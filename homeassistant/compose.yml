@@ -1,6 +1,8 @@
 services:
   homeassistant:
-    image: ghcr.io/home-assistant/home-assistant:stable
+    build:
+      context: .
+    image: homelab-homeassistant
     container_name: homeassistant
     restart: unless-stopped
     privileged: true
@@ -8,7 +10,7 @@ services:
     environment:
       TZ: ${TIMEZONE:-UTC}
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.enable=false"
 
     volumes:
       - ./config:/config

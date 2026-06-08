@@ -7,6 +7,9 @@ services:
     network_mode: host
     environment:
       TZ: ${TIMEZONE:-UTC}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
     volumes:
       - ./config:/config
       - /etc/localtime:/etc/localtime:ro
@@ -22,5 +25,8 @@ services:
       TS_HOSTNAME: homeassistant
       TS_STATE_DIR: /var/lib/tailscale
       TS_AUTH_ONCE: "true"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
     volumes:
       - ./tailscale-state:/var/lib/tailscale

@@ -8,6 +8,7 @@ services:
     volumes:
       - ./data:/data
     labels:
+      - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
       - "traefik.http.routers.bitwarden.tls=true"
       - "traefik.http.routers.bitwarden.entrypoints=http,https"

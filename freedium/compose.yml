@@ -42,7 +42,7 @@ services:
     environment:
       - HOST_ADDRESS=https://freedium.${DOCKER_DOMAIN}
       - TIMEOUT=15
-      - ADMIN_SECRET_KEY=${ADMIN_SECRET_KEY:-freedium_secret}
+      - ADMIN_SECRET_KEY=${ADMIN_SECRET_KEY}
       - DATABASE_URL=postgresql://postgres:postgres@freedium-db:5432/postgres
       - REDIS_HOST=freedium-cache
       - REDIS_PORT=6379
@@ -84,6 +84,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
 
   freedium-cache:
     image: redis:8-alpine
@@ -102,6 +104,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
 
 networks:
   proxy:

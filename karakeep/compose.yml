@@ -40,6 +40,7 @@ services:
       # If you want to mount a custom directory, change the volume mapping above instead.
       DATA_DIR: /data # DON'T CHANGE THIS
     labels:
+      - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
       - "traefik.http.routers.karakeep.tls=true"
       - "traefik.http.routers.karakeep.entrypoints=http,https"
@@ -61,6 +62,9 @@ services:
       - --remote-debugging-address=0.0.0.0
       - --remote-debugging-port=9222
       - --hide-scrollbars
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
     networks:
       - proxy
 
@@ -75,6 +79,9 @@ services:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
     volumes:
       - ./data/meilisearch:/meili_data
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
     networks:
       - proxy
 

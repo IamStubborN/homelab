@@ -14,12 +14,12 @@ This is a self-hosted homelab infrastructure project using Docker Compose. The s
 docker compose up -d
 
 # Restart services after changes
-docker compose down && docker compose pull && docker compose up -d
+docker compose config --quiet && docker compose up -d --remove-orphans
 
 # View logs for a specific service
 docker compose logs -f [service_name]
 
-# Update containers in subdirectories
+# Pull updated images and recreate changed containers without stopping first
 make update-containers
 
 # Clean up Docker system
@@ -71,6 +71,13 @@ Media services route through Gluetun container:
 - Traefik handles SSL with Cloudflare DNS challenge
 - Sensitive credentials stored in `.env` files (not in compose files)
 
+
+## Restore Notes
+
+Use `restore notes` for clean-host recovery. The repository intentionally does not contain runtime data or secrets. Freedium source is tracked as a pinned git submodule.
+
+Watchtower is configured in opt-in mode. Add `com.centurylinklabs.watchtower.enable=true` only to services that should be auto-updated. Keep stateful databases, source-built services, and private custom apps disabled unless their backup and restore path is tested.
+
 ## Development Notes
 
 ### Adding New Services
@@ -95,15 +102,27 @@ Check `.env` files in service directories for credentials:
 - `/karakeep/.env` - Gemini API, MeiliSearch keys
 - `/movie-tracker/.env` - TMDb, Telegram, Prowlarr API keys
 
-### Custom Containers
-**KaraKeep** (`/karakeep/`): Web scraper with Gemini AI summarization and MeiliSearch
-**Freedium** (`/freedium/`): Medium proxy with Caddy, PostgreSQL, Redis
-**Movie-Tracker** (`/movie-tracker/`): Python Telegram bot with Clean Architecture
+### Custom Applications
+**KaraKeep** (`/karakeep/`): Web scraper with Gemini AI summarization and MeiliSearch.
 
-When modifying custom containers:
-- Edit `Dockerfile` for build changes
-- Update `entrypoint.sh` for runtime behavior
-- Rebuild with `docker compose build [service_name]`
+**Freedium** (`/freedium/`): Medium proxy with Caddy, PostgreSQL, Redis. The compose file builds from the pinned submodule at `freedium/repo/`. Restore it with:
+```bash
+git submodule update --init --recursive
+```
+Use the tracked helper for database backups:
+```bash
+freedium/backup-db.sh
+```
+
+**Movie-Tracker** (`/movie-tracker/`): Python Telegram bot deployed from the private image `ghcr.io/example/movie-tracker:latest`. The homelab repository intentionally tracks only the compose wrapper. A clean host must be logged in to GHCR before pulling:
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u example-user --password-stdin
+docker compose pull movie-tracker
+```
+
+When modifying custom applications:
+- For image-based apps such as Movie-Tracker, change and publish the application in its own repository, then pull the image here.
+- For source-built apps such as Freedium, update the pinned submodule deliberately and rebuild the relevant service.
 
 ### Storage Mounts
 - `/mnt/internal/` - Main storage (torrents, media, books)

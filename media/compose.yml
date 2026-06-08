@@ -46,11 +46,10 @@ services:
       - SERVER_COUNTRIES=Bulgaria # Specify your server country here
       - WIREGUARD_PRIVATE_KEY_SECRETFILE=/run/secrets/wireguard_private_key
       - UPDATER_PERIOD=6h
-      - DOT=on
-      - DOT_PROVIDERS=cloudflare,google
+      - DNS_SERVER=on
+      - DNS_UPSTREAM_RESOLVERS=cloudflare,google
       - BLOCK_MALICIOUS=off
       - DNS_UPSTREAM_IPV6=off
-      - DOT_IPV6=off
       - HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={"auth":"none"}
       # - DNS_ADDRESS=${DNS_ADDRESS:-192.0.2.1}
       # - FIREWALL_OUTBOUND_SUBNETS=${LAN_SUBNET:-192.0.2.0/24}

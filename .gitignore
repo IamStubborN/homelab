@@ -131,12 +131,14 @@ zeroclaw/config/daemon_state.json
 samba/config/config.yml
 homeassistant/config/.HA_VERSION
 homeassistant/config/.ha_run.lock
+
+# Local scratch files and agent/tooling state that should never be part of the backup repo
 notes.txt
 package-lock.json
 package.json
+.claude/
 
 # Top-level service folders not included by root compose.yml
-.claude/
 ai/
 bytebase/
 filebrowser/

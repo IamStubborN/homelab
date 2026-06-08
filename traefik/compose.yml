@@ -1,0 +1,61 @@
+services:
+  traefik:
+    image: "traefik:latest"
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - CF_API_EMAIL=${CF_API_EMAIL}
+      - CF_DNS_API_TOKEN_FILE=/run/secrets/cf_dns_api_token
+    secrets:
+      - cf_dns_api_token
+    networks:
+      proxy:
+        aliases:
+          - freedium.${DOCKER_DOMAIN}
+    ports:
+      # HTTP & HTTPS
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/etc/timezone:/etc/timezone:ro"
+      - "/etc/localtime:/etc/localtime:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./config/traefik.yml:/traefik.yml:ro"
+      - "./config/config.yml:/config.yml:ro"
+      - "./config/acme.json:/acme.json"
+    labels:
+      # Global
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.${DOCKER_DOMAIN}`)"
+
+      # SSL
+      - "traefik.http.routers.traefik.tls.certresolver=cloudflare"
+      - "traefik.http.routers.traefik.tls.domains[0].main=${DOCKER_DOMAIN}"
+      - "traefik.http.routers.traefik.tls.domains[0].sans=*.${DOCKER_DOMAIN}"
+      - "traefik.http.routers.traefik.tls=true"
+
+  whoami:
+    image: "traefik/whoami"
+    container_name: whoami
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.tls=true"
+      - "traefik.http.routers.whoami.entrypoints=http,https"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.${DOCKER_DOMAIN}`)"
+    networks:
+      - proxy
+
+secrets:
+  cf_dns_api_token:
+    file: ./secrets/cf_dns_api_token
+
+networks:
+  proxy:
+    external: true

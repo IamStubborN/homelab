@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+scriptVersion="1.8"
+scriptName="Recyclarr"
+
+#### Import Settings
+source /config/extended.conf
+#### Import Functions
+source /config/extended/functions
+#### Create Log File
+logfileSetup
+
+logfile="/config/logs/$logFileName"
+
+log() {
+  m_time=$(date "+%F %T")
+  echo "$m_time :: $scriptName :: $scriptVersion :: $1" | tee -a "$logfile"
+}
+
+verifyConfig () {
+  if [ "$enableRecyclarr" != "true" ]; then
+    log "Script is not enabled, enable by setting enableRecyclarr to \"true\" by modifying the \"/config/extended.conf\" config file..."
+    log "Sleeping (infinity)"
+    sleep infinity
+  fi
+
+  if [ -z "$recyclarrScriptInterval" ]; then
+    recyclarrScriptInterval="6h"
+  fi
+}
+
+RecyclarrProcess () {  
+  # Configure Yaml with URL and API Key
+  sed -i "s%arrUrl%$arrUrl%g" "/config/extended/recyclarr.yaml"
+  sed -i "s%arrApi%$arrApiKey%g" "/config/extended/recyclarr.yaml"
+  
+  log "Updating Arr via Recyclarr"
+  
+  if [ ! -d /config/extended/recyclarr-data ]; then
+    mkdir -p /config/extended/recyclarr-data
+    chmod 777 /config/extended/recyclarr-data
+  fi
+
+  # Capture the output of the Recyclarr command
+  recyclarr_output=$(/recyclarr/recyclarr sync -c $recyclarrConfig --app-data /config/extended/recyclarr-data 2>&1)
+  
+  # Log the output line by line
+  while IFS= read -r line; do
+    log "$line"
+  done <<< "$recyclarr_output"
+  
+  log "Complete"
+}
+
+# Main Loop
+for (( ; ; )); do
+  logfileSetup
+  verifyConfig
+  getArrAppInfo
+  verifyApiAccess
+  RecyclarrProcess
+  log "Script sleeping for $recyclarrScriptInterval..."
+  sleep $recyclarrScriptInterval
+done
+
+exit

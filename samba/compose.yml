@@ -1,0 +1,38 @@
+## https://fariszr.com/en/docker-smb-network-discovery/
+
+services:
+  samba:
+    image: crazymax/samba
+    container_name: samba
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    network_mode: host
+    environment:
+      - "SAMBA_LOG_LEVEL=0"
+    volumes:
+      - ./config:/data
+      - /etc/localtime:/etc/localtime:ro
+      - /mnt/internal:/mnt/share/internal
+      - /mnt/usb_drive:/mnt/share/usb_drive
+
+  wsdd:
+    container_name: samba-wsdd
+    image: jonasped/wsdd
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    network_mode: host
+    environment:
+      - 'HOSTNAME=docker'
+
+  avahi:
+    container_name: samba-avahi
+    image: ydkn/avahi
+    hostname: docker
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    network_mode: host
+    volumes:
+      - ./config/avahi-services:/etc/avahi/services:ro

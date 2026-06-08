@@ -1,0 +1,529 @@
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    # line above must be uncommented to allow external containers to connect.
+    # See https://github.com/qdm12/gluetun-wiki/blob/main/setup/connect-a-container-to-gluetun.md#external-container-to-gluetun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - 8400:8400 # qBittorrent WebUI
+      - 6881:6881 # qBittorrent
+      - 6881:6881/udp # qBittorrent
+      # - 7878:7878 # Radarr
+      # - 8989:8989 # Sonarr
+      - 9696:9696 # Prowlarr
+      # - 6767:6767 # Bazarr
+      # - 8686:8686 # Lidarr
+      # - 8787:8787 # Readarr
+      # - 5055:5055 # Overseerr
+      # - 32400:32400 # Plex (moved to plex container)
+      # - 1900:1900/udp # Plex
+      # - 32410:32410/udp # Plex
+      # - 32411:32411/udp # Plex
+      # - 32412:32412/udp # Plex
+      # - 32413:32413/udp # Plex
+      # - 32414:32414/udp # Plex
+      # - 32469:32469/tcp # Plex
+      # - 8096:8096 # Jellyfin
+    volumes:
+      - ./gluetun/data:/gluetun
+      - ./gluetun/scripts:/scripts:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "/scripts/healthcheck.sh" ]
+      interval: 20s
+      timeout: 15s
+      retries: 2
+      start_period: 60s
+    environment:
+      - TZ=${TIMEZONE:-UTC} # Specify your timezone here
+      - VPN_SERVICE_PROVIDER=nordvpn # Specify your VPN provider here
+      - VPN_TYPE=wireguard # Specify your VPN type here
+      - SERVER_CATEGORIES=P2P # Specify your server categories here
+      - SERVER_COUNTRIES=Bulgaria # Specify your server country here
+      - WIREGUARD_PRIVATE_KEY_SECRETFILE=/run/secrets/wireguard_private_key
+      - UPDATER_PERIOD=6h
+      - DOT=on
+      - DOT_PROVIDERS=cloudflare,google
+      - BLOCK_MALICIOUS=off
+      - DNS_UPSTREAM_IPV6=off
+      - DOT_IPV6=off
+      - HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={"auth":"none"}
+      # - DNS_ADDRESS=${DNS_ADDRESS:-192.0.2.1}
+      # - FIREWALL_OUTBOUND_SUBNETS=${LAN_SUBNET:-192.0.2.0/24}
+      # - DNS_ADDRESS=${ALT_DNS_ADDRESS:-198.51.100.1}
+      # - FIREWALL_OUTBOUND_SUBNETS=${ALT_LAN_SUBNET:-198.51.100.0/24}
+    secrets:
+      - wireguard_private_key
+    labels:
+      - "traefik.enable=true"
+
+      - "traefik.http.routers.qbittorrent.tls=true"
+      - "traefik.http.routers.qbittorrent.entrypoints=http,https"
+      - "traefik.http.routers.qbittorrent.service=qbittorrent"
+      - "traefik.http.routers.qbittorrent.rule=Host(`qbittorrent.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.qbittorrent.loadbalancer.server.port=8400"
+
+      - "traefik.http.routers.prowlarr.tls=true"
+      - "traefik.http.routers.prowlarr.entrypoints=http,https"
+      - "traefik.http.routers.prowlarr.service=prowlarr"
+      - "traefik.http.routers.prowlarr.rule=Host(`prowlarr.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.prowlarr.loadbalancer.server.port=9696"
+
+      # - "traefik.http.routers.radarr.tls=true"
+      # - "traefik.http.routers.radarr.entrypoints=http,https"
+      # - "traefik.http.routers.radarr.service=radarr"
+      # - "traefik.http.routers.radarr.rule=Host(`radarr.${DOCKER_DOMAIN}`)"
+      # - "traefik.http.services.radarr.loadbalancer.server.port=7878"
+
+      # - "traefik.http.routers.sonarr.tls=true"
+      # - "traefik.http.routers.sonarr.entrypoints=http,https"
+      # - "traefik.http.routers.sonarr.service=sonarr"
+      # - "traefik.http.routers.sonarr.rule=Host(`sonarr.${DOCKER_DOMAIN}`)"
+      # - "traefik.http.services.sonarr.loadbalancer.server.port=8989"
+
+      # - "traefik.http.routers.bazarr.tls=true"
+      # - "traefik.http.routers.bazarr.entrypoints=http,https"
+      # - "traefik.http.routers.bazarr.service=bazarr"
+      # - "traefik.http.routers.bazarr.rule=Host(`bazarr.${DOCKER_DOMAIN}`)"
+      # - "traefik.http.services.bazarr.loadbalancer.server.port=6767"
+
+      # - "traefik.http.routers.lidarr.tls=true"
+      # - "traefik.http.routers.lidarr.entrypoints=http,https"
+      # - "traefik.http.routers.lidarr.service=lidarr"
+      # - "traefik.http.routers.lidarr.rule=Host(`lidarr.${DOCKER_DOMAIN}`)"
+      # - "traefik.http.services.lidarr.loadbalancer.server.port=8686"
+
+      # - "traefik.http.routers.readarr.tls=true"
+      # - "traefik.http.routers.readarr.entrypoints=http,https"
+      # - "traefik.http.routers.readarr.service=readarr"
+      # - "traefik.http.routers.readarr.rule=Host(`readarr.${DOCKER_DOMAIN}`)"
+      # - "traefik.http.services.readarr.loadbalancer.server.port=8787"
+
+      # - "traefik.http.routers.overseerr.tls=true"
+      # - "traefik.http.routers.overseerr.entrypoints=http,https"
+      # - "traefik.http.routers.overseerr.service=overseerr"
+      # - "traefik.http.routers.overseerr.rule=Host(`overseerr.${DOCKER_DOMAIN}`)"
+      # - "traefik.http.services.overseerr.loadbalancer.server.port=5055"
+
+      # Plex labels moved to plex container
+      # - "traefik.http.routers.plex.tls=true"
+      # - "traefik.http.routers.plex.entrypoints=http,https"
+      # - "traefik.http.routers.plex.service=plex"
+      # - "traefik.http.routers.plex.rule=Host(`plex.${DOCKER_DOMAIN}`)"
+      # - "traefik.http.services.plex.loadbalancer.server.port=32400"
+
+      # - "traefik.http.routers.jellyfin.tls=true"
+      # - "traefik.http.routers.jellyfin.entrypoints=http,https"
+      # - "traefik.http.routers.jellyfin.service=jellyfin"
+      # - "traefik.http.routers.jellyfin.rule=Host(`jellyfin.${DOCKER_DOMAIN}`)"
+      # - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
+
+      - "deunhealth.restart.on.unhealthy=true"
+    networks:
+      - proxy
+    security_opt:
+      - no-new-privileges:true
+
+  qbittorrent:
+    container_name: qbittorrent
+    image: linuxserver/qbittorrent:latest
+    network_mode: 'service:gluetun'
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      gluetun:
+        condition: service_healthy
+        restart: true
+    healthcheck:
+      test: [ "CMD-SHELL", "/scripts/healthcheck.sh" ]
+      interval: 20s
+      timeout: 15s
+      retries: 2
+      start_period: 60s
+    labels:
+      - "deunhealth.restart.on.unhealthy=true"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UNMASK=002
+      - TZ=${TIMEZONE:-UTC}
+      - WEBUI_PORT=8400
+      - TORRENTING_PORT=6881
+    volumes:
+      - ./qbittorrent/config:/config
+      - ./qbittorrent/ui:/ui
+      - ./qbittorrent/scripts:/scripts
+      - /etc/localtime:/etc/localtime:ro
+      - /mnt/internal/torrents:/data/internal/torrents
+      - /mnt/usb_drive/torrents:/data/usb_drive/torrents
+
+  prowlarr:
+    container_name: prowlarr
+    image: linuxserver/prowlarr:latest
+    network_mode: "service:gluetun"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      gluetun:
+        condition: service_healthy
+        restart: true
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UNMASK=002
+      - TZ=${TIMEZONE:-UTC}
+      - DOTNET_SYSTEM_NET_DISABLEIPV6=1
+    healthcheck:
+      test: "curl -sf http://localhost:9696/ping || exit 1"
+      interval: 30s
+      timeout: 10s
+      retries: 2
+      start_period: 60s
+    labels:
+      - "deunhealth.restart.on.unhealthy=true"
+    volumes:
+      - ./prowlarr/config:/config
+      - /etc/localtime:/etc/localtime:ro
+
+  # radarr:
+  #   container_name: radarr
+  #   image: linuxserver/radarr:latest
+  #   restart: unless-stopped
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   environment:
+  #     - PUID=1000
+  #     - PGID=1000
+  #     - UNMASK=002
+  #     - TZ=${TIMEZONE:-UTC}
+  #   volumes:
+  #     - ./radarr/config:/config
+  #     - ./radarr/custom-services.d:/custom-services.d
+  #     - ./radarr/custom-cont-init.d:/custom-cont-init.d
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - /mnt/internal:/data/internal
+  #     - /mnt/usb_drive:/data/usb_drive
+  #   healthcheck:
+  #     test: "curl -sf http://localhost:7878/ping || exit 1"
+  #     interval: 1m
+  #     timeout: 10s
+  #     retries: 3
+  #   labels:
+  #     - "deunhealth.restart.on.unhealthy=true"
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.radarr.tls=true"
+  #     - "traefik.http.routers.radarr.entrypoints=http,https"
+  #     - "traefik.http.routers.radarr.service=radarr"
+  #     - "traefik.http.routers.radarr.rule=Host(`radarr.${DOCKER_DOMAIN}`)"
+  #     - "traefik.http.services.radarr.loadbalancer.server.port=7878"
+  #   networks:
+  #     - proxy
+
+  # sonarr:
+  #   container_name: sonarr
+  #   image: linuxserver/sonarr:latest
+  #   restart: unless-stopped
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   environment:
+  #     - PUID=1000
+  #     - PGID=1000
+  #     - UNMASK=002
+  #     - TZ=${TIMEZONE:-UTC}
+  #   volumes:
+  #     - ./sonarr/config:/config
+  #     - ./sonarr/custom-services.d:/custom-services.d
+  #     - ./sonarr/custom-cont-init.d:/custom-cont-init.d
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - /mnt/internal:/data/internal
+  #     - /mnt/usb_drive:/data/usb_drive
+  #   healthcheck:
+  #     test: "curl -sf http://localhost:8989/ping || exit 1"
+  #     interval: 1m
+  #     timeout: 10s
+  #     retries: 3
+  #   labels:
+  #     - "deunhealth.restart.on.unhealthy=true"
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.sonarr.tls=true"
+  #     - "traefik.http.routers.sonarr.entrypoints=http,https"
+  #     - "traefik.http.routers.sonarr.service=sonarr"
+  #     - "traefik.http.routers.sonarr.rule=Host(`sonarr.${DOCKER_DOMAIN}`)"
+  #     - "traefik.http.services.sonarr.loadbalancer.server.port=8989"
+  #   networks:
+  #     - proxy
+
+  # bazarr:
+  #   container_name: bazarr
+  #   image: linuxserver/bazarr:latest
+  #   restart: unless-stopped
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   environment:
+  #     - PUID=1000
+  #     - PGID=1000
+  #     - UNMASK=002
+  #     - TZ=${TIMEZONE:-UTC}
+  #   volumes:
+  #     - ./bazarr/config:/config
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - /mnt/internal/media:/data/internal/media
+  #     - /mnt/usb_drive/media:/data/usb_drive/media
+  #   healthcheck:
+  #     test: "curl -sf http://localhost:6767/api/system/status || exit 1"
+  #     interval: 1m
+  #     timeout: 10s
+  #     retries: 3
+  #   labels:
+  #     - "deunhealth.restart.on.unhealthy=true"
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.bazarr.tls=true"
+  #     - "traefik.http.routers.bazarr.entrypoints=http,https"
+  #     - "traefik.http.routers.bazarr.service=bazarr"
+  #     - "traefik.http.routers.bazarr.rule=Host(`bazarr.${DOCKER_DOMAIN}`)"
+  #     - "traefik.http.services.bazarr.loadbalancer.server.port=6767"
+  #   networks:
+  #     - proxy
+
+  # lidarr:
+  #   container_name: lidarr
+  #   image: linuxserver/lidarr:latest
+  #   restart: unless-stopped
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   environment:
+  #     - PUID=1000
+  #     - PGID=1000
+  #     - UNMASK=002
+  #     - TZ=${TIMEZONE:-UTC}
+  #   volumes:
+  #     - ./lidarr/config:/config
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - /mnt/internal:/data/internal
+  #     - /mnt/usb_drive:/data/usb_drive
+  #   healthcheck:
+  #     test: "curl -sf http://localhost:8686/ping || exit 1"
+  #     interval: 1m
+  #     timeout: 10s
+  #     retries: 3
+  #   labels:
+  #     - "deunhealth.restart.on.unhealthy=true"
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.lidarr.tls=true"
+  #     - "traefik.http.routers.lidarr.entrypoints=http,https"
+  #     - "traefik.http.routers.lidarr.service=lidarr"
+  #     - "traefik.http.routers.lidarr.rule=Host(`lidarr.${DOCKER_DOMAIN}`)"
+  #     - "traefik.http.services.lidarr.loadbalancer.server.port=8686"
+  #   networks:
+  #     - proxy
+
+  # readarr:
+  #   container_name: readarr
+  #   image: linuxserver/readarr:develop
+  #   restart: unless-stopped
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   environment:
+  #     - PUID=1000
+  #     - PGID=1000
+  #     - UNMASK=002
+  #     - TZ=${TIMEZONE:-UTC}
+  #   volumes:
+  #     - ./readarr/config:/config
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - /mnt/internal:/data/internal
+  #     - /mnt/usb_drive:/data/usb_drive
+  #   healthcheck:
+  #     test: "curl -sf http://localhost:8787/ping || exit 1"
+  #     interval: 1m
+  #     timeout: 10s
+  #     retries: 3
+  #   labels:
+  #     - "deunhealth.restart.on.unhealthy=true"
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.readarr.tls=true"
+  #     - "traefik.http.routers.readarr.entrypoints=http,https"
+  #     - "traefik.http.routers.readarr.service=readarr"
+  #     - "traefik.http.routers.readarr.rule=Host(`readarr.${DOCKER_DOMAIN}`)"
+  #     - "traefik.http.services.readarr.loadbalancer.server.port=8787"
+  #   networks:
+  #     - proxy
+
+  # overseerr:
+  #   container_name: overseerr
+  #   image: linuxserver/overseerr:latest
+  #   restart: unless-stopped
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   environment:
+  #     - PUID=1000
+  #     - PGID=1000
+  #     - UNMASK=002
+  #     - TZ=${TIMEZONE:-UTC}
+  #   volumes:
+  #     - ./overseerr/config:/config
+  #     - /etc/localtime:/etc/localtime:ro
+  #   healthcheck:
+  #     test: "curl -sf http://localhost:5055/api/v1/status || exit 1"
+  #     interval: 1m
+  #     timeout: 10s
+  #     retries: 3
+  #   labels:
+  #     - "deunhealth.restart.on.unhealthy=true"
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.overseerr.tls=true"
+  #     - "traefik.http.routers.overseerr.entrypoints=http,https"
+  #     - "traefik.http.routers.overseerr.service=overseerr"
+  #     - "traefik.http.routers.overseerr.rule=Host(`overseerr.${DOCKER_DOMAIN}`)"
+  #     - "traefik.http.services.overseerr.loadbalancer.server.port=5055"
+  #   networks:
+  #     - proxy
+
+  # recyclarr:
+  #   image: recyclarr/recyclarr
+  #   container_name: recyclarr
+  #   restart: unless-stopped
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   volumes:
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - ./recyclarr/config:/config
+  #   environment:
+  #     - PUID=1000
+  #     - PGID=1000
+  #     - UNMASK=002
+  #     - TZ=${TIMEZONE:-UTC}
+  #   networks:
+  #     - proxy
+
+  gluetun-watcher:
+    image: docker:cli
+    container_name: gluetun-watcher
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PARENT_CONTAINER=gluetun
+      - DEPENDENT_CONTAINERS=qbittorrent prowlarr
+      - HEALTH_TIMEOUT=120
+      - SETTLE_DELAY=10
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./gluetun-watcher/watch.sh:/watch.sh:ro
+      - ${HOMELAB_ROOT:-/opt/homelab}:${HOMELAB_ROOT:-/opt/homelab}:ro
+    entrypoint: ["sh", "/watch.sh"]
+
+  plex:
+    image: linuxserver/plex:latest
+    container_name: plex
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    devices:
+      - /dev/dri:/dev/dri
+    ports:
+      - 32400:32400
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - VERSION=docker
+      - TZ=${TIMEZONE:-UTC}
+      - PLEX_CLAIM=${PLEX_CLAIM}
+    volumes:
+      - ./plex/config:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /dev/shm:/transcode
+      - /mnt/internal:/data/internal
+      - /mnt/usb_drive:/data/usb_drive
+    healthcheck:
+      test: "curl -sf http://localhost:32400/identity || exit 1"
+      interval: 1m
+      timeout: 10s
+      retries: 3
+    labels:
+      - "deunhealth.restart.on.unhealthy=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.plex.tls=true"
+      - "traefik.http.routers.plex.entrypoints=http,https"
+      - "traefik.http.routers.plex.service=plex"
+      - "traefik.http.routers.plex.rule=Host(`plex.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.plex.loadbalancer.server.port=32400"
+    networks:
+      - proxy
+
+
+  plex-auto-languages:
+    image: ghcr.io/journeydocker/plex-auto-languages:latest
+    container_name: plex-auto-languages
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - PLEX_URL=http://plex:32400
+      - PLEX_TOKEN_FILE=/run/secrets/plex_token
+      - TZ=${TIMEZONE:-UTC}
+      - UPDATE_LEVEL=show
+      - UPDATE_STRATEGY=all
+      - TRIGGER_ON_PLAY=true
+      - TRIGGER_ON_SCAN=false
+      - SCHEDULER_ENABLE=false
+      - DEBUG=true
+    volumes:
+      - ./plex-auto-languages/config:/config
+      - ./plex-auto-languages/logs:/logs
+    secrets:
+      - plex_token
+    networks:
+      - proxy
+
+  # jellyfin:
+  #   image: linuxserver/jellyfin:latest
+  #   container_name: jellyfin
+  #   restart: unless-stopped
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   devices:
+  #     - /dev/dri:/dev/dri
+  #   environment:
+  #     - PUID=1000
+  #     - PGID=1000
+  #     - TZ=${TIMEZONE:-UTC}
+  #   volumes:
+  #     - ./jellyfin/config:/config
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - /mnt/internal:/data/internal
+  #     - /mnt/usb_drive:/data/usb_drive
+  #   healthcheck:
+  #     test: "curl -sf http://localhost:8096/health || exit 1"
+  #     interval: 1m
+  #     timeout: 10s
+  #     retries: 3
+  #   labels:
+  #     - "deunhealth.restart.on.unhealthy=true"
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.jellyfin.tls=true"
+  #     - "traefik.http.routers.jellyfin.entrypoints=http,https"
+  #     - "traefik.http.routers.jellyfin.service=jellyfin"
+  #     - "traefik.http.routers.jellyfin.rule=Host(`jellyfin.${DOCKER_DOMAIN}`)"
+  #     - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
+  #   networks:
+  #     - proxy
+
+secrets:
+  wireguard_private_key:
+    file: ./secrets/wireguard_private_key
+  plex_token:
+    file: ./secrets/plex_token
+
+networks:
+  proxy:
+    external: true

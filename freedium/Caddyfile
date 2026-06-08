@@ -1,0 +1,53 @@
+:80 {
+    encode gzip
+    header -Server
+
+    # Static files
+    @static {
+        path /tailwindcssv3-freedium-hotfix.js
+        path /site.webmanifest
+        path /favicon.ico
+        path /favicon-16x16.png
+        path /favicon-32x32.png
+        path /apple-touch-icon.png
+        path /android-chrome-192x192.png
+        path /android-chrome-512x512.png
+        path /safari-pinned-tab.svg
+        path /robots.txt
+        path /humans.txt
+        path /security.txt
+        path /browserconfig.xml
+        path /mstile-*.png
+    }
+
+    handle @static {
+        root * /static
+        file_server
+    }
+
+    # Block sensitive paths
+    handle_path /websocket {
+        respond "Access denied" 403
+    }
+    handle_path /meta.json {
+        respond "Access denied" 403
+    }
+    handle_path /.env {
+        respond "Access denied" 403
+    }
+    handle_path /.git/* {
+        respond "Access denied" 403
+    }
+
+    # Proxy to freedium app
+    handle {
+        reverse_proxy freedium:7080 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            lb_try_duration 30s
+            lb_try_interval 1s
+        }
+    }
+}

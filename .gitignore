@@ -1,0 +1,154 @@
+# Secrets and local env
+.env
+*.env
+!.env.example
+!**/.env.example
+secrets.yaml
+**/secrets.yaml
+**/secrets.yaml.bak*
+**/secrets/
+**/*secret*
+**/*token*
+**/*credential*
+**/*credentials*
+**/*password*
+**/*.key
+**/*.pem
+**/acme.json
+
+# Backups generated during manual changes
+*.bak*
+**/*.bak*
+*.backup
+**/*.backup
+backups/
+
+# Runtime databases, logs, caches, state
+**/*.db
+**/*.db-*
+**/*.sqlite
+**/*.sqlite-*
+**/*.log
+**/*.log.*
+**/logs/
+**/log/
+**/cache/
+**/tmp/
+**/tts/
+
+# Heavy/runtime app state
+ai/ollama/models/
+ai/ollama-webui/cache/
+ai/ollama-webui/uploads/
+ai/ollama-webui/vector_db/
+bitwarden/data/
+bytebase/data/
+filebrowser/config/database/
+freedium/data/
+gotify/api-data/
+gotify/data/
+karakeep/data/
+kavita/config/
+media/bazarr/
+media/jellyfin/
+media/lidarr/
+media/overseerr/
+media/plex backup/
+media/plex/
+media/plex-auto-languages/
+media/prowlarr/
+media/qbittorrent/config/
+media/radarr/config/
+media/readarr/
+media/recyclarr/
+media/sonarr/config/
+media/gluetun/data/
+miniflux/postgres/
+mosquitto/data/
+mosquitto/log/
+mssql/data/
+portainer/data/
+rustdesk/data/
+samba/config/cache/
+samba/config/lib/
+samba/data/
+speedtest-tracker/config/
+homeassistant/tailscale-state/
+zeroclaw/data/
+zeroclaw/state/
+zeroclaw/tools/
+
+# Home Assistant runtime and sensitive storage
+homeassistant/config/.cloud/
+homeassistant/config/.storage/
+homeassistant/config/.cache/
+homeassistant/config/deps/
+homeassistant/config/home-assistant*.db*
+homeassistant/config/home-assistant.log*
+homeassistant/config/secrets.yaml
+homeassistant/config/secrets.yaml.bak*
+
+# Generated dependency folders and local development output
+**/node_modules/
+**/.venv/
+**/.pytest_cache/
+**/__pycache__/
+**/*.pyc
+**/htmlcov/
+**/.coverage
+
+# Nested repositories / vendor app histories
+freedium/repo/.git/
+movie-tracker/.git/
+
+# IDE/local agent state
+.DS_Store
+**/.DS_Store
+.idea/
+**/.idea/
+**/.vscode/settings.json
+.cursor/
+**/.cursor/
+.claude/settings.local.json
+**/.claude/settings.local.json
+
+# Service-specific runtime folders with only compose/config tracked
+ai/ollama/
+ai/ollama-webui/
+!ai/compose.yml
+wproxy/pritunl/profiles/
+
+# Embedded repositories / vendored source trees: track via their own repos, not homelab config backup
+freedium/repo/
+media/qbittorrent/ui/VueTorrent/
+
+# VPN/exported bundles and mutable app state
+wproxy/backup.ovpn
+wproxy/pritunl/config.tar
+zeroclaw/config/auth-profiles.json
+zeroclaw/config/daemon_state.json
+
+# Real service configs containing secrets; keep sanitized examples instead
+samba/config/config.yml
+homeassistant/config/.HA_VERSION
+homeassistant/config/.ha_run.lock
+notes.txt
+package-lock.json
+package.json
+
+# Top-level service folders not included by root compose.yml
+.claude/
+ai/
+bytebase/
+filebrowser/
+gotify/
+miniflux/
+mssql/
+portainer/
+wproxy/
+zeroclaw/
+
+# movie-tracker is included by root compose; track only its compose wrapper, not app source
+!movie-tracker/
+movie-tracker/**
+!movie-tracker/docker-compose.yml

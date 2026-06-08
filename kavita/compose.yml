@@ -1,0 +1,25 @@
+services:
+  kavita:
+    image: jvmilazz0/kavita:latest
+    container_name: kavita
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TIMEZONE:-UTC}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro      
+      - ./config:/kavita/config
+      - /mnt/internal/torrents/books:/books
+    labels:    
+      - "traefik.enable=true"
+      - "traefik.http.routers.kavita.tls=true"
+      - "traefik.http.routers.kavita.entrypoints=http,https"
+      - "traefik.http.routers.kavita.rule=Host(`kavita.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.kavita.loadbalancer.server.port=5000"
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true

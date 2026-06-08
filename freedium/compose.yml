@@ -1,0 +1,110 @@
+services:
+  freedium-proxy:
+    container_name: freedium-proxy
+    build:
+      context: ./repo/caddy
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./repo/caddy/static:/static:ro
+    networks:
+      - proxy
+      - freedium_net
+    depends_on:
+      freedium:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80/ --max-time 30 || exit 1"]
+      interval: 30s
+      start_period: 20s
+      timeout: 30s
+      retries: 3
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.freedium.rule=Host(`freedium.${DOCKER_DOMAIN}`)"
+      - "traefik.http.routers.freedium.tls=true"
+      - "traefik.http.routers.freedium.entrypoints=http,https"
+      - "traefik.http.services.freedium.loadbalancer.server.port=80"
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  freedium:
+    container_name: freedium
+    build:
+      context: ./repo
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - HOST_ADDRESS=https://freedium.${DOCKER_DOMAIN}
+      - TIMEOUT=15
+      - ADMIN_SECRET_KEY=${ADMIN_SECRET_KEY:-freedium_secret}
+      - DATABASE_URL=postgresql://postgres:postgres@freedium-db:5432/postgres
+      - REDIS_HOST=freedium-cache
+      - REDIS_PORT=6379
+    volumes:
+      - ./repo/web:/app/web
+    networks:
+      - freedium_net
+    mem_limit: 2g
+    depends_on:
+      freedium-db:
+        condition: service_healthy
+      freedium-cache:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:7080/ --max-time 30 || exit 1"]
+      interval: 30s
+      start_period: 30s
+      timeout: 30s
+      retries: 3
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  freedium-db:
+    image: postgres:16-alpine
+    container_name: freedium-db
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - POSTGRES_PASSWORD=${FREEDIUM_POSTGRES_PASSWORD}
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - freedium_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  freedium-cache:
+    image: redis:8-alpine
+    container_name: freedium-cache
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: redis-server --maxmemory 200mb --maxmemory-policy allkeys-lru
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - freedium_net
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  proxy:
+    external: true
+  freedium_net:
+    driver: bridge

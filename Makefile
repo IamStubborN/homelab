@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 VIDEO_DIR ?= /mnt/internal/torrents/tv
 
-.PHONY: ip-test speedtest dns-leak-test update-containers prune check-codecs
+.PHONY: ip-test speedtest dns-leak-test update-containers prune danger-prune check-codecs
 
 ip-test:
 	docker run --rm --network=container:gluetun alpine:3.20 sh -c "apk add wget && wget -qO- https://ipinfo.io"
@@ -19,6 +19,16 @@ update-containers:
 	docker compose up -d --remove-orphans
 
 prune:
+	@echo "Refusing to run docker system prune without an explicit confirmation."
+	@echo "Run: make danger-prune CONFIRM=DELETE_UNUSED_DOCKER_DATA"
+	@exit 1
+
+danger-prune:
+	@if [[ "$(CONFIRM)" != "DELETE_UNUSED_DOCKER_DATA" ]]; then \
+		echo "This removes unused Docker images, build cache, containers, and networks."; \
+		echo "Run exactly: make danger-prune CONFIRM=DELETE_UNUSED_DOCKER_DATA"; \
+		exit 1; \
+	fi
 	docker system prune -a -f
 
 check-codecs:

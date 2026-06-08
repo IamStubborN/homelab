@@ -27,32 +27,6 @@ services:
       - "./config/acme.json:/acme.json"
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
-      # Global
-      - "traefik.enable=true"
-      - "traefik.docker.network=proxy"
-      - "traefik.http.routers.traefik.service=api@internal"
-      - "traefik.http.routers.traefik.rule=Host(`traefik.${DOCKER_DOMAIN}`)"
-
-      # SSL
-      - "traefik.http.routers.traefik.tls.certresolver=cloudflare"
-      - "traefik.http.routers.traefik.tls.domains[0].main=${DOCKER_DOMAIN}"
-      - "traefik.http.routers.traefik.tls.domains[0].sans=*.${DOCKER_DOMAIN}"
-      - "traefik.http.routers.traefik.tls=true"
-
-  whoami:
-    image: "traefik/whoami"
-    container_name: whoami
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-      - "traefik.enable=true"
-      - "traefik.http.routers.whoami.tls=true"
-      - "traefik.http.routers.whoami.entrypoints=http,https"
-      - "traefik.http.routers.whoami.rule=Host(`whoami.${DOCKER_DOMAIN}`)"
-    networks:
-      - proxy
 
 secrets:
   cf_dns_api_token:

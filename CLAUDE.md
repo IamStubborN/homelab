@@ -76,6 +76,8 @@ Media services route through Gluetun container:
 
 Use `restore notes` for clean-host recovery. The repository intentionally does not contain runtime data or secrets. Freedium source is tracked as a pinned git submodule.
 
+Clean-host restore requires more than the root `.env`: create service-local env files for services with `env_file` (`glance/.env`, `speedtest-tracker/.env`), restore Docker secret files under `traefik/secrets/` and `media/secrets/`, restore ignored runtime data directories, and verify host prerequisites such as storage mounts, `/dev/net/tun`, `/dev/dri`, `/run/dbus`, Docker socket access, ports `80/443`, and the external `proxy` network.
+
 Watchtower is configured in opt-in mode. Add `com.centurylinklabs.watchtower.enable=true` only to services that should be auto-updated. Keep stateful databases, source-built services, and private custom apps disabled unless their backup and restore path is tested.
 
 ## Development Notes

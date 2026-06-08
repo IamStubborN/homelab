@@ -43,7 +43,7 @@ services:
       - HOST_ADDRESS=https://freedium.${DOCKER_DOMAIN}
       - TIMEOUT=15
       - ADMIN_SECRET_KEY=${ADMIN_SECRET_KEY}
-      - DATABASE_URL=postgresql://postgres:postgres@freedium-db:5432/postgres
+      - DATABASE_URL=${FREEDIUM_DATABASE_URL}
       - REDIS_HOST=freedium-cache
       - REDIS_PORT=6379
     volumes:

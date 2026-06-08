@@ -1,0 +1,46 @@
+http:
+  routers:
+    homeassistant:
+      rule: "Host(`homeassistant.${DOCKER_DOMAIN}`)"
+      entryPoints:
+        - https
+      tls:
+        certResolver: cloudflare
+      service: homeassistant
+
+  services:
+    homeassistant:
+      loadBalancer:
+        servers:
+          - url: "http://${LAN_BIND_IP:-127.0.0.1}:8123"
+
+  # middlewares:
+  #   https-redirect:
+  #     redirectScheme:
+  #       scheme: https
+  #       permanent: true
+
+    # default-headers:
+    #   headers:
+    #     frameDeny: true
+    #     browserXssFilter: true
+    #     contentTypeNosniff: true
+    #     forceSTSHeader: true
+    #     stsIncludeSubdomains: true
+    #     stsPreload: true
+    #     stsSeconds: 15552000
+    #     customFrameOptionsValue: SAMEORIGIN
+    #     customRequestHeaders:
+    #       X-Forwarded-Proto: https
+
+    # default-whitelist:
+    #   ipAllowList:
+    #     sourceRange:
+    #     - "${LAN_SUBNET:-192.0.2.0/24}"
+    #     - "172.16.0.0/12"
+
+    # secured:
+    #   chain:
+    #     middlewares:
+    #     - default-whitelist
+    #     - default-headers

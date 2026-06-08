@@ -1,0 +1,28 @@
+services:
+  glance:
+    image: glanceapp/glance:latest
+    container_name: glance
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - .env
+    volumes:
+      - ./config:/app/config:ro
+      - ./assets:/app/assets:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.glance.tls=true"
+      - "traefik.http.routers.glance.entrypoints=http,https"
+      - "traefik.http.routers.glance.rule=Host(`${DOCKER_DOMAIN}`)"
+      - "traefik.http.routers.glance.middlewares=glance-headers"
+      - "traefik.http.middlewares.glance-headers.headers.customResponseHeaders.Referrer-Policy=no-referrer"
+      - "traefik.http.services.glance.loadbalancer.server.port=8080"
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true

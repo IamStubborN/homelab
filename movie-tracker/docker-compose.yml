@@ -1,0 +1,53 @@
+services:
+  movie-tracker:
+    image: ghcr.io/example/movie-tracker:latest
+    command: ["python", "-m", "src.main"]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - PYTHONPATH=/app
+      - CACHE_DIR=/app/.cache
+      - DATABASE_URL=${MT_DATABASE_URL}
+      - LOG_LEVEL=${MT_LOG_LEVEL}
+      - TG_BOT_API_KEY=${MT_TG_BOT_API_KEY}
+      - TG_BOT_CHAT_IDS=${MT_TG_BOT_CHAT_IDS}
+      - QBITTORRENT_URL=${MT_QBITTORRENT_URL}
+      - QBITTORRENT_USERNAME=${MT_QBITTORRENT_USERNAME}
+      - QBITTORRENT_PASSWORD=${MT_QBITTORRENT_PASSWORD}
+      - PROWLARR_URL=${MT_PROWLARR_URL}
+      - PROWLARR_API_KEY=${MT_PROWLARR_API_KEY}
+      - TMDB_API_KEY=${MT_TMDB_API_KEY}
+      - TMDB_LANGUAGE=${MT_TMDB_LANGUAGE}
+    volumes:
+      - ./app.db:/app/app.db
+      - cache_data:/app/.cache
+    networks:
+      - default
+      - proxy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import urllib.request; urllib.request.urlopen('http://gluetun:8400/api/v2/app/version', timeout=5)\""
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    labels:
+      - "deunhealth.restart.on.unhealthy=true"
+      - "com.centurylinklabs.watchtower.enable=false"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+volumes:
+  cache_data:
+
+networks:
+  proxy:
+    external: true

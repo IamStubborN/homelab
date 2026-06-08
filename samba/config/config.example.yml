@@ -1,0 +1,21 @@
+auth:
+  - user: example
+    group: example
+    uid: 1000
+    gid: 1000
+    password: change-me
+
+global:
+  - "force user = example"
+  - "force group = example"
+
+share:
+  - name: share
+    path: /mnt
+    browsable: yes
+    readonly: no
+    guestok: no
+    validusers: example
+    writelist: example
+    veto: no
+    recycle: yes

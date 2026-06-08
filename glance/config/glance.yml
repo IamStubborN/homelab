@@ -1,0 +1,422 @@
+server:
+  assets-path: /app/assets
+
+theme:
+  background-color: 224 28 8
+  primary-color: 186 85 58
+  positive-color: 145 63 42
+  negative-color: 358 78 62
+  contrast-multiplier: 1.08
+  text-saturation-multiplier: 0.72
+  custom-css-file: /assets/user.css
+  presets:
+    homelab-light:
+      light: true
+      background-color: 214 32 96
+      primary-color: 188 72 31
+      positive-color: 145 55 34
+      negative-color: 358 67 48
+      contrast-multiplier: 1.18
+      text-saturation-multiplier: 0.72
+
+pages:
+  - name: Home
+    width: wide
+    columns:
+      - size: small
+        widgets:
+          - type: calendar
+            first-day-of-week: monday
+
+          - type: bookmarks
+            title: Quick Access
+            groups:
+              - title: Core
+                color: 194 54 42
+                links:
+                  - title: Proxmox
+                    url: https://proxmox.${LAN_DOMAIN}/
+                    icon: si:proxmox
+                  - title: OPNsense
+                    url: https://opnsense.${LAN_DOMAIN}/
+                    icon: si:opnsense
+                  - title: Traefik
+                    url: https://traefik.${DOCKER_DOMAIN}/
+                    icon: si:traefikproxy
+                  - title: Home Assistant
+                    url: https://homeassistant.${DOCKER_DOMAIN}/
+                    icon: si:homeassistant
+                  - title: Speedtest
+                    url: https://speedtest.${DOCKER_DOMAIN}/
+                    icon: si:speedtest
+
+              - title: Media
+                color: 42 72 43
+                links:
+                  - title: Plex
+                    url: https://plex.${DOCKER_DOMAIN}/
+                    icon: si:plex
+                  - title: qBittorrent
+                    url: https://qbittorrent.${DOCKER_DOMAIN}/
+                    icon: si:qbittorrent
+                  - title: Prowlarr
+                    url: https://prowlarr.${DOCKER_DOMAIN}/
+                    icon: sh:prowlarr
+                  - title: Kavita
+                    url: https://kavita.${DOCKER_DOMAIN}/
+                    icon: si:bookstack
+
+          - type: rss
+            title: Self-hosted
+            cache: 2h
+            limit: 8
+            collapse-after: 4
+            feeds:
+              - url: https://selfh.st/rss/
+                title: selfh.st
+              - url: https://noted.lol/rss/
+                title: Noted
+
+      - size: full
+        widgets:
+          - type: search
+            search-engine: google
+            new-tab: true
+            autofocus: true
+            placeholder: Search the web or use bangs
+            bangs:
+              - title: GitHub
+                shortcut: "!gh"
+                url: https://github.com/search?q={QUERY}
+              - title: Docker Hub
+                shortcut: "!dh"
+                url: https://hub.docker.com/search?q={QUERY}
+              - title: Reddit
+                shortcut: "!r"
+                url: https://www.reddit.com/search/?q={QUERY}
+              - title: YouTube
+                shortcut: "!yt"
+                url: https://www.youtube.com/results?search_query={QUERY}
+
+          - type: videos
+            title: Videos
+            cache: 3h
+            limit: 12
+            include-shorts: true
+            collapse-after-rows: 2
+            style: horizontal-cards
+            channels:
+              - UCXuqSBlHAE6Xw-yeJA0Tunw
+              - UCsBjURrPoezykLs9EqgamOA
+              - UCBJycsmduvYEL83R_U4JriQ
+              - UCHnyfMqiRRG1u-2MsSQLbXA
+              - UCR-DXc1voovS8nhAvccRZhg
+              - UCl2mFZoRqjw_ELax4Yisf6w
+
+          - type: split-column
+            widgets:
+              - type: reddit
+                title: r/news
+                subreddit: news
+                sort-by: hot
+                show-thumbnails: true
+                limit: 10
+                collapse-after: 5
+              - type: rss
+                title: Habr
+                cache: 2h
+                limit: 10
+                collapse-after: 5
+                feeds:
+                  - url: https://habr.com/ru/rss/best/daily/?fl=ru
+                    title: Habr Daily Best
+
+          - type: split-column
+            widgets:
+              - type: hacker-news
+                title: Hacker News
+                limit: 12
+                collapse-after: 5
+                sort-by: best
+                extra-sort-by: engagement
+              - type: lobsters
+                title: Lobsters
+                limit: 12
+                collapse-after: 5
+                tags:
+                  - linux
+                  - security
+                  - programming
+                  - web
+
+          - type: split-column
+            widgets:
+              - type: reddit
+                title: r/technology
+                subreddit: technology
+                sort-by: hot
+                show-thumbnails: true
+                limit: 10
+                collapse-after: 5
+              - type: reddit
+                title: r/selfhosted
+                subreddit: selfhosted
+                sort-by: hot
+                show-thumbnails: true
+                limit: 10
+                collapse-after: 5
+
+          - type: custom-api
+            title: Trending GitHub Repositories
+            cache: 24h
+            url: https://api.ossinsight.io/v1/trends/repos/?period=past_24_hours&language=All
+            template: |
+              <ul class="list list-gap-10 collapsible-container" data-collapse-after="5">
+                {{ range .JSON.Array "data.rows" }}
+                  <li>
+                    <a class="color-primary-if-not-visited" href="https://github.com/{{ .String "repo_name" }}">{{ .String "repo_name" }}</a>
+                    <ul class="list-horizontal-text">
+                      <li class="color-highlight">{{ .String "primary_language" }}</li>
+                      <li>{{ .Int "stars" }} stars</li>
+                      <li>{{ .Int "forks" }} forks</li>
+                    </ul>
+                    <div class="color-subdue text-truncate">{{ .String "description" }}</div>
+                  </li>
+                {{ end }}
+              </ul>
+
+      - size: small
+        widgets:
+          - type: weather
+            title: Weather
+            location: ${WEATHER_LOCATION:-London, United Kingdom}
+            units: metric
+            hour-format: 24h
+
+          - type: group
+            widgets:
+              - type: custom-api
+                title: PrivatBank
+                title-url: https://privatbank.ua/
+                cache: 30m
+                url: https://api.privatbank.ua/p24api/pubinfo?exchange&json&coursid=11
+                template: |
+                  <div class="currency-grid">
+                    <div>
+                      <div class="color-highlight size-h3">{{ .JSON.Float "#(ccy==\"USD\").buy" | printf "%g" }}</div>
+                      <div class="size-h6">USD buy</div>
+                    </div>
+                    <div>
+                      <div class="color-highlight size-h3">{{ .JSON.Float "#(ccy==\"USD\").sale" | printf "%g" }}</div>
+                      <div class="size-h6">USD sell</div>
+                    </div>
+                    <div>
+                      <div class="color-highlight size-h3">{{ .JSON.Float "#(ccy==\"EUR\").buy" | printf "%g" }}</div>
+                      <div class="size-h6">EUR buy</div>
+                    </div>
+                    <div>
+                      <div class="color-highlight size-h3">{{ .JSON.Float "#(ccy==\"EUR\").sale" | printf "%g" }}</div>
+                      <div class="size-h6">EUR sell</div>
+                    </div>
+                  </div>
+
+              - type: custom-api
+                title: MonoBank
+                title-url: https://www.monobank.ua/
+                cache: 30m
+                url: https://api.monobank.ua/bank/currency
+                template: |
+                  <div class="currency-grid">
+                    <div>
+                      <div class="color-highlight size-h3">{{ .JSON.Float "#(currencyCodeA==840).rateBuy" | printf "%g" }}</div>
+                      <div class="size-h6">USD buy</div>
+                    </div>
+                    <div>
+                      <div class="color-highlight size-h3">{{ .JSON.Float "#(currencyCodeA==840).rateSell" | printf "%g" }}</div>
+                      <div class="size-h6">USD sell</div>
+                    </div>
+                    <div>
+                      <div class="color-highlight size-h3">{{ .JSON.Float "#(currencyCodeA==978).rateBuy" | printf "%g" }}</div>
+                      <div class="size-h6">EUR buy</div>
+                    </div>
+                    <div>
+                      <div class="color-highlight size-h3">{{ .JSON.Float "#(currencyCodeA==978).rateSell" | printf "%g" }}</div>
+                      <div class="size-h6">EUR sell</div>
+                    </div>
+                  </div>
+
+          - type: custom-api
+            title: Internet Speed
+            title-url: ${SPEEDTEST_URL}
+            cache: 1h
+            url: ${SPEEDTEST_URL}/api/v1/results/latest
+            headers:
+              Authorization: Bearer ${SPEEDTEST_TRACKER_API_TOKEN}
+              Accept: application/json
+            subrequests:
+              stats:
+                url: ${SPEEDTEST_URL}/api/v1/stats
+                headers:
+                  Authorization: Bearer ${SPEEDTEST_TRACKER_API_TOKEN}
+                  Accept: application/json
+            template: |
+              {{ $stats := .Subrequest "stats" }}
+              {{ $downloadChange := percentChange (.JSON.Float "data.download_bits") ($stats.JSON.Float "data.download.avg_bits") }}
+              {{ $uploadChange := percentChange (.JSON.Float "data.upload_bits") ($stats.JSON.Float "data.upload.avg_bits") }}
+              {{ $pingChange := percentChange (.JSON.Float "data.ping") ($stats.JSON.Float "data.ping.avg") }}
+              <div class="speed-grid">
+                <div>
+                  <div class="size-small {{ if gt $downloadChange 0.0 }}color-positive{{ else if lt $downloadChange 0.0 }}color-negative{{ else }}color-primary{{ end }}">{{ $downloadChange | printf "%+.1f%%" }}</div>
+                  <div class="color-highlight size-h3">{{ .JSON.Float "data.download_bits" | mul 0.000001 | printf "%.1f" }}</div>
+                  <div class="size-h6">Mbps down</div>
+                </div>
+                <div>
+                  <div class="size-small {{ if gt $uploadChange 0.0 }}color-positive{{ else if lt $uploadChange 0.0 }}color-negative{{ else }}color-primary{{ end }}">{{ $uploadChange | printf "%+.1f%%" }}</div>
+                  <div class="color-highlight size-h3">{{ .JSON.Float "data.upload_bits" | mul 0.000001 | printf "%.1f" }}</div>
+                  <div class="size-h6">Mbps up</div>
+                </div>
+                <div>
+                  <div class="size-small {{ if gt $pingChange 0.0 }}color-negative{{ else if lt $pingChange 0.0 }}color-positive{{ else }}color-primary{{ end }}">{{ $pingChange | printf "%+.1f%%" }}</div>
+                  <div class="color-highlight size-h3">{{ .JSON.Float "data.ping" | printf "%.0f" }}</div>
+                  <div class="size-h6">ms ping</div>
+                </div>
+              </div>
+
+          - type: monitor
+            title: Internet
+            cache: 1m
+            sites:
+              - title: Cloudflare
+                url: https://one.one.one.one/
+                check-url: https://one.one.one.one/
+                icon: si:cloudflare
+                timeout: 5s
+              - title: Google
+                url: https://www.google.com/
+                check-url: https://www.google.com/generate_204
+                icon: si:google
+                timeout: 5s
+                alt-status-codes:
+                  - 204
+              - title: Quad9
+                url: https://quad9.net/
+                icon: si:quad9
+                timeout: 5s
+              - title: Speedtest Tracker
+                url: https://speedtest.${DOCKER_DOMAIN}/
+                icon: si:speedtest
+                timeout: 5s
+              - title: Codex
+                url: https://status.openai.com/
+                check-url: https://status.openai.com/api/v2/status.json
+                icon: si:openai
+                timeout: 5s
+              - title: Claude Code
+                url: https://status.claude.com/
+                check-url: https://status.claude.com/api/v2/status.json
+                icon: si:anthropic
+                timeout: 5s
+              - title: Antigravity
+                url: https://antigravity.google/
+                check-url: https://antigravity.google/
+                icon: si:google
+                timeout: 5s
+
+          - type: releases
+            title: Releases
+            cache: 12h
+            show-source-icon: true
+            limit: 8
+            collapse-after: 5
+            repositories:
+              - glanceapp/glance
+              - traefik/traefik
+              - linuxserver/docker-plex
+              - linuxserver/docker-qbittorrent
+              - Prowlarr/Prowlarr
+              - karakeep-app/karakeep
+              - alexjustesen/speedtest-tracker
+
+  - name: Lab
+    width: wide
+    columns:
+      - size: full
+        widgets:
+          - type: monitor
+            title: Local Services
+            cache: 1m
+            sites:
+              - title: Plex
+                url: https://plex.${DOCKER_DOMAIN}/
+                check-url: https://plex.${DOCKER_DOMAIN}/identity
+                icon: si:plex
+                timeout: 5s
+              - title: qBittorrent
+                url: https://qbittorrent.${DOCKER_DOMAIN}/
+                icon: si:qbittorrent
+                timeout: 5s
+              - title: Prowlarr
+                url: https://prowlarr.${DOCKER_DOMAIN}/
+                check-url: https://prowlarr.${DOCKER_DOMAIN}/ping
+                icon: sh:prowlarr
+                timeout: 5s
+              - title: Kavita
+                url: https://kavita.${DOCKER_DOMAIN}/
+                icon: si:bookstack
+                timeout: 5s
+              - title: Karakeep
+                url: https://karakeep.${DOCKER_DOMAIN}/
+                icon: si:bookstack
+                timeout: 5s
+                alt-status-codes:
+                  - 307
+              - title: Bitwarden
+                url: https://bitwarden.${DOCKER_DOMAIN}/
+                icon: si:vaultwarden
+                timeout: 5s
+              - title: Freedium
+                url: https://freedium.${DOCKER_DOMAIN}/
+                icon: si:medium
+                timeout: 5s
+              - title: Traefik
+                url: https://traefik.${DOCKER_DOMAIN}/
+                icon: si:traefikproxy
+                timeout: 5s
+                alt-status-codes:
+                  - 302
+              - title: Home Assistant
+                url: https://homeassistant.${DOCKER_DOMAIN}/
+                icon: si:homeassistant
+                timeout: 5s
+                alt-status-codes:
+                  - 302
+              - title: Speedtest Tracker
+                url: https://speedtest.${DOCKER_DOMAIN}/
+                icon: si:speedtest
+                timeout: 5s
+              - title: Proxmox
+                url: https://proxmox.${LAN_DOMAIN}/
+                icon: si:proxmox
+                timeout: 5s
+              - title: OPNsense
+                url: https://opnsense.${LAN_DOMAIN}/
+                icon: si:opnsense
+                timeout: 5s
+
+      - size: small
+        widgets:
+          - type: bookmarks
+            title: Utilities
+            groups:
+              - title: Apps
+                color: 150 42 38
+                links:
+                  - title: Bitwarden
+                    url: https://bitwarden.${DOCKER_DOMAIN}/
+                    icon: si:vaultwarden
+                  - title: Karakeep
+                    url: https://karakeep.${DOCKER_DOMAIN}/
+                    icon: si:bookstack
+                  - title: Freedium
+                    url: https://freedium.${DOCKER_DOMAIN}/
+                    icon: si:medium

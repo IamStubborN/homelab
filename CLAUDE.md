@@ -96,11 +96,11 @@ networks:
 ```
 
 ### Environment Variables
-Check `.env` files in service directories for credentials:
-- `/traefik/.env` - Cloudflare API (CF_API_EMAIL, CF_DNS_API_TOKEN)
-- `/media/.env` - VPN credentials (WIREGUARD_PRIVATE_KEY, PLEX_CLAIM)
-- `/karakeep/.env` - Gemini API, MeiliSearch keys
-- `/movie-tracker/.env` - TMDb, Telegram, Prowlarr API keys
+Most active compose variables are loaded from the root `.env` file next to `compose.yml`. Keep `.env.example` in sync with the variables reported by `docker compose config --variables`.
+
+Only services that declare `env_file` use service-local `.env` files. At the moment those are:
+- `/glance/.env`
+- `/speedtest-tracker/.env`
 
 ### Custom Applications
 **KaraKeep** (`/karakeep/`): Web scraper with Gemini AI summarization and MeiliSearch.

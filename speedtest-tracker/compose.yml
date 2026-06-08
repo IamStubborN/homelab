@@ -17,7 +17,7 @@ services:
       APP_TIMEZONE: ${TIMEZONE:-UTC}
       PUBLIC_DASHBOARD: "true"
       SPEEDTEST_SCHEDULE: "17 */6 * * *"
-      SPEEDTEST_INTERNET_CHECK_HOSTNAME: one.one.one.one
+      SPEEDTEST_INTERNET_CHECK_HOSTNAME: 1.1.1.1
     volumes:
       - ./config:/config
     labels:

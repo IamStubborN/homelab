@@ -10,6 +10,9 @@ services:
     network_mode: host
     environment:
       - "SAMBA_LOG_LEVEL=0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
     volumes:
       - ./config:/data
       - /etc/localtime:/etc/localtime:ro
@@ -23,6 +26,9 @@ services:
     security_opt:
       - no-new-privileges:true
     network_mode: host
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
     environment:
       - 'HOSTNAME=docker'
 
@@ -34,5 +40,9 @@ services:
     security_opt:
       - no-new-privileges:true
     network_mode: host
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
     volumes:
+      - ./config/avahi-daemon.conf:/etc/avahi/avahi-daemon.conf:ro
       - ./config/avahi-services:/etc/avahi/services:ro

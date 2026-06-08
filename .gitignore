@@ -118,8 +118,7 @@ ai/ollama-webui/
 !ai/compose.yml
 wproxy/pritunl/profiles/
 
-# Embedded repositories / vendored source trees: track via their own repos, not homelab config backup
-freedium/repo/
+# Embedded repositories / vendored source trees: track via submodules or their own repos.
 media/qbittorrent/ui/VueTorrent/
 
 # VPN/exported bundles and mutable app state
@@ -130,6 +129,7 @@ zeroclaw/config/daemon_state.json
 
 # Real service configs containing secrets; keep sanitized examples instead
 samba/config/config.yml
+samba/config/avahi-daemon.conf
 homeassistant/config/.HA_VERSION
 homeassistant/config/.ha_run.lock
 notes.txt

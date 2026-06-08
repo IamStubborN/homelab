@@ -59,6 +59,7 @@ services:
     secrets:
       - wireguard_private_key
     labels:
+      - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
 
       - "traefik.http.routers.qbittorrent.tls=true"
@@ -146,6 +147,7 @@ services:
       retries: 2
       start_period: 60s
     labels:
+      - "com.centurylinklabs.watchtower.enable=true"
       - "deunhealth.restart.on.unhealthy=true"
     environment:
       - PUID=1000
@@ -186,6 +188,7 @@ services:
       retries: 2
       start_period: 60s
     labels:
+      - "com.centurylinklabs.watchtower.enable=true"
       - "deunhealth.restart.on.unhealthy=true"
     volumes:
       - ./prowlarr/config:/config
@@ -416,6 +419,9 @@ services:
       - DEPENDENT_CONTAINERS=qbittorrent prowlarr
       - HEALTH_TIMEOUT=120
       - SETTLE_DELAY=10
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./gluetun-watcher/watch.sh:/watch.sh:ro
@@ -450,6 +456,7 @@ services:
       timeout: 10s
       retries: 3
     labels:
+      - "com.centurylinklabs.watchtower.enable=true"
       - "deunhealth.restart.on.unhealthy=true"
       - "traefik.enable=true"
       - "traefik.http.routers.plex.tls=true"
@@ -482,6 +489,9 @@ services:
       - ./plex-auto-languages/logs:/logs
     secrets:
       - plex_token
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
     networks:
       - proxy
 

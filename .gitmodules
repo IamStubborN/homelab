@@ -1,0 +1,3 @@
+[submodule "freedium/repo"]
+	path = freedium/repo
+	url = https://github.com/Freedium-cfd/web.git

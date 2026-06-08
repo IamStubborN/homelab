@@ -12,6 +12,7 @@ services:
       - ./assets:/app/assets:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     labels:
+      - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
       - "traefik.http.routers.glance.tls=true"

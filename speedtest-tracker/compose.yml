@@ -21,6 +21,7 @@ services:
     volumes:
       - ./config:/config
     labels:
+      - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
       - "traefik.http.routers.speedtest-tracker.tls=true"

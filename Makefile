@@ -14,7 +14,9 @@ dns-leak-test:
 	docker run --rm --network=container:gluetun ubuntu:22.04 sh -c "apt-get update && apt-get install curl inetutils-ping -y && curl https://raw.githubusercontent.com/macvk/dnsleaktest/master/dnsleaktest.sh -o dnsleaktest.sh && chmod +x dnsleaktest.sh && ./dnsleaktest.sh"
 
 update-containers:
-	docker compose down && docker compose pull && docker compose up -d
+	docker compose config --quiet
+	docker compose pull
+	docker compose up -d --remove-orphans
 
 prune:
 	docker system prune -a -f

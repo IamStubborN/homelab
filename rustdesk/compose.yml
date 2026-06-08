@@ -6,6 +6,9 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
     volumes:
       - ./data:/root
     network_mode: "host"
@@ -19,6 +22,9 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
     volumes:
       - ./data:/root
     network_mode: "host"

@@ -1,5 +1,6 @@
 services:
   movie-tracker:
+    container_name: movie-tracker
     image: ghcr.io/example/movie-tracker:latest
     command: ["python", "-m", "src.main"]
     restart: unless-stopped

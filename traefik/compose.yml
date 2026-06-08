@@ -26,6 +26,7 @@ services:
       - "./config/config.yml:/config.yml:ro"
       - "./config/acme.json:/acme.json"
     labels:
+      - "com.centurylinklabs.watchtower.enable=true"
       # Global
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
@@ -45,6 +46,7 @@ services:
     security_opt:
       - no-new-privileges:true
     labels:
+      - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
       - "traefik.http.routers.whoami.tls=true"
       - "traefik.http.routers.whoami.entrypoints=http,https"

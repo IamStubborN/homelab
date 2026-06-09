@@ -11,6 +11,12 @@ services:
       TZ: ${TIMEZONE:-UTC}
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8123/manifest.json >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
     volumes:
       - ./config:/config
@@ -29,6 +35,12 @@ services:
       TS_AUTH_ONCE: "true"
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--peers=false"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
     volumes:
       - ./tailscale-state:/var/lib/tailscale

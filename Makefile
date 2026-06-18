@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-VIDEO_DIR ?= /mnt/internal/torrents/tv
+VIDEO_DIR ?= ${INTERNAL_STORAGE:-/mnt/internal}/torrents/tv
 
 .PHONY: ip-test speedtest dns-leak-test update-containers prune danger-prune check-codecs
 

@@ -16,8 +16,8 @@ services:
     volumes:
       - ./config:/data
       - /etc/localtime:/etc/localtime:ro
-      - /mnt/internal:/mnt/share/internal
-      - /mnt/usb_drive:/mnt/share/usb_drive
+      - ${INTERNAL_STORAGE:-/mnt/internal}:/mnt/share/internal
+      - ${USB_STORAGE:-/mnt/usb_drive}:/mnt/share/usb_drive
 
   wsdd:
     container_name: samba-wsdd

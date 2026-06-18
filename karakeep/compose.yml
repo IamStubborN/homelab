@@ -33,7 +33,7 @@ services:
       INFERENCE_CONTEXT_LENGTH: 32768
 
       # Allow crawler to access internal hostnames
-      CRAWLER_ALLOWED_INTERNAL_HOSTNAMES: freedium.${DOCKER_DOMAIN}
+      CRAWLER_ALLOWED_INTERNAL_HOSTNAMES: ${KARAKEEP_CRAWLER_ALLOWED_INTERNAL_HOSTNAMES}
 
       # OPENAI_API_KEY: ...
       # You almost never want to change the value of the DATA_DIR variable.

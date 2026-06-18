@@ -158,8 +158,8 @@ services:
       - ./qbittorrent/ui:/ui
       - ./qbittorrent/scripts:/scripts
       - /etc/localtime:/etc/localtime:ro
-      - /mnt/internal/torrents:/data/internal/torrents
-      - /mnt/usb_drive/torrents:/data/usb_drive/torrents
+      - ${INTERNAL_STORAGE:-/mnt/internal}/torrents:/data/internal/torrents
+      - ${USB_STORAGE:-/mnt/usb_drive}/torrents:/data/usb_drive/torrents
 
   prowlarr:
     container_name: prowlarr
@@ -207,8 +207,8 @@ services:
   #     - ./radarr/custom-services.d:/custom-services.d
   #     - ./radarr/custom-cont-init.d:/custom-cont-init.d
   #     - /etc/localtime:/etc/localtime:ro
-  #     - /mnt/internal:/data/internal
-  #     - /mnt/usb_drive:/data/usb_drive
+  #     - ${INTERNAL_STORAGE:-/mnt/internal}:/data/internal
+  #     - ${USB_STORAGE:-/mnt/usb_drive}:/data/usb_drive
   #   healthcheck:
   #     test: "curl -sf http://localhost:7878/ping || exit 1"
   #     interval: 1m
@@ -241,8 +241,8 @@ services:
   #     - ./sonarr/custom-services.d:/custom-services.d
   #     - ./sonarr/custom-cont-init.d:/custom-cont-init.d
   #     - /etc/localtime:/etc/localtime:ro
-  #     - /mnt/internal:/data/internal
-  #     - /mnt/usb_drive:/data/usb_drive
+  #     - ${INTERNAL_STORAGE:-/mnt/internal}:/data/internal
+  #     - ${USB_STORAGE:-/mnt/usb_drive}:/data/usb_drive
   #   healthcheck:
   #     test: "curl -sf http://localhost:8989/ping || exit 1"
   #     interval: 1m
@@ -273,8 +273,8 @@ services:
   #   volumes:
   #     - ./bazarr/config:/config
   #     - /etc/localtime:/etc/localtime:ro
-  #     - /mnt/internal/media:/data/internal/media
-  #     - /mnt/usb_drive/media:/data/usb_drive/media
+  #     - ${INTERNAL_STORAGE:-/mnt/internal}/media:/data/internal/media
+  #     - ${USB_STORAGE:-/mnt/usb_drive}/media:/data/usb_drive/media
   #   healthcheck:
   #     test: "curl -sf http://localhost:6767/api/system/status || exit 1"
   #     interval: 1m
@@ -305,8 +305,8 @@ services:
   #   volumes:
   #     - ./lidarr/config:/config
   #     - /etc/localtime:/etc/localtime:ro
-  #     - /mnt/internal:/data/internal
-  #     - /mnt/usb_drive:/data/usb_drive
+  #     - ${INTERNAL_STORAGE:-/mnt/internal}:/data/internal
+  #     - ${USB_STORAGE:-/mnt/usb_drive}:/data/usb_drive
   #   healthcheck:
   #     test: "curl -sf http://localhost:8686/ping || exit 1"
   #     interval: 1m
@@ -337,8 +337,8 @@ services:
   #   volumes:
   #     - ./readarr/config:/config
   #     - /etc/localtime:/etc/localtime:ro
-  #     - /mnt/internal:/data/internal
-  #     - /mnt/usb_drive:/data/usb_drive
+  #     - ${INTERNAL_STORAGE:-/mnt/internal}:/data/internal
+  #     - ${USB_STORAGE:-/mnt/usb_drive}:/data/usb_drive
   #   healthcheck:
   #     test: "curl -sf http://localhost:8787/ping || exit 1"
   #     interval: 1m
@@ -445,8 +445,8 @@ services:
       - ./plex/config:/config
       - /etc/localtime:/etc/localtime:ro
       - /dev/shm:/transcode
-      - /mnt/internal:/data/internal
-      - /mnt/usb_drive:/data/usb_drive
+      - ${INTERNAL_STORAGE:-/mnt/internal}:/data/internal
+      - ${USB_STORAGE:-/mnt/usb_drive}:/data/usb_drive
     healthcheck:
       test: "curl -sf http://localhost:32400/identity || exit 1"
       interval: 1m
@@ -507,8 +507,8 @@ services:
   #   volumes:
   #     - ./jellyfin/config:/config
   #     - /etc/localtime:/etc/localtime:ro
-  #     - /mnt/internal:/data/internal
-  #     - /mnt/usb_drive:/data/usb_drive
+  #     - ${INTERNAL_STORAGE:-/mnt/internal}:/data/internal
+  #     - ${USB_STORAGE:-/mnt/usb_drive}:/data/usb_drive
   #   healthcheck:
   #     test: "curl -sf http://localhost:8096/health || exit 1"
   #     interval: 1m

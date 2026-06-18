@@ -74,7 +74,7 @@ Media services route through Gluetun container:
 
 ## Restore Notes
 
-Use `restore notes` for clean-host recovery. The repository intentionally does not contain runtime data or secrets. Freedium source is tracked as a pinned git submodule.
+Use this file and the tracked `*.example.*` files for clean-host recovery. The repository intentionally does not contain runtime data, local Home Assistant state, or secrets. Freedium source is tracked as a pinned git submodule.
 
 Clean-host restore requires more than the root `.env`: create service-local env files for services with `env_file` (`glance/.env`, `speedtest-tracker/.env`), restore Docker secret files under `traefik/secrets/` and `media/secrets/`, restore ignored runtime data directories, and verify host prerequisites such as storage mounts, `/dev/net/tun`, `/dev/dri`, `/run/dbus`, Docker socket access, ports `80/443`, and the external `proxy` network.
 
@@ -104,6 +104,16 @@ Only services that declare `env_file` use service-local `.env` files. At the mom
 - `/glance/.env`
 - `/speedtest-tracker/.env`
 
+Runtime-only config files are ignored. Copy tracked examples before first use:
+```bash
+cp traefik/config/config.example.yml traefik/config/config.yml
+cp glance/config/glance.example.yml glance/config/glance.yml
+cp homeassistant/config/configuration.example.yaml homeassistant/config/configuration.yaml
+cp homeassistant/config/automations.example.yaml homeassistant/config/automations.yaml
+cp homeassistant/config/scripts.example.yaml homeassistant/config/scripts.yaml
+cp homeassistant/config/scenes.example.yaml homeassistant/config/scenes.yaml
+```
+
 ### Custom Applications
 **KaraKeep** (`/karakeep/`): Web scraper with Gemini AI summarization and MeiliSearch.
 
@@ -127,6 +137,6 @@ When modifying custom applications:
 - For source-built apps such as Freedium, update the pinned submodule deliberately and rebuild the relevant service.
 
 ### Storage Mounts
-- `/mnt/internal/` - Main storage (torrents, media, books)
-- `/mnt/usb_drive/` - Secondary USB storage
+- `${INTERNAL_STORAGE:-/mnt/internal}/` - Main storage (torrents, media, books)
+- `${USB_STORAGE:-/mnt/usb_drive}/` - Secondary USB storage
 - Services mount these as `/data/internal` and `/data/usb_drive`

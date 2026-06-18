@@ -129,6 +129,12 @@ zeroclaw/config/daemon_state.json
 
 # Real service configs containing secrets; keep sanitized examples instead
 samba/config/config.yml
+glance/config/glance.yml
+traefik/config/config.yml
+homeassistant/config/configuration.yaml
+homeassistant/config/automations.yaml
+homeassistant/config/scripts.yaml
+homeassistant/config/scenes.yaml
 homeassistant/config/.HA_VERSION
 homeassistant/config/.ha_run.lock
 

@@ -10,7 +10,7 @@ services:
     volumes:
       - /etc/localtime:/etc/localtime:ro      
       - ./config:/kavita/config
-      - /mnt/internal/torrents/books:/books
+      - ${INTERNAL_STORAGE:-/mnt/internal}/torrents/books:/books
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"

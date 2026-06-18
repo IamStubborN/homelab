@@ -1,0 +1,14 @@
+default_config:
+
+homeassistant:
+  external_url: "https://homeassistant.example.local"
+  internal_url: "http://homeassistant.local:8123"
+
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - "127.0.0.1"
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml

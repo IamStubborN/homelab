@@ -38,23 +38,25 @@ services:
       start_period: 60s
     environment:
       - TZ=${TIMEZONE:-UTC} # Specify your timezone here
-      - VPN_SERVICE_PROVIDER=nordvpn # Specify your VPN provider here
+      - VPN_SERVICE_PROVIDER=protonvpn # Specify your VPN provider here
       - VPN_TYPE=wireguard # Specify your VPN type here
-      - SERVER_CATEGORIES=P2P # Specify your server categories here
-      - SERVER_COUNTRIES=Bulgaria # Specify your server country here
-      - WIREGUARD_PRIVATE_KEY_SECRETFILE=/run/secrets/wireguard_private_key
+      - PORT_FORWARD_ONLY=on # Use only ProtonVPN servers with port forwarding
+      - SERVER_COUNTRIES=Bulgaria # ProtonVPN preferred country
+      - WIREGUARD_PRIVATE_KEY_SECRETFILE=/run/secrets/protonvpn_wireguard_private_key
       - UPDATER_PERIOD=6h
       - DNS_SERVER=on
       - DNS_UPSTREAM_RESOLVERS=cloudflare,google
       - BLOCK_MALICIOUS=off
       - DNS_UPSTREAM_IPV6=off
       - HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={"auth":"none"}
+      - VPN_PORT_FORWARDING=on
+      - VPN_PORT_FORWARDING_STATUS_FILE=/gluetun/forwarded_port
       # - DNS_ADDRESS=${DNS_ADDRESS:-192.0.2.1}
       # - FIREWALL_OUTBOUND_SUBNETS=${LAN_SUBNET:-192.0.2.0/24}
       # - DNS_ADDRESS=${ALT_DNS_ADDRESS:-198.51.100.1}
       # - FIREWALL_OUTBOUND_SUBNETS=${ALT_LAN_SUBNET:-198.51.100.0/24}
     secrets:
-      - wireguard_private_key
+      - protonvpn_wireguard_private_key
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
@@ -152,11 +154,11 @@ services:
       - UNMASK=002
       - TZ=${TIMEZONE:-UTC}
       - WEBUI_PORT=8400
-      - TORRENTING_PORT=6881
     volumes:
       - ./qbittorrent/config:/config
       - ./qbittorrent/ui:/ui
       - ./qbittorrent/scripts:/scripts
+      - ./gluetun/data/forwarded_port:/gluetun/forwarded_port:ro
       - /etc/localtime:/etc/localtime:ro
       - ${INTERNAL_STORAGE:-/mnt/internal}/torrents:/data/internal/torrents
       - ${USB_STORAGE:-/mnt/usb_drive}/torrents:/data/usb_drive/torrents
@@ -526,8 +528,8 @@ services:
   #     - proxy
 
 secrets:
-  wireguard_private_key:
-    file: ./secrets/wireguard_private_key
+  protonvpn_wireguard_private_key:
+    file: ./secrets/protonvpn_wireguard_private_key
   plex_token:
     file: ./secrets/plex_token
 

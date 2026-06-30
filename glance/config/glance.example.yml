@@ -189,7 +189,7 @@ pages:
         widgets:
           - type: weather
             title: Weather
-            location: ${WEATHER_LOCATION:-London, United Kingdom}
+            location: ${WEATHER_LOCATION}
             units: metric
             hour-format: 24h
 

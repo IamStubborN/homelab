@@ -1,21 +1,22 @@
 #!/bin/sh
 
-# qBittorrent Health Check — tuned for NordVPN (no native port forwarding).
+# qBittorrent Health Check — tuned for ProtonVPN port forwarding.
 #
 # Hard failures (container will be restarted by deunhealth):
 #   1. WebUI not responding
 #   2. connection_status=disconnected — qBittorrent's own netstack is broken
 #   3. Gluetun control API doesn't return a public IP — VPN side is dead
 #   4. IP leak: qBittorrent's external IP disagrees with the VPN IP
-#   5. Active torrents exist but qBittorrent has no network signal
+#   5. qBittorrent listen_port differs from ProtonVPN's forwarded port
+#   6. Active torrents exist but qBittorrent has no network signal
 #      (dht_nodes=0, peers=0, no external IP) for longer than GRACE_PERIOD
 #
 # Benign states (NOT failures):
-#   - connection_status=firewalled — normal with NordVPN (no port forwarding)
 #   - dht_nodes=0 with 0 active torrents — libtorrent sleeps DHT when idle
 
 WEBUI_PORT=8400
 GLUETUN_API="http://localhost:8000"
+FORWARDED_PORT_FILE="/gluetun/forwarded_port"
 STATE_FILE="/config/healthcheck_stuck_since"
 GRACE_PERIOD_SECONDS=300  # 5 minutes before declaring a stuck qBT unhealthy
 
@@ -52,6 +53,19 @@ if [ -n "$QB_EXTERNAL_IP" ] && [ "$QB_EXTERNAL_IP" != "$VPN_IP" ]; then
     exit 1
 fi
 
+FORWARDED_PORT=$(tr -dc '0-9' < "$FORWARDED_PORT_FILE" 2>/dev/null || true)
+if [ -z "$FORWARDED_PORT" ] || [ "$FORWARDED_PORT" -lt 1 ] || [ "$FORWARDED_PORT" -gt 65535 ] 2>/dev/null; then
+    log "FAIL: ProtonVPN forwarded port unavailable"
+    exit 1
+fi
+
+QB_PREFS=$(wget -qO- --timeout=5 "http://localhost:${WEBUI_PORT}/api/v2/app/preferences" 2>/dev/null) || true
+LISTEN_PORT=$(echo "$QB_PREFS" | sed -n 's/.*"listen_port":\([0-9]*\).*/\1/p')
+if [ "$LISTEN_PORT" != "$FORWARDED_PORT" ]; then
+    log "FAIL: listen_port=$LISTEN_PORT forwarded_port=$FORWARDED_PORT"
+    exit 1
+fi
+
 # Count torrents that should be actively talking to the network.
 # Exclude paused, queued, errored, checking, or moving states.
 TORRENTS=$(wget -qO- --timeout=5 "http://localhost:${WEBUI_PORT}/api/v2/torrents/info" 2>/dev/null) || true
@@ -61,7 +75,7 @@ ACTIVE=$(echo "$TORRENTS" \
 
 if [ "$ACTIVE" -eq 0 ]; then
     mark_healthy
-    log "OK: idle (active=0) conn=$CONNECTION_STATUS VPN=$VPN_IP"
+    log "OK: idle (active=0) conn=$CONNECTION_STATUS port=$LISTEN_PORT VPN=$VPN_IP"
     exit 0
 fi
 
@@ -69,7 +83,7 @@ fi
 # Any positive signal (DHT, peers, or a learned external IP) means qBT is alive.
 if [ "$DHT_NODES" -gt 0 ] || [ "$PEERS" -gt 0 ] || [ -n "$QB_EXTERNAL_IP" ]; then
     mark_healthy
-    log "OK: active=$ACTIVE DHT=$DHT_NODES peers=$PEERS VPN=$VPN_IP"
+    log "OK: active=$ACTIVE conn=$CONNECTION_STATUS port=$LISTEN_PORT DHT=$DHT_NODES peers=$PEERS VPN=$VPN_IP"
     exit 0
 fi
 

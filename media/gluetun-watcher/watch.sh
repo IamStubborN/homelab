@@ -6,6 +6,8 @@ PARENT="${PARENT_CONTAINER:-gluetun}"
 DEPENDENTS="${DEPENDENT_CONTAINERS:-qbittorrent prowlarr}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
 SETTLE_DELAY="${SETTLE_DELAY:-10}"
+QBITTORRENT_CONTAINER="${QBITTORRENT_CONTAINER:-qbittorrent}"
+QBITTORRENT_WEBUI_PORT="${QBITTORRENT_WEBUI_PORT:-8400}"
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') [gluetun-watcher] $1"
@@ -52,6 +54,33 @@ wait_healthy() {
     return 1
 }
 
+get_forwarded_port() {
+    docker exec "$PARENT" sh -c 'cat /gluetun/forwarded_port /tmp/gluetun/forwarded_port 2>/dev/null | head -n1' 2>/dev/null \
+        | tr -dc '0-9'
+}
+
+sync_qbittorrent_port() {
+    port="$(get_forwarded_port)"
+    if [ -z "$port" ] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ] 2>/dev/null; then
+        log "WARNING: cannot read valid forwarded port from $PARENT"
+        return 1
+    fi
+
+    state=$(docker inspect "$QBITTORRENT_CONTAINER" --format '{{.State.Status}}' 2>/dev/null || echo "")
+    if [ "$state" != "running" ]; then
+        log "$QBITTORRENT_CONTAINER: not running ($state), cannot sync forwarded port"
+        return 1
+    fi
+
+    log "$QBITTORRENT_CONTAINER: syncing listen_port=$port"
+    if docker exec "$QBITTORRENT_CONTAINER" sh -c "wget -qO- --timeout=5 --post-data 'json={\"listen_port\":$port}' http://127.0.0.1:${QBITTORRENT_WEBUI_PORT}/api/v2/app/setPreferences >/dev/null"; then
+        log "$QBITTORRENT_CONTAINER: listen_port synced to $port"
+    else
+        log "ERROR: failed to sync $QBITTORRENT_CONTAINER listen_port"
+        return 1
+    fi
+}
+
 restart_dependents() {
     for ctr in $DEPENDENTS; do
         state=$(docker inspect "$ctr" --format '{{.State.Status}}' 2>/dev/null || echo "")
@@ -96,6 +125,8 @@ check_startup_order() {
     if [ "$stale" -eq 1 ]; then
         log "Stale dependents detected, restarting..."
         restart_dependents
+        sleep 5
+        sync_qbittorrent_port || true
     else
         log "All dependents OK"
     fi
@@ -109,6 +140,7 @@ sleep "$SETTLE_DELAY"
 
 log "Initial startup order check..."
 check_startup_order
+sync_qbittorrent_port || true
 
 log "Watching docker events for $PARENT..."
 docker events \
@@ -123,6 +155,8 @@ docker events \
         log "$PARENT is healthy, restarting dependents..."
         sleep "$SETTLE_DELAY"
         restart_dependents
+        sleep 5
+        sync_qbittorrent_port || true
     else
         log "WARNING: $PARENT not healthy after ${HEALTH_TIMEOUT}s, skipping"
     fi

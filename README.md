@@ -38,7 +38,7 @@ Fill real values only in ignored local files:
 - `glance/.env`
 - `speedtest-tracker/.env`
 - `traefik/secrets/cf_dns_api_token`
-- `media/secrets/wireguard_private_key`
+- `media/secrets/protonvpn_wireguard_private_key`
 - `media/secrets/plex_token`
 - `homeassistant/config/secrets.yaml`
 

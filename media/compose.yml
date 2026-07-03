@@ -73,6 +73,13 @@ services:
       - "traefik.http.routers.prowlarr.rule=Host(`prowlarr.${DOCKER_DOMAIN}`)"
       - "traefik.http.services.prowlarr.loadbalancer.server.port=9696"
 
+
+      - "traefik.http.routers.speedtest-vpn.tls=true"
+      - "traefik.http.routers.speedtest-vpn.entrypoints=http,https"
+      - "traefik.http.routers.speedtest-vpn.service=speedtest-vpn"
+      - "traefik.http.routers.speedtest-vpn.rule=Host(`speedtest-vpn.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.speedtest-vpn.loadbalancer.server.port=80"
+
       # - "traefik.http.routers.radarr.tls=true"
       # - "traefik.http.routers.radarr.entrypoints=http,https"
       # - "traefik.http.routers.radarr.service=radarr"
@@ -415,7 +422,7 @@ services:
         condition: service_healthy
     environment:
       - PARENT_CONTAINER=gluetun
-      - DEPENDENT_CONTAINERS=qbittorrent prowlarr
+      - DEPENDENT_CONTAINERS=qbittorrent prowlarr speedtest-tracker-vpn
       - HEALTH_TIMEOUT=120
       - SETTLE_DELAY=10
     labels:
@@ -491,6 +498,46 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
+    networks:
+      - proxy
+
+
+  media-preview-generator:
+    image: stevezzau/media_preview_generator:latest
+    container_name: media-preview-generator
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      plex:
+        condition: service_healthy
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TIMEZONE:-UTC}
+    volumes:
+      - ./media-preview-generator/config:/config
+      - ./plex/config:/plex:rw
+      - /etc/localtime:/etc/localtime:ro
+      - ${INTERNAL_STORAGE:-/mnt/internal}:/data/internal:ro
+      - ${USB_STORAGE:-/mnt/usb_drive}:/data/usb_drive:ro
+    healthcheck:
+      test: "curl -sf http://localhost:8080/api/health || curl -sf http://localhost:8080/api/system/status || exit 1"
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "deunhealth.restart.on.unhealthy=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.media-preview.tls=true"
+      - "traefik.http.routers.media-preview.entrypoints=http,https"
+      - "traefik.http.routers.media-preview.service=media-preview"
+      - "traefik.http.routers.media-preview.rule=Host(`media-preview.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.media-preview.loadbalancer.server.port=8080"
     networks:
       - proxy
 

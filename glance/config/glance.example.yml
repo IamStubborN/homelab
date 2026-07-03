@@ -167,18 +167,20 @@ pages:
                 collapse-after: 5
 
           - type: custom-api
-            title: Trending GitHub Repositories
+            title: Active GitHub Repositories
             cache: 24h
-            url: https://api.ossinsight.io/v1/trends/repos/?period=past_24_hours&language=All
+            url: https://api.github.com/search/repositories?q=stars:%3E1000&sort=updated&order=desc&per_page=10
+            headers:
+              Accept: application/vnd.github+json
             template: |
               <ul class="list list-gap-10 collapsible-container" data-collapse-after="5">
-                {{ range .JSON.Array "data.rows" }}
+                {{ range .JSON.Array "items" }}
                   <li>
-                    <a class="color-primary-if-not-visited" href="https://github.com/{{ .String "repo_name" }}">{{ .String "repo_name" }}</a>
+                    <a class="color-primary-if-not-visited" href="{{ .String "html_url" }}">{{ .String "full_name" }}</a>
                     <ul class="list-horizontal-text">
-                      <li class="color-highlight">{{ .String "primary_language" }}</li>
-                      <li>{{ .Int "stars" }} stars</li>
-                      <li>{{ .Int "forks" }} forks</li>
+                      <li class="color-highlight">{{ .String "language" }}</li>
+                      <li>{{ .Int "stargazers_count" }} stars</li>
+                      <li>{{ .Int "forks_count" }} forks</li>
                     </ul>
                     <div class="color-subdue text-truncate">{{ .String "description" }}</div>
                   </li>
@@ -264,6 +266,7 @@ pages:
               {{ $downloadChange := percentChange (.JSON.Float "data.download_bits") ($stats.JSON.Float "data.download.avg_bits") }}
               {{ $uploadChange := percentChange (.JSON.Float "data.upload_bits") ($stats.JSON.Float "data.upload.avg_bits") }}
               {{ $pingChange := percentChange (.JSON.Float "data.ping") ($stats.JSON.Float "data.ping.avg") }}
+              <div class="speed-meta">{{ .JSON.String "data.data.server.location" }}, {{ .JSON.String "data.data.server.country" }} · {{ .JSON.String "data.data.interface.externalIp" }}</div>
               <div class="speed-grid">
                 <div>
                   <div class="size-small {{ if gt $downloadChange 0.0 }}color-positive{{ else if lt $downloadChange 0.0 }}color-negative{{ else }}color-primary{{ end }}">{{ $downloadChange | printf "%+.1f%%" }}</div>
@@ -277,6 +280,49 @@ pages:
                 </div>
                 <div>
                   <div class="size-small {{ if gt $pingChange 0.0 }}color-negative{{ else if lt $pingChange 0.0 }}color-positive{{ else }}color-primary{{ end }}">{{ $pingChange | printf "%+.1f%%" }}</div>
+                  <div class="color-highlight size-h3">{{ .JSON.Float "data.ping" | printf "%.0f" }}</div>
+                  <div class="size-h6">ms ping</div>
+                </div>
+              </div>
+
+          - type: custom-api
+            title: VPN Speed
+            title-url: ${SPEEDTEST_VPN_PUBLIC_URL}
+            cache: 1h
+            url: ${SPEEDTEST_VPN_URL}/api/v1/results/latest
+            headers:
+              Authorization: Bearer ${SPEEDTEST_TRACKER_API_TOKEN}
+              Accept: application/json
+            subrequests:
+              vpnInfo:
+                url: ${GLUETUN_CONTROL_URL}/v1/publicip/ip
+                headers:
+                  Accept: application/json
+              vpnStats:
+                url: ${SPEEDTEST_VPN_URL}/api/v1/stats
+                headers:
+                  Authorization: Bearer ${SPEEDTEST_TRACKER_API_TOKEN}
+                  Accept: application/json
+            template: |
+              {{ $vpnInfo := .Subrequest "vpnInfo" }}
+              {{ $vpnStats := .Subrequest "vpnStats" }}
+              {{ $vpnDownloadChange := percentChange (.JSON.Float "data.download_bits") ($vpnStats.JSON.Float "data.download.avg_bits") }}
+              {{ $vpnUploadChange := percentChange (.JSON.Float "data.upload_bits") ($vpnStats.JSON.Float "data.upload.avg_bits") }}
+              {{ $vpnPingChange := percentChange (.JSON.Float "data.ping") ($vpnStats.JSON.Float "data.ping.avg") }}
+              <div class="speed-meta">{{ $vpnInfo.JSON.String "city" }}, {{ $vpnInfo.JSON.String "country" }} · {{ $vpnInfo.JSON.String "public_ip" }}</div>
+              <div class="speed-grid">
+                <div>
+                  <div class="size-small {{ if gt $vpnDownloadChange 0.0 }}color-positive{{ else if lt $vpnDownloadChange 0.0 }}color-negative{{ else }}color-primary{{ end }}">{{ $vpnDownloadChange | printf "%+.1f%%" }}</div>
+                  <div class="color-highlight size-h3">{{ .JSON.Float "data.download_bits" | mul 0.000001 | printf "%.1f" }}</div>
+                  <div class="size-h6">Mbps down</div>
+                </div>
+                <div>
+                  <div class="size-small {{ if gt $vpnUploadChange 0.0 }}color-positive{{ else if lt $vpnUploadChange 0.0 }}color-negative{{ else }}color-primary{{ end }}">{{ $vpnUploadChange | printf "%+.1f%%" }}</div>
+                  <div class="color-highlight size-h3">{{ .JSON.Float "data.upload_bits" | mul 0.000001 | printf "%.1f" }}</div>
+                  <div class="size-h6">Mbps up</div>
+                </div>
+                <div>
+                  <div class="size-small {{ if gt $vpnPingChange 0.0 }}color-negative{{ else if lt $vpnPingChange 0.0 }}color-positive{{ else }}color-primary{{ end }}">{{ $vpnPingChange | printf "%+.1f%%" }}</div>
                   <div class="color-highlight size-h3">{{ .JSON.Float "data.ping" | printf "%.0f" }}</div>
                   <div class="size-h6">ms ping</div>
                 </div>

@@ -37,6 +37,42 @@ services:
     networks:
       - proxy
 
+
+  speedtest-tracker-vpn:
+    image: lscr.io/linuxserver/speedtest-tracker:latest
+    container_name: speedtest-tracker-vpn
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - .env
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      APP_URL: https://speedtest-vpn.${DOCKER_DOMAIN}
+      ASSET_URL: https://speedtest-vpn.${DOCKER_DOMAIN}
+      DB_CONNECTION: sqlite
+      DISPLAY_TIMEZONE: ${TIMEZONE:-UTC}
+      APP_TIMEZONE: ${TIMEZONE:-UTC}
+      PUBLIC_DASHBOARD: "true"
+      SPEEDTEST_SCHEDULE: "47 */6 * * *"
+      SPEEDTEST_INTERNET_CHECK_HOSTNAME: 1.1.1.1
+    volumes:
+      - ./config-vpn:/config
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+        restart: true
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    network_mode: "service:gluetun"
+
 networks:
   proxy:
     external: true

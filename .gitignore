@@ -52,6 +52,7 @@ kavita/config/
 media/bazarr/
 media/jellyfin/
 media/lidarr/
+media/media-preview-generator/
 media/overseerr/
 media/plex backup/
 media/plex/
@@ -73,6 +74,7 @@ samba/config/cache/
 samba/config/lib/
 samba/data/
 speedtest-tracker/config/
+speedtest-tracker/config-vpn/
 homeassistant/tailscale-state/
 zeroclaw/data/
 zeroclaw/state/

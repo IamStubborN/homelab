@@ -12,3 +12,17 @@ http:
 automation: !include automations.yaml
 script: !include scripts.yaml
 scene: !include scenes.yaml
+
+
+command_line:
+  # Local CozyLife smart plug control. Replace the IP with a DHCP-reserved address.
+  - switch:
+      name: girlianda
+      unique_id: cozylife_garland_power
+      icon: mdi:string-lights
+      command_on: python3 /config/scripts/cozylife_socket.py 192.0.2.201 on
+      command_off: python3 /config/scripts/cozylife_socket.py 192.0.2.201 off
+      command_state: python3 /config/scripts/cozylife_socket.py 192.0.2.201 state
+      value_template: '{{ value == "ON" }}'
+      command_timeout: 8
+      scan_interval: 30

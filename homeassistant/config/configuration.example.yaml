@@ -13,6 +13,30 @@ automation: !include automations.yaml
 script: !include scripts.yaml
 scene: !include scenes.yaml
 
+input_boolean:
+  climate_auto_primary:
+    name: Primary auto cooling
+    icon: mdi:thermostat-auto
+
+input_number:
+  climate_auto_primary_on_above:
+    name: Primary cool above
+    min: 18
+    max: 32
+    initial: 26
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-chevron-up
+  climate_auto_primary_off_below:
+    name: Primary turn off below
+    min: 16
+    max: 30
+    initial: 24
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-chevron-down
 
 command_line:
   # Local CozyLife smart plug control. Replace the IP with a DHCP-reserved address.

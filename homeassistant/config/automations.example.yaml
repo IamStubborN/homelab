@@ -1,1 +1,52 @@
-[]
+- id: climate_auto_andrei_temperature
+  alias: Andrei auto cooling by temperature
+  description: Turns cooling on above the high threshold and off below the low threshold when auto cooling is enabled.
+  mode: single
+  trigger:
+    - platform: state
+      entity_id:
+        - input_boolean.climate_auto_andrei
+        - input_number.climate_auto_andrei_on_above
+        - input_number.climate_auto_andrei_off_below
+    - platform: state
+      entity_id: climate.example_andrei_ac
+      attribute: current_temperature
+    - platform: homeassistant
+      event: start
+    - platform: time_pattern
+      minutes: "/5"
+  condition:
+    - condition: state
+      entity_id: input_boolean.climate_auto_andrei
+      state: "on"
+    - condition: template
+      value_template: >-
+        {{ states('input_number.climate_auto_andrei_off_below') | float(0)
+           < states('input_number.climate_auto_andrei_on_above') | float(0) }}
+  action:
+    - choose:
+        - conditions:
+            - condition: numeric_state
+              entity_id: climate.example_andrei_ac
+              attribute: current_temperature
+              above: input_number.climate_auto_andrei_on_above
+          sequence:
+            - service: climate.set_hvac_mode
+              target:
+                entity_id: climate.example_andrei_ac
+              data:
+                hvac_mode: cool
+        - conditions:
+            - condition: state
+              entity_id: climate.example_andrei_ac
+              state: cool
+            - condition: numeric_state
+              entity_id: climate.example_andrei_ac
+              attribute: current_temperature
+              below: input_number.climate_auto_andrei_off_below
+          sequence:
+            - service: climate.set_hvac_mode
+              target:
+                entity_id: climate.example_andrei_ac
+              data:
+                hvac_mode: "off"

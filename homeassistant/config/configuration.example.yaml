@@ -13,9 +13,58 @@ automation: !include automations.yaml
 script: !include scripts.yaml
 scene: !include scenes.yaml
 
+template:
+  - switch:
+      - name: Andrei auto cooling
+        unique_id: climate_auto_andrei_switch
+        default_entity_id: switch.climate_auto_andrei
+        icon: mdi:thermostat-auto
+        state: "{{ is_state('input_boolean.climate_auto_andrei', 'on') }}"
+        turn_on:
+          action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.climate_auto_andrei
+        turn_off:
+          action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.climate_auto_andrei
+      - name: Valentina auto cooling
+        unique_id: climate_auto_valentina_switch
+        default_entity_id: switch.climate_auto_valentina
+        icon: mdi:thermostat-auto
+        state: "{{ is_state('input_boolean.climate_auto_valentina', 'on') }}"
+        turn_on:
+          action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.climate_auto_valentina
+        turn_off:
+          action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.climate_auto_valentina
+      - name: Kitchen auto cooling
+        unique_id: climate_auto_kitchen_switch
+        default_entity_id: switch.climate_auto_kitchen
+        icon: mdi:thermostat-auto
+        state: "{{ is_state('input_boolean.climate_auto_kitchen', 'on') }}"
+        turn_on:
+          action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.climate_auto_kitchen
+        turn_off:
+          action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.climate_auto_kitchen
+
 input_boolean:
   climate_auto_andrei:
     name: Andrei auto cooling
+    icon: mdi:thermostat-auto
+
+  climate_auto_valentina:
+    name: Valentina auto cooling
+    icon: mdi:thermostat-auto
+  climate_auto_kitchen:
+    name: Kitchen auto cooling
     icon: mdi:thermostat-auto
 
 input_number:
@@ -30,6 +79,43 @@ input_number:
     icon: mdi:thermometer-chevron-up
   climate_auto_andrei_off_below:
     name: Andrei turn off below
+    min: 16
+    max: 30
+    initial: 24
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-chevron-down
+
+  climate_auto_valentina_on_above:
+    name: Valentina cool above
+    min: 18
+    max: 32
+    initial: 26
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-chevron-up
+  climate_auto_valentina_off_below:
+    name: Valentina turn off below
+    min: 16
+    max: 30
+    initial: 24
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-chevron-down
+  climate_auto_kitchen_on_above:
+    name: Kitchen cool above
+    min: 18
+    max: 32
+    initial: 26
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-chevron-up
+  climate_auto_kitchen_off_below:
+    name: Kitchen turn off below
     min: 16
     max: 30
     initial: 24

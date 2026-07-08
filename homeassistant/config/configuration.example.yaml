@@ -13,9 +13,58 @@ automation: !include automations.yaml
 script: !include scripts.yaml
 scene: !include scenes.yaml
 
+template:
+  - switch:
+      - name: Primary auto cooling
+        unique_id: climate_auto_primary_switch
+        default_entity_id: switch.climate_auto_primary
+        icon: mdi:thermostat-auto
+        state: "{{ is_state('input_boolean.climate_auto_primary', 'on') }}"
+        turn_on:
+          action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.climate_auto_primary
+        turn_off:
+          action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.climate_auto_primary
+      - name: Secondary auto cooling
+        unique_id: climate_auto_secondary_switch
+        default_entity_id: switch.climate_auto_secondary
+        icon: mdi:thermostat-auto
+        state: "{{ is_state('input_boolean.climate_auto_secondary', 'on') }}"
+        turn_on:
+          action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.climate_auto_secondary
+        turn_off:
+          action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.climate_auto_secondary
+      - name: Kitchen auto cooling
+        unique_id: climate_auto_kitchen_switch
+        default_entity_id: switch.climate_auto_kitchen
+        icon: mdi:thermostat-auto
+        state: "{{ is_state('input_boolean.climate_auto_kitchen', 'on') }}"
+        turn_on:
+          action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.climate_auto_kitchen
+        turn_off:
+          action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.climate_auto_kitchen
+
 input_boolean:
   climate_auto_primary:
     name: Primary auto cooling
+    icon: mdi:thermostat-auto
+
+  climate_auto_secondary:
+    name: Secondary auto cooling
+    icon: mdi:thermostat-auto
+  climate_auto_kitchen:
+    name: Kitchen auto cooling
     icon: mdi:thermostat-auto
 
 input_number:
@@ -30,6 +79,43 @@ input_number:
     icon: mdi:thermometer-chevron-up
   climate_auto_primary_off_below:
     name: Primary turn off below
+    min: 16
+    max: 30
+    initial: 24
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-chevron-down
+
+  climate_auto_secondary_on_above:
+    name: Secondary cool above
+    min: 18
+    max: 32
+    initial: 26
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-chevron-up
+  climate_auto_secondary_off_below:
+    name: Secondary turn off below
+    min: 16
+    max: 30
+    initial: 24
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-chevron-down
+  climate_auto_kitchen_on_above:
+    name: Kitchen cool above
+    min: 18
+    max: 32
+    initial: 26
+    step: 0.5
+    mode: box
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-chevron-up
+  climate_auto_kitchen_off_below:
+    name: Kitchen turn off below
     min: 16
     max: 30
     initial: 24

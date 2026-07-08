@@ -15,32 +15,32 @@ scene: !include scenes.yaml
 
 template:
   - switch:
-      - name: Andrei auto cooling
-        unique_id: climate_auto_andrei_switch
-        default_entity_id: switch.climate_auto_andrei
+      - name: Alice auto cooling
+        unique_id: climate_auto_alice_switch
+        default_entity_id: switch.climate_auto_alice
         icon: mdi:thermostat-auto
-        state: "{{ is_state('input_boolean.climate_auto_andrei', 'on') }}"
+        state: "{{ is_state('input_boolean.climate_auto_alice', 'on') }}"
         turn_on:
           action: input_boolean.turn_on
           target:
-            entity_id: input_boolean.climate_auto_andrei
+            entity_id: input_boolean.climate_auto_alice
         turn_off:
           action: input_boolean.turn_off
           target:
-            entity_id: input_boolean.climate_auto_andrei
-      - name: Valentina auto cooling
-        unique_id: climate_auto_valentina_switch
-        default_entity_id: switch.climate_auto_valentina
+            entity_id: input_boolean.climate_auto_alice
+      - name: Bob auto cooling
+        unique_id: climate_auto_bob_switch
+        default_entity_id: switch.climate_auto_bob
         icon: mdi:thermostat-auto
-        state: "{{ is_state('input_boolean.climate_auto_valentina', 'on') }}"
+        state: "{{ is_state('input_boolean.climate_auto_bob', 'on') }}"
         turn_on:
           action: input_boolean.turn_on
           target:
-            entity_id: input_boolean.climate_auto_valentina
+            entity_id: input_boolean.climate_auto_bob
         turn_off:
           action: input_boolean.turn_off
           target:
-            entity_id: input_boolean.climate_auto_valentina
+            entity_id: input_boolean.climate_auto_bob
       - name: Kitchen auto cooling
         unique_id: climate_auto_kitchen_switch
         default_entity_id: switch.climate_auto_kitchen
@@ -56,20 +56,20 @@ template:
             entity_id: input_boolean.climate_auto_kitchen
 
 input_boolean:
-  climate_auto_andrei:
-    name: Andrei auto cooling
+  climate_auto_alice:
+    name: Alice auto cooling
     icon: mdi:thermostat-auto
 
-  climate_auto_valentina:
-    name: Valentina auto cooling
+  climate_auto_bob:
+    name: Bob auto cooling
     icon: mdi:thermostat-auto
   climate_auto_kitchen:
     name: Kitchen auto cooling
     icon: mdi:thermostat-auto
 
 input_number:
-  climate_auto_andrei_on_above:
-    name: Andrei cool above
+  climate_auto_alice_on_above:
+    name: Alice cool above
     min: 18
     max: 32
     initial: 26
@@ -77,8 +77,8 @@ input_number:
     mode: box
     unit_of_measurement: "°C"
     icon: mdi:thermometer-chevron-up
-  climate_auto_andrei_off_below:
-    name: Andrei turn off below
+  climate_auto_alice_off_below:
+    name: Alice turn off below
     min: 16
     max: 30
     initial: 24
@@ -87,8 +87,8 @@ input_number:
     unit_of_measurement: "°C"
     icon: mdi:thermometer-chevron-down
 
-  climate_auto_valentina_on_above:
-    name: Valentina cool above
+  climate_auto_bob_on_above:
+    name: Bob cool above
     min: 18
     max: 32
     initial: 26
@@ -96,8 +96,8 @@ input_number:
     mode: box
     unit_of_measurement: "°C"
     icon: mdi:thermometer-chevron-up
-  climate_auto_valentina_off_below:
-    name: Valentina turn off below
+  climate_auto_bob_off_below:
+    name: Bob turn off below
     min: 16
     max: 30
     initial: 24

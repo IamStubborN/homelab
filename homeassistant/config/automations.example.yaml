@@ -1,15 +1,15 @@
-- id: climate_auto_andrei_temperature
-  alias: Andrei auto cooling by temperature
+- id: climate_auto_alice_temperature
+  alias: Alice auto cooling by temperature
   description: Turns cooling on at or above the high threshold and off at or below the low threshold when auto cooling is enabled.
   mode: single
   trigger:
     - platform: state
       entity_id:
-        - input_boolean.climate_auto_andrei
-        - input_number.climate_auto_andrei_on_above
-        - input_number.climate_auto_andrei_off_below
+        - input_boolean.climate_auto_alice
+        - input_number.climate_auto_alice_on_above
+        - input_number.climate_auto_alice_off_below
     - platform: state
-      entity_id: climate.example_andrei_ac
+      entity_id: climate.example_alice_ac
       attribute: current_temperature
     - platform: homeassistant
       event: start
@@ -17,52 +17,52 @@
       minutes: "/5"
   condition:
     - condition: state
-      entity_id: input_boolean.climate_auto_andrei
+      entity_id: input_boolean.climate_auto_alice
       state: "on"
     - condition: template
       value_template: >-
-        {{ states('input_number.climate_auto_andrei_off_below') | float(0)
-           < states('input_number.climate_auto_andrei_on_above') | float(0) }}
+        {{ states('input_number.climate_auto_alice_off_below') | float(0)
+           < states('input_number.climate_auto_alice_on_above') | float(0) }}
   action:
     - choose:
         - conditions:
             - condition: template
               value_template: >-
-                {{ state_attr('climate.example_andrei_ac', 'current_temperature') | float(-999)
-                   >= states('input_number.climate_auto_andrei_on_above') | float(999) }}
+                {{ state_attr('climate.example_alice_ac', 'current_temperature') | float(-999)
+                   >= states('input_number.climate_auto_alice_on_above') | float(999) }}
           sequence:
             - service: climate.set_hvac_mode
               target:
-                entity_id: climate.example_andrei_ac
+                entity_id: climate.example_alice_ac
               data:
                 hvac_mode: cool
         - conditions:
             - condition: state
-              entity_id: climate.example_andrei_ac
+              entity_id: climate.example_alice_ac
               state: cool
             - condition: template
               value_template: >-
-                {{ state_attr('climate.example_andrei_ac', 'current_temperature') | float(999)
-                   <= states('input_number.climate_auto_andrei_off_below') | float(-999) }}
+                {{ state_attr('climate.example_alice_ac', 'current_temperature') | float(999)
+                   <= states('input_number.climate_auto_alice_off_below') | float(-999) }}
           sequence:
             - service: climate.set_hvac_mode
               target:
-                entity_id: climate.example_andrei_ac
+                entity_id: climate.example_alice_ac
               data:
                 hvac_mode: "off"
 
-- id: climate_auto_valentina_temperature
-  alias: Valentina auto cooling by temperature
+- id: climate_auto_bob_temperature
+  alias: Bob auto cooling by temperature
   description: Turns cooling on at or above the high threshold and off at or below the low threshold when auto cooling is enabled.
   mode: single
   trigger:
     - platform: state
       entity_id:
-        - input_boolean.climate_auto_valentina
-        - input_number.climate_auto_valentina_on_above
-        - input_number.climate_auto_valentina_off_below
+        - input_boolean.climate_auto_bob
+        - input_number.climate_auto_bob_on_above
+        - input_number.climate_auto_bob_off_below
     - platform: state
-      entity_id: climate.example_valentina_ac
+      entity_id: climate.example_bob_ac
       attribute: current_temperature
     - platform: homeassistant
       event: start
@@ -70,37 +70,37 @@
       minutes: "/5"
   condition:
     - condition: state
-      entity_id: input_boolean.climate_auto_valentina
+      entity_id: input_boolean.climate_auto_bob
       state: "on"
     - condition: template
       value_template: >-
-        {{ states('input_number.climate_auto_valentina_off_below') | float(0)
-           < states('input_number.climate_auto_valentina_on_above') | float(0) }}
+        {{ states('input_number.climate_auto_bob_off_below') | float(0)
+           < states('input_number.climate_auto_bob_on_above') | float(0) }}
   action:
     - choose:
         - conditions:
             - condition: template
               value_template: >-
-                {{ state_attr('climate.example_valentina_ac', 'current_temperature') | float(-999)
-                   >= states('input_number.climate_auto_valentina_on_above') | float(999) }}
+                {{ state_attr('climate.example_bob_ac', 'current_temperature') | float(-999)
+                   >= states('input_number.climate_auto_bob_on_above') | float(999) }}
           sequence:
             - service: climate.set_hvac_mode
               target:
-                entity_id: climate.example_valentina_ac
+                entity_id: climate.example_bob_ac
               data:
                 hvac_mode: cool
         - conditions:
             - condition: state
-              entity_id: climate.example_valentina_ac
+              entity_id: climate.example_bob_ac
               state: cool
             - condition: template
               value_template: >-
-                {{ state_attr('climate.example_valentina_ac', 'current_temperature') | float(999)
-                   <= states('input_number.climate_auto_valentina_off_below') | float(-999) }}
+                {{ state_attr('climate.example_bob_ac', 'current_temperature') | float(999)
+                   <= states('input_number.climate_auto_bob_off_below') | float(-999) }}
           sequence:
             - service: climate.set_hvac_mode
               target:
-                entity_id: climate.example_valentina_ac
+                entity_id: climate.example_bob_ac
               data:
                 hvac_mode: "off"
 

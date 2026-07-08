@@ -89,6 +89,7 @@ homeassistant/config/home-assistant*.db*
 homeassistant/config/home-assistant.log*
 homeassistant/config/secrets.yaml
 homeassistant/config/secrets.yaml.bak*
+homeassistant/config/www/
 
 # Generated dependency folders and local development output
 **/node_modules/

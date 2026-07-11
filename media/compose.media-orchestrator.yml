@@ -1,0 +1,338 @@
+name: media-orchestrator
+
+x-media-profile: &media-profile
+  profiles:
+    - media-orchestrator
+
+x-locked-down: &locked-down
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+x-service-environment: &service-environment
+  MEDIA_DATABASE_URL_FILE: /run/secrets/media_database_url
+  MEDIA_ANDRII_TOKEN_FILE: /run/secrets/media_andrii_token
+  MEDIA_VALENTYNA_TOKEN_FILE: /run/secrets/media_valentyna_token
+  MEDIA_RUNNER_TOKEN_FILE: /run/secrets/media_runner_token
+  MEDIA_LISTEN_ADDR: 0.0.0.0:8080
+  MEDIA_PROWLARR_URL: http://gluetun:9696
+  MEDIA_PROWLARR_API_KEY_FILE: /run/secrets/media_prowlarr_api_key
+  MEDIA_QBITTORRENT_URL: http://gluetun:8400
+  MEDIA_QBITTORRENT_USERNAME_FILE: /run/secrets/media_qbittorrent_username
+  MEDIA_QBITTORRENT_PASSWORD_FILE: /run/secrets/media_qbittorrent_password
+  MEDIA_PLEX_URL: http://plex:32400
+  MEDIA_PLEX_TOKEN_FILE: /run/secrets/media_plex_token
+  RUST_LOG: ${MEDIA_RUST_LOG:-info}
+  TZ: ${TIMEZONE:-UTC}
+
+x-service-secrets: &service-secrets
+  - media_database_url
+  - media_andrii_token
+  - media_valentyna_token
+  - media_runner_token
+  - media_prowlarr_api_key
+  - media_qbittorrent_username
+  - media_qbittorrent_password
+  - media_plex_token
+
+services:
+  media-postgres:
+    <<: [*media-profile, *locked-down]
+    image: ${MEDIA_POSTGRES_IMAGE:?set MEDIA_POSTGRES_IMAGE to an immutable PostgreSQL tag or digest}
+    container_name: media-postgres
+    restart: unless-stopped
+    read_only: true
+    cap_add:
+      # Required by the official entrypoint to initialize and drop to postgres.
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    environment:
+      POSTGRES_DB: ${MEDIA_POSTGRES_DB:-media_orchestrator}
+      POSTGRES_USER: ${MEDIA_POSTGRES_USER:-media}
+      POSTGRES_PASSWORD_FILE: /run/secrets/media_postgres_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: ${TIMEZONE:-UTC}
+    secrets:
+      - media_postgres_password
+    volumes:
+      - type: volume
+        source: media_postgres_data
+        target: /var/lib/postgresql/data
+        volume:
+          nocopy: true
+    tmpfs:
+      - /run/postgresql:size=16m,mode=0770
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - media-db
+
+  media-migrate:
+    <<: [*media-profile, *locked-down]
+    image: ${MEDIA_SERVICE_IMAGE:?set MEDIA_SERVICE_IMAGE to an immutable media-orchestrator tag or digest}
+    container_name: media-migrate
+    command:
+      - migrate
+    restart: "no"
+    read_only: true
+    environment:
+      MEDIA_DATABASE_URL_FILE: /run/secrets/media_database_url
+      RUST_LOG: ${MEDIA_RUST_LOG:-info}
+      TZ: ${TIMEZONE:-UTC}
+    secrets:
+      - media_database_url
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    depends_on:
+      media-postgres:
+        condition: service_healthy
+    networks:
+      - media-db
+
+  media-service:
+    <<: [*media-profile, *locked-down]
+    image: ${MEDIA_SERVICE_IMAGE:?set MEDIA_SERVICE_IMAGE to an immutable media-orchestrator tag or digest}
+    container_name: media-service
+    command:
+      - serve
+    restart: unless-stopped
+    read_only: true
+    environment: *service-environment
+    secrets: *service-secrets
+    expose:
+      - "8080"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - --silent
+        - --show-error
+        - http://127.0.0.1:8080/v1/ready
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      media-postgres:
+        condition: service_healthy
+      media-migrate:
+        condition: service_completed_successfully
+    labels:
+      traefik.enable: "false"
+    networks:
+      - media-db
+      - media-private
+      - proxy
+
+  gluetun-rezka:
+    <<: [*media-profile, *locked-down]
+    image: ${GLUETUN_REZKA_IMAGE:?set GLUETUN_REZKA_IMAGE to an immutable Gluetun tag or digest}
+    container_name: gluetun-rezka
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      TZ: ${TIMEZONE:-UTC}
+      VPN_SERVICE_PROVIDER: protonvpn
+      VPN_TYPE: wireguard
+      WIREGUARD_PRIVATE_KEY_SECRETFILE: /run/secrets/gluetun_rezka_wireguard_private_key
+      SERVER_COUNTRIES: ${GLUETUN_REZKA_SERVER_COUNTRIES:?set dedicated Rezka VPN countries}
+      VPN_PORT_FORWARDING: "off"
+      HEALTH_RESTART_VPN: "off"
+      DNS_SERVER: "on"
+      DNS_UPSTREAM_RESOLVERS: cloudflare,google
+      BLOCK_MALICIOUS: "off"
+      DNS_UPSTREAM_IPV6: "off"
+      HTTP_CONTROL_SERVER_ADDRESS: 127.0.0.1:8000
+      HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH: /run/secrets/gluetun_rezka_control_auth_config
+    secrets:
+      - gluetun_rezka_wireguard_private_key
+      - gluetun_rezka_control_auth_config
+    volumes:
+      - type: volume
+        source: gluetun_rezka_state
+        target: /gluetun
+        volume:
+          nocopy: true
+    healthcheck:
+      test:
+        - CMD
+        - /gluetun-entrypoint
+        - healthcheck
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    labels:
+      traefik.enable: "false"
+    networks:
+      - media-private
+      - rezka-egress
+
+  download-runner:
+    <<: [*media-profile, *locked-down]
+    image: ${DOWNLOAD_RUNNER_IMAGE:?set DOWNLOAD_RUNNER_IMAGE to an immutable media-orchestrator runner tag or digest}
+    container_name: download-runner
+    command:
+      - runner
+    restart: unless-stopped
+    read_only: true
+    network_mode: service:gluetun-rezka
+    group_add:
+      - ${RENDER_GID:-109}
+      - ${VIDEO_GID:-44}
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      MEDIA_SERVICE_URL: http://media-service:8080
+      MEDIA_TOKEN_FILE: /run/secrets/media_runner_token
+      MEDIA_REZKA_MIRRORS: ${MEDIA_REZKA_MIRRORS:?set comma-separated HTTPS Rezka mirrors}
+      MEDIA_REZKA_SESSION_PROBE_URL: ${MEDIA_REZKA_SESSION_PROBE_URL:?set the HTTPS session probe URL}
+      MEDIA_REZKA_SESSION_VALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_VALID_MARKERS_JSON:?set valid session markers JSON}
+      MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON:?set invalid session markers JSON}
+      MEDIA_REZKA_USERNAME_FILE: /run/secrets/rezka_username
+      MEDIA_REZKA_PASSWORD_FILE: /run/secrets/rezka_password
+      MEDIA_REZKA_COOKIE_KEY_FILE: /run/secrets/rezka_cookie_key
+      MEDIA_REZKA_SESSION_STORE_FILE: /var/lib/media-orchestrator/session/session.bin
+      MEDIA_REZKA_CONTROL_URL: http://127.0.0.1:8000
+      MEDIA_REZKA_CONTROL_API_KEY_FILE: /run/secrets/gluetun_rezka_control_api_key
+      MEDIA_STORAGE_ROOT: /data/internal
+      MEDIA_REZKA_STAGING_ROOT: /data/internal/media-orchestrator/staging/rezka
+      MEDIA_REZKA_TV_ROOT: /data/internal/media/rezka/tv
+      MEDIA_REZKA_MOVIES_ROOT: /data/internal/media/rezka/movies
+      MEDIA_STORAGE_RESERVE_BYTES: "21474836480"
+      RUST_LOG: ${MEDIA_RUST_LOG:-info}
+      TZ: ${TIMEZONE:-UTC}
+    secrets:
+      - media_runner_token
+      - rezka_username
+      - rezka_password
+      - rezka_cookie_key
+      - gluetun_rezka_control_api_key
+    volumes:
+      # One bind mount preserves atomic rename between staging and Plex roots.
+      - type: bind
+        source: ${INTERNAL_STORAGE:?set INTERNAL_STORAGE to the storage root}
+        target: /data/internal
+        bind:
+          create_host_path: false
+      - type: volume
+        source: rezka_session_encrypted
+        target: /var/lib/media-orchestrator/session
+        volume:
+          nocopy: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+      - /run/media-orchestrator:size=16m,mode=0700
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - --silent
+        - --show-error
+        - http://media-service:8080/v1/health
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      gluetun-rezka:
+        condition: service_healthy
+      media-service:
+        condition: service_healthy
+
+  gluetun-rezka-watcher:
+    <<: [*media-profile, *locked-down]
+    image: ${GLUETUN_REZKA_WATCHER_IMAGE:?set GLUETUN_REZKA_WATCHER_IMAGE to an immutable Docker CLI tag or digest}
+    container_name: gluetun-rezka-watcher
+    restart: unless-stopped
+    read_only: true
+    network_mode: none
+    environment:
+      PARENT_CONTAINER: gluetun-rezka
+      DEPENDENT_CONTAINER: download-runner
+      HEALTH_TIMEOUT: "120"
+      SETTLE_DELAY: "10"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./gluetun-rezka-watcher/watch.sh:/watch.sh:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    entrypoint:
+      - /bin/sh
+      - /watch.sh
+    healthcheck:
+      test:
+        - CMD
+        - docker
+        - info
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      gluetun-rezka:
+        condition: service_healthy
+
+secrets:
+  media_postgres_password:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_postgres_password
+  media_database_url:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_database_url
+  media_andrii_token:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_andrii_token
+  media_valentyna_token:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_valentyna_token
+  media_runner_token:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_runner_token
+  media_prowlarr_api_key:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_prowlarr_api_key
+  media_qbittorrent_username:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_qbittorrent_username
+  media_qbittorrent_password:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_qbittorrent_password
+  media_plex_token:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_plex_token
+  rezka_username:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/rezka_username
+  rezka_password:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/rezka_password
+  rezka_cookie_key:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/rezka_cookie_key
+  gluetun_rezka_wireguard_private_key:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/gluetun_rezka_wireguard_private_key
+  gluetun_rezka_control_auth_config:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/gluetun_rezka_control_auth_config
+  gluetun_rezka_control_api_key:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/gluetun_rezka_control_api_key
+
+volumes:
+  media_postgres_data:
+  gluetun_rezka_state:
+  rezka_session_encrypted:
+
+networks:
+  media-db:
+    internal: true
+  media-private:
+    internal: true
+  rezka-egress:
+  proxy:
+    external: true

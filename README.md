@@ -10,6 +10,7 @@ This repository is public-safe by design: secrets, runtime databases, local Home
 - Gluetun VPN routing for selected media services
 - qBittorrent and Prowlarr
 - Plex, Kavita, Samba, Watchtower, DeUnhealth
+- Inactive media-orchestrator Compose scaffold with a dedicated Rezka VPN
 - KaraKeep, Freedium, Movie Tracker, Glance, Speedtest Tracker
 - Home Assistant with public-safe example config only
 
@@ -53,6 +54,10 @@ Validate compose:
 ```bash
 docker compose config --quiet
 ```
+
+The media-orchestrator scaffold is a separate opt-in Compose project. See
+`media/README.md` for image pinning, secret creation, validation, startup, and
+rollback commands. It is not included in the active root Compose file.
 
 Start services:
 

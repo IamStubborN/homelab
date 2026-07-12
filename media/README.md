@@ -114,6 +114,29 @@ stack. `gluetun-rezka-watcher` watches only `gluetun-rezka` and restarts only
 `download-runner` when that dedicated container is recreated. An in-process VPN
 rotation does not restart the runner, preserving one runner job per namespace.
 
+## Glance Queue Widget
+
+`glance/config/glance.example.yml` includes a `custom-api` widget ("Media Queue")
+that calls `GET http://media-service:8080/v1/queue/status` and renders the
+`queued` count and `active` flag from `QueueStatusDto`. It is wired for the
+final topology but stays dark (Glance's own request-failed state) until this
+profile is deployed, simply because `media-service` does not exist yet.
+
+No network change is needed on the `glance` side: both `glance/compose.yml`
+and this file already declare `proxy` as an `external: true` network, so once
+`media-service` is running they resolve each other by container name over
+that shared network.
+
+The widget authenticates with `Authorization: Bearer ${MEDIA_STATUS_TOKEN}`,
+an env placeholder resolved from the gitignored `glance/.env`. This service
+only recognizes the three fixed client tokens configured above
+(`media_andrii_token`, `media_valentyna_token`, `media_runner_token`) — there
+is no dedicated read-only/status client. Set `MEDIA_STATUS_TOKEN` in
+`glance/.env` to the same value as one of the existing family tokens (prefer
+`media_andrii_token` or `media_valentyna_token`; avoid reusing
+`media_runner_token`, which is scoped to the download runner) rather than
+inventing a new credential.
+
 ## Rollback
 
 Stopping this separate project leaves Plex, qBittorrent, Prowlarr, and the

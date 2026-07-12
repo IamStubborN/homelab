@@ -34,6 +34,7 @@ export MEDIA_VALENTYNA_WEBHOOK_HMAC=dummy-valentyna-webhook-hmac
 export MEDIA_PROWLARR_API_KEY=dummy-prowlarr-api-key
 export MEDIA_PLEX_TOKEN=dummy-plex-token
 export GLUETUN_REZKA_SERVER_COUNTRIES=Bulgaria
+export GLUETUN_REZKA_OUTBOUND_SUBNETS=172.18.0.0/16,172.22.0.0/16,172.29.0.0/16
 export GLUETUN_REZKA_CONTROL_API_KEY=dummy-gluetun-api-key
 export MEDIA_REZKA_MIRRORS=https://rezka.example
 export MEDIA_REZKA_SESSION_PROBE_URL=https://rezka.example/account/probe
@@ -119,6 +120,8 @@ assert_yq '.services.gluetun-rezka.cap_add | contains(["NET_ADMIN", "DAC_READ_SE
     'Gluetun must read strict host secrets after dropping all capabilities'
 assert_yq '.services.gluetun-rezka.environment.HTTPPROXY == "on" and .services.gluetun-rezka.environment.HTTPPROXY_LISTENING_ADDRESS == ":8888" and .services.gluetun-rezka.environment.HTTPPROXY_STEALTH == "on"' \
     'Gluetun must expose only its internal stealth HTTP proxy for Rezka service requests'
+assert_yq '.services.gluetun-rezka.environment.FIREWALL_OUTBOUND_SUBNETS == "172.18.0.0/16,172.22.0.0/16,172.29.0.0/16"' \
+    'Gluetun must allow only the configured local service subnets outside the VPN tunnel'
 assert_yq '.services.gluetun-rezka.networks | has("rezka-credentials")' \
     'Gluetun namespace must join the Rezka credential broker network'
 assert_yq '.networks."rezka-credentials".external == true and .networks."rezka-credentials".name == "rezka-credentials"' \

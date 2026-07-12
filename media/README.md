@@ -9,7 +9,13 @@ published.
 
 Copy the media-orchestrator placeholders from the root `.env.example` into the
 real ignored `.env`, replacing every image digest and provider placeholder.
-The application images must contain `curl` for Compose health checks.
+The application images provide their own `media healthcheck` command; no
+additional HTTP client is required in the runtime images. Create the shared
+external network used by the two Hermes profiles once:
+
+```bash
+docker network create media-internal
+```
 
 Create the host paths before starting. Staging remains outside Plex roots, but
 all Rezka paths stay on the same filesystem for atomic publication:
@@ -30,8 +36,9 @@ media_database_url
 media_andrii_token
 media_valentyna_token
 media_runner_token
+media_andrii_webhook_hmac
+media_valentyna_webhook_hmac
 media_prowlarr_api_key
-media_qbittorrent_username
 media_qbittorrent_password
 media_plex_token
 rezka_username
@@ -44,6 +51,9 @@ gluetun_rezka_control_api_key
 
 `media_database_url` uses the private hostname, for example
 `postgres://media:<password>@media-postgres:5432/media_orchestrator`.
+The two media API tokens and webhook HMAC values must match the corresponding
+files in the `hermes-home` deployment. Set the real Plex TV/movie section IDs,
+an existing qBittorrent category, and the qBittorrent username in `.env`.
 `rezka_cookie_key` is base64 for exactly 32 decoded bytes. The Gluetun API key
 is generated with `docker run --rm qmcgaw/gluetun:<pinned-version> genkey`; put
 the same key in `gluetun_rezka_control_api_key` and in the auth config:

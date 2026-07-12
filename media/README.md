@@ -53,7 +53,8 @@ gluetun_rezka_control_api_key
 `postgres://media:<password>@media-postgres:5432/media_orchestrator`.
 The two media API tokens and webhook HMAC values must match the corresponding
 files in the `hermes-home` deployment. Set the real Plex TV/movie section IDs,
-an existing qBittorrent category, and the qBittorrent username in `.env`.
+the existing qBittorrent TV and movies categories, and the qBittorrent username
+in `.env`.
 `rezka_cookie_key` is base64 for exactly 32 decoded bytes. The Gluetun API key
 is generated with `docker run --rm qmcgaw/gluetun:<pinned-version> genkey`; put
 the same key in `gluetun_rezka_control_api_key` and in the auth config:

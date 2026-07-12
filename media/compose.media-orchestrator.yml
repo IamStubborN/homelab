@@ -33,6 +33,8 @@ x-service-environment: &service-environment
   MEDIA_PLEX_TOKEN: ${MEDIA_PLEX_TOKEN:?set Plex token}
   MEDIA_PLEX_TV_SECTION: ${MEDIA_PLEX_TV_SECTION:?set Plex TV section ID}
   MEDIA_PLEX_MOVIES_SECTION: ${MEDIA_PLEX_MOVIES_SECTION:?set Plex movies section ID}
+  HTTPS_PROXY: http://gluetun-rezka:8888
+  NO_PROXY: localhost,127.0.0.1,media-postgres,media-service,gluetun,plex,vaultwarden-broker-andrii
   RUST_LOG: ${MEDIA_RUST_LOG:-info}
   TZ: ${TIMEZONE:-UTC}
 
@@ -187,6 +189,9 @@ services:
       DNS_UPSTREAM_IPV6: "off"
       HTTP_CONTROL_SERVER_ADDRESS: 127.0.0.1:8000
       HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH: /run/secrets/gluetun_rezka_control_auth_config
+      HTTPPROXY: "on"
+      HTTPPROXY_LISTENING_ADDRESS: :8888
+      HTTPPROXY_STEALTH: "on"
     secrets:
       - gluetun_rezka_wireguard_private_key
       - gluetun_rezka_control_auth_config

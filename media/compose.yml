@@ -48,8 +48,10 @@ services:
       - DNS_UPSTREAM_RESOLVERS=cloudflare,google
       - BLOCK_MALICIOUS=off
       - DNS_UPSTREAM_IPV6=off
-      - HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={"auth":"none"}
-      - HTTP_CONTROL_SERVER_ADDRESS=127.0.0.1:8000
+      # Control server must be reachable cross-container (Glance VPN widget) but
+      # is locked down with an apikey; see gluetun/control-auth-config.example.toml.
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH=/run/secrets/gluetun_control_auth_config
       - VPN_PORT_FORWARDING=on
       - VPN_PORT_FORWARDING_STATUS_FILE=/gluetun/forwarded_port
       # - DNS_ADDRESS=${DNS_ADDRESS:-192.0.2.1}
@@ -58,6 +60,7 @@ services:
       # - FIREWALL_OUTBOUND_SUBNETS=${ALT_LAN_SUBNET:-198.51.100.0/24}
     secrets:
       - protonvpn_wireguard_private_key
+      - gluetun_control_auth_config
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
@@ -162,6 +165,8 @@ services:
       - UNMASK=002
       - TZ=${TIMEZONE:-UTC}
       - WEBUI_PORT=8400
+    secrets:
+      - gluetun_control_api_key
     volumes:
       - ./qbittorrent/config:/config
       - ./qbittorrent/ui:/ui
@@ -580,6 +585,13 @@ secrets:
     file: ./secrets/protonvpn_wireguard_private_key
   plex_token:
     file: ./secrets/plex_token
+  # Gluetun control-server auth: the TOML role file for Gluetun and the raw
+  # apikey for the qBittorrent healthcheck. Both must carry the SAME key.
+  # See gluetun/control-auth-config.example.toml and media/README.md.
+  gluetun_control_auth_config:
+    file: ./secrets/gluetun_control_auth_config
+  gluetun_control_api_key:
+    file: ./secrets/gluetun_control_api_key
 
 networks:
   proxy:

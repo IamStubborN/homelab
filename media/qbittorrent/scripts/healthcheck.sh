@@ -16,6 +16,11 @@
 
 WEBUI_PORT=8400
 GLUETUN_API="http://localhost:8000"
+# The Gluetun control server now requires an apikey. Sourced from a Docker
+# secret mounted into this container; must equal the key in the Gluetun auth
+# config. A missing key is a hard failure — without it we cannot confirm the
+# VPN public IP, and silently passing would defeat the leak detector.
+GLUETUN_API_KEY_FILE="/run/secrets/gluetun_control_api_key"
 FORWARDED_PORT_FILE="/gluetun/forwarded_port"
 STATE_FILE="/config/healthcheck_stuck_since"
 GRACE_PERIOD_SECONDS=300  # 5 minutes before declaring a stuck qBT unhealthy
@@ -41,7 +46,13 @@ if [ "$CONNECTION_STATUS" = "disconnected" ]; then
     exit 1
 fi
 
-VPN_IP=$(wget -qO- --timeout=5 "${GLUETUN_API}/v1/publicip/ip" 2>/dev/null \
+GLUETUN_API_KEY=$(tr -d '\r\n' < "$GLUETUN_API_KEY_FILE" 2>/dev/null || true)
+if [ -z "$GLUETUN_API_KEY" ]; then
+    log "FAIL: Gluetun control API key missing ($GLUETUN_API_KEY_FILE)"
+    exit 1
+fi
+
+VPN_IP=$(wget -qO- --timeout=5 --header="X-API-Key: ${GLUETUN_API_KEY}" "${GLUETUN_API}/v1/publicip/ip" 2>/dev/null \
     | sed -n 's/.*"public_ip":"\([^"]*\)".*/\1/p')
 if [ -z "$VPN_IP" ]; then
     log "FAIL: Gluetun public IP unavailable"

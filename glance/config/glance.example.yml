@@ -298,6 +298,7 @@ pages:
                 url: ${GLUETUN_CONTROL_URL}/v1/publicip/ip
                 headers:
                   Accept: application/json
+                  X-API-Key: ${GLUETUN_CONTROL_API_KEY}
               vpnStats:
                 url: ${SPEEDTEST_VPN_URL}/api/v1/stats
                 headers:

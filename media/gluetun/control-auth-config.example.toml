@@ -1,0 +1,22 @@
+# Gluetun control-server authentication for the MAIN gluetun VPN namespace.
+#
+# The control server binds on :8000 so cross-container callers (the Glance
+# "VPN Speed" widget) can reach it, but every route is locked behind an apikey.
+# Only the single route the consumers actually need is exposed:
+#   - Glance vpnInfo subrequest  -> GET /v1/publicip/ip
+#   - qBittorrent healthcheck    -> GET /v1/publicip/ip
+#
+# Setup (do NOT commit real secrets):
+#   1. Generate a key:
+#        docker run --rm qmcgaw/gluetun:<pinned-version> genkey
+#   2. Copy this file to media/secrets/gluetun_control_auth_config and replace
+#      the apikey below with the generated key.
+#   3. Write the SAME key (raw, no quotes/newline) to
+#      media/secrets/gluetun_control_api_key   (qBittorrent healthcheck reads it)
+#      and to glance/.env as GLUETUN_CONTROL_API_KEY.
+
+[[roles]]
+name = "vpn-status"
+routes = ["GET /v1/publicip/ip"]
+auth = "apikey"
+apikey = "replace-with-generated-key"

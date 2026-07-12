@@ -12,6 +12,7 @@ This repository is public-safe by design: secrets, runtime databases, local Home
 - Plex, Kavita, Samba, Watchtower, DeUnhealth
 - Inactive media-orchestrator Compose scaffold with a dedicated Rezka VPN
 - KaraKeep, Freedium, Movie Tracker, Glance, Speedtest Tracker
+- Bitwarden (Vaultwarden), Mosquitto, RustDesk
 - Home Assistant with public-safe example config only
 
 ## Setup

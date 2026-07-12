@@ -186,6 +186,7 @@ services:
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
+      - DAC_READ_SEARCH
     devices:
       - /dev/net/tun:/dev/net/tun
     environment:

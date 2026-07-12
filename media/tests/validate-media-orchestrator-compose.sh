@@ -86,6 +86,8 @@ assert_yq '.services.download-runner.devices | any_c(.source == "/dev/dri" and .
     'runner must receive VAAPI devices'
 assert_yq '.services.gluetun-rezka.ports == null and .services.gluetun-rezka.environment.HTTP_CONTROL_SERVER_ADDRESS == "127.0.0.1:8000"' \
     'Gluetun control API must remain private to the shared namespace'
+assert_yq '.services.gluetun-rezka.cap_add | contains(["NET_ADMIN", "DAC_READ_SEARCH"])' \
+    'Gluetun must read strict host secrets after dropping all capabilities'
 assert_yq '.services.gluetun-rezka-watcher.environment.PARENT_CONTAINER == "gluetun-rezka" and .services.gluetun-rezka-watcher.environment.DEPENDENT_CONTAINER == "download-runner"' \
     'dedicated watcher must only pair the Rezka VPN and runner'
 assert_yq '.services.download-runner.environment.MEDIA_STORAGE_RESERVE_BYTES == "21474836480"' \

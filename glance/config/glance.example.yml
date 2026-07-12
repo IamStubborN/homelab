@@ -328,6 +328,32 @@ pages:
                 </div>
               </div>
 
+          - type: custom-api
+            title: Media Queue
+            cache: 1m
+            # Activates once the media-orchestrator profile is deployed (see
+            # media/README.md and media/compose.media-orchestrator.yml). No
+            # extra network wiring is needed here: media-service already joins
+            # the same external `proxy` network as this glance service, so the
+            # container-name URL below resolves as soon as media-service exists.
+            # Requires MEDIA_STATUS_TOKEN in glance/.env — see media/README.md.
+            url: http://media-service:8080/v1/queue/status
+            headers:
+              Authorization: Bearer ${MEDIA_STATUS_TOKEN}
+              Accept: application/json
+            template: |
+              {{ $active := .JSON.Bool "active" }}
+              <div class="currency-grid">
+                <div>
+                  <div class="color-highlight size-h3">{{ .JSON.Int "queued" }}</div>
+                  <div class="size-h6">queued jobs</div>
+                </div>
+                <div>
+                  <div class="size-h3 {{ if $active }}color-positive{{ else }}color-subdue{{ end }}">{{ if $active }}Active{{ else }}Idle{{ end }}</div>
+                  <div class="size-h6">runner status</div>
+                </div>
+              </div>
+
           - type: monitor
             title: Internet
             cache: 1m

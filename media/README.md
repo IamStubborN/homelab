@@ -10,12 +10,13 @@ published.
 Copy the media-orchestrator placeholders from the root `.env.example` into the
 real ignored `.env`, replacing every image digest and provider placeholder.
 The application images provide their own `media healthcheck` command; no
-additional HTTP client is required in the runtime images. Create the shared
-external network used by this media-orchestrator profile once (the Hermes
-profiles live in the separate `hermes-home` deployment):
+additional HTTP client is required in the runtime images. Create the external
+networks used by this media-orchestrator profile once (the Hermes profiles and
+credential broker live in separate deployments):
 
 ```bash
 docker network create media-internal
+docker network create rezka-credentials
 ```
 
 Create the host paths before starting. Staging remains outside Plex roots, but
@@ -29,36 +30,31 @@ install -d -m 0750 \
 install -d -m 0700 "${MEDIA_SECRETS_DIR}"
 ```
 
-Create these secret files with mode `0600`; never commit their values:
+Set the application credentials in the real ignored root `.env`; never commit
+their values. This includes the PostgreSQL password and database URL, all three
+API tokens, both webhook HMAC values, the Prowlarr API key, Plex token, Rezka
+username/password for synchronous service searches, credential broker token and
+cookie key, qBittorrent password, and Gluetun control API key. Set
+`ANDRII_REZKA_BROKER_TOKEN` to the token configured for
+`vaultwarden-broker-andrii`. The static Rezka username/password stay scoped to
+`media-service` and are not passed to `download-runner`.
+
+Create only these Gluetun-required secret files with mode `0600`:
 
 ```text
-media_postgres_password
-media_database_url
-media_andrii_token
-media_valentyna_token
-media_runner_token
-media_andrii_webhook_hmac
-media_valentyna_webhook_hmac
-media_prowlarr_api_key
-media_qbittorrent_password
-media_plex_token
-rezka_username
-rezka_password
-rezka_cookie_key
 gluetun_rezka_wireguard_private_key
 gluetun_rezka_control_auth_config
-gluetun_rezka_control_api_key
 ```
 
-`media_database_url` uses the private hostname, for example
+`MEDIA_DATABASE_URL` uses the private hostname, for example
 `postgres://media:<password>@media-postgres:5432/media_orchestrator`.
 The two media API tokens and webhook HMAC values must match the corresponding
-files in the `hermes-home` deployment. Set the real Plex TV/movie section IDs,
+values in the `hermes-home` deployment. Set the real Plex TV/movie section IDs,
 the existing qBittorrent TV and movies categories, and the qBittorrent username
 in `.env`.
-`rezka_cookie_key` is base64 for exactly 32 decoded bytes. The Gluetun API key
-is generated with `docker run --rm qmcgaw/gluetun:<pinned-version> genkey`; put
-the same key in `gluetun_rezka_control_api_key` and in the auth config:
+`MEDIA_REZKA_COOKIE_KEY` is base64 for exactly 32 decoded bytes. The Gluetun API key
+is generated with `docker run --rm qmcgaw/gluetun:<pinned-version> genkey`; set
+the same key as `GLUETUN_REZKA_CONTROL_API_KEY` in `.env` and in the auth config:
 
 ```toml
 [[roles]]
@@ -72,10 +68,15 @@ The control server binds to `127.0.0.1` inside the namespace shared only by
 `gluetun-rezka` and `download-runner`; it has no published port or Traefik
 route. `HEALTH_RESTART_VPN=off` prevents Gluetun health recovery from changing
 the job IP. The runner owns explicit rotation only after a terminal job state.
+Because the runner uses `network_mode: service:gluetun-rezka`, the
+`gluetun-rezka` service joins the external `rezka-credentials` network on its
+behalf. The runner reaches the broker at
+`http://vaultwarden-broker-andrii:8787` over that shared network namespace.
 
 ## Validate
 
-The repository test creates temporary dummy secrets and only renders Compose:
+The repository test creates temporary dummy environment values and the two
+required Gluetun secret files, then only renders Compose:
 
 ```bash
 media/tests/validate-media-orchestrator-compose.sh
@@ -83,8 +84,8 @@ shellcheck media/gluetun-rezka-watcher/watch.sh \
   media/tests/validate-media-orchestrator-compose.sh
 ```
 
-For an operator-side render using the real ignored environment and secret file
-paths:
+For an operator-side render using the real ignored environment and the two
+Gluetun secret file paths:
 
 ```bash
 docker compose --env-file .env \
@@ -94,8 +95,8 @@ docker compose --env-file .env \
 
 ## Start And Operate
 
-Do not run these commands until the images exist and the secret files are
-ready. The service talks to existing Prowlarr and qBittorrent through
+Do not run these commands until the images, root environment values, and two
+Gluetun secret files are ready. The service talks to existing Prowlarr and qBittorrent through
 `http://gluetun:9696` and `http://gluetun:8400`, and to Plex through
 `http://plex:32400`, while remaining outside both VPN namespaces.
 
@@ -130,11 +131,11 @@ that shared network.
 The widget authenticates with `Authorization: Bearer ${MEDIA_STATUS_TOKEN}`,
 an env placeholder resolved from the gitignored `glance/.env`. This service
 only recognizes the three fixed client tokens configured above
-(`media_andrii_token`, `media_valentyna_token`, `media_runner_token`) — there
+(`MEDIA_ANDRII_TOKEN`, `MEDIA_VALENTYNA_TOKEN`, `MEDIA_RUNNER_TOKEN`) — there
 is no dedicated read-only/status client. Set `MEDIA_STATUS_TOKEN` in
 `glance/.env` to the same value as one of the existing family tokens (prefer
-`media_andrii_token` or `media_valentyna_token`; avoid reusing
-`media_runner_token`, which is scoped to the download runner) rather than
+`MEDIA_ANDRII_TOKEN` or `MEDIA_VALENTYNA_TOKEN`; avoid reusing
+`MEDIA_RUNNER_TOKEN`, which is scoped to the download runner) rather than
 inventing a new credential.
 
 ## Rollback

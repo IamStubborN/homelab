@@ -11,42 +11,29 @@ x-locked-down: &locked-down
     - ALL
 
 x-service-environment: &service-environment
-  MEDIA_DATABASE_URL_FILE: /run/secrets/media_database_url
-  MEDIA_ANDRII_TOKEN_FILE: /run/secrets/media_andrii_token
-  MEDIA_VALENTYNA_TOKEN_FILE: /run/secrets/media_valentyna_token
-  MEDIA_RUNNER_TOKEN_FILE: /run/secrets/media_runner_token
-  MEDIA_ANDRII_WEBHOOK_HMAC_FILE: /run/secrets/media_andrii_webhook_hmac
-  MEDIA_VALENTYNA_WEBHOOK_HMAC_FILE: /run/secrets/media_valentyna_webhook_hmac
+  MEDIA_DATABASE_URL: ${MEDIA_DATABASE_URL:?set media database URL}
+  MEDIA_ANDRII_TOKEN: ${MEDIA_ANDRII_TOKEN:?set Andrii API token}
+  MEDIA_VALENTYNA_TOKEN: ${MEDIA_VALENTYNA_TOKEN:?set Valentyna API token}
+  MEDIA_RUNNER_TOKEN: ${MEDIA_RUNNER_TOKEN:?set runner API token}
+  MEDIA_ANDRII_WEBHOOK_HMAC: ${MEDIA_ANDRII_WEBHOOK_HMAC:?set Andrii webhook HMAC}
+  MEDIA_VALENTYNA_WEBHOOK_HMAC: ${MEDIA_VALENTYNA_WEBHOOK_HMAC:?set Valentyna webhook HMAC}
   MEDIA_LISTEN_ADDR: 0.0.0.0:8080
   MEDIA_PROWLARR_URL: http://gluetun:9696
-  MEDIA_PROWLARR_API_KEY_FILE: /run/secrets/media_prowlarr_api_key
+  MEDIA_PROWLARR_API_KEY: ${MEDIA_PROWLARR_API_KEY:?set Prowlarr API key}
   MEDIA_REZKA_MIRRORS: ${MEDIA_REZKA_MIRRORS:?set comma-separated HTTPS Rezka mirrors}
   MEDIA_REZKA_SESSION_PROBE_URL: ${MEDIA_REZKA_SESSION_PROBE_URL:?set the HTTPS session probe URL}
   MEDIA_REZKA_SESSION_VALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_VALID_MARKERS_JSON:?set valid session markers JSON}
   MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON:?set invalid session markers JSON}
-  MEDIA_REZKA_USERNAME_FILE: /run/secrets/rezka_username
-  MEDIA_REZKA_PASSWORD_FILE: /run/secrets/rezka_password
-  MEDIA_REZKA_COOKIE_KEY_FILE: /run/secrets/rezka_cookie_key
+  MEDIA_REZKA_USERNAME: ${MEDIA_REZKA_USERNAME:?set Rezka username}
+  MEDIA_REZKA_PASSWORD: ${MEDIA_REZKA_PASSWORD:?set Rezka password}
+  MEDIA_REZKA_COOKIE_KEY: ${MEDIA_REZKA_COOKIE_KEY:?set Rezka cookie key}
   MEDIA_REZKA_SESSION_STORE_FILE: /var/lib/media-orchestrator/session/session.bin
   MEDIA_PLEX_URL: http://plex:32400
-  MEDIA_PLEX_TOKEN_FILE: /run/secrets/media_plex_token
+  MEDIA_PLEX_TOKEN: ${MEDIA_PLEX_TOKEN:?set Plex token}
   MEDIA_PLEX_TV_SECTION: ${MEDIA_PLEX_TV_SECTION:?set Plex TV section ID}
   MEDIA_PLEX_MOVIES_SECTION: ${MEDIA_PLEX_MOVIES_SECTION:?set Plex movies section ID}
   RUST_LOG: ${MEDIA_RUST_LOG:-info}
   TZ: ${TIMEZONE:-UTC}
-
-x-service-secrets: &service-secrets
-  - media_database_url
-  - media_andrii_token
-  - media_valentyna_token
-  - media_runner_token
-  - media_andrii_webhook_hmac
-  - media_valentyna_webhook_hmac
-  - media_prowlarr_api_key
-  - media_plex_token
-  - rezka_username
-  - rezka_password
-  - rezka_cookie_key
 
 services:
   media-postgres:
@@ -65,11 +52,9 @@ services:
     environment:
       POSTGRES_DB: ${MEDIA_POSTGRES_DB:-media_orchestrator}
       POSTGRES_USER: ${MEDIA_POSTGRES_USER:-media}
-      POSTGRES_PASSWORD_FILE: /run/secrets/media_postgres_password
+      POSTGRES_PASSWORD: ${MEDIA_POSTGRES_PASSWORD:?set media PostgreSQL password}
       PGDATA: /var/lib/postgresql/data/pgdata
       TZ: ${TIMEZONE:-UTC}
-    secrets:
-      - media_postgres_password
     volumes:
       - type: volume
         source: media_postgres_data
@@ -100,11 +85,9 @@ services:
     restart: "no"
     read_only: true
     environment:
-      MEDIA_DATABASE_URL_FILE: /run/secrets/media_database_url
+      MEDIA_DATABASE_URL: ${MEDIA_DATABASE_URL:?set media database URL}
       RUST_LOG: ${MEDIA_RUST_LOG:-info}
       TZ: ${TIMEZONE:-UTC}
-    secrets:
-      - media_database_url
     tmpfs:
       - /tmp:size=32m,mode=1777
     depends_on:
@@ -143,7 +126,6 @@ services:
     restart: unless-stopped
     read_only: true
     environment: *service-environment
-    secrets: *service-secrets
     volumes:
       - type: volume
         source: rezka_service_session_encrypted
@@ -227,6 +209,7 @@ services:
     networks:
       - media-private
       - rezka-egress
+      - rezka-credentials
       - proxy
 
   download-runner:
@@ -246,35 +229,29 @@ services:
       - /dev/dri:/dev/dri
     environment:
       MEDIA_SERVICE_URL: http://media-service:8080
-      MEDIA_TOKEN_FILE: /run/secrets/media_runner_token
+      MEDIA_TOKEN: ${MEDIA_RUNNER_TOKEN:?set runner API token}
       MEDIA_REZKA_MIRRORS: ${MEDIA_REZKA_MIRRORS:?set comma-separated HTTPS Rezka mirrors}
       MEDIA_REZKA_SESSION_PROBE_URL: ${MEDIA_REZKA_SESSION_PROBE_URL:?set the HTTPS session probe URL}
       MEDIA_REZKA_SESSION_VALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_VALID_MARKERS_JSON:?set valid session markers JSON}
       MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON:?set invalid session markers JSON}
-      MEDIA_REZKA_USERNAME_FILE: /run/secrets/rezka_username
-      MEDIA_REZKA_PASSWORD_FILE: /run/secrets/rezka_password
-      MEDIA_REZKA_COOKIE_KEY_FILE: /run/secrets/rezka_cookie_key
+      MEDIA_REZKA_CREDENTIAL_BROKER_URL: http://vaultwarden-broker-andrii:8787
+      MEDIA_REZKA_CREDENTIAL_BROKER_TOKEN: ${ANDRII_REZKA_BROKER_TOKEN:?set Andrii Rezka credential broker token}
+      MEDIA_REZKA_CREDENTIAL_BROKER_PRIVATE_HTTP_HOSTS: vaultwarden-broker-andrii
+      MEDIA_REZKA_COOKIE_KEY: ${MEDIA_REZKA_COOKIE_KEY:?set Rezka cookie key}
       MEDIA_REZKA_SESSION_STORE_FILE: /var/lib/media-orchestrator/session/session.bin
       MEDIA_GLUETUN_URL: http://127.0.0.1:8000
-      MEDIA_GLUETUN_API_KEY_FILE: /run/secrets/gluetun_rezka_control_api_key
+      MEDIA_GLUETUN_API_KEY: ${GLUETUN_REZKA_CONTROL_API_KEY:?set dedicated Gluetun control API key}
       MEDIA_QBITTORRENT_URL: http://gluetun:8400
       MEDIA_QBITTORRENT_TV_CATEGORY: ${MEDIA_QBITTORRENT_TV_CATEGORY:?set existing TV category}
       MEDIA_QBITTORRENT_MOVIES_CATEGORY: ${MEDIA_QBITTORRENT_MOVIES_CATEGORY:?set existing movies category}
       MEDIA_QBITTORRENT_USERNAME: ${MEDIA_QBITTORRENT_USERNAME:?set qBittorrent username}
-      MEDIA_QBITTORRENT_PASSWORD_FILE: /run/secrets/media_qbittorrent_password
+      MEDIA_QBITTORRENT_PASSWORD: ${MEDIA_QBITTORRENT_PASSWORD:?set qBittorrent password}
       MEDIA_STAGING_ROOT: /data/internal/media-orchestrator/staging/rezka
       MEDIA_TV_ROOT: /data/internal/media/rezka/tv
       MEDIA_MOVIES_ROOT: /data/internal/media/rezka/movies
       MEDIA_STORAGE_RESERVE_BYTES: "21474836480"
       RUST_LOG: ${MEDIA_RUST_LOG:-info}
       TZ: ${TIMEZONE:-UTC}
-    secrets:
-      - media_runner_token
-      - media_qbittorrent_password
-      - rezka_username
-      - rezka_password
-      - rezka_cookie_key
-      - gluetun_rezka_control_api_key
     volumes:
       # One bind mount preserves atomic rename between staging and Plex roots.
       - type: bind
@@ -343,38 +320,10 @@ services:
         condition: service_healthy
 
 secrets:
-  media_postgres_password:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_postgres_password
-  media_database_url:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_database_url
-  media_andrii_token:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_andrii_token
-  media_valentyna_token:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_valentyna_token
-  media_runner_token:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_runner_token
-  media_andrii_webhook_hmac:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_andrii_webhook_hmac
-  media_valentyna_webhook_hmac:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_valentyna_webhook_hmac
-  media_prowlarr_api_key:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_prowlarr_api_key
-  media_qbittorrent_password:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_qbittorrent_password
-  media_plex_token:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_plex_token
-  rezka_username:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/rezka_username
-  rezka_password:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/rezka_password
-  rezka_cookie_key:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/rezka_cookie_key
   gluetun_rezka_wireguard_private_key:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/gluetun_rezka_wireguard_private_key
   gluetun_rezka_control_auth_config:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/gluetun_rezka_control_auth_config
-  gluetun_rezka_control_api_key:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/gluetun_rezka_control_api_key
 
 volumes:
   media_postgres_data:
@@ -391,5 +340,8 @@ networks:
     name: ${MEDIA_NETWORK:-media-internal}
     external: true
   rezka-egress:
+  rezka-credentials:
+    name: rezka-credentials
+    external: true
   proxy:
     external: true

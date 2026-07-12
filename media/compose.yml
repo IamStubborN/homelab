@@ -441,7 +441,7 @@ services:
     entrypoint: ["sh", "/watch.sh"]
 
   plex-orphan-watcher:
-    image: ${PLEX_ORPHAN_WATCHER_IMAGE:-ghcr.io/iamstubborn/plex-orphan-watcher:0.1.2@sha256:1afd4325fa713a691657c5853ee23fa6057228da1a87ada170ab771cadb90e41}
+    image: ${PLEX_ORPHAN_WATCHER_IMAGE:-ghcr.io/iamstubborn/plex-orphan-watcher:0.2.0@sha256:7bff06ada86ae36459fbdf55398316fd93e402ed758891c09a0f959ef70a216d}
     container_name: plex-orphan-watcher
     restart: unless-stopped
     read_only: true
@@ -455,8 +455,9 @@ services:
       plex:
         condition: service_healthy
     environment:
-      - WATCH_ROOTS=/data/internal/torrents/tv,/data/usb_drive/media/tv,/data/usb_drive/torrents/tv
-      - PLEX_DATABASE=/plex/com.plexapp.plugins.library.db
+      - WATCH_ROOTS=/data/internal/media/tv,/data/internal/media/rezka/tv,/data/internal/torrents/tv,/data/usb_drive/media/tv,/data/usb_drive/torrents/tv
+      - PLEX_URL=http://plex:32400
+      - PLEX_TOKEN_FILE=/run/secrets/plex_token
       - QBITTORRENT_URL=http://gluetun:8400
       - DRY_RUN=false
       - DELETE_DELAY=30s
@@ -464,10 +465,13 @@ services:
       - MAX_RETRY_AGE=10m
       - HEALTH_ADDRESS=:8080
     volumes:
-      - ./plex/config/Library/Application Support/Plex Media Server/Plug-in Support/Databases:/plex:ro
+      - ${INTERNAL_STORAGE:-/mnt/internal}/media/tv:/data/internal/media/tv
+      - ${INTERNAL_STORAGE:-/mnt/internal}/media/rezka/tv:/data/internal/media/rezka/tv
       - ${INTERNAL_STORAGE:-/mnt/internal}/torrents/tv:/data/internal/torrents/tv
       - ${USB_STORAGE:-/mnt/usb_drive}/media/tv:/data/usb_drive/media/tv
       - ${USB_STORAGE:-/mnt/usb_drive}/torrents/tv:/data/usb_drive/torrents/tv
+    secrets:
+      - plex_token
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
       - "deunhealth.restart.on.unhealthy=true"

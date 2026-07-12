@@ -14,16 +14,19 @@
 # Benign states (NOT failures):
 #   - dht_nodes=0 with 0 active torrents — libtorrent sleeps DHT when idle
 
-WEBUI_PORT=8400
-GLUETUN_API="http://localhost:8000"
+WEBUI_PORT="${WEBUI_PORT:-8400}"
+GLUETUN_API="${GLUETUN_API:-http://localhost:8000}"
 # The Gluetun control server now requires an apikey. Sourced from a Docker
 # secret mounted into this container; must equal the key in the Gluetun auth
 # config. A missing key is a hard failure — without it we cannot confirm the
 # VPN public IP, and silently passing would defeat the leak detector.
-GLUETUN_API_KEY_FILE="/run/secrets/gluetun_control_api_key"
-FORWARDED_PORT_FILE="/gluetun/forwarded_port"
-STATE_FILE="/config/healthcheck_stuck_since"
+GLUETUN_API_KEY_FILE="${GLUETUN_API_KEY_FILE:-/run/secrets/gluetun_control_api_key}"
+FORWARDED_PORT_FILE="${FORWARDED_PORT_FILE:-/gluetun/forwarded_port}"
+HEALTH_STATE_DIR="${HEALTH_STATE_DIR:-/config}"
+STATE_FILE="${HEALTH_STATE_DIR}/stuck_since"
+PORT_MISMATCH_STATE_FILE="${HEALTH_STATE_DIR}/port_mismatch_since"
 GRACE_PERIOD_SECONDS=300  # 5 minutes before declaring a stuck qBT unhealthy
+PORT_SYNC_GRACE_SECONDS=120
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"; }
 mark_healthy() { rm -f "$STATE_FILE" 2>/dev/null || true; }
@@ -73,9 +76,22 @@ fi
 QB_PREFS=$(wget -qO- --timeout=5 "http://localhost:${WEBUI_PORT}/api/v2/app/preferences" 2>/dev/null) || true
 LISTEN_PORT=$(echo "$QB_PREFS" | sed -n 's/.*"listen_port":\([0-9]*\).*/\1/p')
 if [ "$LISTEN_PORT" != "$FORWARDED_PORT" ]; then
-    log "FAIL: listen_port=$LISTEN_PORT forwarded_port=$FORWARDED_PORT"
-    exit 1
+	NOW=$(date +%s)
+	if [ -f "$PORT_MISMATCH_STATE_FILE" ]; then
+		SINCE=$(cat "$PORT_MISMATCH_STATE_FILE" 2>/dev/null || echo "$NOW")
+		DURATION=$((NOW - SINCE))
+		if [ "$DURATION" -ge "$PORT_SYNC_GRACE_SECONDS" ]; then
+			log "FAIL: listen_port=$LISTEN_PORT forwarded_port=$FORWARDED_PORT mismatch for ${DURATION}s"
+			exit 1
+		fi
+		log "WARN: listen_port=$LISTEN_PORT forwarded_port=$FORWARDED_PORT waiting for sync (${DURATION}s/${PORT_SYNC_GRACE_SECONDS}s)"
+	else
+		echo "$NOW" > "$PORT_MISMATCH_STATE_FILE"
+		log "WARN: listen_port=$LISTEN_PORT forwarded_port=$FORWARDED_PORT waiting for sync"
+	fi
+	exit 0
 fi
+rm -f "$PORT_MISMATCH_STATE_FILE" 2>/dev/null || true
 
 # Count torrents that should be actively talking to the network.
 # Exclude paused, queued, errored, checking, or moving states.

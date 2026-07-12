@@ -176,6 +176,43 @@ services:
       - ${INTERNAL_STORAGE:-/mnt/internal}/torrents:/data/internal/torrents
       - ${USB_STORAGE:-/mnt/usb_drive}/torrents:/data/usb_drive/torrents
 
+  qbittorrent-port-sync:
+    image: alpine:3.23
+    container_name: qbittorrent-port-sync
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_started
+    environment:
+      - QBITTORRENT_URL=http://gluetun:8400
+      - FORWARDED_PORT_FILE=/gluetun/forwarded_port
+      - SYNC_STATE_FILE=/tmp/synced_port
+      - POLL_INTERVAL=5
+    volumes:
+      - ./qbittorrent/scripts/port-sync.sh:/scripts/port-sync.sh:ro
+      - ./gluetun/data/forwarded_port:/gluetun/forwarded_port:ro
+    tmpfs:
+      - /tmp:size=1m,mode=1777
+    entrypoint: ["sh", "/scripts/port-sync.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /tmp/synced_port && test \"$$(cat /tmp/synced_port)\" = \"$$(tr -dc '0-9' < /gluetun/forwarded_port)\""]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "deunhealth.restart.on.unhealthy=true"
+    networks:
+      - proxy
+
   prowlarr:
     container_name: prowlarr
     image: linuxserver/prowlarr:latest
@@ -441,7 +478,7 @@ services:
     entrypoint: ["sh", "/watch.sh"]
 
   plex-orphan-watcher:
-    image: ${PLEX_ORPHAN_WATCHER_IMAGE:-ghcr.io/iamstubborn/plex-orphan-watcher:0.2.0@sha256:7bff06ada86ae36459fbdf55398316fd93e402ed758891c09a0f959ef70a216d}
+    image: ${PLEX_ORPHAN_WATCHER_IMAGE:-ghcr.io/iamstubborn/plex-orphan-watcher:0.3.0@sha256:2382ec8b34d782b2e956ad5f16e26f31b927c0c66f0a0b2e4d7cba85a7731de7}
     container_name: plex-orphan-watcher
     restart: unless-stopped
     read_only: true
@@ -463,6 +500,7 @@ services:
       - DELETE_DELAY=30s
       - RETRY_INTERVAL=30s
       - MAX_RETRY_AGE=10m
+      - QUARANTINE_RETENTION=168h
       - HEALTH_ADDRESS=:8080
     volumes:
       - ${INTERNAL_STORAGE:-/mnt/internal}/media/tv:/data/internal/media/tv

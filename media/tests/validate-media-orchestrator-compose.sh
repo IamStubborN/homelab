@@ -72,6 +72,10 @@ assert_yq '.services.media-service.environment.MEDIA_ANDRII_WEBHOOK_HMAC_FILE ==
     'media-service must sign notifications for both Hermes profiles'
 assert_yq '.services.media-service.environment.MEDIA_REZKA_SESSION_STORE_FILE == "/var/lib/media-orchestrator/session/session.bin" and (.services.media-service.volumes | any_c(.source == "rezka_service_session_encrypted" and .target == "/var/lib/media-orchestrator/session"))' \
     'media-service must have its own encrypted Rezka search session'
+assert_yq '.services.media-session-init.restart == "no" and (.services.media-session-init.cap_add | contains(["CHOWN"]))' \
+    'session volumes must be initialized for the non-root runtime user'
+assert_yq '.services.media-service.user == "1000:1000" and .services.download-runner.user == "1000:1000"' \
+    'service and runner must use the homelab storage owner'
 assert_yq '.services.media-service.healthcheck.test | join(" ") == "CMD media healthcheck --url http://127.0.0.1:8080/v1/ready"' \
     'media-service healthcheck must use the bundled media binary'
 assert_yq '.services.download-runner.network_mode == "service:gluetun-rezka"' \
@@ -97,7 +101,7 @@ assert_yq '.services.download-runner.healthcheck.test | join(" ") == "CMD media 
 assert_yq '.services.download-runner.volumes | any_c(.source == "rezka_session_encrypted" and .target == "/var/lib/media-orchestrator/session")' \
     'runner must persist its encrypted Rezka session in a dedicated volume'
 
-for service in media-postgres media-migrate media-service gluetun-rezka download-runner gluetun-rezka-watcher; do
+for service in media-postgres media-session-init media-migrate media-service gluetun-rezka download-runner gluetun-rezka-watcher; do
     image=$(yq -r ".services.\"$service\".image" "$TMP_DIR/rendered.yml")
     if ! printf '%s\n' "$image" | grep -Eq '@sha256:[0-9a-f]{64}$'; then
         printf 'FAIL: %s image is not pinned by sha256 digest: %s\n' "$service" "$image" >&2

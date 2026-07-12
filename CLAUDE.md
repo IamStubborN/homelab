@@ -81,6 +81,27 @@ Use this file and the tracked `*.example.*` files for clean-host recovery. The r
 
 Clean-host restore requires more than the root `.env`: create service-local env files for services with `env_file` (`glance/.env`, `speedtest-tracker/.env`), restore Docker secret files under `traefik/secrets/` and `media/secrets/`, restore ignored runtime data directories, and verify host prerequisites such as storage mounts, `/dev/net/tun`, `/dev/dri`, `/run/dbus`, Docker socket access, ports `80/443`, and the external `proxy` network.
 
+### Gluetun control-server API key
+
+The main Gluetun control server (`media/compose.yml`) binds on `:8000` so the
+Glance "VPN Speed" widget can reach `/v1/publicip/ip` cross-container, but every
+route is locked behind an apikey. Generate one key and place the SAME value in
+three spots:
+
+```bash
+KEY=$(docker run --rm qmcgaw/gluetun:<pinned-version> genkey)
+# 1. Gluetun auth config (copy the tracked example, then set apikey = "$KEY"):
+cp media/gluetun/control-auth-config.example.toml media/secrets/gluetun_control_auth_config
+# 2. Raw key for the qBittorrent healthcheck:
+printf '%s' "$KEY" > media/secrets/gluetun_control_api_key
+# 3. glance/.env: GLUETUN_CONTROL_API_KEY=$KEY
+chmod 0600 media/secrets/gluetun_control_auth_config media/secrets/gluetun_control_api_key
+```
+
+The only route exposed is `GET /v1/publicip/ip` (used by both the Glance widget
+and the qBittorrent healthcheck). A mismatched or missing key makes the
+qBittorrent healthcheck fail closed and the Glance widget go blank.
+
 Watchtower is configured in opt-in mode. Add `com.centurylinklabs.watchtower.enable=true` only to services that should be auto-updated. Keep stateful databases, source-built services, and private custom apps disabled unless their backup and restore path is tested.
 
 Vaultwarden (`bitwarden/compose.yml`) and Traefik (`traefik/compose.yml`) carry

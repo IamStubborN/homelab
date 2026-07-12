@@ -60,6 +60,26 @@ assert_yq() {
     fi
 }
 
+assert_file_contains() {
+    file=$1
+    pattern=$2
+    message=$3
+    if ! grep -Fq "$pattern" "$file"; then
+        printf 'FAIL: %s\n' "$message" >&2
+        exit 1
+    fi
+}
+
+assert_file_not_contains() {
+    file=$1
+    pattern=$2
+    message=$3
+    if grep -Fq "$pattern" "$file"; then
+        printf 'FAIL: %s\n' "$message" >&2
+        exit 1
+    fi
+}
+
 assert_yq '.services.media-postgres.networks as $networks | (($networks | length) == 1 and ($networks | has("media-db")))' \
     'PostgreSQL must only join the private database network'
 assert_yq '.networks.media-db.internal == true and .networks.media-private.internal == true' \
@@ -104,6 +124,10 @@ assert_yq '.services.download-runner.restart == "no" and .services.download-runn
     'runner must process one job and remain stopped until the lifecycle watcher rotates VPN'
 assert_yq '.services.gluetun-rezka-watcher.environment.ROTATION_ATTEMPTS == "3" and .services.gluetun-rezka-watcher.environment.STATE_DIR == "/state" and ((.services.gluetun-rezka-watcher.volumes | map(select(.target == "/state" and .source == "gluetun_rezka_lifecycle")) | length) == 1)' \
     'lifecycle watcher must bound rotations and persist non-secret rotation evidence'
+assert_file_contains 'media/gluetun-rezka-watcher/watch.sh' 'cat /tmp/gluetun/ip' \
+    'lifecycle watcher must use Gluetun public-IP state instead of a single external HTTPS dependency'
+assert_file_not_contains 'media/gluetun-rezka-watcher/watch.sh' 'api.ipify.org' \
+    'lifecycle watcher must not depend on the unavailable api.ipify.org endpoint'
 assert_yq '.services.download-runner.environment.MEDIA_STORAGE_RESERVE_BYTES == "21474836480"' \
     'runner must preserve the 20 GiB free-space reserve'
 assert_yq '.services.download-runner.environment.MEDIA_STAGING_ROOT == "/data/internal/media-orchestrator/staging/rezka" and .services.download-runner.environment.MEDIA_TV_ROOT == "/data/internal/media/rezka/tv" and .services.download-runner.environment.MEDIA_MOVIES_ROOT == "/data/internal/media/rezka/movies"' \

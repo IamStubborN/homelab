@@ -41,8 +41,20 @@ restart_dependent() {
 }
 
 public_ip() {
-    docker exec "$PARENT" wget -qO- --timeout=15 https://api.ipify.org 2>/dev/null \
-        | tr -d '\r\n' || true
+    ip=$(docker exec "$PARENT" cat /tmp/gluetun/ip 2>/dev/null | tr -d '\r\n' || true)
+    if [ -n "$ip" ]; then
+        printf '%s' "$ip"
+        return
+    fi
+
+    for endpoint in http://ipinfo.io/ip http://ifconfig.me/ip; do
+        ip=$(docker exec "$PARENT" wget -qO- --timeout=15 "$endpoint" 2>/dev/null \
+            | tr -d '\r\n' || true)
+        if [ -n "$ip" ]; then
+            printf '%s' "$ip"
+            return
+        fi
+    done
 }
 
 record_rotation() {

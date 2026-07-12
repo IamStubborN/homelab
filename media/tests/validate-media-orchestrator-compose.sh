@@ -100,6 +100,10 @@ assert_yq '.networks."rezka-credentials".external == true and .networks."rezka-c
     'Rezka credential broker network must use the fixed external network name'
 assert_yq '.services.gluetun-rezka-watcher.environment.PARENT_CONTAINER == "gluetun-rezka" and .services.gluetun-rezka-watcher.environment.DEPENDENT_CONTAINER == "download-runner"' \
     'dedicated watcher must only pair the Rezka VPN and runner'
+assert_yq '.services.download-runner.restart == "no" and .services.download-runner.environment.MEDIA_RUNNER_EXIT_AFTER_JOB == "true"' \
+    'runner must process one job and remain stopped until the lifecycle watcher rotates VPN'
+assert_yq '.services.gluetun-rezka-watcher.environment.ROTATION_ATTEMPTS == "3" and .services.gluetun-rezka-watcher.environment.STATE_DIR == "/state" and ((.services.gluetun-rezka-watcher.volumes | map(select(.target == "/state" and .source == "gluetun_rezka_lifecycle")) | length) == 1)' \
+    'lifecycle watcher must bound rotations and persist non-secret rotation evidence'
 assert_yq '.services.download-runner.environment.MEDIA_STORAGE_RESERVE_BYTES == "21474836480"' \
     'runner must preserve the 20 GiB free-space reserve'
 assert_yq '.services.download-runner.environment.MEDIA_STAGING_ROOT == "/data/internal/media-orchestrator/staging/rezka" and .services.download-runner.environment.MEDIA_TV_ROOT == "/data/internal/media/rezka/tv" and .services.download-runner.environment.MEDIA_MOVIES_ROOT == "/data/internal/media/rezka/movies"' \

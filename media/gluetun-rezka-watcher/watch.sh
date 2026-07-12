@@ -5,6 +5,8 @@ PARENT=${PARENT_CONTAINER:-gluetun-rezka}
 DEPENDENT=${DEPENDENT_CONTAINER:-download-runner}
 HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-120}
 SETTLE_DELAY=${SETTLE_DELAY:-10}
+ROTATION_ATTEMPTS=${ROTATION_ATTEMPTS:-3}
+STATE_DIR=${STATE_DIR:-/state}
 
 log() {
     printf '%s [gluetun-rezka-watcher] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1"
@@ -38,6 +40,52 @@ restart_dependent() {
     docker restart "$DEPENDENT" >/dev/null
 }
 
+public_ip() {
+    docker exec "$PARENT" wget -qO- --timeout=15 https://api.ipify.org 2>/dev/null \
+        | tr -d '\r\n' || true
+}
+
+record_rotation() {
+    timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    printf '%s\t%s\t%s\t%s\n' "$timestamp" "$1" "$2" "$3" \
+        >>"$STATE_DIR/rotations.tsv"
+}
+
+rotate_parent() {
+    previous_ip=$(public_ip)
+    attempt=1
+    while [ "$attempt" -le "$ROTATION_ATTEMPTS" ]; do
+        log "rotating $PARENT before the next job (attempt $attempt/$ROTATION_ATTEMPTS)"
+        docker restart "$PARENT" >/dev/null
+        if wait_healthy; then
+            sleep "$SETTLE_DELAY"
+            current_ip=$(public_ip)
+            if [ -n "$previous_ip" ] && [ -n "$current_ip" ] \
+                && [ "$previous_ip" != "$current_ip" ]; then
+                record_rotation "$previous_ip" "$current_ip" "$attempt"
+                log "$PARENT rotated from $previous_ip to $current_ip"
+                return 0
+            fi
+            log "$PARENT did not obtain a different public IP"
+        else
+            log "$PARENT did not become healthy within ${HEALTH_TIMEOUT}s"
+        fi
+        attempt=$((attempt + 1))
+    done
+    record_rotation "${previous_ip:-unknown}" "failed" "$ROTATION_ATTEMPTS"
+    return 1
+}
+
+start_dependent() {
+    state=$(docker inspect "$DEPENDENT" --format '{{.State.Status}}' 2>/dev/null || true)
+    if [ "$state" = running ]; then
+        log "$DEPENDENT is already running"
+        return
+    fi
+    log "starting $DEPENDENT after successful VPN rotation"
+    docker start "$DEPENDENT" >/dev/null
+}
+
 check_stale_namespace() {
     parent_started=$(started_at "$PARENT")
     dependent_started=$(started_at "$DEPENDENT")
@@ -49,20 +97,29 @@ check_stale_namespace() {
     fi
 }
 
-log "watching $PARENT; only $DEPENDENT may be restarted"
+mkdir -p "$STATE_DIR"
+touch "$STATE_DIR/rotations.tsv"
+
+log "watching $PARENT and $DEPENDENT; only this dedicated pair may be controlled"
 sleep "$SETTLE_DELAY"
 check_stale_namespace
 
 docker events \
+    --filter type=container \
     --filter "container=$PARENT" \
+    --filter "container=$DEPENDENT" \
     --filter "event=start" \
-    --format '{{.Time}}' | while IFS= read -r _; do
-    log "$PARENT start detected; waiting for health"
-    if wait_healthy; then
-        sleep "$SETTLE_DELAY"
-        restart_dependent
-    else
-        log "$PARENT did not become healthy within ${HEALTH_TIMEOUT}s"
+    --filter "event=die" \
+    --format '{{.Actor.Attributes.name}}|{{.Action}}' | while IFS='|' read -r container action; do
+    if [ "$container" = "$DEPENDENT" ] && [ "$action" = die ]; then
+        log "$DEPENDENT completed its one-job process; rotating VPN"
+        if rotate_parent; then
+            start_dependent
+        else
+            log "VPN rotation failed; $DEPENDENT remains stopped and queued work is gated"
+        fi
+    elif [ "$container" = "$PARENT" ] && [ "$action" = start ]; then
+        log "$PARENT start detected"
     fi
 done
 

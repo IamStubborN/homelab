@@ -221,7 +221,7 @@ services:
     user: ${PUID:-1000}:${PGID:-1000}
     command:
       - runner
-    restart: unless-stopped
+    restart: "no"
     read_only: true
     network_mode: service:gluetun-rezka
     group_add:
@@ -241,6 +241,7 @@ services:
       MEDIA_REZKA_CREDENTIAL_BROKER_PRIVATE_HTTP_HOSTS: vaultwarden-broker-andrii
       MEDIA_REZKA_COOKIE_KEY: ${MEDIA_REZKA_COOKIE_KEY:?set Rezka cookie key}
       MEDIA_REZKA_SESSION_STORE_FILE: /var/lib/media-orchestrator/session/session.bin
+      MEDIA_RUNNER_EXIT_AFTER_JOB: "true"
       MEDIA_QBITTORRENT_URL: http://gluetun:8400
       MEDIA_QBITTORRENT_TV_CATEGORY: ${MEDIA_QBITTORRENT_TV_CATEGORY:?set existing TV category}
       MEDIA_QBITTORRENT_MOVIES_CATEGORY: ${MEDIA_QBITTORRENT_MOVIES_CATEGORY:?set existing movies category}
@@ -298,9 +299,12 @@ services:
       DEPENDENT_CONTAINER: download-runner
       HEALTH_TIMEOUT: "120"
       SETTLE_DELAY: "10"
+      ROTATION_ATTEMPTS: "3"
+      STATE_DIR: /state
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./gluetun-rezka-watcher/watch.sh:/watch.sh:ro
+      - gluetun_rezka_lifecycle:/state
     tmpfs:
       - /tmp:size=16m,mode=1777
     entrypoint:
@@ -328,6 +332,7 @@ secrets:
 volumes:
   media_postgres_data:
   gluetun_rezka_state:
+  gluetun_rezka_lifecycle:
   rezka_session_encrypted:
   rezka_service_session_encrypted:
 

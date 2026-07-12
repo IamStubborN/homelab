@@ -241,8 +241,6 @@ services:
       MEDIA_REZKA_CREDENTIAL_BROKER_PRIVATE_HTTP_HOSTS: vaultwarden-broker-andrii
       MEDIA_REZKA_COOKIE_KEY: ${MEDIA_REZKA_COOKIE_KEY:?set Rezka cookie key}
       MEDIA_REZKA_SESSION_STORE_FILE: /var/lib/media-orchestrator/session/session.bin
-      MEDIA_GLUETUN_URL: http://127.0.0.1:8000
-      MEDIA_GLUETUN_API_KEY: ${GLUETUN_REZKA_CONTROL_API_KEY:?set dedicated Gluetun control API key}
       MEDIA_QBITTORRENT_URL: http://gluetun:8400
       MEDIA_QBITTORRENT_TV_CATEGORY: ${MEDIA_QBITTORRENT_TV_CATEGORY:?set existing TV category}
       MEDIA_QBITTORRENT_MOVIES_CATEGORY: ${MEDIA_QBITTORRENT_MOVIES_CATEGORY:?set existing movies category}

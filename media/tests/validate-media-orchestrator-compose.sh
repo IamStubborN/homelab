@@ -100,8 +100,8 @@ assert_yq '.services.media-postgres.environment.POSTGRES_PASSWORD == "dummy-post
     'PostgreSQL must receive its password directly from the root environment'
 assert_yq '.services.media-service.environment as $env | ($env.MEDIA_DATABASE_URL != null and $env.MEDIA_ANDRII_TOKEN != null and $env.MEDIA_VALENTYNA_TOKEN != null and $env.MEDIA_RUNNER_TOKEN != null and $env.MEDIA_LIFECYCLE_TOKEN == "dummy-lifecycle-token" and $env.MEDIA_PROWLARR_API_KEY != null and $env.MEDIA_PLEX_TOKEN != null and $env.MEDIA_REZKA_USERNAME == "dummy-rezka-username" and $env.MEDIA_REZKA_PASSWORD == "dummy-rezka-password" and $env.MEDIA_REZKA_COOKIE_KEY != null and ($env | has("MEDIA_DATABASE_URL_FILE") | not) and ($env | has("MEDIA_ANDRII_TOKEN_FILE") | not) and ($env | has("MEDIA_VALENTYNA_TOKEN_FILE") | not) and ($env | has("MEDIA_RUNNER_TOKEN_FILE") | not) and ($env | has("MEDIA_PROWLARR_API_KEY_FILE") | not) and ($env | has("MEDIA_PLEX_TOKEN_FILE") | not) and ($env | has("MEDIA_REZKA_USERNAME_FILE") | not) and ($env | has("MEDIA_REZKA_PASSWORD_FILE") | not) and ($env | has("MEDIA_REZKA_COOKIE_KEY_FILE") | not))' \
     'media-service must receive application secrets directly from the root environment'
-assert_yq '.services.media-service.environment.MEDIA_REZKA_SESSION_STORE_FILE == "/var/lib/media-orchestrator/session/session.bin" and (.services.media-service.volumes | any_c(.source == "rezka_service_session_encrypted" and .target == "/var/lib/media-orchestrator/session"))' \
-    'media-service must have its own encrypted Rezka search session'
+assert_yq '.services.media-service.environment.MEDIA_REZKA_SESSION_STORE_FILE == "/var/lib/media-orchestrator/session/session.bin" and (.services.media-service.volumes | any_c(.source == "rezka_session_encrypted" and .target == "/var/lib/media-orchestrator/session"))' \
+    'media-service must consume the shared encrypted Rezka session snapshot'
 assert_yq '.services.media-session-init.restart == "no" and (.services.media-session-init.cap_add | contains(["CHOWN"]))' \
     'session volumes must be initialized for the non-root runtime user'
 assert_yq '.services.media-migrate.user == "1000:1000" and .services.media-service.user == "1000:1000" and .services.download-runner.user == "1000:1000"' \
@@ -155,7 +155,9 @@ assert_yq '.services.gluetun-rezka.secrets as $secrets | (($secrets | length) ==
 assert_yq '.services.download-runner.healthcheck.test | join(" ") == "CMD media healthcheck --url http://media-service:8080/v1/health"' \
     'runner healthcheck must use the bundled media binary'
 assert_yq '.services.download-runner.volumes | any_c(.source == "rezka_session_encrypted" and .target == "/var/lib/media-orchestrator/session")' \
-    'runner must persist its encrypted Rezka session in a dedicated volume'
+    'runner must persist the shared encrypted Rezka session snapshot'
+assert_yq '(.volumes | has("rezka_session_encrypted")) and (.volumes | has("rezka_service_session_encrypted") | not)' \
+    'service and runner must share one encrypted Rezka session volume'
 
 for service in media-postgres media-session-init media-migrate media-service gluetun-rezka download-runner gluetun-rezka-watcher; do
     image=$(yq -r ".services.\"$service\".image" "$TMP_DIR/rendered.yml")

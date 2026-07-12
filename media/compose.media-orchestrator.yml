@@ -111,13 +111,11 @@ services:
     command:
       - -R
       - ${PUID:-1000}:${PGID:-1000}
-      - /var/lib/media-orchestrator/service-session
-      - /var/lib/media-orchestrator/runner-session
+      - /var/lib/media-orchestrator/session
     restart: "no"
     read_only: true
     volumes:
-      - rezka_service_session_encrypted:/var/lib/media-orchestrator/service-session
-      - rezka_session_encrypted:/var/lib/media-orchestrator/runner-session
+      - rezka_session_encrypted:/var/lib/media-orchestrator/session
 
   media-service:
     <<: [*media-profile, *locked-down]
@@ -131,7 +129,7 @@ services:
     environment: *service-environment
     volumes:
       - type: volume
-        source: rezka_service_session_encrypted
+        source: rezka_session_encrypted
         target: /var/lib/media-orchestrator/session
         volume:
           nocopy: true
@@ -343,7 +341,6 @@ volumes:
   gluetun_rezka_state:
   gluetun_rezka_lifecycle:
   rezka_session_encrypted:
-  rezka_service_session_encrypted:
 
 networks:
   media-db:

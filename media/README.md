@@ -11,7 +11,8 @@ Copy the media-orchestrator placeholders from the root `.env.example` into the
 real ignored `.env`, replacing every image digest and provider placeholder.
 The application images provide their own `media healthcheck` command; no
 additional HTTP client is required in the runtime images. Create the shared
-external network used by the two Hermes profiles once:
+external network used by this media-orchestrator profile once (the Hermes
+profiles live in the separate `hermes-home` deployment):
 
 ```bash
 docker network create media-internal

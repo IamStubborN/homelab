@@ -440,6 +440,40 @@ services:
       - ${HOMELAB_ROOT:-/opt/homelab}:${HOMELAB_ROOT:-/opt/homelab}:ro
     entrypoint: ["sh", "/watch.sh"]
 
+  plex-orphan-watcher:
+    image: ${PLEX_ORPHAN_WATCHER_IMAGE:-ghcr.io/iamstubborn/plex-orphan-watcher:0.1.0@sha256:3380c512d90b60c64407c233c87eaa17cae341a363425c6a0eac395be36c87ad}
+    container_name: plex-orphan-watcher
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      plex:
+        condition: service_healthy
+    environment:
+      - WATCH_ROOTS=/data/internal/torrents/tv,/data/usb_drive/media/tv,/data/usb_drive/torrents/tv
+      - PLEX_DATABASE=/plex/com.plexapp.plugins.library.db
+      - QBITTORRENT_URL=http://gluetun:8400
+      - DRY_RUN=false
+      - DELETE_DELAY=30s
+      - RETRY_INTERVAL=30s
+      - MAX_RETRY_AGE=10m
+      - HEALTH_ADDRESS=:8080
+    volumes:
+      - ./plex/config/Library/Application Support/Plex Media Server/Plug-in Support/Databases:/plex:ro
+      - ${INTERNAL_STORAGE:-/mnt/internal}/torrents/tv:/data/internal/torrents/tv
+      - ${USB_STORAGE:-/mnt/usb_drive}/media/tv:/data/usb_drive/media/tv
+      - ${USB_STORAGE:-/mnt/usb_drive}/torrents/tv:/data/usb_drive/torrents/tv
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+      - "deunhealth.restart.on.unhealthy=true"
+    networks:
+      - proxy
+
   plex:
     image: linuxserver/plex:latest
     container_name: plex

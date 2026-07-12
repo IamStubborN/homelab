@@ -6,7 +6,11 @@ DEPENDENT=${DEPENDENT_CONTAINER:-download-runner}
 HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-120}
 SETTLE_DELAY=${SETTLE_DELAY:-10}
 ROTATION_ATTEMPTS=${ROTATION_ATTEMPTS:-3}
+LIFECYCLE_WRITE_ATTEMPTS=${LIFECYCLE_WRITE_ATTEMPTS:-3}
+LIFECYCLE_RETRY_DELAY=${LIFECYCLE_RETRY_DELAY:-2}
+LIFECYCLE_HTTP_TIMEOUT=${LIFECYCLE_HTTP_TIMEOUT:-10}
 STATE_DIR=${STATE_DIR:-/state}
+: "${MEDIA_LIFECYCLE_TOKEN:?MEDIA_LIFECYCLE_TOKEN is required}"
 
 log() {
     printf '%s [gluetun-rezka-watcher] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1"
@@ -63,19 +67,70 @@ record_rotation() {
         >>"$STATE_DIR/rotations.tsv"
 }
 
+json_ip() {
+    case ${1:-} in
+        '' | *[!0-9A-Fa-f:.]*) printf 'null' ;;
+        *) printf '"%s"' "$1" ;;
+    esac
+}
+
+put_lifecycle() {
+    state=$1
+    reason=$2
+    previous_ip=$3
+    current_ip=$4
+    body=$(printf '{"state":"%s","reason":%s,"previous_ip":%s,"current_ip":%s}' \
+        "$state" "$reason" "$(json_ip "$previous_ip")" "$(json_ip "$current_ip")")
+    content_length=$(printf '%s' "$body" | wc -c | tr -d ' ')
+    response_file="$STATE_DIR/lifecycle-response.$$"
+    attempt=1
+
+    while [ "$attempt" -le "$LIFECYCLE_WRITE_ATTEMPTS" ]; do
+        if {
+            printf 'PUT /v1/runner/lifecycle HTTP/1.1\r\n'
+            printf 'Host: media-service:8080\r\n'
+            printf 'Authorization: Bearer %s\r\n' "$MEDIA_LIFECYCLE_TOKEN"
+            printf 'Content-Type: application/json\r\n'
+            printf 'Content-Length: %s\r\n' "$content_length"
+            printf 'Connection: close\r\n\r\n'
+            printf '%s' "$body"
+        } | nc -w "$LIFECYCLE_HTTP_TIMEOUT" media-service 8080 >"$response_file" 2>/dev/null; then
+            status_code=$(awk 'NR == 1 { print $2; exit }' "$response_file")
+            case $status_code in
+                2??)
+                    rm -f "$response_file"
+                    return 0
+                    ;;
+            esac
+        fi
+
+        log "failed to record lifecycle state $state (attempt $attempt/$LIFECYCLE_WRITE_ATTEMPTS)"
+        attempt=$((attempt + 1))
+        if [ "$attempt" -le "$LIFECYCLE_WRITE_ATTEMPTS" ]; then
+            sleep "$LIFECYCLE_RETRY_DELAY"
+        fi
+    done
+
+    rm -f "$response_file"
+    return 1
+}
+
 rotate_parent() {
-    previous_ip=$(public_ip)
+    if [ -z "${ROTATION_PREVIOUS_IP:-}" ]; then
+        ROTATION_PREVIOUS_IP=$(public_ip)
+    fi
+    ROTATION_CURRENT_IP=
     attempt=1
     while [ "$attempt" -le "$ROTATION_ATTEMPTS" ]; do
         log "rotating $PARENT before the next job (attempt $attempt/$ROTATION_ATTEMPTS)"
         docker restart "$PARENT" >/dev/null
         if wait_healthy; then
             sleep "$SETTLE_DELAY"
-            current_ip=$(public_ip)
-            if [ -n "$previous_ip" ] && [ -n "$current_ip" ] \
-                && [ "$previous_ip" != "$current_ip" ]; then
-                record_rotation "$previous_ip" "$current_ip" "$attempt"
-                log "$PARENT rotated from $previous_ip to $current_ip"
+            ROTATION_CURRENT_IP=$(public_ip)
+            if [ -n "$ROTATION_PREVIOUS_IP" ] && [ -n "$ROTATION_CURRENT_IP" ] \
+                && [ "$ROTATION_PREVIOUS_IP" != "$ROTATION_CURRENT_IP" ]; then
+                record_rotation "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP" "$attempt"
+                log "$PARENT rotated from $ROTATION_PREVIOUS_IP to $ROTATION_CURRENT_IP"
                 return 0
             fi
             log "$PARENT did not obtain a different public IP"
@@ -84,7 +139,7 @@ rotate_parent() {
         fi
         attempt=$((attempt + 1))
     done
-    record_rotation "${previous_ip:-unknown}" "failed" "$ROTATION_ATTEMPTS"
+    record_rotation "${ROTATION_PREVIOUS_IP:-unknown}" "failed" "$ROTATION_ATTEMPTS"
     return 1
 }
 
@@ -116,6 +171,27 @@ log "watching $PARENT and $DEPENDENT; only this dedicated pair may be controlled
 sleep "$SETTLE_DELAY"
 check_stale_namespace
 
+dependent_state=$(docker inspect "$DEPENDENT" --format '{{.State.Status}}' 2>/dev/null || true)
+if [ "$dependent_state" = running ] && wait_healthy; then
+    current_ip=$(public_ip)
+    if ! put_lifecycle ready null "$current_ip" "$current_ip"; then
+        log "cannot initialize ready lifecycle state; stopping $DEPENDENT fail-closed"
+        docker stop "$DEPENDENT" >/dev/null || true
+        exit 1
+    fi
+elif [ "$dependent_state" != running ]; then
+    ROTATION_PREVIOUS_IP=$(public_ip)
+    if ! put_lifecycle rotating null "$ROTATION_PREVIOUS_IP" ''; then
+        log "cannot initialize rotating lifecycle state; $DEPENDENT remains stopped"
+        exit 1
+    elif rotate_parent && put_lifecycle ready null "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP"; then
+        start_dependent
+    else
+        put_lifecycle blocked '"vpn_rotation_failed"' "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP" || true
+        log "startup VPN reconciliation failed; $DEPENDENT remains stopped"
+    fi
+fi
+
 docker events \
     --filter type=container \
     --filter "container=$PARENT" \
@@ -125,9 +201,20 @@ docker events \
     --format '{{.Actor.Attributes.name}}|{{.Action}}' | while IFS='|' read -r container action; do
     if [ "$container" = "$DEPENDENT" ] && [ "$action" = die ]; then
         log "$DEPENDENT completed its one-job process; rotating VPN"
-        if rotate_parent; then
-            start_dependent
+        ROTATION_PREVIOUS_IP=$(public_ip)
+        if ! put_lifecycle rotating null "$ROTATION_PREVIOUS_IP" ''; then
+            log "cannot record rotating lifecycle state; $DEPENDENT remains stopped"
+        elif rotate_parent; then
+            if put_lifecycle ready null "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP"; then
+                start_dependent
+            else
+                log "cannot record ready lifecycle state; $DEPENDENT remains stopped"
+            fi
         else
+            if ! put_lifecycle blocked '"vpn_rotation_failed"' \
+                "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP"; then
+                log "cannot record blocked lifecycle state"
+            fi
             log "VPN rotation failed; $DEPENDENT remains stopped and queued work is gated"
         fi
     elif [ "$container" = "$PARENT" ] && [ "$action" = start ]; then

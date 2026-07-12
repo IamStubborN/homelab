@@ -28,6 +28,7 @@ export MEDIA_DATABASE_URL=postgres://media:dummy-postgres-password@media-postgre
 export MEDIA_ANDRII_TOKEN=dummy-andrii-token
 export MEDIA_VALENTYNA_TOKEN=dummy-valentyna-token
 export MEDIA_RUNNER_TOKEN=dummy-runner-token
+export MEDIA_LIFECYCLE_TOKEN=dummy-lifecycle-token
 export MEDIA_ANDRII_WEBHOOK_HMAC=dummy-andrii-webhook-hmac
 export MEDIA_VALENTYNA_WEBHOOK_HMAC=dummy-valentyna-webhook-hmac
 export MEDIA_PROWLARR_API_KEY=dummy-prowlarr-api-key
@@ -94,7 +95,7 @@ assert_yq '.services.media-service.environment.MEDIA_ANDRII_WEBHOOK_HMAC == "dum
     'media-service must sign notifications for both Hermes profiles'
 assert_yq '.services.media-postgres.environment.POSTGRES_PASSWORD == "dummy-postgres-password" and (.services.media-postgres.environment | has("POSTGRES_PASSWORD_FILE") | not)' \
     'PostgreSQL must receive its password directly from the root environment'
-assert_yq '.services.media-service.environment as $env | ($env.MEDIA_DATABASE_URL != null and $env.MEDIA_ANDRII_TOKEN != null and $env.MEDIA_VALENTYNA_TOKEN != null and $env.MEDIA_RUNNER_TOKEN != null and $env.MEDIA_PROWLARR_API_KEY != null and $env.MEDIA_PLEX_TOKEN != null and $env.MEDIA_REZKA_USERNAME == "dummy-rezka-username" and $env.MEDIA_REZKA_PASSWORD == "dummy-rezka-password" and $env.MEDIA_REZKA_COOKIE_KEY != null and ($env | has("MEDIA_DATABASE_URL_FILE") | not) and ($env | has("MEDIA_ANDRII_TOKEN_FILE") | not) and ($env | has("MEDIA_VALENTYNA_TOKEN_FILE") | not) and ($env | has("MEDIA_RUNNER_TOKEN_FILE") | not) and ($env | has("MEDIA_PROWLARR_API_KEY_FILE") | not) and ($env | has("MEDIA_PLEX_TOKEN_FILE") | not) and ($env | has("MEDIA_REZKA_USERNAME_FILE") | not) and ($env | has("MEDIA_REZKA_PASSWORD_FILE") | not) and ($env | has("MEDIA_REZKA_COOKIE_KEY_FILE") | not))' \
+assert_yq '.services.media-service.environment as $env | ($env.MEDIA_DATABASE_URL != null and $env.MEDIA_ANDRII_TOKEN != null and $env.MEDIA_VALENTYNA_TOKEN != null and $env.MEDIA_RUNNER_TOKEN != null and $env.MEDIA_LIFECYCLE_TOKEN == "dummy-lifecycle-token" and $env.MEDIA_PROWLARR_API_KEY != null and $env.MEDIA_PLEX_TOKEN != null and $env.MEDIA_REZKA_USERNAME == "dummy-rezka-username" and $env.MEDIA_REZKA_PASSWORD == "dummy-rezka-password" and $env.MEDIA_REZKA_COOKIE_KEY != null and ($env | has("MEDIA_DATABASE_URL_FILE") | not) and ($env | has("MEDIA_ANDRII_TOKEN_FILE") | not) and ($env | has("MEDIA_VALENTYNA_TOKEN_FILE") | not) and ($env | has("MEDIA_RUNNER_TOKEN_FILE") | not) and ($env | has("MEDIA_PROWLARR_API_KEY_FILE") | not) and ($env | has("MEDIA_PLEX_TOKEN_FILE") | not) and ($env | has("MEDIA_REZKA_USERNAME_FILE") | not) and ($env | has("MEDIA_REZKA_PASSWORD_FILE") | not) and ($env | has("MEDIA_REZKA_COOKIE_KEY_FILE") | not))' \
     'media-service must receive application secrets directly from the root environment'
 assert_yq '.services.media-service.environment.MEDIA_REZKA_SESSION_STORE_FILE == "/var/lib/media-orchestrator/session/session.bin" and (.services.media-service.volumes | any_c(.source == "rezka_service_session_encrypted" and .target == "/var/lib/media-orchestrator/session"))' \
     'media-service must have its own encrypted Rezka search session'
@@ -120,6 +121,8 @@ assert_yq '.networks."rezka-credentials".external == true and .networks."rezka-c
     'Rezka credential broker network must use the fixed external network name'
 assert_yq '.services.gluetun-rezka-watcher.environment.PARENT_CONTAINER == "gluetun-rezka" and .services.gluetun-rezka-watcher.environment.DEPENDENT_CONTAINER == "download-runner"' \
     'dedicated watcher must only pair the Rezka VPN and runner'
+assert_yq '.services.gluetun-rezka-watcher.environment.MEDIA_LIFECYCLE_TOKEN == "dummy-lifecycle-token" and (.services.gluetun-rezka-watcher.environment | has("MEDIA_RUNNER_TOKEN") | not) and (.services.gluetun-rezka-watcher.networks | has("media-internal"))' \
+    'watcher must have only the narrow lifecycle credential and private service network'
 assert_yq '.services.download-runner.restart == "no" and .services.download-runner.environment.MEDIA_RUNNER_EXIT_AFTER_JOB == "true"' \
     'runner must process one job and remain stopped until the lifecycle watcher rotates VPN'
 assert_yq '.services.gluetun-rezka-watcher.environment.ROTATION_ATTEMPTS == "3" and .services.gluetun-rezka-watcher.environment.STATE_DIR == "/state" and ((.services.gluetun-rezka-watcher.volumes | map(select(.target == "/state" and .source == "gluetun_rezka_lifecycle")) | length) == 1)' \

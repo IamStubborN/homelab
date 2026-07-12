@@ -258,7 +258,8 @@ services:
       MEDIA_GLUETUN_URL: http://127.0.0.1:8000
       MEDIA_GLUETUN_API_KEY_FILE: /run/secrets/gluetun_rezka_control_api_key
       MEDIA_QBITTORRENT_URL: http://gluetun:8400
-      MEDIA_QBITTORRENT_CATEGORY: ${MEDIA_QBITTORRENT_CATEGORY:?set existing qBittorrent category}
+      MEDIA_QBITTORRENT_TV_CATEGORY: ${MEDIA_QBITTORRENT_TV_CATEGORY:?set existing TV category}
+      MEDIA_QBITTORRENT_MOVIES_CATEGORY: ${MEDIA_QBITTORRENT_MOVIES_CATEGORY:?set existing movies category}
       MEDIA_QBITTORRENT_USERNAME: ${MEDIA_QBITTORRENT_USERNAME:?set qBittorrent username}
       MEDIA_QBITTORRENT_PASSWORD_FILE: /run/secrets/media_qbittorrent_password
       MEDIA_STAGING_ROOT: /data/internal/media-orchestrator/staging/rezka

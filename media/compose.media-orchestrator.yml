@@ -20,6 +20,14 @@ x-service-environment: &service-environment
   MEDIA_LISTEN_ADDR: 0.0.0.0:8080
   MEDIA_PROWLARR_URL: http://gluetun:9696
   MEDIA_PROWLARR_API_KEY_FILE: /run/secrets/media_prowlarr_api_key
+  MEDIA_REZKA_MIRRORS: ${MEDIA_REZKA_MIRRORS:?set comma-separated HTTPS Rezka mirrors}
+  MEDIA_REZKA_SESSION_PROBE_URL: ${MEDIA_REZKA_SESSION_PROBE_URL:?set the HTTPS session probe URL}
+  MEDIA_REZKA_SESSION_VALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_VALID_MARKERS_JSON:?set valid session markers JSON}
+  MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON:?set invalid session markers JSON}
+  MEDIA_REZKA_USERNAME_FILE: /run/secrets/rezka_username
+  MEDIA_REZKA_PASSWORD_FILE: /run/secrets/rezka_password
+  MEDIA_REZKA_COOKIE_KEY_FILE: /run/secrets/rezka_cookie_key
+  MEDIA_REZKA_SESSION_STORE_FILE: /var/lib/media-orchestrator/session/session.bin
   MEDIA_PLEX_URL: http://plex:32400
   MEDIA_PLEX_TOKEN_FILE: /run/secrets/media_plex_token
   MEDIA_PLEX_TV_SECTION: ${MEDIA_PLEX_TV_SECTION:?set Plex TV section ID}
@@ -36,6 +44,9 @@ x-service-secrets: &service-secrets
   - media_valentyna_webhook_hmac
   - media_prowlarr_api_key
   - media_plex_token
+  - rezka_username
+  - rezka_password
+  - rezka_cookie_key
 
 services:
   media-postgres:
@@ -111,6 +122,12 @@ services:
     read_only: true
     environment: *service-environment
     secrets: *service-secrets
+    volumes:
+      - type: volume
+        source: rezka_service_session_encrypted
+        target: /var/lib/media-orchestrator/session
+        volume:
+          nocopy: true
     expose:
       - "8080"
     tmpfs:
@@ -334,6 +351,7 @@ volumes:
   media_postgres_data:
   gluetun_rezka_state:
   rezka_session_encrypted:
+  rezka_service_session_encrypted:
 
 networks:
   media-db:

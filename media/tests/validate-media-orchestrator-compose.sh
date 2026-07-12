@@ -70,6 +70,8 @@ assert_yq '.services.media-service.networks | has("media-internal")' \
     'media-service must join the shared Hermes media network'
 assert_yq '.services.media-service.environment.MEDIA_ANDRII_WEBHOOK_HMAC_FILE == "/run/secrets/media_andrii_webhook_hmac" and .services.media-service.environment.MEDIA_VALENTYNA_WEBHOOK_HMAC_FILE == "/run/secrets/media_valentyna_webhook_hmac"' \
     'media-service must sign notifications for both Hermes profiles'
+assert_yq '.services.media-service.environment.MEDIA_REZKA_SESSION_STORE_FILE == "/var/lib/media-orchestrator/session/session.bin" and (.services.media-service.volumes | any_c(.source == "rezka_service_session_encrypted" and .target == "/var/lib/media-orchestrator/session"))' \
+    'media-service must have its own encrypted Rezka search session'
 assert_yq '.services.media-service.healthcheck.test | join(" ") == "CMD media healthcheck --url http://127.0.0.1:8080/v1/ready"' \
     'media-service healthcheck must use the bundled media binary'
 assert_yq '.services.download-runner.network_mode == "service:gluetun-rezka"' \

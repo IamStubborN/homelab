@@ -192,6 +192,7 @@ services:
       HTTPPROXY: "on"
       HTTPPROXY_LISTENING_ADDRESS: :8888
       HTTPPROXY_STEALTH: "on"
+      FIREWALL_OUTBOUND_SUBNETS: ${GLUETUN_REZKA_OUTBOUND_SUBNETS:?set the Docker subnets reachable outside the VPN}
     secrets:
       - gluetun_rezka_wireguard_private_key
       - gluetun_rezka_control_auth_config

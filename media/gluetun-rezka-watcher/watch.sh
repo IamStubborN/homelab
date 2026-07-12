@@ -81,27 +81,17 @@ put_lifecycle() {
     current_ip=$4
     body=$(printf '{"state":"%s","reason":%s,"previous_ip":%s,"current_ip":%s}' \
         "$state" "$reason" "$(json_ip "$previous_ip")" "$(json_ip "$current_ip")")
-    content_length=$(printf '%s' "$body" | wc -c | tr -d ' ')
     response_file="$STATE_DIR/lifecycle-response.$$"
     attempt=1
 
     while [ "$attempt" -le "$LIFECYCLE_WRITE_ATTEMPTS" ]; do
-        if {
-            printf 'PUT /v1/runner/lifecycle HTTP/1.1\r\n'
-            printf 'Host: media-service:8080\r\n'
-            printf 'Authorization: Bearer %s\r\n' "$MEDIA_LIFECYCLE_TOKEN"
-            printf 'Content-Type: application/json\r\n'
-            printf 'Content-Length: %s\r\n' "$content_length"
-            printf 'Connection: close\r\n\r\n'
-            printf '%s' "$body"
-        } | nc -w "$LIFECYCLE_HTTP_TIMEOUT" media-service 8080 >"$response_file" 2>/dev/null; then
-            status_code=$(awk 'NR == 1 { print $2; exit }' "$response_file")
-            case $status_code in
-                2??)
-                    rm -f "$response_file"
-                    return 0
-                    ;;
-            esac
+        if wget -q -T "$LIFECYCLE_HTTP_TIMEOUT" -O "$response_file" \
+            --header "Authorization: Bearer $MEDIA_LIFECYCLE_TOKEN" \
+            --header 'Content-Type: application/json' \
+            --post-data "$body" \
+            http://media-service:8080/v1/runner/lifecycle; then
+            rm -f "$response_file"
+            return 0
         fi
 
         log "failed to record lifecycle state $state (attempt $attempt/$LIFECYCLE_WRITE_ATTEMPTS)"

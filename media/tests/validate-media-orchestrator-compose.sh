@@ -74,8 +74,8 @@ assert_yq '.services.media-service.environment.MEDIA_REZKA_SESSION_STORE_FILE ==
     'media-service must have its own encrypted Rezka search session'
 assert_yq '.services.media-session-init.restart == "no" and (.services.media-session-init.cap_add | contains(["CHOWN"]))' \
     'session volumes must be initialized for the non-root runtime user'
-assert_yq '.services.media-service.user == "1000:1000" and .services.download-runner.user == "1000:1000"' \
-    'service and runner must use the homelab storage owner'
+assert_yq '.services.media-migrate.user == "1000:1000" and .services.media-service.user == "1000:1000" and .services.download-runner.user == "1000:1000"' \
+    'application containers must use the homelab secret and storage owner'
 assert_yq '.services.media-service.healthcheck.test | join(" ") == "CMD media healthcheck --url http://127.0.0.1:8080/v1/ready"' \
     'media-service healthcheck must use the bundled media binary'
 assert_yq '.services.download-runner.network_mode == "service:gluetun-rezka"' \

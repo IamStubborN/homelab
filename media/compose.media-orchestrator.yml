@@ -94,6 +94,7 @@ services:
     <<: [*media-profile, *locked-down]
     image: ${MEDIA_SERVICE_IMAGE:?set MEDIA_SERVICE_IMAGE to an immutable media-orchestrator tag or digest}
     container_name: media-migrate
+    user: ${PUID:-1000}:${PGID:-1000}
     command:
       - migrate
     restart: "no"

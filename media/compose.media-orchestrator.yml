@@ -195,6 +195,8 @@ services:
         target: /gluetun
         volume:
           nocopy: true
+    tmpfs:
+      - /tmp/gluetun:rw,nosuid,nodev,noexec,size=16m,mode=0755
     healthcheck:
       test:
         - CMD

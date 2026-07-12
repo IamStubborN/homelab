@@ -136,6 +136,8 @@ assert_yq '.services.gluetun-rezka-watcher.environment.ROTATION_ATTEMPTS == "3" 
     'lifecycle watcher must bound rotations and persist non-secret rotation evidence'
 assert_file_contains 'media/gluetun-rezka-watcher/watch.sh' 'cat /tmp/gluetun/ip' \
     'lifecycle watcher must use Gluetun public-IP state instead of a single external HTTPS dependency'
+assert_file_contains 'media/gluetun-rezka-watcher/watch.sh' 'check_stale_namespace' \
+    'lifecycle watcher must repair a runner left in an obsolete Gluetun network namespace'
 assert_file_not_contains 'media/gluetun-rezka-watcher/watch.sh' 'api.ipify.org' \
     'lifecycle watcher must not depend on the unavailable api.ipify.org endpoint'
 assert_yq '.services.download-runner.environment.MEDIA_STORAGE_RESERVE_BYTES == "21474836480"' \

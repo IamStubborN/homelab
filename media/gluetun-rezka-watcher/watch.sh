@@ -136,7 +136,8 @@ rotate_parent() {
 start_dependent() {
     state=$(docker inspect "$DEPENDENT" --format '{{.State.Status}}' 2>/dev/null || true)
     if [ "$state" = running ]; then
-        log "$DEPENDENT is already running"
+        log "$DEPENDENT is already running; checking its network namespace"
+        check_stale_namespace
         return
     fi
     log "starting $DEPENDENT after successful VPN rotation"
@@ -209,6 +210,7 @@ docker events \
         fi
     elif [ "$container" = "$PARENT" ] && [ "$action" = start ]; then
         log "$PARENT start detected"
+        check_stale_namespace
     fi
 done
 

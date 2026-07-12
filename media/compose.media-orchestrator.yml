@@ -15,6 +15,7 @@ x-service-environment: &service-environment
   MEDIA_PRIMARY_TOKEN: ${MEDIA_PRIMARY_TOKEN:?set Primary API token}
   MEDIA_SECONDARY_TOKEN: ${MEDIA_SECONDARY_TOKEN:?set Secondary API token}
   MEDIA_RUNNER_TOKEN: ${MEDIA_RUNNER_TOKEN:?set runner API token}
+  MEDIA_LIFECYCLE_TOKEN: ${MEDIA_LIFECYCLE_TOKEN:?set lifecycle API token}
   MEDIA_PRIMARY_WEBHOOK_HMAC: ${MEDIA_PRIMARY_WEBHOOK_HMAC:?set Primary webhook HMAC}
   MEDIA_SECONDARY_WEBHOOK_HMAC: ${MEDIA_SECONDARY_WEBHOOK_HMAC:?set Secondary webhook HMAC}
   MEDIA_LISTEN_ADDR: 0.0.0.0:8080
@@ -293,14 +294,16 @@ services:
     container_name: gluetun-rezka-watcher
     restart: unless-stopped
     read_only: true
-    network_mode: none
     environment:
+      MEDIA_LIFECYCLE_TOKEN: ${MEDIA_LIFECYCLE_TOKEN:?set lifecycle API token}
       PARENT_CONTAINER: gluetun-rezka
       DEPENDENT_CONTAINER: download-runner
       HEALTH_TIMEOUT: "120"
       SETTLE_DELAY: "10"
       ROTATION_ATTEMPTS: "3"
       STATE_DIR: /state
+    networks:
+      - media-internal
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./gluetun-rezka-watcher/watch.sh:/watch.sh:ro

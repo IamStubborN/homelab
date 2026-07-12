@@ -131,7 +131,8 @@ that shared network.
 The widget authenticates with `Authorization: Bearer ${MEDIA_STATUS_TOKEN}`,
 an env placeholder resolved from the gitignored `glance/.env`. This service
 only recognizes the three fixed client tokens configured above
-(`MEDIA_PRIMARY_TOKEN`, `MEDIA_SECONDARY_TOKEN`, `MEDIA_RUNNER_TOKEN`) — there
+(`MEDIA_PRIMARY_TOKEN`, `MEDIA_SECONDARY_TOKEN`, `MEDIA_RUNNER_TOKEN`,
+`MEDIA_LIFECYCLE_TOKEN`) — there
 is no dedicated read-only/status client. Set `MEDIA_STATUS_TOKEN` in
 `glance/.env` to the same value as one of the existing family tokens (prefer
 `MEDIA_PRIMARY_TOKEN` or `MEDIA_SECONDARY_TOKEN`; avoid reusing

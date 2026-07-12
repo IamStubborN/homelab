@@ -112,10 +112,31 @@ services:
     networks:
       - media-db
 
+  media-session-init:
+    <<: [*media-profile, *locked-down]
+    image: ${MEDIA_SERVICE_IMAGE:?set MEDIA_SERVICE_IMAGE to an immutable media-orchestrator tag or digest}
+    container_name: media-session-init
+    user: "0:0"
+    cap_add:
+      - CHOWN
+    entrypoint:
+      - /bin/chown
+    command:
+      - -R
+      - ${PUID:-1000}:${PGID:-1000}
+      - /var/lib/media-orchestrator/service-session
+      - /var/lib/media-orchestrator/runner-session
+    restart: "no"
+    read_only: true
+    volumes:
+      - rezka_service_session_encrypted:/var/lib/media-orchestrator/service-session
+      - rezka_session_encrypted:/var/lib/media-orchestrator/runner-session
+
   media-service:
     <<: [*media-profile, *locked-down]
     image: ${MEDIA_SERVICE_IMAGE:?set MEDIA_SERVICE_IMAGE to an immutable media-orchestrator tag or digest}
     container_name: media-service
+    user: ${PUID:-1000}:${PGID:-1000}
     command:
       - serve
     restart: unless-stopped
@@ -147,6 +168,8 @@ services:
       media-postgres:
         condition: service_healthy
       media-migrate:
+        condition: service_completed_successfully
+      media-session-init:
         condition: service_completed_successfully
     labels:
       traefik.enable: "false"
@@ -208,6 +231,7 @@ services:
     <<: [*media-profile, *locked-down]
     image: ${DOWNLOAD_RUNNER_IMAGE:?set DOWNLOAD_RUNNER_IMAGE to an immutable media-orchestrator runner tag or digest}
     container_name: download-runner
+    user: ${PUID:-1000}:${PGID:-1000}
     command:
       - runner
     restart: unless-stopped
@@ -279,6 +303,8 @@ services:
         condition: service_healthy
       media-service:
         condition: service_healthy
+      media-session-init:
+        condition: service_completed_successfully
 
   gluetun-rezka-watcher:
     <<: [*media-profile, *locked-down]

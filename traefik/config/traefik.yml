@@ -3,7 +3,7 @@ global:
 
 api:
   dashboard: true
-  debug: true
+  debug: false
 
 entryPoints:
   http:
@@ -18,8 +18,6 @@ entryPoints:
   wproxy:
     address: ":9000"
 
-serversTransport:
-  insecureSkipVerify: true
 
 providers:
   docker:

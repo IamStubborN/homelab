@@ -27,6 +27,7 @@ services:
       - "./config/acme.json:/acme.json"
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.monitor-only=true"
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 80 && nc -z 127.0.0.1 443"]
       interval: 30s

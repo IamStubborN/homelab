@@ -83,6 +83,16 @@ Clean-host restore requires more than the root `.env`: create service-local env 
 
 Watchtower is configured in opt-in mode. Add `com.centurylinklabs.watchtower.enable=true` only to services that should be auto-updated. Keep stateful databases, source-built services, and private custom apps disabled unless their backup and restore path is tested.
 
+Vaultwarden (`bitwarden/compose.yml`) and Traefik (`traefik/compose.yml`) carry
+`com.centurylinklabs.watchtower.monitor-only=true` alongside the `enable`
+label: Watchtower still tracks and reports on new images for both, but never
+recreates their containers. Update them manually after reading upstream
+release notes:
+```bash
+cd bitwarden && docker compose pull && docker compose up -d
+cd traefik && docker compose pull && docker compose up -d
+```
+
 ## Development Notes
 
 ### Adding New Services

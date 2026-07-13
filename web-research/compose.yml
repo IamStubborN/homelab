@@ -4,7 +4,7 @@ x-firecrawl-environment: &firecrawl-environment
   PLAYWRIGHT_MICROSERVICE_URL: http://firecrawl-playwright:3000/scrape
   POSTGRES_USER: firecrawl
   POSTGRES_PASSWORD: ${FIRECRAWL_POSTGRES_PASSWORD:?set FIRECRAWL_POSTGRES_PASSWORD}
-  POSTGRES_DB: firecrawl
+  POSTGRES_DB: postgres
   POSTGRES_HOST: firecrawl-postgres
   POSTGRES_PORT: "5432"
   USE_DB_AUTHENTICATION: "false"
@@ -144,12 +144,12 @@ services:
     environment:
       POSTGRES_USER: firecrawl
       POSTGRES_PASSWORD: ${FIRECRAWL_POSTGRES_PASSWORD:?set FIRECRAWL_POSTGRES_PASSWORD}
-      POSTGRES_DB: firecrawl
+      POSTGRES_DB: postgres
     volumes:
       - firecrawl_postgres:/var/lib/postgresql/data
     mem_limit: 768m
     healthcheck:
-      test: [CMD-SHELL, "pg_isready -U firecrawl -d firecrawl"]
+      test: [CMD-SHELL, "pg_isready -U firecrawl -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 10

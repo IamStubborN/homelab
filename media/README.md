@@ -33,18 +33,24 @@ install -d -m 0700 "${MEDIA_SECRETS_DIR}"
 Set the application credentials in the real ignored root `.env`; never commit
 their values. This includes the PostgreSQL password and database URL, all three
 API tokens, both webhook HMAC values, the Prowlarr API key, Plex token, Rezka
-username/password for synchronous service searches, credential broker token and
-cookie key, qBittorrent password, and Gluetun control API key. Set
+credential broker token and cookie key, qBittorrent password, and Gluetun
+control API key. Set
 `ANDRII_REZKA_BROKER_TOKEN` to the token configured for
-`vaultwarden-broker-andrii`. The static Rezka username/password stay scoped to
-`media-service` and are not passed to `download-runner`.
+`vaultwarden-broker-andrii`.
 
-Create only these Gluetun-required secret files with mode `0600`:
+Create these local secret files with mode `0600`:
 
 ```text
+media_rezka_username
+media_rezka_password
 gluetun_rezka_wireguard_private_key
 gluetun_rezka_control_auth_config
 ```
+
+The Rezka files are mounted only into `media-service`. It uses them to log in
+again automatically whenever the encrypted cookie session expires; Hermes and
+`download-runner` never receive the static password, and routine session
+renewal does not require Telegram approval.
 
 `MEDIA_DATABASE_URL` uses the private hostname, for example
 `postgres://media:<password>@media-postgres:5432/media_orchestrator`.

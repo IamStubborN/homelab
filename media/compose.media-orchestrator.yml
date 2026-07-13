@@ -25,16 +25,15 @@ x-service-environment: &service-environment
   MEDIA_REZKA_SESSION_PROBE_URL: ${MEDIA_REZKA_SESSION_PROBE_URL:?set the HTTPS session probe URL}
   MEDIA_REZKA_SESSION_VALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_VALID_MARKERS_JSON:?set valid session markers JSON}
   MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON:?set invalid session markers JSON}
-  MEDIA_REZKA_USERNAME: ${MEDIA_REZKA_USERNAME:?set Rezka username}
-  MEDIA_REZKA_PASSWORD: ${MEDIA_REZKA_PASSWORD:?set Rezka password}
+  MEDIA_REZKA_USERNAME_FILE: /run/secrets/media_rezka_username
+  MEDIA_REZKA_PASSWORD_FILE: /run/secrets/media_rezka_password
   MEDIA_REZKA_COOKIE_KEY: ${MEDIA_REZKA_COOKIE_KEY:?set Rezka cookie key}
   MEDIA_REZKA_SESSION_STORE_FILE: /var/lib/media-orchestrator/session/session.bin
   MEDIA_PLEX_URL: http://plex:32400
   MEDIA_PLEX_TOKEN: ${MEDIA_PLEX_TOKEN:?set Plex token}
   MEDIA_PLEX_TV_SECTION: ${MEDIA_PLEX_TV_SECTION:?set Plex TV section ID}
   MEDIA_PLEX_MOVIES_SECTION: ${MEDIA_PLEX_MOVIES_SECTION:?set Plex movies section ID}
-  HTTPS_PROXY: http://gluetun-rezka:8888
-  NO_PROXY: localhost,127.0.0.1,media-postgres,media-service,gluetun,plex,vaultwarden-broker-andrii
+  MEDIA_REZKA_PROXY_URL: http://gluetun-rezka:8888
   RUST_LOG: ${MEDIA_RUST_LOG:-info}
   TZ: ${TIMEZONE:-UTC}
 
@@ -127,6 +126,9 @@ services:
     restart: unless-stopped
     read_only: true
     environment: *service-environment
+    secrets:
+      - media_rezka_username
+      - media_rezka_password
     volumes:
       - type: volume
         source: rezka_session_encrypted
@@ -255,7 +257,7 @@ services:
       MEDIA_STAGING_ROOT: /data/internal/media-orchestrator/staging/rezka
       MEDIA_TV_ROOT: /data/internal/media/rezka/tv
       MEDIA_MOVIES_ROOT: /data/internal/media/rezka/movies
-      MEDIA_STORAGE_RESERVE_BYTES: "21474836480"
+      MEDIA_STORAGE_RESERVE_BYTES: "0"
       RUST_LOG: ${MEDIA_RUST_LOG:-info}
       TZ: ${TIMEZONE:-UTC}
     volumes:
@@ -331,6 +333,10 @@ services:
         condition: service_healthy
 
 secrets:
+  media_rezka_username:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_rezka_username
+  media_rezka_password:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_rezka_password
   gluetun_rezka_wireguard_private_key:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/gluetun_rezka_wireguard_private_key
   gluetun_rezka_control_auth_config:

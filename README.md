@@ -13,6 +13,7 @@ This repository is public-safe by design: secrets, runtime databases, local Home
 - Inactive media-orchestrator Compose scaffold with a dedicated Rezka VPN
 - KaraKeep, Freedium, Movie Tracker, Glance, Speedtest Tracker
 - Bitwarden (Vaultwarden), Mosquitto, RustDesk
+- Internal SearXNG and Firecrawl services shared by household Hermes agents
 - Home Assistant with public-safe example config only
 
 ## Setup
@@ -43,6 +44,11 @@ Fill real values only in ignored local files:
 - `media/secrets/protonvpn_wireguard_private_key`
 - `media/secrets/plex_token`
 - `homeassistant/config/secrets.yaml`
+
+Generate independent random values for `SEARXNG_SECRET`,
+`FIRECRAWL_POSTGRES_PASSWORD`, and `FIRECRAWL_BULL_AUTH_KEY` in the root `.env`.
+The web-research services are reachable only from the `agent-tools` Docker
+network and publish no host ports.
 
 Initialize the Freedium submodule:
 

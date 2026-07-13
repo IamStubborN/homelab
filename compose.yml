@@ -22,6 +22,7 @@ include:
     - freedium/compose.yml
     - movie-tracker/docker-compose.yml
     - bitwarden/compose.yml
+    - web-research/compose.yml
 
     # - mssql/compose.yml
     # - portainer/compose.yml

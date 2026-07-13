@@ -105,7 +105,7 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
-    command: redis-server --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --save "" --appendonly no --maxmemory 256mb --maxmemory-policy noeviction
     tmpfs:
       - /data:rw,nosuid,nodev,noexec,size=256m
     mem_limit: 320m

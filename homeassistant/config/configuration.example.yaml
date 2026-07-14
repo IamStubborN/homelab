@@ -72,7 +72,6 @@ input_number:
     name: Alice cool above
     min: 18
     max: 32
-    initial: 26
     step: 0.5
     mode: box
     unit_of_measurement: "°C"
@@ -81,7 +80,6 @@ input_number:
     name: Alice turn off below
     min: 16
     max: 30
-    initial: 24
     step: 0.5
     mode: box
     unit_of_measurement: "°C"
@@ -91,7 +89,6 @@ input_number:
     name: Bob cool above
     min: 18
     max: 32
-    initial: 26
     step: 0.5
     mode: box
     unit_of_measurement: "°C"
@@ -100,7 +97,6 @@ input_number:
     name: Bob turn off below
     min: 16
     max: 30
-    initial: 24
     step: 0.5
     mode: box
     unit_of_measurement: "°C"
@@ -109,7 +105,6 @@ input_number:
     name: Kitchen cool above
     min: 18
     max: 32
-    initial: 26
     step: 0.5
     mode: box
     unit_of_measurement: "°C"
@@ -118,7 +113,6 @@ input_number:
     name: Kitchen turn off below
     min: 16
     max: 30
-    initial: 24
     step: 0.5
     mode: box
     unit_of_measurement: "°C"

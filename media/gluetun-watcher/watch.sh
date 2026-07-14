@@ -16,7 +16,7 @@ if ! docker compose version >/dev/null 2>&1; then
     exit 1
 fi
 
-get_compose_cmd() {
+get_compose_metadata() {
     PROJECT=$(docker inspect "$PARENT" \
         --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null)
     CONFIG=$(docker inspect "$PARENT" \
@@ -29,13 +29,39 @@ get_compose_cmd() {
         return 1
     fi
 
-    COMPOSE_CMD="docker compose -p $PROJECT --project-directory $WORKDIR"
-    OLD_IFS="$IFS"; IFS=","
-    for f in $CONFIG; do
-        COMPOSE_CMD="$COMPOSE_CMD -f $f"
-    done
-    IFS="$OLD_IFS"
     return 0
+}
+
+recreate_dependent() {
+    service=$1
+
+    set -- docker compose -p "$PROJECT" --project-directory "$WORKDIR"
+    old_ifs=$IFS
+    IFS=,
+    for config_file in $CONFIG; do
+        set -- "$@" -f "$config_file"
+    done
+    IFS=$old_ifs
+    set -- "$@" up -d --force-recreate --no-deps "$service"
+
+    log "$service: recreating with Compose (gluetun namespace changed)..."
+    if output=$("$@" 2>&1); then
+        if [ -n "$output" ]; then
+            printf '%s\n' "$output" | while IFS= read -r line; do
+                log "  $line"
+            done
+        fi
+        log "$service: done"
+        return 0
+    fi
+
+    if [ -n "$output" ]; then
+        printf '%s\n' "$output" | while IFS= read -r line; do
+            log "  $line"
+        done
+    fi
+    log "ERROR: failed to recreate $service"
+    return 1
 }
 
 wait_healthy() {
@@ -53,19 +79,18 @@ wait_healthy() {
 }
 
 restart_dependents() {
-    for ctr in $DEPENDENTS; do
-        state=$(docker inspect "$ctr" --format '{{.State.Status}}' 2>/dev/null || echo "")
-        if [ "$state" != "running" ]; then
-            log "$ctr: not running ($state), skip"
-            continue
-        fi
+    if ! get_compose_metadata; then
+        log "ERROR: cannot recover dependents without Compose metadata"
+        return 1
+    fi
 
-        log "$ctr: restarting (gluetun namespace changed)..."
-        docker restart "$ctr" 2>&1 | while IFS= read -r line; do
-            log "  $line"
-        done
-        log "$ctr: done"
+    failed=0
+    for service in $DEPENDENTS; do
+        if ! recreate_dependent "$service"; then
+            failed=1
+        fi
     done
+    return "$failed"
 }
 
 # Check if dependents started before gluetun (stale namespace)
@@ -115,7 +140,10 @@ log "Watching docker events for $PARENT..."
 docker events \
     --filter "container=$PARENT" \
     --filter "event=start" \
-    --format '{{.Time}}' | while IFS= read -r _; do
+    --format '{{.Action}}' | while IFS= read -r action; do
+
+    # Docker may return exec_start health-check events for an event=start filter.
+    [ "$action" = "start" ] || continue
 
     log "$PARENT start event detected"
     log "Waiting for $PARENT healthy (${HEALTH_TIMEOUT}s)..."

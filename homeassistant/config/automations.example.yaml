@@ -156,3 +156,42 @@
                 entity_id: climate.example_kitchen_ac
               data:
                 hvac_mode: "off"
+
+- id: climate_auto_alice_presence
+  alias: Alice auto cooling by presence
+  description: Enables auto cooling when Alice arrives home, then disables auto cooling and turns off the air conditioner after Alice has been away for three minutes.
+  mode: single
+  trigger:
+    - platform: state
+      entity_id: device_tracker.alice_phone
+      to: home
+      id: arrived
+    - platform: template
+      value_template: >-
+        {{ states('device_tracker.alice_phone')
+           not in ['home', 'unknown', 'unavailable'] }}
+      for: "00:03:00"
+      id: left
+  action:
+    - choose:
+        - conditions: "{{ trigger.id == 'arrived' }}"
+          sequence:
+            - service: input_boolean.turn_on
+              target:
+                entity_id: input_boolean.climate_auto_alice
+        - conditions: "{{ trigger.id == 'left' }}"
+          sequence:
+            - service: input_boolean.turn_off
+              target:
+                entity_id: input_boolean.climate_auto_alice
+            - if:
+                - condition: template
+                  value_template: >-
+                    {{ states('climate.example_alice_ac')
+                       not in ['off', 'unknown', 'unavailable'] }}
+              then:
+                - service: climate.set_hvac_mode
+                  target:
+                    entity_id: climate.example_alice_ac
+                  data:
+                    hvac_mode: "off"

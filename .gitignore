@@ -53,6 +53,7 @@ media/bazarr/
 media/jellyfin/
 media/lidarr/
 media/media-preview-generator/
+media/plex-orphan-watcher/
 media/overseerr/
 media/plex backup/
 media/plex/

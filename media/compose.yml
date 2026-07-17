@@ -478,7 +478,7 @@ services:
     entrypoint: ["sh", "/watch.sh"]
 
   plex-orphan-watcher:
-    image: ${PLEX_ORPHAN_WATCHER_IMAGE:-ghcr.io/iamstubborn/plex-orphan-watcher:0.4.2@sha256:1cc9312cb3c27647b70d4f0bed7c35b17070cb681da0b333bf6f104faa77a6d5}
+    image: ${PLEX_ORPHAN_WATCHER_IMAGE:-ghcr.io/iamstubborn/plex-orphan-watcher:0.4.3@sha256:e0bea95c87ac2d541f105796054a9e1dd8a672012332c505dc80e8a73c87c00a}
     container_name: plex-orphan-watcher
     restart: unless-stopped
     read_only: true

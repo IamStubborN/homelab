@@ -50,6 +50,8 @@ export MEDIA_QBITTORRENT_USERNAME=admin
 export MEDIA_QBITTORRENT_PASSWORD=dummy-qbittorrent-password
 export ANDRII_REZKA_BROKER_TOKEN=dummy-rezka-broker-token
 export MEDIA_REZKA_COOKIE_KEY=ZHVtbXktMzItYnl0ZS1yZXprYS1jb29raWUta2V5ISE=
+export MT_TMDB_API_KEY=dummy-tmdb-api-key
+export MT_TMDB_LANGUAGE=ru
 
 docker compose -f "$COMPOSE_FILE" --profile media-orchestrator config > "$TMP_DIR/rendered.yml"
 
@@ -96,6 +98,10 @@ assert_yq '.services.media-service.environment.MEDIA_REZKA_PROXY_URL == "http://
     'media-service must proxy only Rezka requests through the dedicated VPN'
 assert_yq '.services.media-service.environment.MEDIA_ANDRII_WEBHOOK_HMAC == "dummy-andrii-webhook-hmac" and .services.media-service.environment.MEDIA_VALENTYNA_WEBHOOK_HMAC == "dummy-valentyna-webhook-hmac"' \
     'media-service must sign notifications for both Hermes profiles'
+assert_yq '.services.media-service.environment.MEDIA_TMDB_API_KEY == "dummy-tmdb-api-key" and .services.media-service.environment.MEDIA_TMDB_LANGUAGE == "ru"' \
+    'media-service must receive the shared TMDB configuration'
+assert_yq '(.services.download-runner.environment | has("MEDIA_TMDB_API_KEY") | not) and (.services.download-runner.environment | has("MEDIA_TMDB_LANGUAGE") | not)' \
+    'runner must not receive TMDB configuration'
 assert_yq '.services.media-postgres.environment.POSTGRES_PASSWORD == "dummy-postgres-password" and (.services.media-postgres.environment | has("POSTGRES_PASSWORD_FILE") | not)' \
     'PostgreSQL must receive its password directly from the root environment'
 assert_yq '.services.media-service.environment as $env | ($env.MEDIA_DATABASE_URL != null and $env.MEDIA_ANDRII_TOKEN != null and $env.MEDIA_VALENTYNA_TOKEN != null and $env.MEDIA_RUNNER_TOKEN != null and $env.MEDIA_LIFECYCLE_TOKEN == "dummy-lifecycle-token" and $env.MEDIA_PROWLARR_API_KEY != null and $env.MEDIA_PLEX_TOKEN != null and $env.MEDIA_REZKA_USERNAME_FILE == "/run/secrets/media_rezka_username" and $env.MEDIA_REZKA_PASSWORD_FILE == "/run/secrets/media_rezka_password" and $env.MEDIA_REZKA_COOKIE_KEY != null and ($env | has("MEDIA_DATABASE_URL_FILE") | not) and ($env | has("MEDIA_ANDRII_TOKEN_FILE") | not) and ($env | has("MEDIA_VALENTYNA_TOKEN_FILE") | not) and ($env | has("MEDIA_RUNNER_TOKEN_FILE") | not) and ($env | has("MEDIA_PROWLARR_API_KEY_FILE") | not) and ($env | has("MEDIA_PLEX_TOKEN_FILE") | not) and ($env | has("MEDIA_REZKA_USERNAME") | not) and ($env | has("MEDIA_REZKA_PASSWORD") | not) and ($env | has("MEDIA_REZKA_COOKIE_KEY_FILE") | not))' \

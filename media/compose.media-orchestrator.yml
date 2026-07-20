@@ -175,6 +175,8 @@ services:
     cap_add:
       - NET_ADMIN
       - DAC_READ_SEARCH
+      # Gluetun persists the detected public IP after dropping to PUID/PGID.
+      - CHOWN
     devices:
       - /dev/net/tun:/dev/net/tun
     environment:

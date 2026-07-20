@@ -18,6 +18,8 @@ x-service-environment: &service-environment
   MEDIA_LIFECYCLE_TOKEN: ${MEDIA_LIFECYCLE_TOKEN:?set lifecycle API token}
   MEDIA_PRIMARY_WEBHOOK_HMAC: ${MEDIA_PRIMARY_WEBHOOK_HMAC:?set Primary webhook HMAC}
   MEDIA_SECONDARY_WEBHOOK_HMAC: ${MEDIA_SECONDARY_WEBHOOK_HMAC:?set Secondary webhook HMAC}
+  MEDIA_PRIMARY_WEBHOOK_URL: http://media-notifier-primary:8644/webhooks/media-notify
+  MEDIA_SECONDARY_WEBHOOK_URL: http://media-notifier-secondary:8644/webhooks/media-notify
   MEDIA_LISTEN_ADDR: 0.0.0.0:8080
   MEDIA_PROWLARR_URL: http://gluetun:9696
   MEDIA_PROWLARR_API_KEY: ${MEDIA_PROWLARR_API_KEY:?set Prowlarr API key}

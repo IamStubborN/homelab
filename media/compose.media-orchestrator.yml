@@ -18,6 +18,8 @@ x-service-environment: &service-environment
   MEDIA_LIFECYCLE_TOKEN: ${MEDIA_LIFECYCLE_TOKEN:?set lifecycle API token}
   MEDIA_ANDRII_WEBHOOK_HMAC: ${MEDIA_ANDRII_WEBHOOK_HMAC:?set Andrii webhook HMAC}
   MEDIA_VALENTYNA_WEBHOOK_HMAC: ${MEDIA_VALENTYNA_WEBHOOK_HMAC:?set Valentyna webhook HMAC}
+  MEDIA_ANDRII_WEBHOOK_URL: http://media-notifier-andrii:8644/webhooks/media-notify
+  MEDIA_VALENTYNA_WEBHOOK_URL: http://media-notifier-valentyna:8644/webhooks/media-notify
   MEDIA_LISTEN_ADDR: 0.0.0.0:8080
   MEDIA_PROWLARR_URL: http://gluetun:9696
   MEDIA_PROWLARR_API_KEY: ${MEDIA_PROWLARR_API_KEY:?set Prowlarr API key}

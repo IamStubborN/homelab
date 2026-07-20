@@ -105,6 +105,32 @@ put_lifecycle() {
     return 1
 }
 
+get_lifecycle_state() {
+    response_file="$STATE_DIR/lifecycle-state.$$"
+    attempt=1
+    while [ "$attempt" -le "$LIFECYCLE_WRITE_ATTEMPTS" ]; do
+        if wget -q -T "$LIFECYCLE_HTTP_TIMEOUT" -O "$response_file" \
+            --header "Authorization: Bearer $MEDIA_LIFECYCLE_TOKEN" \
+            http://media-service:8080/v1/runner/lifecycle; then
+            state=$(sed -n 's/.*"state":"\([^"]*\)".*/\1/p' "$response_file")
+            case $state in
+                ready | rotating | blocked)
+                    rm -f "$response_file"
+                    printf '%s' "$state"
+                    return 0
+                    ;;
+            esac
+        fi
+        log "failed to read lifecycle state (attempt $attempt/$LIFECYCLE_WRITE_ATTEMPTS)" >&2
+        attempt=$((attempt + 1))
+        if [ "$attempt" -le "$LIFECYCLE_WRITE_ATTEMPTS" ]; then
+            sleep "$LIFECYCLE_RETRY_DELAY"
+        fi
+    done
+    rm -f "$response_file"
+    return 1
+}
+
 rotate_parent() {
     if [ -z "${ROTATION_PREVIOUS_IP:-}" ]; then
         ROTATION_PREVIOUS_IP=$(public_ip)
@@ -140,7 +166,7 @@ start_dependent() {
         check_stale_namespace
         return
     fi
-    log "starting $DEPENDENT after successful VPN rotation"
+    log "starting $DEPENDENT on the prepared VPN session"
     docker start "$DEPENDENT" >/dev/null
 }
 
@@ -191,22 +217,30 @@ docker events \
     --filter "event=die" \
     --format '{{.Actor.Attributes.name}}|{{.Action}}' | while IFS='|' read -r container action; do
     if [ "$container" = "$DEPENDENT" ] && [ "$action" = die ]; then
-        log "$DEPENDENT completed its one-job process; rotating VPN"
-        ROTATION_PREVIOUS_IP=$(public_ip)
-        if ! put_lifecycle rotating null "$ROTATION_PREVIOUS_IP" ''; then
-            log "cannot record rotating lifecycle state; $DEPENDENT remains stopped"
-        elif rotate_parent; then
-            if put_lifecycle ready null "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP"; then
-                start_dependent
+        lifecycle_state=$(get_lifecycle_state || true)
+        if [ "$lifecycle_state" = ready ]; then
+            log "$DEPENDENT completed an attempt; reusing the current VPN session"
+            start_dependent
+        elif [ "$lifecycle_state" = rotating ]; then
+            log "$DEPENDENT requested a fresh VPN session"
+            ROTATION_PREVIOUS_IP=$(public_ip)
+            if rotate_parent; then
+                if put_lifecycle ready null "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP"; then
+                    start_dependent
+                else
+                    log "cannot record ready lifecycle state; $DEPENDENT remains stopped"
+                fi
             else
-                log "cannot record ready lifecycle state; $DEPENDENT remains stopped"
+                if ! put_lifecycle blocked '"vpn_rotation_failed"' \
+                    "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP"; then
+                    log "cannot record blocked lifecycle state"
+                fi
+                log "VPN rotation failed; $DEPENDENT remains stopped and queued work is gated"
             fi
+        elif [ "$lifecycle_state" = blocked ]; then
+            log "$DEPENDENT stopped while lifecycle is blocked; queued work remains gated"
         else
-            if ! put_lifecycle blocked '"vpn_rotation_failed"' \
-                "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP"; then
-                log "cannot record blocked lifecycle state"
-            fi
-            log "VPN rotation failed; $DEPENDENT remains stopped and queued work is gated"
+            log "cannot read lifecycle state; $DEPENDENT remains stopped fail-closed"
         fi
     elif [ "$container" = "$PARENT" ] && [ "$action" = start ]; then
         log "$PARENT start detected"

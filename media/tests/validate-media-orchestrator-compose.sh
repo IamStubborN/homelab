@@ -139,13 +139,17 @@ assert_yq '.services.gluetun-rezka-watcher.environment.PARENT_CONTAINER == "glue
 assert_yq '.services.gluetun-rezka-watcher.environment.MEDIA_LIFECYCLE_TOKEN == "dummy-lifecycle-token" and (.services.gluetun-rezka-watcher.environment | has("MEDIA_RUNNER_TOKEN") | not) and (.services.gluetun-rezka-watcher.networks | has("media-internal"))' \
     'watcher must have only the narrow lifecycle credential and private service network'
 assert_yq '.services.download-runner.restart == "no" and .services.download-runner.environment.MEDIA_RUNNER_EXIT_AFTER_JOB == "true"' \
-    'runner must process one job and remain stopped until the lifecycle watcher rotates VPN'
+    'runner must process one attempt so the lifecycle watcher can enforce the sticky VPN policy'
 assert_yq '.services.gluetun-rezka-watcher.environment.ROTATION_ATTEMPTS == "3" and .services.gluetun-rezka-watcher.environment.STATE_DIR == "/state" and ((.services.gluetun-rezka-watcher.volumes | map(select(.target == "/state" and .source == "gluetun_rezka_lifecycle")) | length) == 1)' \
     'lifecycle watcher must bound rotations and persist non-secret rotation evidence'
 assert_file_contains 'media/gluetun-rezka-watcher/watch.sh' 'cat /tmp/gluetun/ip' \
     'lifecycle watcher must use Gluetun public-IP state instead of a single external HTTPS dependency'
 assert_file_contains 'media/gluetun-rezka-watcher/watch.sh' 'check_stale_namespace' \
     'lifecycle watcher must repair a runner left in an obsolete Gluetun network namespace'
+assert_file_contains 'media/gluetun-rezka-watcher/watch.sh' 'get_lifecycle_state' \
+    'lifecycle watcher must read the durable retry decision before rotating VPN'
+assert_file_contains 'media/gluetun-rezka-watcher/watch.sh' 'reusing the current VPN session' \
+    'lifecycle watcher must reuse one VPN session for bounded same-job retries'
 assert_file_not_contains 'media/gluetun-rezka-watcher/watch.sh' 'api.ipify.org' \
     'lifecycle watcher must not depend on the unavailable api.ipify.org endpoint'
 assert_yq '.services.download-runner.environment.MEDIA_STORAGE_RESERVE_BYTES == "0"' \

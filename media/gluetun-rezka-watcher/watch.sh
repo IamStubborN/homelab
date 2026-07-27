@@ -9,6 +9,8 @@ ROTATION_ATTEMPTS=${ROTATION_ATTEMPTS:-3}
 LIFECYCLE_WRITE_ATTEMPTS=${LIFECYCLE_WRITE_ATTEMPTS:-3}
 LIFECYCLE_RETRY_DELAY=${LIFECYCLE_RETRY_DELAY:-2}
 LIFECYCLE_HTTP_TIMEOUT=${LIFECYCLE_HTTP_TIMEOUT:-10}
+REZKA_PROBE_URL=${REZKA_PROBE_URL:-https://rezka.ag/}
+REZKA_PROBE_TIMEOUT=${REZKA_PROBE_TIMEOUT:-20}
 STATE_DIR=${STATE_DIR:-/state}
 : "${MEDIA_LIFECYCLE_TOKEN:?MEDIA_LIFECYCLE_TOKEN is required}"
 
@@ -59,6 +61,13 @@ public_ip() {
             return
         fi
     done
+}
+
+rezka_egress_healthy() {
+    docker exec "$PARENT" wget -q -O /dev/null \
+        --timeout="$REZKA_PROBE_TIMEOUT" \
+        --user-agent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36' \
+        "$REZKA_PROBE_URL"
 }
 
 record_rotation() {
@@ -145,6 +154,11 @@ rotate_parent() {
             ROTATION_CURRENT_IP=$(public_ip)
             if [ -n "$ROTATION_PREVIOUS_IP" ] && [ -n "$ROTATION_CURRENT_IP" ] \
                 && [ "$ROTATION_PREVIOUS_IP" != "$ROTATION_CURRENT_IP" ]; then
+                if ! rezka_egress_healthy; then
+                    log "$PARENT obtained a new IP that Rezka rejected; rotating again"
+                    attempt=$((attempt + 1))
+                    continue
+                fi
                 record_rotation "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP" "$attempt"
                 log "$PARENT rotated from $ROTATION_PREVIOUS_IP to $ROTATION_CURRENT_IP"
                 return 0
@@ -191,7 +205,20 @@ check_stale_namespace
 dependent_state=$(docker inspect "$DEPENDENT" --format '{{.State.Status}}' 2>/dev/null || true)
 if [ "$dependent_state" = running ] && wait_healthy; then
     current_ip=$(public_ip)
-    if ! put_lifecycle ready null "$current_ip" "$current_ip"; then
+    if ! rezka_egress_healthy; then
+        log "$PARENT egress is healthy but Rezka rejected it; preparing a fresh VPN session"
+        docker stop "$DEPENDENT" >/dev/null || true
+        ROTATION_PREVIOUS_IP=$current_ip
+        if put_lifecycle rotating null "$current_ip" '' \
+            && rotate_parent \
+            && put_lifecycle ready null "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP"; then
+            start_dependent
+        else
+            put_lifecycle blocked '"vpn_rotation_failed"' \
+                "$ROTATION_PREVIOUS_IP" "${ROTATION_CURRENT_IP:-}" || true
+            log "startup Rezka egress reconciliation failed; $DEPENDENT remains stopped"
+        fi
+    elif ! put_lifecycle ready null "$current_ip" "$current_ip"; then
         log "cannot initialize ready lifecycle state; stopping $DEPENDENT fail-closed"
         docker stop "$DEPENDENT" >/dev/null || true
         exit 1

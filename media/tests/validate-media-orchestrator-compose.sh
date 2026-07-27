@@ -142,8 +142,12 @@ assert_yq '.services.download-runner.restart == "no" and .services.download-runn
     'runner must process one attempt so the lifecycle watcher can enforce the sticky VPN policy'
 assert_yq '.services.gluetun-rezka-watcher.environment.ROTATION_ATTEMPTS == "3" and .services.gluetun-rezka-watcher.environment.STATE_DIR == "/state" and ((.services.gluetun-rezka-watcher.volumes | map(select(.target == "/state" and .source == "gluetun_rezka_lifecycle")) | length) == 1)' \
     'lifecycle watcher must bound rotations and persist non-secret rotation evidence'
+assert_yq '.services.gluetun-rezka-watcher.environment.REZKA_PROBE_URL == "https://rezka.example/account/probe" and .services.gluetun-rezka-watcher.environment.REZKA_PROBE_TIMEOUT == "20"' \
+    'lifecycle watcher must validate that each prepared VPN address can reach Rezka'
 assert_file_contains 'media/gluetun-rezka-watcher/watch.sh' 'cat /tmp/gluetun/ip' \
     'lifecycle watcher must use Gluetun public-IP state instead of a single external HTTPS dependency'
+assert_file_contains 'media/gluetun-rezka-watcher/watch.sh' 'rezka_egress_healthy' \
+    'lifecycle watcher must reject VPN addresses blocked by Rezka before starting the runner'
 assert_file_contains 'media/gluetun-rezka-watcher/watch.sh' 'check_stale_namespace' \
     'lifecycle watcher must repair a runner left in an obsolete Gluetun network namespace'
 assert_file_contains 'media/gluetun-rezka-watcher/watch.sh' 'get_lifecycle_state' \

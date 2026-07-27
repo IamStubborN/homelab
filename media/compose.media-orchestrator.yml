@@ -315,6 +315,8 @@ services:
       HEALTH_TIMEOUT: "120"
       SETTLE_DELAY: "10"
       ROTATION_ATTEMPTS: "3"
+      REZKA_PROBE_URL: ${MEDIA_REZKA_SESSION_PROBE_URL:?set the HTTPS Rezka probe URL}
+      REZKA_PROBE_TIMEOUT: "20"
       STATE_DIR: /state
     networks:
       - media-internal

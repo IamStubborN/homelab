@@ -495,14 +495,14 @@ services:
       - DELETE_ROOTS=/data/internal/media,/data/usb_drive/media
       - AUDIT_ROOTS=/data/internal/torrents,/data/usb_drive/torrents
       - STATE_PATH=/state/watcher.db
-      - DRY_RUN=true
+      - DRY_RUN=false
       - SETTLE_DELAY=15m
       - RECONCILE_INTERVAL=1h
       - HEALTH_ADDRESS=:8080
     volumes:
       - ./plex-orphan-watcher/state:/state
-      - ${INTERNAL_STORAGE:-/mnt/internal}/media:/data/internal/media:ro
-      - ${USB_STORAGE:-/mnt/usb_drive}/media:/data/usb_drive/media:ro
+      - ${INTERNAL_STORAGE:-/mnt/internal}/media:/data/internal/media
+      - ${USB_STORAGE:-/mnt/usb_drive}/media:/data/usb_drive/media
       - ${INTERNAL_STORAGE:-/mnt/internal}/torrents:/data/internal/torrents:ro
       - ${USB_STORAGE:-/mnt/usb_drive}/torrents:/data/usb_drive/torrents:ro
     secrets:

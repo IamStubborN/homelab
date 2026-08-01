@@ -4,6 +4,13 @@ Docker Compose configuration for a self-hosted homelab stack.
 
 This repository is public-safe by design: secrets, runtime databases, local Home Assistant configuration, ACME state, Tailscale state, and service-local runtime configs are ignored. Tracked files are either compose definitions or sanitized examples.
 
+## Deployment Policy
+
+Prefer manual deployment from a trusted operator workstation. This repository
+does not use GitHub Actions for homelab deployment. Validate the relevant
+Compose project locally, inspect the current runtime state, and apply changes
+with the documented Docker Compose or guarded media deployment commands.
+
 ## Services
 
 - Traefik reverse proxy with Cloudflare DNS challenge

@@ -106,6 +106,12 @@ Gluetun secret files are ready. The service talks to existing Prowlarr and qBitt
 `http://gluetun:9696` and `http://gluetun:8400`, and to Plex through
 `http://plex:32400`, while remaining outside both VPN namespaces.
 
+`media-service` also acts as the only media-admin facade for Hermes. It receives
+qBittorrent and Plex credentials, plus one scoped `/data/internal` bind mount;
+Hermes receives none of those directly. Reads are restricted to media roots,
+the Docker socket is not mounted, and file mutations move data into
+`/data/internal/media-orchestrator/quarantine`.
+
 ```bash
 docker compose --env-file .env \
   -f media/compose.media-orchestrator.yml \

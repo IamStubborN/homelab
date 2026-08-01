@@ -37,6 +37,13 @@ x-service-environment: &service-environment
   MEDIA_PLEX_TOKEN: ${MEDIA_PLEX_TOKEN:?set Plex token}
   MEDIA_PLEX_TV_SECTION: ${MEDIA_PLEX_TV_SECTION:?set Plex TV section ID}
   MEDIA_PLEX_MOVIES_SECTION: ${MEDIA_PLEX_MOVIES_SECTION:?set Plex movies section ID}
+  MEDIA_QBITTORRENT_URL: http://gluetun:8400
+  MEDIA_QBITTORRENT_TV_CATEGORY: ${MEDIA_QBITTORRENT_TV_CATEGORY:?set existing TV category}
+  MEDIA_QBITTORRENT_MOVIES_CATEGORY: ${MEDIA_QBITTORRENT_MOVIES_CATEGORY:?set existing movies category}
+  MEDIA_QBITTORRENT_USERNAME: ${MEDIA_QBITTORRENT_USERNAME:?set qBittorrent username}
+  MEDIA_QBITTORRENT_PASSWORD: ${MEDIA_QBITTORRENT_PASSWORD:?set qBittorrent password}
+  MEDIA_TV_ROOT: /data/internal/media/rezka/tv
+  MEDIA_MOVIES_ROOT: /data/internal/media/rezka/movies
   MEDIA_REZKA_PROXY_URL: http://gluetun-rezka:8888
   RUST_LOG: ${MEDIA_RUST_LOG:-info}
   TZ: ${TIMEZONE:-UTC}
@@ -139,6 +146,11 @@ services:
         target: /var/lib/media-orchestrator/session
         volume:
           nocopy: true
+      - type: bind
+        source: ${INTERNAL_STORAGE:?set INTERNAL_STORAGE to the storage root}
+        target: /data/internal
+        bind:
+          create_host_path: false
     expose:
       - "8080"
     tmpfs:

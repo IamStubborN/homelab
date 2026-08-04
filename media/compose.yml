@@ -41,7 +41,7 @@ services:
       - VPN_SERVICE_PROVIDER=protonvpn # Specify your VPN provider here
       - VPN_TYPE=wireguard # Specify your VPN type here
       - PORT_FORWARD_ONLY=on # Use only ProtonVPN servers with port forwarding
-      - SERVER_COUNTRIES=Bulgaria # ProtonVPN preferred country
+      - SERVER_COUNTRIES=Netherlands # ProtonVPN P2P country for qBittorrent
       - WIREGUARD_PRIVATE_KEY_SECRETFILE=/run/secrets/protonvpn_wireguard_private_key
       - UPDATER_PERIOD=6h
       - DNS_SERVER=on
@@ -70,13 +70,6 @@ services:
       - "traefik.http.routers.qbittorrent.service=qbittorrent"
       - "traefik.http.routers.qbittorrent.rule=Host(`qbittorrent.${DOCKER_DOMAIN}`)"
       - "traefik.http.services.qbittorrent.loadbalancer.server.port=8400"
-
-      - "traefik.http.routers.prowlarr.tls=true"
-      - "traefik.http.routers.prowlarr.entrypoints=http,https"
-      - "traefik.http.routers.prowlarr.service=prowlarr"
-      - "traefik.http.routers.prowlarr.rule=Host(`prowlarr.${DOCKER_DOMAIN}`)"
-      - "traefik.http.services.prowlarr.loadbalancer.server.port=9696"
-
 
       - "traefik.http.routers.speedtest-vpn.tls=true"
       - "traefik.http.routers.speedtest-vpn.entrypoints=http,https"
@@ -216,14 +209,9 @@ services:
   prowlarr:
     container_name: prowlarr
     image: linuxserver/prowlarr:latest
-    network_mode: "service:gluetun"
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
-    depends_on:
-      gluetun:
-        condition: service_healthy
-        restart: true
     environment:
       - PUID=1000
       - PGID=1000
@@ -239,9 +227,17 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "deunhealth.restart.on.unhealthy=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.prowlarr.tls=true"
+      - "traefik.http.routers.prowlarr.entrypoints=http,https"
+      - "traefik.http.routers.prowlarr.service=prowlarr"
+      - "traefik.http.routers.prowlarr.rule=Host(`prowlarr.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.prowlarr.loadbalancer.server.port=9696"
     volumes:
       - ./prowlarr/config:/config
       - /etc/localtime:/etc/localtime:ro
+    networks:
+      - proxy
 
   # radarr:
   #   container_name: radarr
@@ -465,7 +461,7 @@ services:
         condition: service_healthy
     environment:
       - PARENT_CONTAINER=gluetun
-      - DEPENDENT_CONTAINERS=qbittorrent prowlarr speedtest-tracker-vpn
+      - DEPENDENT_CONTAINERS=qbittorrent speedtest-tracker-vpn
       - HEALTH_TIMEOUT=120
       - SETTLE_DELAY=10
     labels:

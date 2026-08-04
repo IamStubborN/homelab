@@ -3,7 +3,7 @@
 # restarted or recreated (network namespace changes in both cases).
 
 PARENT="${PARENT_CONTAINER:-gluetun}"
-DEPENDENTS="${DEPENDENT_CONTAINERS:-qbittorrent prowlarr}"
+DEPENDENTS="${DEPENDENT_CONTAINERS:-qbittorrent}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
 SETTLE_DELAY="${SETTLE_DELAY:-10}"
 

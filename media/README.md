@@ -102,9 +102,11 @@ docker compose --env-file .env \
 ## Start And Operate
 
 Do not run these commands until the images, root environment values, and two
-Gluetun secret files are ready. The service talks to existing Prowlarr and qBittorrent through
-`http://gluetun:9696` and `http://gluetun:8400`, and to Plex through
-`http://plex:32400`, while remaining outside both VPN namespaces.
+Gluetun secret files are ready. The service talks to Prowlarr directly through
+`http://prowlarr:9696`, to qBittorrent through `http://gluetun:8400`, and to
+Plex through `http://plex:32400`. Prowlarr stays outside the VPN so indexer
+sites see the server address, while qBittorrent remains inside the dedicated
+Netherlands P2P VPN namespace.
 
 `media-service` also acts as the only media-admin facade for Hermes. It receives
 qBittorrent and Plex credentials, plus one scoped `/data/internal` bind mount;

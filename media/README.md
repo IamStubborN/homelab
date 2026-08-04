@@ -129,6 +129,19 @@ stack. `gluetun-rezka-watcher` watches only `gluetun-rezka` and restarts only
 `download-runner` when that dedicated container is recreated. An in-process VPN
 rotation does not restart the runner, preserving one runner job per namespace.
 
+## FlareSolverr
+
+Prowlarr reaches indexers directly from the server. The internal-only
+`flaresolverr` service is an exception handler for indexers protected by
+Cloudflare; it has no published port or Traefik route. In Prowlarr, assign the
+`cloudflare` tag to both the FlareSolverr proxy and only the indexers that need
+it. RuTracker currently uses this tag, while other indexers continue to use
+their normal direct connection.
+
+Keep `LOG_LEVEL=warning` and `LOG_HTML=false`. Debug or HTML logging can include
+indexer request bodies and must only be enabled briefly during supervised
+diagnostics, then disabled before the container is recreated.
+
 ## Glance Queue Widget
 
 `glance/config/glance.example.yml` includes a `custom-api` widget ("Media Queue")

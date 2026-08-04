@@ -228,14 +228,46 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
       - "deunhealth.restart.on.unhealthy=true"
       - "traefik.enable=true"
-      - "traefik.http.routers.prowlarr.tls=true"
-      - "traefik.http.routers.prowlarr.entrypoints=http,https"
-      - "traefik.http.routers.prowlarr.service=prowlarr"
-      - "traefik.http.routers.prowlarr.rule=Host(`prowlarr.${DOCKER_DOMAIN}`)"
-      - "traefik.http.services.prowlarr.loadbalancer.server.port=9696"
+      # A distinct router/service name prevents a stale pre-migration Gluetun
+      # container from joining this load-balancer until its next safe restart.
+      - "traefik.http.routers.prowlarr-direct.tls=true"
+      - "traefik.http.routers.prowlarr-direct.entrypoints=http,https"
+      - "traefik.http.routers.prowlarr-direct.service=prowlarr-direct"
+      - "traefik.http.routers.prowlarr-direct.priority=100"
+      - "traefik.http.routers.prowlarr-direct.rule=Host(`prowlarr.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.prowlarr-direct.loadbalancer.server.port=9696"
     volumes:
       - ./prowlarr/config:/config
       - /etc/localtime:/etc/localtime:ro
+    networks:
+      - proxy
+
+  flaresolverr:
+    container_name: flaresolverr
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # INFO logs include request bodies and can expose private-indexer credentials.
+      - LOG_LEVEL=warning
+      - LOG_HTML=false
+      - CAPTCHA_SOLVER=none
+      - TZ=${TIMEZONE:-UTC}
+    expose:
+      - "8191"
+    shm_size: 512mb
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8191/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "deunhealth.restart.on.unhealthy=true"
+      - "traefik.enable=false"
     networks:
       - proxy
 

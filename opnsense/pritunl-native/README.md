@@ -28,7 +28,9 @@ Safety contract:
   fourth process;
 - persistent state under `/conf/pritunl-native/state`;
 - persistent logs under `/var/log/pritunl-native`;
-- manual reset only through `pritunl-vpnctl reset`.
+- manual reset only through `pritunl-vpnctl reset`; reset clears lockout,
+  consecutive failures and cooldown state, but never clears the rolling
+  24-hour launch history.
 
 The persisted instance stays disabled only to prevent OPNsense boot or a generic
 service reconfigure from starting it outside the attempt gate. While running,

@@ -47,7 +47,7 @@ prune_remote() {
   local remote_directory=$1
   local include_pattern=$2
   local keep=$3
-  local index=0 file
+  local index=0 file log_file
 
   while IFS= read -r file; do
     [[ -n "${file}" ]] || continue
@@ -56,28 +56,35 @@ prune_remote() {
       continue
     fi
 
+    case "${file}" in
+      *.vma.zst) log_file="${file%.vma.zst}.log" ;;
+      *.tar.zst) log_file="${file%.tar.zst}.log" ;;
+      *) log_file='' ;;
+    esac
     rclone --bind "${RCLONE_BIND}" deletefile "${remote_directory}/${file}"
     rclone --bind "${RCLONE_BIND}" deletefile "${remote_directory}/${file}.notes" 2>/dev/null || true
-    rclone --bind "${RCLONE_BIND}" deletefile "${remote_directory}/${file}.log" 2>/dev/null || true
+    [[ -n "${log_file}" ]] && rclone --bind "${RCLONE_BIND}" deletefile "${remote_directory}/${log_file}" 2>/dev/null || true
   done < <(rclone --bind "${RCLONE_BIND}" lsf "${remote_directory}" --files-only --include "${include_pattern}" | sort -r)
 }
 
 upload_guest_archive() {
   local kind=$1
   local archive=$2
-  local remote_directory pattern regex keep sidecar archive_name
+  local remote_directory pattern regex keep sidecar archive_name log_file
 
   case "${kind}" in
     opnsense)
       remote_directory="${REMOTE_ROOT}/OPNsense/full-vm"
       pattern='vzdump-qemu-100-*.vma.zst'
       regex='^vzdump-qemu-100-.*\.vma\.zst$'
+      log_file="${archive%.vma.zst}.log"
       keep=3
       ;;
     docker)
       remote_directory="${REMOTE_ROOT}/Docker/full-lxc"
       pattern='vzdump-lxc-300-*.tar.zst'
       regex='^vzdump-lxc-300-.*\.tar\.zst$'
+      log_file="${archive%.tar.zst}.log"
       keep=2
       ;;
     *)
@@ -104,12 +111,12 @@ upload_guest_archive() {
   pvesm extractconfig "local:backup/$(basename "${archive}")" >/dev/null
   upload_file "${archive}" "${remote_directory}"
 
-  for sidecar in "${archive}.notes" "${archive}.log"; do
+  for sidecar in "${archive}.notes" "${log_file}"; do
     [[ -f "${sidecar}" ]] && upload_file "${sidecar}" "${remote_directory}"
   done
 
   prune_remote "${remote_directory}" "${pattern}" "${keep}"
-  rm -f -- "${archive}" "${archive}.notes" "${archive}.log"
+  rm -f -- "${archive}" "${archive}.notes" "${log_file}"
 }
 
 latest_archive() {

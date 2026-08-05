@@ -2,6 +2,8 @@
 
 This project is a deliberately manual-started OpenVPN client for a Pritunl profile that requires `PIN + TOTP`.
 
+This Docker implementation is retained only as a disabled fallback. The active client runs natively on OPNsense. The root `~/homelab/compose.yml` does not include this project, both services require an explicit profile, and both use restart policy `no`.
+
 The runtime is Debian 13.6 with OpenVPN 2.7.5 from the official OpenVPN 2.7 APT repository. The image build prints and verifies the installed runtime versions. OpenVPN 3 is not used here because this watcher needs to provide a freshly generated `PIN + TOTP` through an `auth-user-pass` file.
 
 DNS is provided by a dnsmasq instance inside the container. Queries for `platform-bo.com`, `cluster.local`, and `atlas-iac.com` (including subdomains) are sent to the corporate VPN DNS at `192.168.217.1`; other queries use the bootstrap resolvers. The VPN remote hostname is resolved through bootstrap DNS before dnsmasq starts so the split-DNS rules cannot prevent the VPN from connecting. The Compose service publishes DNS on the Docker host LAN address `192.168.1.4:53` for the OPNsense split-DNS forwarder; the port is intentionally bound to the LAN address, not all host addresses.
@@ -26,9 +28,17 @@ Secrets are expected as Docker Compose secrets under `secrets/` and must not be 
 
 The canonical project path on the Docker host is `~/homelab/pritunl-vpn-gateway`. The previous `~/homelab/wproxy` implementation has been removed after traffic cutover.
 
-The service is included by `~/homelab/compose.yml` with the `manual` profile. A normal homelab start does not start the VPN watcher.
+The service is not included by `~/homelab/compose.yml`. Start it only as an intentional fallback from this directory with an explicit `manual` or `vpn` profile.
 
-OPNsense should forward the three private suffixes to `192.168.1.4` on port 53. When the VPN is unavailable, the gateway's fail-closed policy prevents private DNS queries from reaching the corporate resolver through the ordinary uplink.
+When this fallback is intentionally enabled, OPNsense can forward the three private suffixes to `192.168.1.4` on port 53. The active native OPNsense setup forwards them directly to `192.168.217.1` through `ovpnc1` instead.
+
+## LAN and Tailscale routed gateway
+
+The gateway also has a dedicated macvlan address, `192.168.1.5`, on the Docker host LAN. OPNsense can use this address as a policy-routing gateway for corporate destinations from both the local LAN and the Tailscale network. The VPN container enables IPv4 forwarding, MASQUERADEs only the currently learned VPN destinations, and rejects those destinations if they would leave through the ordinary uplink instead of `tun0`.
+
+The watcher writes the current non-link routes learned on `tun0` to `state/routes/corporate-routes.txt`. A small read-only HTTP sidecar publishes that file at `http://192.168.1.4:8765/corporate-routes.txt` for an OPNsense `URL Table (IPs)` alias. OPNsense should attach that alias to a firewall rule with gateway `192.168.1.5` on both the LAN and TAILSCALE interfaces. If the tunnel disappears, the last route set remains in the alias but the gateway rejects it, so traffic does not fall back to the normal uplink.
+
+The macvlan address is intentionally separate from the Docker host address. If the Docker host itself later needs to originate traffic through this gateway, it will need a host-side macvlan interface and an explicit route; ordinary LAN and Tailscale clients do not need that extra host configuration.
 
 ## Running selected containers through the VPN
 

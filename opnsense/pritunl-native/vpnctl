@@ -1,0 +1,97 @@
+#!/bin/sh
+
+set -eu
+
+BASE_DIR="${BASE_DIR:-/conf/pritunl-native}"
+STATE_DIR="${STATE_DIR:-$BASE_DIR/state}"
+RUN_DIR="${RUN_DIR:-/var/run/pritunl-native}"
+LOG_DIR="${LOG_DIR:-/var/log/pritunl-native}"
+PID_FILE="$RUN_DIR/watcher.pid"
+WATCHER="/usr/local/opnsense/scripts/pritunl-native/watcher.sh"
+
+status() {
+    if [ -r "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        printf 'running pid=%s\n' "$(cat "$PID_FILE")"
+    elif [ -e "$STATE_DIR/lockout" ]; then
+        printf 'locked out\n'
+    else
+        printf 'stopped\n'
+    fi
+    printf 'failures_since_reset=%s\n' "$(cat "$STATE_DIR/failures-since-reset" 2>/dev/null || printf 0)"
+}
+
+case "${1:-status}" in
+    start)
+        mkdir -p "$RUN_DIR" "$LOG_DIR"
+        if [ -e "$STATE_DIR/lockout" ]; then
+            printf 'Locked out. Run vpnctl reset first.\n' >&2
+            exit 78
+        fi
+        if [ -r "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+            printf 'Already running.\n'
+            exit 0
+        fi
+        /usr/sbin/daemon -f -p "$PID_FILE" "$WATCHER"
+        sleep 1
+        status
+        ;;
+    stop)
+        if [ -r "$PID_FILE" ]; then
+            pid="$(cat "$PID_FILE")"
+            kill -TERM "$pid" 2>/dev/null || true
+            wait_count=0
+            while kill -0 "$pid" 2>/dev/null && [ "$wait_count" -lt 10 ]; do
+                sleep 1
+                wait_count=$((wait_count + 1))
+            done
+            rm -f "$PID_FILE"
+        fi
+        pkill -F "/var/run/ovpn-instance-6387ef44-4e9a-4c79-af35-c829c2eb0766.pid" 2>/dev/null || true
+        printf 'Stopped.\n'
+        ;;
+    reset)
+        if [ -r "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+            printf 'Stop the watcher before reset.\n' >&2
+            exit 69
+        fi
+        rm -f "$STATE_DIR/lockout" "$STATE_DIR/failures-since-reset" "$STATE_DIR/consecutive-failures" "$STATE_DIR/last-attempt"
+        printf 'Fail-safe state reset.\n'
+        ;;
+    status)
+        status
+        ;;
+    logs)
+        tail -n 100 "$LOG_DIR/watcher.log" "$LOG_DIR/events.log" "$LOG_DIR/openvpn.log" 2>/dev/null || true
+        ;;
+    refresh-routes)
+        /usr/local/opnsense/scripts/pritunl-native/route-table.sh refresh
+        ;;
+    test-retry-contract)
+        test_root="$(mktemp -d /tmp/pritunl-native-test.XXXXXX)"
+        trap 'rm -rf "$test_root"' EXIT INT TERM
+        mkdir -p "$test_root/secrets" "$test_root/state" "$test_root/run" "$test_root/logs"
+        printf 'test\n' > "$test_root/secrets/username"
+        printf 'test\n' > "$test_root/secrets/pin"
+        printf 'JBSWY3DPEHPK3PXP\n' > "$test_root/secrets/totp-seed"
+        chmod 0600 "$test_root/secrets/"*
+        set +e
+        BASE_DIR="$test_root" SECRET_DIR="$test_root/secrets" STATE_DIR="$test_root/state" \
+            RUN_DIR="$test_root/run" LOG_DIR="$test_root/logs" SIMULATE_AUTH_FAILURE=true \
+            MIN_RETRY_INTERVAL_SECONDS=1 MAX_ATTEMPTS=3 "$WATCHER" >/dev/null 2>&1
+        rc=$?
+        set -e
+        failures="$(cat "$test_root/state/failures-since-reset")"
+        lockouts="$(grep -c 'lockout total=3' "$test_root/logs/events.log" || true)"
+        attempts="$(grep -c 'attempt-start' "$test_root/logs/events.log" || true)"
+        if [ "$rc" -eq 78 ] && [ "$failures" -eq 3 ] && [ "$lockouts" -eq 1 ] && [ "$attempts" -eq 3 ]; then
+            printf 'PASS attempts=3 failures=3 lockouts=1 exit=78\n'
+        else
+            printf 'FAIL attempts=%s failures=%s lockouts=%s exit=%s\n' "$attempts" "$failures" "$lockouts" "$rc" >&2
+            exit 1
+        fi
+        ;;
+    *)
+        printf 'Usage: vpnctl {start|stop|reset|status|logs|refresh-routes|test-retry-contract}\n' >&2
+        exit 64
+        ;;
+esac

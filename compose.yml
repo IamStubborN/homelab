@@ -23,7 +23,7 @@ include:
     - movie-tracker/docker-compose.yml
     - bitwarden/compose.yml
     - web-research/compose.yml
-    - pritunl-vpn-gateway/compose.yml
+    # - pritunl-vpn-gateway/compose.yml
 
     # - mssql/compose.yml
     # - portainer/compose.yml

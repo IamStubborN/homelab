@@ -47,9 +47,14 @@ OPENVPN_UP_FILE="${RUN_DIR}/openvpn-up"
 OPENVPN_CONNECTED_FILE="${RUN_DIR}/openvpn-connected"
 FIREWALL_READY_FILE="${RUN_DIR}/firewall-ready"
 ACTIVE_FIREWALL_CHAIN_FILE="${RUN_DIR}/active-firewall-chain"
+ACTIVE_FORWARD_CHAIN_FILE="${RUN_DIR}/active-forward-chain"
+ACTIVE_NAT_CHAIN_FILE="${RUN_DIR}/active-nat-chain"
 REMOTE_ENDPOINT_IP_FILE="${RUN_DIR}/remote-endpoint-ip"
 IPTABLES_BIN="${IPTABLES_BIN:-iptables}"
 UPLINK_INTERFACE="${UPLINK_INTERFACE:-}"
+VPN_GATEWAY_LAN_INTERFACE="${VPN_GATEWAY_LAN_INTERFACE:-}"
+VPN_GATEWAY_LAN_CIDRS="${VPN_GATEWAY_LAN_CIDRS:-192.168.1.0/24 100.64.0.0/10}"
+VPN_ROUTE_EXPORT_FILE="${VPN_ROUTE_EXPORT_FILE:-/routes/corporate-routes.txt}"
 STATE_FILE_MODE="${STATE_FILE_MODE:-0644}"
 LOG_FILE_MODE="${LOG_FILE_MODE:-0644}"
 DNSMASQ_PID=""
@@ -58,7 +63,7 @@ LAST_ATTEMPT_CONNECTED=0
 
 export OPENVPN_UP_FILE OPENVPN_CONNECTED_FILE
 
-mkdir -p "$RUN_DIR" "$STATE_DIR" "$LOG_DIR"
+mkdir -p "$RUN_DIR" "$STATE_DIR" "$LOG_DIR" "$(dirname "$VPN_ROUTE_EXPORT_FILE")"
 chmod 0700 "$RUN_DIR"
 chmod 0755 "$STATE_DIR" "$LOG_DIR"
 
@@ -168,6 +173,134 @@ detect_uplink_interface() {
     [[ -n "$UPLINK_INTERFACE" ]] || die "could not determine the pre-VPN uplink interface"
 }
 
+detect_gateway_lan_interface() {
+    if [[ -z "$VPN_GATEWAY_LAN_INTERFACE" ]]; then
+        VPN_GATEWAY_LAN_INTERFACE="$(ip -4 route show | awk '$1 == "192.168.1.0/24" { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
+    fi
+    [[ -n "$VPN_GATEWAY_LAN_INTERFACE" ]] || die "could not determine the gateway LAN interface"
+    [[ "$VPN_GATEWAY_LAN_INTERFACE" != "$UPLINK_INTERFACE" ]] || die "gateway LAN interface must differ from the VPN uplink interface"
+    ip link show dev "$VPN_GATEWAY_LAN_INTERFACE" >/dev/null 2>&1 || die "gateway LAN interface does not exist: $VPN_GATEWAY_LAN_INTERFACE"
+}
+
+vpn_route_destinations() {
+    ip -4 route show dev "$VPN_TUNNEL_INTERFACE" |
+        awk '$1 != "default" && $0 !~ / scope link([[:space:]]|$)/ { print $1 }' |
+        sort -u
+}
+
+write_route_export() {
+    local destination count=0 tmp
+
+    tmp="${VPN_ROUTE_EXPORT_FILE}.tmp"
+    : > "$tmp"
+    while read -r destination; do
+        [[ "$destination" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$ ]] || continue
+        printf '%s\n' "$destination" >> "$tmp"
+        count=$((count + 1))
+    done < <(vpn_route_destinations)
+
+    if (( count == 0 )); then
+        rm -f "$tmp"
+        event "route-export-error no-tunnel-destinations"
+        return 1
+    fi
+
+    chmod "$STATE_FILE_MODE" "$tmp"
+    mv -f "$tmp" "$VPN_ROUTE_EXPORT_FILE"
+    event "route-export-ready file=$VPN_ROUTE_EXPORT_FILE routes=$count"
+}
+
+configure_forward_firewall() {
+    local active_forward active_nat new_forward new_nat destination source tmp route_count=0
+
+    detect_gateway_lan_interface
+    active_forward=""
+    active_nat=""
+    if [[ -s "$ACTIVE_FORWARD_CHAIN_FILE" ]]; then
+        active_forward="$(sed -n '1p' "$ACTIVE_FORWARD_CHAIN_FILE")"
+    fi
+    if [[ -s "$ACTIVE_NAT_CHAIN_FILE" ]]; then
+        active_nat="$(sed -n '1p' "$ACTIVE_NAT_CHAIN_FILE")"
+    fi
+    if [[ "$active_forward" == "PRITUNL_VPN_FW_A" ]]; then
+        new_forward="PRITUNL_VPN_FW_B"
+        new_nat="PRITUNL_VPN_NAT_B"
+    else
+        new_forward="PRITUNL_VPN_FW_A"
+        new_nat="PRITUNL_VPN_NAT_A"
+    fi
+
+    if "$IPTABLES_BIN" -L FORWARD -n >/dev/null 2>&1; then
+        if "$IPTABLES_BIN" -L "$new_forward" -n >/dev/null 2>&1; then
+            "$IPTABLES_BIN" -F "$new_forward" || return 1
+        else
+            "$IPTABLES_BIN" -N "$new_forward" || return 1
+        fi
+        if "$IPTABLES_BIN" -t nat -L "$new_nat" -n >/dev/null 2>&1; then
+            "$IPTABLES_BIN" -t nat -F "$new_nat" || return 1
+        else
+            "$IPTABLES_BIN" -t nat -N "$new_nat" || return 1
+        fi
+    else
+        return 1
+    fi
+
+    "$IPTABLES_BIN" -A "$new_forward" -i "$VPN_TUNNEL_INTERFACE" -o "$VPN_GATEWAY_LAN_INTERFACE" \
+        -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || return 1
+
+    while read -r destination; do
+        [[ "$destination" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$ ]] || continue
+        route_count=$((route_count + 1))
+        for source in $VPN_GATEWAY_LAN_CIDRS; do
+            [[ "$source" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]] || continue
+            "$IPTABLES_BIN" -A "$new_forward" -i "$VPN_GATEWAY_LAN_INTERFACE" -o "$VPN_TUNNEL_INTERFACE" \
+                -s "$source" -d "$destination" -j ACCEPT || return 1
+            "$IPTABLES_BIN" -A "$new_forward" -i "$VPN_GATEWAY_LAN_INTERFACE" \
+                -s "$source" -d "$destination" ! -o "$VPN_TUNNEL_INTERFACE" \
+                -j REJECT --reject-with icmp-net-unreachable || return 1
+            "$IPTABLES_BIN" -t nat -A "$new_nat" -o "$VPN_TUNNEL_INTERFACE" \
+                -s "$source" -d "$destination" -j MASQUERADE || return 1
+        done
+    done < "$VPN_ROUTE_EXPORT_FILE"
+
+    (( route_count > 0 )) || return 1
+    "$IPTABLES_BIN" -A "$new_forward" -j RETURN || return 1
+    "$IPTABLES_BIN" -t nat -A "$new_nat" -j RETURN || return 1
+
+    if ! "$IPTABLES_BIN" -C FORWARD -j "$new_forward" 2>/dev/null; then
+        "$IPTABLES_BIN" -I FORWARD 1 -j "$new_forward" || return 1
+    fi
+    if ! "$IPTABLES_BIN" -t nat -C POSTROUTING -j "$new_nat" 2>/dev/null; then
+        "$IPTABLES_BIN" -t nat -I POSTROUTING 1 -j "$new_nat" || return 1
+    fi
+
+    tmp="${ACTIVE_FORWARD_CHAIN_FILE}.tmp"
+    printf '%s\n' "$new_forward" > "$tmp"
+    chmod "$STATE_FILE_MODE" "$tmp"
+    mv -f "$tmp" "$ACTIVE_FORWARD_CHAIN_FILE"
+    tmp="${ACTIVE_NAT_CHAIN_FILE}.tmp"
+    printf '%s\n' "$new_nat" > "$tmp"
+    chmod "$STATE_FILE_MODE" "$tmp"
+    mv -f "$tmp" "$ACTIVE_NAT_CHAIN_FILE"
+
+    if [[ -n "$active_forward" && "$active_forward" != "$new_forward" ]]; then
+        while "$IPTABLES_BIN" -C FORWARD -j "$active_forward" 2>/dev/null; do
+            "$IPTABLES_BIN" -D FORWARD -j "$active_forward" || return 1
+        done
+        "$IPTABLES_BIN" -F "$active_forward" 2>/dev/null || true
+        "$IPTABLES_BIN" -X "$active_forward" 2>/dev/null || true
+    fi
+    if [[ -n "$active_nat" && "$active_nat" != "$new_nat" ]]; then
+        while "$IPTABLES_BIN" -t nat -C POSTROUTING -j "$active_nat" 2>/dev/null; do
+            "$IPTABLES_BIN" -t nat -D POSTROUTING -j "$active_nat" || return 1
+        done
+        "$IPTABLES_BIN" -t nat -F "$active_nat" 2>/dev/null || true
+        "$IPTABLES_BIN" -t nat -X "$active_nat" 2>/dev/null || true
+    fi
+
+    event "forward-firewall-ready chain=$new_forward nat-chain=$new_nat routes=$route_count lan-interface=$VPN_GATEWAY_LAN_INTERFACE"
+}
+
 configure_fail_closed_firewall() {
     local active_chain new_chain destination endpoint route_count=0 tmp
 
@@ -208,7 +341,10 @@ configure_fail_closed_firewall() {
         [[ "$destination" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$ ]] || continue
         "$IPTABLES_BIN" -A "$new_chain" -d "$destination" ! -o "$VPN_TUNNEL_INTERFACE" -j REJECT --reject-with icmp-net-unreachable || return 1
         route_count=$((route_count + 1))
-    done < <(ip -4 route show dev "$VPN_TUNNEL_INTERFACE" | awk '{ print $1 }' | sort -u)
+    done < <(vpn_route_destinations)
+
+    write_route_export || return 1
+    configure_forward_firewall || return 1
 
     # Non-corporate traffic keeps the existing split-routing default path.
     "$IPTABLES_BIN" -A "$new_chain" -j RETURN || return 1

@@ -9,6 +9,9 @@ services:
     container_name: pritunl-vpn-watcher
     restart: "no"
     stop_grace_period: 15s
+    depends_on:
+      pritunl-vpn-routes:
+        condition: service_started
     ports:
       - "192.168.1.4:53:53/tcp"
       - "192.168.1.4:53:53/udp"
@@ -27,6 +30,8 @@ services:
       start_period: 30s
     cap_add:
       - NET_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
     devices:
       - /dev/net/tun:/dev/net/tun
     security_opt:
@@ -40,6 +45,7 @@ services:
     volumes:
       - ./profile:/vpn:ro
       - ./state:/state
+      - ./state/routes:/routes
       - ./logs:/logs
     secrets:
       - pritunl_vpn_username
@@ -61,6 +67,37 @@ services:
       DNSMASQ_PRIVATE_DOMAINS: "platform-bo.com cluster.local atlas-iac.com"
       DNSMASQ_BOOTSTRAP_SERVERS: "192.168.0.1 1.1.1.1"
       DNSMASQ_LISTEN_ADDRESS: 0.0.0.0
+      VPN_GATEWAY_LAN_INTERFACE: eth1
+      VPN_GATEWAY_LAN_CIDRS: "192.168.1.0/24 100.64.0.0/10"
+      VPN_ROUTE_EXPORT_FILE: /routes/corporate-routes.txt
+    networks:
+      default: {}
+      vpn_lan:
+        ipv4_address: 192.168.1.5
+
+  pritunl-vpn-routes:
+    profiles:
+      - manual
+      - vpn
+    image: busybox:1.37.0
+    container_name: pritunl-vpn-routes
+    restart: "no"
+    command: ["httpd", "-f", "-p", "80", "-h", "/www"]
+    ports:
+      - "192.168.1.4:8765:80/tcp"
+    volumes:
+      - ./state/routes:/www:ro
+
+networks:
+  vpn_lan:
+    name: pritunl_vpn_lan
+    driver: macvlan
+    driver_opts:
+      parent: eth0
+    ipam:
+      config:
+        - subnet: 192.168.1.0/24
+          gateway: 192.168.1.1
 
 secrets:
   pritunl_vpn_username:

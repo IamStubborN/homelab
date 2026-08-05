@@ -141,8 +141,8 @@ case "${1:-status}" in
             printf 'Stop both the watcher and OpenVPN before reset.\n' >&2
             exit 69
         fi
-        rm -f "$STATE_DIR/lockout" "$STATE_DIR/attempts-since-reset" "$STATE_DIR/attempt-history" "$STATE_DIR/failures-since-reset" "$STATE_DIR/consecutive-failures" "$STATE_DIR/last-attempt"
-        printf 'Fail-safe state reset.\n'
+        rm -f "$STATE_DIR/lockout" "$STATE_DIR/consecutive-failures" "$STATE_DIR/last-attempt"
+        printf 'Fail-safe lockout reset. Rolling 24-hour attempt history preserved.\n'
         ;;
     status)
         status

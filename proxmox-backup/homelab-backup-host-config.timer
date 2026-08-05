@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly Proxmox host configuration backup to Google Drive
+
+[Timer]
+OnCalendar=Sun *-*-* 03:30:00 UTC
+Persistent=true
+Unit=homelab-backup@host-config.service
+
+[Install]
+WantedBy=timers.target

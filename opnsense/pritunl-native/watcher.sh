@@ -10,7 +10,7 @@ MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
 MIN_RETRY_INTERVAL_SECONDS="${MIN_RETRY_INTERVAL_SECONDS:-3600}"
 CONNECT_TIMEOUT_SECONDS="${CONNECT_TIMEOUT_SECONDS:-45}"
 PING_EXIT_SECONDS="${PING_EXIT_SECONDS:-120}"
-ROLLING_WINDOW_SECONDS="${ROLLING_WINDOW_SECONDS:-86400}"
+ROLLING_WINDOW_SECONDS=86400
 STABLE_SESSION_SECONDS="${STABLE_SESSION_SECONDS:-3600}"
 SIMULATE_AUTH_FAILURE="${SIMULATE_AUTH_FAILURE:-false}"
 VALIDATE_ONLY="${VALIDATE_ONLY:-false}"
@@ -32,7 +32,7 @@ export STATE_DIR
 
 CONFIG_FILE="/var/etc/openvpn/instance-${INSTANCE_UUID}.conf"
 UP_FILE="/var/etc/openvpn/instance-${INSTANCE_UUID}.up"
-OPENVPN_PID_FILE="/var/run/ovpn-instance-${INSTANCE_UUID}.pid"
+OPENVPN_PID_FILE="${OPENVPN_PID_FILE:-/var/run/ovpn-instance-${INSTANCE_UUID}.pid}"
 WATCHER_LOG="$LOG_DIR/watcher.log"
 EVENT_LOG="$LOG_DIR/events.log"
 ATTEMPTS_FILE="$STATE_DIR/attempts-since-reset"
@@ -44,6 +44,7 @@ LOCKOUT_FILE="$STATE_DIR/lockout"
 CONNECTED_FILE="$RUN_DIR/connected"
 PASSWORD_FILE="$RUN_DIR/password"
 openvpn_pid=""
+owns_openvpn=false
 
 case "$MAX_ATTEMPTS:$MIN_RETRY_INTERVAL_SECONDS" in
     *[!0-9:]*|:*|*:) printf 'Invalid retry policy.\n' >&2; exit 64 ;;
@@ -91,12 +92,15 @@ write_number() {
 }
 
 stop_openvpn() {
+    if [ "$owns_openvpn" != "true" ]; then
+        return
+    fi
     pid="${openvpn_pid:-}"
     if [ -z "$pid" ] && [ -r "$OPENVPN_PID_FILE" ]; then
         pid="$(cat "$OPENVPN_PID_FILE")"
     fi
     case "$pid" in
-        ''|*[!0-9]*) rm -f "$OPENVPN_PID_FILE"; return ;;
+        ''|*[!0-9]*) rm -f "$OPENVPN_PID_FILE"; owns_openvpn=false; return ;;
     esac
     if kill -0 "$pid" 2>/dev/null; then
         kill -TERM "$pid" 2>/dev/null || true
@@ -111,6 +115,7 @@ stop_openvpn() {
     fi
     rm -f "$OPENVPN_PID_FILE"
     openvpn_pid=""
+    owns_openvpn=false
 }
 
 cleanup_runtime() {
@@ -307,7 +312,9 @@ while :; do
     prepare_interface
     render_config
     export PRITUNL_RUN_DIR="$RUN_DIR" PRITUNL_EVENT_LOG="$EVENT_LOG"
+    owns_openvpn=true
     if ! "$OPENVPN_BIN" --config "$CONFIG_FILE"; then
+        stop_openvpn
         record_failed_outcome "$attempt_number"
         continue
     fi
@@ -348,7 +355,7 @@ while :; do
     log "connection-established attempt=$attempt_number"
     connected_at="$(date +%s)"
     stable_reset_done=false
-    while kill -0 "$openvpn_pid" 2>/dev/null; do
+    while kill -0 "$openvpn_pid" 2>/dev/null && [ -e "$CONNECTED_FILE" ]; do
         now="$(date +%s)"
         if [ "$stable_reset_done" = "false" ] && [ $((now - connected_at)) -ge "$STABLE_SESSION_SECONDS" ]; then
             write_number "$CONSECUTIVE_FILE" 0
@@ -358,8 +365,14 @@ while :; do
         fi
         sleep 1
     done
-    rm -f "$OPENVPN_PID_FILE"
-    openvpn_pid=""
+    if kill -0 "$openvpn_pid" 2>/dev/null; then
+        event "connection-marker-lost attempt=$attempt_number; terminating-native-client=1"
+        log "connection marker lost; terminating native OpenVPN client"
+        stop_openvpn
+    else
+        rm -f "$OPENVPN_PID_FILE"
+        openvpn_pid=""
+    fi
     rm -f "$CONNECTED_FILE"
     if [ "$stable_reset_done" = "false" ]; then
         record_failed_outcome "$attempt_number"

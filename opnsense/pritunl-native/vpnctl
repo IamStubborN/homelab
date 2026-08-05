@@ -7,17 +7,51 @@ STATE_DIR="${STATE_DIR:-$BASE_DIR/state}"
 RUN_DIR="${RUN_DIR:-/var/run/pritunl-native}"
 LOG_DIR="${LOG_DIR:-/var/log/pritunl-native}"
 PID_FILE="$RUN_DIR/watcher.pid"
+OPENVPN_PID_FILE="/var/run/ovpn-instance-6387ef44-4e9a-4c79-af35-c829c2eb0766.pid"
+OPENVPN_CONFIG="/var/etc/openvpn/instance-6387ef44-4e9a-4c79-af35-c829c2eb0766.conf"
 WATCHER="/usr/local/opnsense/scripts/pritunl-native/watcher.sh"
 
+find_watcher_pid() {
+    if [ -r "$PID_FILE" ]; then
+        pid="$(cat "$PID_FILE")"
+        case "$pid" in
+            ''|*[!0-9]*) ;;
+            *) if kill -0 "$pid" 2>/dev/null; then printf '%s\n' "$pid"; return; fi ;;
+        esac
+    fi
+    /usr/bin/pgrep -f "^/bin/sh ${WATCHER}$" 2>/dev/null | sed -n '1p'
+}
+
+find_watcher_daemon_pid() {
+    /usr/bin/pgrep -f "^daemon: ${WATCHER}" 2>/dev/null | sed -n '1p'
+}
+
+find_openvpn_pid() {
+    if [ -r "$OPENVPN_PID_FILE" ]; then
+        pid="$(cat "$OPENVPN_PID_FILE")"
+        case "$pid" in
+            ''|*[!0-9]*) ;;
+            *) if kill -0 "$pid" 2>/dev/null; then printf '%s\n' "$pid"; return; fi ;;
+        esac
+    fi
+    /usr/bin/pgrep -f "^/usr/local/sbin/openvpn --config ${OPENVPN_CONFIG}" 2>/dev/null | sed -n '1p'
+}
+
 status() {
-    if [ -r "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-        printf 'running pid=%s\n' "$(cat "$PID_FILE")"
+    watcher_pid="$(find_watcher_pid || true)"
+    if [ -n "$watcher_pid" ]; then
+        printf 'running pid=%s\n' "$watcher_pid"
     elif [ -e "$STATE_DIR/lockout" ]; then
         printf 'locked out\n'
     else
         printf 'stopped\n'
     fi
-    printf 'failures_since_reset=%s\n' "$(cat "$STATE_DIR/failures-since-reset" 2>/dev/null || printf 0)"
+    openvpn_pid="$(find_openvpn_pid || true)"
+    if [ -n "$openvpn_pid" ]; then
+        printf 'openvpn_pid=%s\n' "$openvpn_pid"
+    fi
+    attempts="$(cat "$STATE_DIR/attempts-since-reset" 2>/dev/null || cat "$STATE_DIR/failures-since-reset" 2>/dev/null || printf 0)"
+    printf 'attempts_since_reset=%s\n' "$attempts"
 }
 
 case "${1:-status}" in
@@ -27,41 +61,76 @@ case "${1:-status}" in
             printf 'Locked out. Run vpnctl reset first.\n' >&2
             exit 78
         fi
-        if [ -r "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        watcher_pid="$(find_watcher_pid || true)"
+        if [ -n "$watcher_pid" ]; then
             printf 'Already running.\n'
             exit 0
+        fi
+        watcher_daemon_pid="$(find_watcher_daemon_pid || true)"
+        if [ -n "$watcher_daemon_pid" ]; then
+            printf 'Refusing to start while watcher daemon pid %s is still running.\n' "$watcher_daemon_pid" >&2
+            exit 70
+        fi
+        openvpn_pid="$(find_openvpn_pid || true)"
+        if [ -n "$openvpn_pid" ]; then
+            printf 'Refusing to start while OpenVPN pid %s is still running.\n' "$openvpn_pid" >&2
+            exit 70
         fi
         /usr/sbin/daemon -f -p "$PID_FILE" "$WATCHER"
         sleep 1
         status
         ;;
     stop)
-        if [ -r "$PID_FILE" ]; then
-            pid="$(cat "$PID_FILE")"
+        watcher_pid="$(find_watcher_pid || true)"
+        if [ -n "$watcher_pid" ]; then
+            pid="$watcher_pid"
             kill -TERM "$pid" 2>/dev/null || true
             wait_count=0
             while kill -0 "$pid" 2>/dev/null && [ "$wait_count" -lt 10 ]; do
                 sleep 1
                 wait_count=$((wait_count + 1))
             done
-            rm -f "$PID_FILE"
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
         fi
-        pkill -F "/var/run/ovpn-instance-6387ef44-4e9a-4c79-af35-c829c2eb0766.pid" 2>/dev/null || true
+        rm -f "$PID_FILE"
+        watcher_daemon_pid="$(find_watcher_daemon_pid || true)"
+        if [ -n "$watcher_daemon_pid" ]; then
+            kill -TERM "$watcher_daemon_pid" 2>/dev/null || true
+            sleep 1
+            if kill -0 "$watcher_daemon_pid" 2>/dev/null; then
+                kill -KILL "$watcher_daemon_pid" 2>/dev/null || true
+            fi
+        fi
+        openvpn_pid="$(find_openvpn_pid || true)"
+        if [ -n "$openvpn_pid" ]; then
+            kill -TERM "$openvpn_pid" 2>/dev/null || true
+            wait_count=0
+            while kill -0 "$openvpn_pid" 2>/dev/null && [ "$wait_count" -lt 10 ]; do
+                sleep 1
+                wait_count=$((wait_count + 1))
+            done
+            if kill -0 "$openvpn_pid" 2>/dev/null; then
+                kill -KILL "$openvpn_pid" 2>/dev/null || true
+            fi
+        fi
+        rm -f "$OPENVPN_PID_FILE"
         printf 'Stopped.\n'
         ;;
     reset)
-        if [ -r "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-            printf 'Stop the watcher before reset.\n' >&2
+        if [ -n "$(find_watcher_pid || true)" ] || [ -n "$(find_openvpn_pid || true)" ]; then
+            printf 'Stop both the watcher and OpenVPN before reset.\n' >&2
             exit 69
         fi
-        rm -f "$STATE_DIR/lockout" "$STATE_DIR/failures-since-reset" "$STATE_DIR/consecutive-failures" "$STATE_DIR/last-attempt"
+        rm -f "$STATE_DIR/lockout" "$STATE_DIR/attempts-since-reset" "$STATE_DIR/failures-since-reset" "$STATE_DIR/consecutive-failures" "$STATE_DIR/last-attempt"
         printf 'Fail-safe state reset.\n'
         ;;
     status)
         status
         ;;
     logs)
-        tail -n 100 "$LOG_DIR/watcher.log" "$LOG_DIR/events.log" "$LOG_DIR/openvpn.log" 2>/dev/null || true
+        tail -n 100 "$LOG_DIR/watcher.log" "$LOG_DIR/events.log" 2>/dev/null || true
         ;;
     refresh-routes)
         /usr/local/opnsense/scripts/pritunl-native/route-table.sh refresh
@@ -80,13 +149,13 @@ case "${1:-status}" in
             MIN_RETRY_INTERVAL_SECONDS=1 MAX_ATTEMPTS=3 "$WATCHER" >/dev/null 2>&1
         rc=$?
         set -e
-        failures="$(cat "$test_root/state/failures-since-reset")"
-        lockouts="$(grep -c 'lockout total=3' "$test_root/logs/events.log" || true)"
+        attempts_state="$(cat "$test_root/state/attempts-since-reset")"
+        lockouts="$(grep -c 'lockout attempts=3' "$test_root/logs/events.log" || true)"
         attempts="$(grep -c 'attempt-start' "$test_root/logs/events.log" || true)"
-        if [ "$rc" -eq 78 ] && [ "$failures" -eq 3 ] && [ "$lockouts" -eq 1 ] && [ "$attempts" -eq 3 ]; then
-            printf 'PASS attempts=3 failures=3 lockouts=1 exit=78\n'
+        if [ "$rc" -eq 78 ] && [ "$attempts_state" -eq 3 ] && [ "$lockouts" -eq 1 ] && [ "$attempts" -eq 3 ]; then
+            printf 'PASS attempts=3 reserved=3 lockouts=1 exit=78\n'
         else
-            printf 'FAIL attempts=%s failures=%s lockouts=%s exit=%s\n' "$attempts" "$failures" "$lockouts" "$rc" >&2
+            printf 'FAIL attempts=%s reserved=%s lockouts=%s exit=%s\n' "$attempts" "$attempts_state" "$lockouts" "$rc" >&2
             exit 1
         fi
         ;;

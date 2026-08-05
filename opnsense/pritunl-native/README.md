@@ -6,14 +6,31 @@ The persisted OPNsense instance intentionally stays disabled. The supervisor ena
 
 Safety contract:
 
-- one OpenVPN connection per supervisor attempt;
+- OPNsense generates the complete native instance configuration, including its
+  management socket, PID file, daemon identity, standard link hooks and logs;
+- one native OpenVPN process launch per reserved attempt;
 - first attempt immediately, including immediately after a connected session drops;
-- one hour between subsequent failed attempts;
-- cumulative lockout after three failures since the last manual reset;
-- a successful connection resets only the consecutive failure counter;
+- one hour between subsequent attempts that do not reach `route-up`;
+- at most three OpenVPN launches since the last manual reset, regardless of the
+  OpenVPN exit reason or which lifecycle events were observed;
+- connection success is accepted only at `route-up`, after authentication and
+  route installation;
+- a successful connection never restores the persistent launch budget;
+- after the third connected session drops, the supervisor locks out instead of
+  starting a fourth process;
 - persistent state under `/conf/pritunl-native/state`;
 - persistent logs under `/var/log/pritunl-native`;
 - manual reset only through `pritunl-vpnctl reset`.
+
+The persisted instance stays disabled only to prevent OPNsense boot or a generic
+service reconfigure from starting it outside the attempt gate. While running,
+the process uses the native OPNsense management socket, PID file, link hooks and
+syslog pipeline, so Connection Status and Log File remain available in the UI.
+
+The conservative launch budget is intentional. A client cannot prove that a
+TLS or transport failure happened before the corporate server observed an
+authentication request, so every process launch is charged before OpenVPN is
+started. This makes three the hard upper bound on server-facing attempts.
 
 Installed paths:
 

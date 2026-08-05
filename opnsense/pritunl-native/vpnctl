@@ -141,16 +141,8 @@ case "${1:-status}" in
             printf 'Stop both the watcher and OpenVPN before reset.\n' >&2
             exit 69
         fi
-        rm -f "$STATE_DIR/lockout" "$STATE_DIR/consecutive-failures" "$STATE_DIR/last-attempt"
-        printf 'Fail-safe lockout reset. Rolling 24-hour attempt history preserved.\n'
-        ;;
-    reset-attempts)
-        if [ -n "$(find_watcher_pid || true)" ] || [ -n "$(find_openvpn_pid || true)" ]; then
-            printf 'Stop both the watcher and OpenVPN before resetting attempts.\n' >&2
-            exit 69
-        fi
         rm -f "$STATE_DIR/lockout" "$STATE_DIR/attempts-since-reset" "$STATE_DIR/attempt-history" "$STATE_DIR/failures-since-reset" "$STATE_DIR/consecutive-failures" "$STATE_DIR/last-attempt"
-        printf 'Manual override: lockout and all retry attempt history reset.\n'
+        printf 'Manual reset: lockout and all retry attempt history cleared.\n'
         ;;
     status)
         status
@@ -187,7 +179,7 @@ case "${1:-status}" in
         fi
         ;;
     *)
-        printf 'Usage: vpnctl {start|stop|reset|reset-attempts|status|logs|refresh-routes|test-retry-contract}\n' >&2
+        printf 'Usage: vpnctl {start|stop|reset|status|logs|refresh-routes|test-retry-contract}\n' >&2
         exit 64
         ;;
 esac

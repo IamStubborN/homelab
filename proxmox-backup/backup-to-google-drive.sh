@@ -140,7 +140,7 @@ backup_host_config() {
   timestamp=$(date -u '+%Y_%m_%d-%H_%M_%S')
   archive="${LOCAL_BACKUP_DIR}/proxmox-host-config-${timestamp}.tar.zst"
 
-  tar --acls --xattrs --numeric-owner -C / \
+  tar --acls --numeric-owner -C / \
     -I 'zstd -T0 -3' \
     -cf "${archive}" \
     etc/pve \

@@ -24,6 +24,7 @@ SIMULATE_SERVER_DISCONNECT="${SIMULATE_SERVER_DISCONNECT:-false}"
 DNSMASQ_VPN_SERVER="${DNSMASQ_VPN_SERVER:-192.168.217.1}"
 DNSMASQ_PRIVATE_DOMAINS="${DNSMASQ_PRIVATE_DOMAINS:-platform-bo.com cluster.local atlas-iac.com}"
 DNSMASQ_BOOTSTRAP_SERVERS="${DNSMASQ_BOOTSTRAP_SERVERS:-192.168.0.1 1.1.1.1}"
+DNSMASQ_LISTEN_ADDRESS="${DNSMASQ_LISTEN_ADDRESS:-127.0.0.1}"
 
 LOG_DIR="${LOG_DIR:-/logs}"
 WATCHER_LOG_FILE="${LOG_DIR}/watcher.log"
@@ -243,7 +244,7 @@ start_dnsmasq() {
     {
         printf '%s\n' 'no-resolv'
         printf '%s\n' 'no-hosts'
-        printf '%s\n' 'listen-address=127.0.0.1'
+        printf 'listen-address=%s\n' "$DNSMASQ_LISTEN_ADDRESS"
         printf '%s\n' 'bind-interfaces'
         printf '%s\n' 'port=53'
         printf '%s\n' 'cache-size=256'

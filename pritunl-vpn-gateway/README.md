@@ -4,7 +4,7 @@ This project is a deliberately manual-started OpenVPN client for a Pritunl profi
 
 The runtime is Debian 13.6 with OpenVPN 2.7.5 from the official OpenVPN 2.7 APT repository. The image build prints and verifies the installed runtime versions. OpenVPN 3 is not used here because this watcher needs to provide a freshly generated `PIN + TOTP` through an `auth-user-pass` file.
 
-DNS is provided by a local dnsmasq instance inside the container. Queries for `platform-bo.com`, `cluster.local`, and `atlas-iac.com` (including subdomains) are sent to the corporate VPN DNS at `192.168.217.1`; other queries use the bootstrap resolvers. The VPN remote hostname is resolved through bootstrap DNS before dnsmasq starts so the split-DNS rules cannot prevent the VPN from connecting.
+DNS is provided by a dnsmasq instance inside the container. Queries for `platform-bo.com`, `cluster.local`, and `atlas-iac.com` (including subdomains) are sent to the corporate VPN DNS at `192.168.217.1`; other queries use the bootstrap resolvers. The VPN remote hostname is resolved through bootstrap DNS before dnsmasq starts so the split-DNS rules cannot prevent the VPN from connecting. The Compose service publishes DNS on the Docker host LAN address `192.168.1.4:53` for the OPNsense split-DNS forwarder; the port is intentionally bound to the LAN address, not all host addresses.
 
 Safety behavior:
 
@@ -27,6 +27,8 @@ Secrets are expected as Docker Compose secrets under `secrets/` and must not be 
 The canonical project path on the Docker host is `~/homelab/pritunl-vpn-gateway`. The previous `~/homelab/wproxy` implementation has been removed after traffic cutover.
 
 The service is included by `~/homelab/compose.yml` with the `manual` profile. A normal homelab start does not start the VPN watcher.
+
+OPNsense should forward the three private suffixes to `192.168.1.4` on port 53. When the VPN is unavailable, the gateway's fail-closed policy prevents private DNS queries from reaching the corporate resolver through the ordinary uplink.
 
 ## Running selected containers through the VPN
 

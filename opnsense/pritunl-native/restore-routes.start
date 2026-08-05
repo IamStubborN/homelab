@@ -1,0 +1,17 @@
+#!/bin/sh
+
+set -eu
+
+HELPER="/usr/local/opnsense/scripts/pritunl-native/route-table.sh"
+
+if [ ! -x "$HELPER" ]; then
+    logger -t pritunl-native "route restore skipped: helper is unavailable"
+    exit 0
+fi
+
+if "$HELPER" restore; then
+    logger -t pritunl-native "restored persistent corporate routes into PF alias"
+else
+    logger -t pritunl-native "failed to restore persistent corporate routes into PF alias"
+    exit 1
+fi

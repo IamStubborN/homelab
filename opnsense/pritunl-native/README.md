@@ -78,3 +78,8 @@ OPNsense UI configuration:
 - `Firewall > Rules > TAILSCALE`: allow only TAILSCALE net to `PRITUNL_CORPORATE_ROUTES`.
 
 `route-table.sh` keeps the external alias populated with routes learned on `ovpnc1`. The last known set remains loaded after a tunnel failure so corporate destinations are blocked on WAN instead of leaking through the default route.
+
+`restore-routes.start` is installed as
+`/usr/local/etc/rc.syshook.d/start/99-pritunl-native-routes`. It restores the
+last known route set into the external PF alias after OPNsense networking is
+ready, without starting OpenVPN or consuming an authentication attempt.

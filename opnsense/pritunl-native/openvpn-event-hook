@@ -10,9 +10,17 @@ umask 077
 mkdir -p "$RUN_DIR" "$(dirname "$EVENT_LOG")"
 
 case "$EVENT" in
+    # Compatibility for a process started by the previous supervisor. New
+    # native configs use OPNsense's standard up/down hooks directly.
     up)
         /usr/local/etc/inc/plugins.inc.d/openvpn/ovpn-linkup "$@"
+        ;;
+    route-up)
+        /usr/local/opnsense/scripts/pritunl-native/route-table.sh refresh >> "$EVENT_LOG"
         : > "$RUN_DIR/connected"
+        ;;
+    route-pre-down)
+        rm -f "$RUN_DIR/connected"
         ;;
     down)
         rm -f "$RUN_DIR/connected"

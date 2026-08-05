@@ -30,15 +30,29 @@ export STATE_DIR
 
 CONFIG_FILE="/var/etc/openvpn/instance-${INSTANCE_UUID}.conf"
 UP_FILE="/var/etc/openvpn/instance-${INSTANCE_UUID}.up"
+OPENVPN_PID_FILE="/var/run/ovpn-instance-${INSTANCE_UUID}.pid"
 WATCHER_LOG="$LOG_DIR/watcher.log"
-OPENVPN_LOG="$LOG_DIR/openvpn.log"
 EVENT_LOG="$LOG_DIR/events.log"
-FAILURES_FILE="$STATE_DIR/failures-since-reset"
+ATTEMPTS_FILE="$STATE_DIR/attempts-since-reset"
+LEGACY_FAILURES_FILE="$STATE_DIR/failures-since-reset"
 CONSECUTIVE_FILE="$STATE_DIR/consecutive-failures"
 LAST_ATTEMPT_FILE="$STATE_DIR/last-attempt"
 LOCKOUT_FILE="$STATE_DIR/lockout"
 CONNECTED_FILE="$RUN_DIR/connected"
 PASSWORD_FILE="$RUN_DIR/password"
+openvpn_pid=""
+
+case "$MAX_ATTEMPTS:$MIN_RETRY_INTERVAL_SECONDS" in
+    *[!0-9:]*|:*|*:) printf 'Invalid retry policy.\n' >&2; exit 64 ;;
+esac
+if [ "$MAX_ATTEMPTS" -lt 1 ] || [ "$MAX_ATTEMPTS" -gt 3 ]; then
+    printf 'MAX_ATTEMPTS must be between 1 and 3.\n' >&2
+    exit 64
+fi
+if [ "$SIMULATE_AUTH_FAILURE" != "true" ] && [ "$MIN_RETRY_INTERVAL_SECONDS" -lt 3600 ]; then
+    printf 'MIN_RETRY_INTERVAL_SECONDS cannot be below 3600 outside simulation.\n' >&2
+    exit 64
+fi
 
 mkdir -p "$SECRET_DIR" "$STATE_DIR" "$RUN_DIR" "$LOG_DIR"
 chmod 0700 "$BASE_DIR" "$SECRET_DIR" "$STATE_DIR" "$RUN_DIR"
@@ -73,11 +87,37 @@ write_number() {
     chmod 0600 "$1"
 }
 
+stop_openvpn() {
+    pid="${openvpn_pid:-}"
+    if [ -z "$pid" ] && [ -r "$OPENVPN_PID_FILE" ]; then
+        pid="$(cat "$OPENVPN_PID_FILE")"
+    fi
+    case "$pid" in
+        ''|*[!0-9]*) rm -f "$OPENVPN_PID_FILE"; return ;;
+    esac
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -TERM "$pid" 2>/dev/null || true
+        wait_count=0
+        while kill -0 "$pid" 2>/dev/null && [ "$wait_count" -lt 10 ]; do
+            sleep 1
+            wait_count=$((wait_count + 1))
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    fi
+    rm -f "$OPENVPN_PID_FILE"
+    openvpn_pid=""
+}
+
 cleanup_runtime() {
+    stop_openvpn
     rm -f "$PASSWORD_FILE" "$CONNECTED_FILE"
 }
 
-trap cleanup_runtime EXIT INT TERM
+trap cleanup_runtime EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 "$ROUTE_TABLE_HELPER" restore
 
@@ -120,25 +160,23 @@ render_config() {
     chmod 0600 "$CONFIG_FILE" "$UP_FILE"
 
     /usr/bin/sed -i '' \
-        -e '/^daemon /d' \
-        -e '/^management /d' \
-        -e '/^writepid /d' \
-        -e '/^up /d' \
-        -e '/^down /d' \
+        -e '/^route-up /d' \
+        -e '/^route-pre-down /d' \
         -e '/^keepalive /d' \
+        -e 's/^script-security .*/script-security 2/' \
         "$CONFIG_FILE"
 
     {
         printf 'connect-retry-max 1\n'
         printf 'resolv-retry 0\n'
         printf 'single-session\n'
-        printf 'auth-retry nointeract\n'
+        printf 'auth-retry none\n'
         printf 'ping 10\n'
         printf 'ping-exit %s\n' "$PING_EXIT_SECONDS"
         printf 'tls-exit\n'
         printf 'remap-usr1 SIGTERM\n'
-        printf 'up %s\n' "$EVENT_HOOK"
-        printf 'down %s\n' "$EVENT_HOOK"
+        printf 'route-up %s\n' "$EVENT_HOOK"
+        printf 'route-pre-down %s\n' "$EVENT_HOOK"
     } >> "$CONFIG_FILE"
 }
 
@@ -149,6 +187,12 @@ if [ "$VALIDATE_ONLY" = "true" ]; then
     grep -q '^key-direction 1$' "$CONFIG_FILE"
     grep -q '^connect-retry-max 1$' "$CONFIG_FILE"
     grep -q '^single-session$' "$CONFIG_FILE"
+    grep -q '^auth-retry none$' "$CONFIG_FILE"
+    grep -q '^script-security 2$' "$CONFIG_FILE"
+    grep -q '^management .*\.sock unix$' "$CONFIG_FILE"
+    grep -q '^writepid ' "$CONFIG_FILE"
+    grep -q '^daemon ' "$CONFIG_FILE"
+    grep -q '^route-up ' "$CONFIG_FILE"
     rm -f "$CONFIG_FILE" "$UP_FILE"
     log "validation-only-pass"
     exit 0
@@ -165,19 +209,45 @@ wait_for_retry_window() {
     fi
 }
 
-record_failure() {
-    total=$(( $(read_number "$FAILURES_FILE") + 1 ))
-    consecutive=$(( $(read_number "$CONSECUTIVE_FILE") + 1 ))
-    write_number "$FAILURES_FILE" "$total"
-    write_number "$CONSECUTIVE_FILE" "$consecutive"
-    event "attempt-failed total=$total consecutive=$consecutive"
-    log "attempt-failed total=$total max=$MAX_ATTEMPTS"
+read_attempts() {
+    attempts="$(read_number "$ATTEMPTS_FILE")"
+    legacy="$(read_number "$LEGACY_FAILURES_FILE")"
+    if [ "$legacy" -gt "$attempts" ]; then
+        attempts="$legacy"
+    fi
+    printf '%s\n' "$attempts"
+}
+
+enter_lockout() {
+    total="$(read_attempts)"
+    printf '%s\n' "$(date -u +%FT%TZ)" > "$LOCKOUT_FILE"
+    chmod 0600 "$LOCKOUT_FILE"
+    event "lockout attempts=$total"
+    log "lockout-entered attempts=$total"
+    exit 78
+}
+
+reserve_attempt() {
+    total="$(read_attempts)"
     if [ "$total" -ge "$MAX_ATTEMPTS" ]; then
-        printf '%s\n' "$(date -u +%FT%TZ)" > "$LOCKOUT_FILE"
-        chmod 0600 "$LOCKOUT_FILE"
-        event "lockout total=$total"
-        log "lockout-entered"
-        exit 78
+        enter_lockout
+    fi
+    total=$((total + 1))
+    write_number "$ATTEMPTS_FILE" "$total"
+    # Keep the previous counter synchronized so a rollback cannot restore a
+    # lower retry budget.
+    write_number "$LEGACY_FAILURES_FILE" "$total"
+    printf '%s\n' "$total"
+}
+
+record_failed_outcome() {
+    total="$1"
+    consecutive=$(( $(read_number "$CONSECUTIVE_FILE") + 1 ))
+    write_number "$CONSECUTIVE_FILE" "$consecutive"
+    event "attempt-failed attempt=$total consecutive=$consecutive"
+    log "attempt-failed attempt=$total max=$MAX_ATTEMPTS"
+    if [ "$total" -ge "$MAX_ATTEMPTS" ]; then
+        enter_lockout
     fi
 }
 
@@ -185,22 +255,44 @@ while :; do
     wait_for_retry_window
     attempt_started="$(date +%s)"
     write_number "$LAST_ATTEMPT_FILE" "$attempt_started"
-    attempt_number=$(( $(read_number "$FAILURES_FILE") + 1 ))
+    attempt_number="$(reserve_attempt)"
     event "attempt-start number=$attempt_number max=$MAX_ATTEMPTS"
     log "attempt-start number=$attempt_number max=$MAX_ATTEMPTS"
     rm -f "$CONNECTED_FILE"
 
     if [ "$SIMULATE_AUTH_FAILURE" = "true" ]; then
         sleep 1
-        record_failure
+        record_failed_outcome "$attempt_number"
         continue
     fi
 
     prepare_interface
     render_config
     export PRITUNL_RUN_DIR="$RUN_DIR" PRITUNL_EVENT_LOG="$EVENT_LOG"
-    "$OPENVPN_BIN" --config "$CONFIG_FILE" --log-append "$OPENVPN_LOG" &
-    openvpn_pid=$!
+    if ! "$OPENVPN_BIN" --config "$CONFIG_FILE"; then
+        record_failed_outcome "$attempt_number"
+        continue
+    fi
+
+    elapsed=0
+    while [ ! -r "$OPENVPN_PID_FILE" ] && [ "$elapsed" -lt 10 ]; do
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    if [ ! -r "$OPENVPN_PID_FILE" ]; then
+        event "native-start-failed reason=missing-pidfile attempt=$attempt_number"
+        record_failed_outcome "$attempt_number"
+        continue
+    fi
+    openvpn_pid="$(cat "$OPENVPN_PID_FILE")"
+    case "$openvpn_pid" in
+        ''|*[!0-9]*)
+            event "native-start-failed reason=invalid-pidfile attempt=$attempt_number"
+            stop_openvpn
+            record_failed_outcome "$attempt_number"
+            continue
+            ;;
+    esac
 
     elapsed=0
     while kill -0 "$openvpn_pid" 2>/dev/null && [ ! -e "$CONNECTED_FILE" ] && [ "$elapsed" -lt "$CONNECT_TIMEOUT_SECONDS" ]; do
@@ -209,19 +301,26 @@ while :; do
     done
 
     if [ ! -e "$CONNECTED_FILE" ]; then
-        kill -TERM "$openvpn_pid" 2>/dev/null || true
-        wait "$openvpn_pid" 2>/dev/null || true
-        record_failure
+        stop_openvpn
+        record_failed_outcome "$attempt_number"
         continue
     fi
 
     write_number "$CONSECUTIVE_FILE" 0
-    "$ROUTE_TABLE_HELPER" refresh >> "$WATCHER_LOG"
-    event "connection-established"
-    log "connection-established"
-    wait "$openvpn_pid" 2>/dev/null || true
+    event "connection-established attempt=$attempt_number native-status=available"
+    log "connection-established attempt=$attempt_number"
+    while kill -0 "$openvpn_pid" 2>/dev/null; do
+        sleep 1
+    done
+    rm -f "$OPENVPN_PID_FILE"
+    openvpn_pid=""
     rm -f "$CONNECTED_FILE"
-    event "connection-lost immediate-retry=1"
-    log "connection-lost; retrying immediately"
+    if [ "$attempt_number" -ge "$MAX_ATTEMPTS" ]; then
+        event "connection-lost budget-exhausted=1"
+        log "connection-lost; attempt budget exhausted"
+        enter_lockout
+    fi
+    event "connection-lost immediate-retry=1 next-attempt=$((attempt_number + 1))"
+    log "connection-lost; retrying immediately with attempt $((attempt_number + 1)) of $MAX_ATTEMPTS"
     write_number "$LAST_ATTEMPT_FILE" 0
 done

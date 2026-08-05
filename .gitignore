@@ -108,6 +108,8 @@ movie-tracker/.git/
 # IDE/local agent state
 .DS_Store
 **/.DS_Store
+._*
+**/._*
 .idea/
 **/.idea/
 **/.vscode/settings.json

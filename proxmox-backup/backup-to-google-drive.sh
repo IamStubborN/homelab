@@ -6,6 +6,7 @@ umask 077
 readonly LOCAL_BACKUP_DIR=/var/lib/vz/dump
 readonly REMOTE_ROOT='gdrive:Homelab Backups/Proxmox'
 readonly LOCK_FILE=/run/lock/homelab-google-drive-backup.lock
+readonly RCLONE_BIND=0.0.0.0
 
 exec 9>"${LOCK_FILE}"
 if ! flock -n 9; then
@@ -28,14 +29,14 @@ upload_file() {
 
   destination="${remote_directory}/$(basename "${source}")"
 
-  rclone mkdir "${remote_directory}"
-  rclone copyto "${source}" "${destination}" \
+  rclone --bind "${RCLONE_BIND}" mkdir "${remote_directory}"
+  rclone --bind "${RCLONE_BIND}" copyto "${source}" "${destination}" \
     --transfers 1 \
     --checkers 2 \
     --drive-chunk-size 64M
 
   local_size=$(stat -c '%s' "${source}")
-  remote_size=$(rclone lsl "${destination}" | awk 'NR == 1 {print $1}')
+  remote_size=$(rclone --bind "${RCLONE_BIND}" lsl "${destination}" | awk 'NR == 1 {print $1}')
   if [[ -z "${remote_size}" || "${local_size}" != "${remote_size}" ]]; then
     echo "Remote size verification failed for $(basename "${source}")" >&2
     exit 74
@@ -55,10 +56,10 @@ prune_remote() {
       continue
     fi
 
-    rclone deletefile "${remote_directory}/${file}"
-    rclone deletefile "${remote_directory}/${file}.notes" 2>/dev/null || true
-    rclone deletefile "${remote_directory}/${file}.log" 2>/dev/null || true
-  done < <(rclone lsf "${remote_directory}" --files-only --include "${include_pattern}" | sort -r)
+    rclone --bind "${RCLONE_BIND}" deletefile "${remote_directory}/${file}"
+    rclone --bind "${RCLONE_BIND}" deletefile "${remote_directory}/${file}.notes" 2>/dev/null || true
+    rclone --bind "${RCLONE_BIND}" deletefile "${remote_directory}/${file}.log" 2>/dev/null || true
+  done < <(rclone --bind "${RCLONE_BIND}" lsf "${remote_directory}" --files-only --include "${include_pattern}" | sort -r)
 }
 
 upload_guest_archive() {

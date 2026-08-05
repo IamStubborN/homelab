@@ -27,7 +27,6 @@ include:
 
     # - mssql/compose.yml
     # - portainer/compose.yml
-    # - wproxy/compose.yml
     # - gotify/compose.yml
     # - ai/compose.yml
 

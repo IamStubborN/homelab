@@ -10,6 +10,8 @@ PID_FILE="$RUN_DIR/watcher.pid"
 OPENVPN_PID_FILE="/var/run/ovpn-instance-6387ef44-4e9a-4c79-af35-c829c2eb0766.pid"
 OPENVPN_CONFIG="/var/etc/openvpn/instance-6387ef44-4e9a-4c79-af35-c829c2eb0766.conf"
 WATCHER="/usr/local/opnsense/scripts/pritunl-native/watcher.sh"
+START_LOCK_FILE="$RUN_DIR/start.lock"
+WATCHER_LOCK_FILE="$RUN_DIR/watcher.lock"
 
 find_watcher_pid() {
     if [ -r "$PID_FILE" ]; then
@@ -61,8 +63,7 @@ status() {
     printf 'consecutive_failures=%s\n' "$(cat "$STATE_DIR/consecutive-failures" 2>/dev/null || printf 0)"
 }
 
-case "${1:-status}" in
-    start)
+start_locked() {
         mkdir -p "$RUN_DIR" "$LOG_DIR"
         if [ -e "$STATE_DIR/lockout" ]; then
             printf 'Locked out. Run vpnctl reset first.\n' >&2
@@ -83,9 +84,19 @@ case "${1:-status}" in
             printf 'Refusing to start while OpenVPN pid %s is still running.\n' "$openvpn_pid" >&2
             exit 70
         fi
-        /usr/sbin/daemon -f -p "$PID_FILE" "$WATCHER"
+        /usr/sbin/daemon -f -p "$PID_FILE" /usr/bin/lockf -t 0 "$WATCHER_LOCK_FILE" "$WATCHER"
         sleep 1
         status
+}
+
+case "${1:-status}" in
+    start)
+        mkdir -p "$RUN_DIR"
+        chmod 0700 "$RUN_DIR"
+        exec /usr/bin/lockf -t 10 "$START_LOCK_FILE" "$0" _start_locked
+        ;;
+    _start_locked)
+        start_locked
         ;;
     stop)
         watcher_pid="$(find_watcher_pid || true)"
@@ -153,7 +164,8 @@ case "${1:-status}" in
         set +e
         BASE_DIR="$test_root" SECRET_DIR="$test_root/secrets" STATE_DIR="$test_root/state" \
             RUN_DIR="$test_root/run" LOG_DIR="$test_root/logs" SIMULATE_AUTH_FAILURE=true \
-            MIN_RETRY_INTERVAL_SECONDS=1 STABLE_SESSION_SECONDS=1 MAX_ATTEMPTS=3 "$WATCHER" >/dev/null 2>&1
+            OPENVPN_PID_FILE="$test_root/openvpn.pid" MIN_RETRY_INTERVAL_SECONDS=1 \
+            STABLE_SESSION_SECONDS=1 MAX_ATTEMPTS=3 "$WATCHER" >/dev/null 2>&1
         rc=$?
         set -e
         attempts_state="$(wc -l < "$test_root/state/attempt-history" | tr -d ' ')"

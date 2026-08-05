@@ -9,6 +9,10 @@ Safety contract:
 - OPNsense generates the complete native instance configuration, including its
   management socket, PID file, daemon identity, standard link hooks and logs;
 - one native OpenVPN process launch per reserved attempt;
+- serialized start and lifetime locks prevent concurrent supervisors from
+  launching or updating retry state in parallel;
+- simulation and validation runs never signal an OpenVPN process they did not
+  start and own;
 - first attempt immediately, including immediately after a connected session drops;
 - one hour between subsequent attempts that do not reach `route-up`;
 - at most three OpenVPN launches in a rolling 24-hour window, regardless of
@@ -16,7 +20,9 @@ Safety contract:
 - at most three consecutive failed or shorter-than-one-hour sessions;
 - connection success is accepted only at `route-up`, after authentication and
   route installation;
-- a session resets the consecutive counter only after one uninterrupted hour;
+- a session resets the consecutive counter only after one uninterrupted hour
+  with both the native OpenVPN process and the `route-up` connection marker
+  continuously present;
 - a successful session never clears the rolling 24-hour launch history;
 - reaching either limit creates a persistent lockout instead of starting a
   fourth process;

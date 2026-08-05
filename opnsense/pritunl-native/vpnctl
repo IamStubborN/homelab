@@ -50,8 +50,15 @@ status() {
     if [ -n "$openvpn_pid" ]; then
         printf 'openvpn_pid=%s\n' "$openvpn_pid"
     fi
-    attempts="$(cat "$STATE_DIR/attempts-since-reset" 2>/dev/null || cat "$STATE_DIR/failures-since-reset" 2>/dev/null || printf 0)"
-    printf 'attempts_since_reset=%s\n' "$attempts"
+    now="$(date +%s)"
+    cutoff=$((now - 86400))
+    if [ -r "$STATE_DIR/attempt-history" ]; then
+        attempts="$(awk -v cutoff="$cutoff" '$1 ~ /^[0-9]+$/ && $1 > cutoff { count++ } END { print count + 0 }' "$STATE_DIR/attempt-history")"
+    else
+        attempts="$(cat "$STATE_DIR/failures-since-reset" 2>/dev/null || printf 0)"
+    fi
+    printf 'attempts_last_24h=%s\n' "$attempts"
+    printf 'consecutive_failures=%s\n' "$(cat "$STATE_DIR/consecutive-failures" 2>/dev/null || printf 0)"
 }
 
 case "${1:-status}" in
@@ -123,7 +130,7 @@ case "${1:-status}" in
             printf 'Stop both the watcher and OpenVPN before reset.\n' >&2
             exit 69
         fi
-        rm -f "$STATE_DIR/lockout" "$STATE_DIR/attempts-since-reset" "$STATE_DIR/failures-since-reset" "$STATE_DIR/consecutive-failures" "$STATE_DIR/last-attempt"
+        rm -f "$STATE_DIR/lockout" "$STATE_DIR/attempts-since-reset" "$STATE_DIR/attempt-history" "$STATE_DIR/failures-since-reset" "$STATE_DIR/consecutive-failures" "$STATE_DIR/last-attempt"
         printf 'Fail-safe state reset.\n'
         ;;
     status)
@@ -146,11 +153,11 @@ case "${1:-status}" in
         set +e
         BASE_DIR="$test_root" SECRET_DIR="$test_root/secrets" STATE_DIR="$test_root/state" \
             RUN_DIR="$test_root/run" LOG_DIR="$test_root/logs" SIMULATE_AUTH_FAILURE=true \
-            MIN_RETRY_INTERVAL_SECONDS=1 MAX_ATTEMPTS=3 "$WATCHER" >/dev/null 2>&1
+            MIN_RETRY_INTERVAL_SECONDS=1 STABLE_SESSION_SECONDS=1 MAX_ATTEMPTS=3 "$WATCHER" >/dev/null 2>&1
         rc=$?
         set -e
-        attempts_state="$(cat "$test_root/state/attempts-since-reset")"
-        lockouts="$(grep -c 'lockout attempts=3' "$test_root/logs/events.log" || true)"
+        attempts_state="$(wc -l < "$test_root/state/attempt-history" | tr -d ' ')"
+        lockouts="$(grep -c 'lockout rolling=3 consecutive=3' "$test_root/logs/events.log" || true)"
         attempts="$(grep -c 'attempt-start' "$test_root/logs/events.log" || true)"
         if [ "$rc" -eq 78 ] && [ "$attempts_state" -eq 3 ] && [ "$lockouts" -eq 1 ] && [ "$attempts" -eq 3 ]; then
             printf 'PASS attempts=3 reserved=3 lockouts=1 exit=78\n'

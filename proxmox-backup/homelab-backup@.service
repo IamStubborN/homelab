@@ -1,0 +1,11 @@
+[Unit]
+Description=Homelab %i backup to Google Drive
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-backup-to-google-drive %i
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

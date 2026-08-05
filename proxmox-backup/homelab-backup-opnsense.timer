@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly OPNsense backup to Google Drive
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00 UTC
+Persistent=true
+Unit=homelab-backup@opnsense.service
+
+[Install]
+WantedBy=timers.target

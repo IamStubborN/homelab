@@ -1,0 +1,10 @@
+[Unit]
+Description=Monthly Docker LXC backup to Google Drive
+
+[Timer]
+OnCalendar=Sun *-*-01..07 05:00:00 UTC
+Persistent=true
+Unit=homelab-backup@docker.service
+
+[Install]
+WantedBy=timers.target

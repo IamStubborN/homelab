@@ -30,7 +30,9 @@ Safety contract:
 - persistent logs under `/var/log/pritunl-native`;
 - manual reset only through `pritunl-vpnctl reset`; reset clears lockout,
   consecutive failures and cooldown state, but never clears the rolling
-  24-hour launch history.
+  24-hour launch history;
+- explicit operator override `pritunl-vpnctl reset-attempts` clears all retry
+  history, but only while both the watcher and OpenVPN are stopped.
 
 The persisted instance stays disabled only to prevent OPNsense boot or a generic
 service reconfigure from starting it outside the attempt gate. While running,
@@ -62,6 +64,7 @@ pritunl-vpnctl status
 pritunl-vpnctl logs
 pritunl-vpnctl stop
 pritunl-vpnctl reset
+pritunl-vpnctl reset-attempts
 pritunl-vpnctl start
 pritunl-vpnctl refresh-routes
 pritunl-vpnctl test-retry-contract

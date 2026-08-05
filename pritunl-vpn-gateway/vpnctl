@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+gateway_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+homelab_dir="$(cd -- "$gateway_dir/.." && pwd)"
+state_dir="${gateway_dir}/state"
+compose=(docker compose --project-directory "$homelab_dir" --profile manual -f "$homelab_dir/compose.yml")
+
+usage() {
+    printf '%s\n' \
+        "Usage: $0 {set-secrets|start|stop|status|logs|reset|test-lockout|test-disconnect}" \
+        "  set-secrets Prompt for username, PIN and Base32 TOTP seed without echoing them" \
+        "  start       Start the VPN watcher; refuses while lockout is active" \
+        "  stop        Stop the VPN watcher" \
+        "  status      Show container and lockout status" \
+        "  logs        Follow watcher logs" \
+        "  reset       Clear the manual lockout marker" \
+        "  test-lockout Simulate three AUTH_FAILED attempts without contacting Pritunl" \
+        "  test-disconnect Simulate server disconnect, immediate retry and lockout"
+}
+
+mkdir -p "$state_dir"
+
+case "${1:-}" in
+    set-secrets)
+        secrets_dir="${gateway_dir}/secrets"
+        mkdir -p "$secrets_dir"
+        chmod 0700 "$secrets_dir"
+
+        read -r -p "VPN username [andrii.prykhodko]: " username
+        username="${username:-andrii.prykhodko}"
+        read -r -s -p "VPN PIN: " pin
+        printf '\n'
+        read -r -s -p "TOTP seed (Base32): " seed
+        printf '\n'
+
+        seed="$(printf '%s' "$seed" | tr -d '[:space:]-')"
+        if [[ ! "$seed" =~ ^[A-Za-z2-7]+=*$ ]]; then
+            printf '%s\n' "ERROR: TOTP seed is not valid Base32" >&2
+            exit 2
+        fi
+        [[ -n "$pin" ]] || { printf '%s\n' "ERROR: VPN PIN is empty" >&2; exit 2; }
+
+        for name in vpn_username vpn_pin totp_seed; do
+            tmp="$(mktemp "${secrets_dir}/${name}.XXXXXX")"
+            chmod 0600 "$tmp"
+            case "$name" in
+                vpn_username) printf '%s\n' "$username" > "$tmp" ;;
+                vpn_pin) printf '%s\n' "$pin" > "$tmp" ;;
+                totp_seed) printf '%s\n' "$seed" > "$tmp" ;;
+            esac
+            mv -f "$tmp" "${secrets_dir}/${name}"
+        done
+        unset username pin seed tmp
+        printf '%s\n' "secrets=installed"
+        ;;
+    start)
+        if [[ -e "$state_dir/lockout" ]]; then
+            printf '%s\n' "LOCKOUT is active. Run '$0 reset' first." >&2
+            exit 78
+        fi
+        for secret in vpn_username vpn_pin totp_seed; do
+            if [[ ! -s "${gateway_dir}/secrets/${secret}" ]]; then
+                printf '%s\n' "Missing secret: ${secret}; run '$0 set-secrets' first." >&2
+                exit 2
+            fi
+        done
+        "${compose[@]}" up -d --build pritunl-vpn
+        ;;
+    stop)
+        "${compose[@]}" stop pritunl-vpn
+        ;;
+    status)
+        if [[ -e "$state_dir/lockout" ]]; then
+            printf '%s\n' "lockout=active"
+            sed -n '1p' "$state_dir/lockout"
+        else
+            printf '%s\n' "lockout=inactive"
+        fi
+        if [[ -s "$state_dir/failures-since-reset" ]]; then
+            printf 'failures_since_manual_reset=%s\n' "$(cat "$state_dir/failures-since-reset")"
+        elif [[ -s "$state_dir/failure-count" ]]; then
+            printf 'failures_since_manual_reset=%s (legacy state)\n' "$(cat "$state_dir/failure-count")"
+        fi
+        if [[ -s "$state_dir/consecutive-failures" ]]; then
+            printf 'consecutive_failures=%s\n' "$(cat "$state_dir/consecutive-failures")"
+        fi
+        printf 'logs_dir=%s\n' "${gateway_dir}/logs"
+        "${compose[@]}" ps pritunl-vpn
+        ;;
+    logs)
+        "${compose[@]}" logs -f pritunl-vpn
+        ;;
+    reset)
+        rm -f "$state_dir/lockout"
+        rm -f \
+            "$state_dir/failure-count" \
+            "$state_dir/attempts" \
+            "$state_dir/failures-since-reset" \
+            "$state_dir/consecutive-failures" \
+            "$state_dir/attempt-sequence" \
+            "$state_dir/in-flight-attempt" \
+            "$state_dir/last-attempt" \
+            "$state_dir/immediate-retry" \
+            "$state_dir/openvpn-status.log"
+        printf '%s\n' "lockout=cleared"
+        ;;
+    test-lockout)
+        image="local/pritunl-vpn-watcher:2026-08-05-openvpn-2.7.5-dnsmasq-safety"
+        test_dir="$(mktemp -d /tmp/pritunl-vpn-test.XXXXXX)"
+        set +e
+        docker run --rm --read-only --tmpfs /run --tmpfs /tmp \
+            --dns 127.0.0.1 \
+            -v "${gateway_dir}/profile:/vpn:ro" \
+            -v "$test_dir:/state" \
+            -v "$test_dir:/logs" \
+            -e SIMULATE_AUTH_FAILURE=true \
+            -e MAX_ATTEMPTS=3 \
+            -e MIN_RETRY_INTERVAL_SECONDS=1 \
+            "$image"
+        rc=$?
+        set -e
+        printf 'simulation_exit_code=%s\n' "$rc"
+        if [[ "$rc" != 78 ]]; then
+            printf '%s\n' "ERROR: expected lockout exit code 78" >&2
+            exit 1
+        fi
+        attempts="$(grep -c 'attempt-start sequence=' "$test_dir/events.log" || true)"
+        if [[ "$attempts" != 3 ]]; then
+            printf 'ERROR: expected exactly 3 attempts, got %s\n' "$attempts" >&2
+            exit 1
+        fi
+        printf '%s\n' "simulation=passed"
+        ;;
+    test-disconnect)
+        image="local/pritunl-vpn-watcher:2026-08-05-openvpn-2.7.5-dnsmasq-safety"
+        test_dir="$(mktemp -d /tmp/pritunl-vpn-disconnect-test.XXXXXX)"
+        set +e
+        docker run --rm --read-only --tmpfs /run --tmpfs /tmp \
+            --dns 127.0.0.1 \
+            -v "${gateway_dir}/profile:/vpn:ro" \
+            -v "$test_dir:/state" \
+            -v "$test_dir:/logs" \
+            -e SIMULATE_SERVER_DISCONNECT=true \
+            -e MAX_ATTEMPTS=3 \
+            -e MIN_RETRY_INTERVAL_SECONDS=1 \
+            "$image"
+        rc=$?
+        set -e
+        printf 'simulation_exit_code=%s\n' "$rc"
+        if [[ "$rc" != 78 ]]; then
+            printf '%s\n' "ERROR: expected lockout exit code 78" >&2
+            exit 1
+        fi
+        attempts="$(grep -c 'attempt-start sequence=' "$test_dir/events.log" || true)"
+        immediate="$(grep -c 'disconnect-detected immediate-retry-scheduled' "$test_dir/events.log" || true)"
+        if [[ "$attempts" != 4 || "$immediate" != 1 ]]; then
+            printf 'ERROR: expected 4 total attempts and 1 immediate retry, got attempts=%s immediate=%s\n' "$attempts" "$immediate" >&2
+            exit 1
+        fi
+        printf '%s\n' "simulation=passed"
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac

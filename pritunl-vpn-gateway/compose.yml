@@ -1,0 +1,67 @@
+services:
+  pritunl-vpn:
+    profiles:
+      - manual
+      - vpn
+    build:
+      context: .
+    image: local/pritunl-vpn-watcher:2026-08-05-openvpn-2.7.5-dnsmasq-safety
+    container_name: pritunl-vpn-watcher
+    restart: "no"
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test -e /run/pritunl-vpn/openvpn-up && test -e /run/pritunl-vpn/firewall-ready && ip -4 addr show dev tun0 | grep -q 'inet '
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    dns:
+      - 127.0.0.1
+    tmpfs:
+      - /run
+      - /tmp
+    volumes:
+      - ./profile:/vpn:ro
+      - ./state:/state
+      - ./logs:/logs
+    secrets:
+      - pritunl_vpn_username
+      - pritunl_vpn_pin
+      - pritunl_vpn_totp_seed
+    environment:
+      VPN_CONFIG: /vpn/client.ovpn
+      VPN_USERNAME_FILE: /run/secrets/pritunl_vpn_username
+      VPN_PIN_FILE: /run/secrets/pritunl_vpn_pin
+      TOTP_SEED_FILE: /run/secrets/pritunl_vpn_totp_seed
+      MAX_ATTEMPTS: "3"
+      MIN_RETRY_INTERVAL_SECONDS: "3600"
+      OPENVPN_CONNECT_TIMEOUT_SECONDS: "30"
+      OPENVPN_PING_EXIT_SECONDS: "120"
+      OPENVPN_EVENT_HOOK: /usr/local/bin/pritunl-openvpn-hook
+      STATE_FILE_MODE: "0644"
+      LOG_FILE_MODE: "0644"
+      DNSMASQ_VPN_SERVER: 192.168.217.1
+      DNSMASQ_PRIVATE_DOMAINS: "platform-bo.com cluster.local atlas-iac.com"
+      DNSMASQ_BOOTSTRAP_SERVERS: "192.168.0.1 1.1.1.1"
+
+secrets:
+  pritunl_vpn_username:
+    file: ./secrets/vpn_username
+  pritunl_vpn_pin:
+    file: ./secrets/vpn_pin
+  pritunl_vpn_totp_seed:
+    file: ./secrets/totp_seed

@@ -1,0 +1,15 @@
+# Runtime secrets and generated state
+secrets/
+state/
+logs/
+
+# VPN credentials and profiles
+profile/
+*.ovpn
+*.key
+*.crt
+
+# Local editor and OS files
+.DS_Store
+.idea/
+.vscode/

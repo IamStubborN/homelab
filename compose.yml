@@ -5,30 +5,21 @@ include:
     - traefik/compose.yml
 
     # services
-    # - zeroclaw/compose.yml
     - glance/compose.yml
     - speedtest-tracker/compose.yml
     - mosquitto/compose.yml
     - homeassistant/compose.yml
     - karakeep/compose.yml
     - kavita/compose.yml
-    # - filebrowser/compose.yml
     - media/compose.yml
     - watchtower/compose.yml
     - deunhealth/compose.yml
     - samba/compose.yml
     - rustdesk/compose.yml
-    # - miniflux/compose.yml
     - freedium/compose.yml
     - movie-tracker/docker-compose.yml
     - bitwarden/compose.yml
     - web-research/compose.yml
-    # - pritunl-vpn-gateway/compose.yml
-
-    # - mssql/compose.yml
-    # - portainer/compose.yml
-    # - gotify/compose.yml
-    # - ai/compose.yml
 
 networks:
     proxy:

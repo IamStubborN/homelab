@@ -6,9 +6,6 @@ services:
     security_opt:
       - no-new-privileges:true
     volumes:
-      # By default, the data is stored in a docker volume called "data".
-      # If you want to mount a custom directory, change the volume mapping to:
-      # - /path/to/your/directory:/data
       - ./data/web:/data
     environment:
       MEILI_ADDR: http://meilisearch:7700
@@ -22,12 +19,6 @@ services:
 
       INFERENCE_TEXT_MODEL: gemini-2.5-flash
       INFERENCE_IMAGE_MODEL: gemini-2.5-flash
-      
-      # OLLAMA_BASE_URL: http://${OLLAMA_HOST_IP:-127.0.0.1}:11434 
-      # INFERENCE_TEXT_MODEL: gemma3:latest
-      # INFERENCE_IMAGE_MODEL: gemma3:latest 
-      # EMBEDDING_TEXT_MODEL: gemma3:latest 
-
       INFERENCE_ENABLE_AUTO_SUMMARIZATION: true
       INFERENCE_JOB_TIMEOUT_SEC: 600
       INFERENCE_CONTEXT_LENGTH: 32768
@@ -35,9 +26,6 @@ services:
       # Allow crawler to access internal hostnames
       CRAWLER_ALLOWED_INTERNAL_HOSTNAMES: ${KARAKEEP_CRAWLER_ALLOWED_INTERNAL_HOSTNAMES}
 
-      # OPENAI_API_KEY: ...
-      # You almost never want to change the value of the DATA_DIR variable.
-      # If you want to mount a custom directory, change the volume mapping above instead.
       DATA_DIR: /data # DON'T CHANGE THIS
     labels:
       - "com.centurylinklabs.watchtower.enable=true"

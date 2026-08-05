@@ -1,0 +1,8 @@
+secrets/
+profile/
+state/
+logs/
+*.ovpn
+*.key
+*.crt
+*.log

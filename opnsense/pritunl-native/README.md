@@ -11,13 +11,15 @@ Safety contract:
 - one native OpenVPN process launch per reserved attempt;
 - first attempt immediately, including immediately after a connected session drops;
 - one hour between subsequent attempts that do not reach `route-up`;
-- at most three OpenVPN launches since the last manual reset, regardless of the
-  OpenVPN exit reason or which lifecycle events were observed;
+- at most three OpenVPN launches in a rolling 24-hour window, regardless of
+  the OpenVPN exit reason or which lifecycle events were observed;
+- at most three consecutive failed or shorter-than-one-hour sessions;
 - connection success is accepted only at `route-up`, after authentication and
   route installation;
-- a successful connection never restores the persistent launch budget;
-- after the third connected session drops, the supervisor locks out instead of
-  starting a fourth process;
+- a session resets the consecutive counter only after one uninterrupted hour;
+- a successful session never clears the rolling 24-hour launch history;
+- reaching either limit creates a persistent lockout instead of starting a
+  fourth process;
 - persistent state under `/conf/pritunl-native/state`;
 - persistent logs under `/var/log/pritunl-native`;
 - manual reset only through `pritunl-vpnctl reset`.
@@ -30,7 +32,12 @@ syslog pipeline, so Connection Status and Log File remain available in the UI.
 The conservative launch budget is intentional. A client cannot prove that a
 TLS or transport failure happened before the corporate server observed an
 authentication request, so every process launch is charged before OpenVPN is
-started. This makes three the hard upper bound on server-facing attempts.
+started. This makes three the hard upper bound on server-facing attempts in 24
+hours.
+
+The generated client ignores pushed `redirect-gateway` and `redirect-private`
+directives. Ordinary internet traffic therefore keeps using the WAN default
+route; only routes explicitly pushed for corporate destinations use the VPN.
 
 Installed paths:
 
@@ -59,6 +66,8 @@ OPNsense UI configuration:
 - `Firewall > NAT > Outbound`: hybrid mode, LAN and TAILSCALE source NAT on the OpenVPN group;
 - `Firewall > Aliases`: external alias `PRITUNL_CORPORATE_ROUTES`;
 - `Firewall > Rules > Floating`: quick outbound WAN block to `PRITUNL_CORPORATE_ROUTES`;
+- `Firewall > Rules > Floating`: quick outbound OpenVPN block for destinations
+  outside `PRITUNL_CORPORATE_ROUTES`;
 - `Firewall > Rules > TAILSCALE`: allow only TAILSCALE net to `PRITUNL_CORPORATE_ROUTES`.
 
 `route-table.sh` keeps the external alias populated with routes learned on `ovpnc1`. The last known set remains loaded after a tunnel failure so corporate destinations are blocked on WAN instead of leaking through the default route.

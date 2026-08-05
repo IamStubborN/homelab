@@ -1,0 +1,23 @@
+#!/bin/sh
+
+set -eu
+
+EVENT="${script_type:-unknown}"
+RUN_DIR="${PRITUNL_RUN_DIR:-/var/run/pritunl-native}"
+EVENT_LOG="${PRITUNL_EVENT_LOG:-/var/log/pritunl-native/events.log}"
+
+umask 077
+mkdir -p "$RUN_DIR" "$(dirname "$EVENT_LOG")"
+
+case "$EVENT" in
+    up)
+        /usr/local/etc/inc/plugins.inc.d/openvpn/ovpn-linkup "$@"
+        : > "$RUN_DIR/connected"
+        ;;
+    down)
+        rm -f "$RUN_DIR/connected"
+        /usr/local/etc/inc/plugins.inc.d/openvpn/ovpn-linkdown "$@"
+        ;;
+esac
+
+printf '%s event=%s dev=%s\n' "$(date -u +%FT%TZ)" "$EVENT" "${dev:-unknown}" >> "$EVENT_LOG"

@@ -20,6 +20,15 @@ media/qbittorrent-vpn/vpn-server status
 media/qbittorrent-vpn/vpn-server use bg-13
 ```
 
+The ignored pool can be recreated without printing the private key. Save the
+current last-known-good configuration, then derive another profile by replacing
+only its public peer settings:
+
+```bash
+media/qbittorrent-vpn/vpn-server save nl-612
+media/qbittorrent-vpn/vpn-server derive bg-13 192.0.2.1:51820 '<peer-public-key>'
+```
+
 `use` validates the selected profile, atomically installs it as `wg0.conf`,
 restarts only the `qbittorrent` container, and waits for all of the following:
 

@@ -28,8 +28,9 @@ Safety contract:
   fourth process;
 - persistent state under `/conf/pritunl-native/state`;
 - persistent logs under `/var/log/pritunl-native`;
-- manual reset only through `pritunl-vpnctl reset`; it clears lockout and all
-  retry history, but only while both the watcher and OpenVPN are stopped.
+- manual recovery only through `pritunl-vpnctl recover`; it clears lockout and
+  all retry history only while both the watcher and OpenVPN are stopped, and
+  deliberately leaves the VPN stopped until a separate explicit start.
 
 The persisted instance stays disabled only to prevent OPNsense boot or a generic
 service reconfigure from starting it outside the attempt gate. While running,
@@ -60,7 +61,7 @@ Useful commands:
 pritunl-vpnctl status
 pritunl-vpnctl logs
 pritunl-vpnctl stop
-pritunl-vpnctl reset
+pritunl-vpnctl recover
 pritunl-vpnctl start
 pritunl-vpnctl refresh-routes
 pritunl-vpnctl test-retry-contract

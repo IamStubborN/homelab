@@ -48,8 +48,8 @@ make check-codecs VIDEO_DIR=/path/to/dir  # Custom directory
 
 ### Network Architecture
 - **Traefik** reverse proxy handles all HTTP/HTTPS traffic with Cloudflare DNS challenge
-- **Gluetun** VPN container routes media services through NordVPN WireGuard
-- Services use `network_mode: service:gluetun` to route through VPN
+- **hotio/qbittorrent** owns the ProtonVPN WireGuard namespace and NAT-PMP port forwarding
+- Additional VPN consumers use `network_mode: service:qbittorrent`
 - Shared `proxy` network (external) connects all services to Traefik
 - All services accessible via `*.${DOCKER_DOMAIN}` domain
 
@@ -61,10 +61,10 @@ make check-codecs VIDEO_DIR=/path/to/dir  # Custom directory
 5. **Monitoring**: Watchtower (auto-updates), DeUnhealth (health checks)
 6. **Other Services**: Bitwarden (Vaultwarden), Mosquitto (MQTT broker), RustDesk (remote desktop relay)
 
-### VPN Routing (Gluetun)
-Media services route through Gluetun container:
-- qBittorrent and Prowlarr: `network_mode: service:gluetun`
-- speedtest-tracker-vpn also routes through the same Gluetun container: `network_mode: service:gluetun`
+### VPN Routing
+- qBittorrent runs in its own ProtonVPN WireGuard namespace with a fail-closed firewall
+- speedtest-tracker-vpn shares it with `network_mode: service:qbittorrent`
+- Prowlarr uses direct network access
 - Plex: Does NOT route through VPN (direct network access)
 - Health checks integrated with DeUnhealth for auto-restart
 
@@ -81,26 +81,11 @@ Use this file and the tracked `*.example.*` files for clean-host recovery. The r
 
 Clean-host restore requires more than the root `.env`: create service-local env files for services with `env_file` (`glance/.env`, `speedtest-tracker/.env`), restore Docker secret files under `traefik/secrets/` and `media/secrets/`, restore ignored runtime data directories, and verify host prerequisites such as storage mounts, `/dev/net/tun`, `/dev/dri`, `/run/dbus`, Docker socket access, ports `80/443`, and the external `proxy` network.
 
-### Gluetun control-server API key
+### ProtonVPN WireGuard configuration
 
-The main Gluetun control server (`media/compose.yml`) binds on `:8000` so the
-Glance "VPN Speed" widget can reach `/v1/publicip/ip` cross-container, but every
-route is locked behind an apikey. Generate one key and place the SAME value in
-three spots:
-
-```bash
-KEY=$(docker run --rm qmcgaw/gluetun:<pinned-version> genkey)
-# 1. Gluetun auth config (copy the tracked example, then set apikey = "$KEY"):
-cp media/gluetun/control-auth-config.example.toml media/secrets/gluetun_control_auth_config
-# 2. Raw key for the qBittorrent healthcheck:
-printf '%s' "$KEY" > media/secrets/gluetun_control_api_key
-# 3. glance/.env: GLUETUN_CONTROL_API_KEY=$KEY
-chmod 0600 media/secrets/gluetun_control_auth_config media/secrets/gluetun_control_api_key
-```
-
-The only route exposed is `GET /v1/publicip/ip` (used by both the Glance widget
-and the qBittorrent healthcheck). A mismatched or missing key makes the
-qBittorrent healthcheck fail closed and the Glance widget go blank.
+The ignored file `media/qbittorrent/config/wireguard/wg0.conf` contains the
+ProtonVPN WireGuard configuration generated with NAT-PMP enabled. Keep it mode
+`0600`; it contains the private key and must never be committed.
 
 Watchtower is configured in opt-in mode. Add `com.centurylinklabs.watchtower.enable=true` only to services that should be auto-updated. Keep stateful databases, source-built services, and private custom apps disabled unless their backup and restore path is tested.
 

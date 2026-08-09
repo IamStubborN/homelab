@@ -1,14 +1,14 @@
 #!/bin/sh
-# gluetun-watcher: restarts dependent containers when gluetun is
-# restarted or recreated (network namespace changes in both cases).
+# vpn-namespace-watcher: recreates containers sharing another container's
+# network namespace after the parent is restarted or recreated.
 
-PARENT="${PARENT_CONTAINER:-gluetun}"
-DEPENDENTS="${DEPENDENT_CONTAINERS:-qbittorrent}"
+PARENT="${PARENT_CONTAINER:-qbittorrent}"
+DEPENDENTS="${DEPENDENT_CONTAINERS:-speedtest-tracker-vpn}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
 SETTLE_DELAY="${SETTLE_DELAY:-10}"
 
 log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [gluetun-watcher] $1"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [vpn-namespace-watcher] $1"
 }
 
 if ! docker compose version >/dev/null 2>&1; then
@@ -44,7 +44,7 @@ recreate_dependent() {
     IFS=$old_ifs
     set -- "$@" up -d --force-recreate --no-deps "$service"
 
-    log "$service: recreating with Compose (gluetun namespace changed)..."
+    log "$service: recreating with Compose ($PARENT namespace changed)..."
     if output=$("$@" 2>&1); then
         if [ -n "$output" ]; then
             printf '%s\n' "$output" | while IFS= read -r line; do
@@ -93,7 +93,7 @@ restart_dependents() {
     return "$failed"
 }
 
-# Check if dependents started before gluetun (stale namespace)
+# Check if dependents started before their network namespace parent.
 check_startup_order() {
     parent_started=$(docker inspect "$PARENT" \
         --format '{{.State.StartedAt}}' 2>/dev/null || echo "")

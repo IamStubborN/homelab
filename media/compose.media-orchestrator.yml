@@ -37,7 +37,7 @@ x-service-environment: &service-environment
   MEDIA_PLEX_TOKEN: ${MEDIA_PLEX_TOKEN:?set Plex token}
   MEDIA_PLEX_TV_SECTION: ${MEDIA_PLEX_TV_SECTION:?set Plex TV section ID}
   MEDIA_PLEX_MOVIES_SECTION: ${MEDIA_PLEX_MOVIES_SECTION:?set Plex movies section ID}
-  MEDIA_QBITTORRENT_URL: http://gluetun:8400
+  MEDIA_QBITTORRENT_URL: http://qbittorrent:8400
   MEDIA_QBITTORRENT_TV_CATEGORY: ${MEDIA_QBITTORRENT_TV_CATEGORY:?set existing TV category}
   MEDIA_QBITTORRENT_MOVIES_CATEGORY: ${MEDIA_QBITTORRENT_MOVIES_CATEGORY:?set existing movies category}
   MEDIA_QBITTORRENT_USERNAME: ${MEDIA_QBITTORRENT_USERNAME:?set qBittorrent username}
@@ -267,7 +267,7 @@ services:
       MEDIA_REZKA_COOKIE_KEY: ${MEDIA_REZKA_COOKIE_KEY:?set Rezka cookie key}
       MEDIA_REZKA_SESSION_STORE_FILE: /var/lib/media-orchestrator/session/session.bin
       MEDIA_RUNNER_EXIT_AFTER_JOB: "true"
-      MEDIA_QBITTORRENT_URL: http://gluetun:8400
+      MEDIA_QBITTORRENT_URL: http://qbittorrent:8400
       MEDIA_QBITTORRENT_TV_CATEGORY: ${MEDIA_QBITTORRENT_TV_CATEGORY:?set existing TV category}
       MEDIA_QBITTORRENT_MOVIES_CATEGORY: ${MEDIA_QBITTORRENT_MOVIES_CATEGORY:?set existing movies category}
       MEDIA_QBITTORRENT_USERNAME: ${MEDIA_QBITTORRENT_USERNAME:?set qBittorrent username}

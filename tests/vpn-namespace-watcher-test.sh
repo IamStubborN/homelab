@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(unset CDPATH; cd -- "$(dirname -- "$0")/.." && pwd)
-WATCHER="$ROOT/media/gluetun-watcher/watch.sh"
+WATCHER="$ROOT/media/vpn-namespace-watcher/watch.sh"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -32,7 +32,7 @@ case "$1" in
                 printf '%s\n' 'healthy'
                 ;;
             *State.StartedAt*)
-                if [ "$target" = "gluetun" ]; then
+                if [ "$target" = "qbittorrent" ]; then
                     printf '%s\n' "$PARENT_STARTED"
                 else
                     printf '%s\n' "$DEPENDENT_STARTED"
@@ -58,8 +58,8 @@ chmod +x "$TMP/docker"
 run_watcher() {
     : >"$DOCKER_CALLS"
     PATH="$TMP:$PATH" \
-        PARENT_CONTAINER=gluetun \
-        DEPENDENT_CONTAINERS=qbittorrent \
+        PARENT_CONTAINER=qbittorrent \
+        DEPENDENT_CONTAINERS=speedtest-tracker-vpn \
         HEALTH_TIMEOUT=5 \
         SETTLE_DELAY=0 \
         "$WATCHER" >"$TMP/output" 2>&1
@@ -76,7 +76,7 @@ DOCKER_EVENTS=''
 export PARENT_STARTED DEPENDENT_STARTED DEPENDENT_STATE DOCKER_EVENTS
 run_watcher
 
-expected='compose -p homelab --project-directory /srv/homelab -f /srv/homelab/compose.yml -f /srv/homelab/compose.override.yml up -d --force-recreate --no-deps qbittorrent'
+expected='compose -p homelab --project-directory /srv/homelab -f /srv/homelab/compose.yml -f /srv/homelab/compose.override.yml up -d --force-recreate --no-deps speedtest-tracker-vpn'
 if ! grep -Fqx "$expected" "$DOCKER_CALLS"; then
     echo "FAIL: exited stale dependent was not recreated with Compose" >&2
     cat "$TMP/output" >&2
@@ -92,11 +92,11 @@ DOCKER_EVENTS='exec_start'
 export PARENT_STARTED DEPENDENT_STARTED DEPENDENT_STATE DOCKER_EVENTS
 run_watcher
 
-if grep -Fq 'force-recreate' "$DOCKER_CALLS" || grep -Fq 'restart qbittorrent' "$DOCKER_CALLS"; then
+if grep -Fq 'force-recreate' "$DOCKER_CALLS" || grep -Fq 'restart speedtest-tracker-vpn' "$DOCKER_CALLS"; then
     echo "FAIL: exec_start event triggered dependent recovery" >&2
     cat "$TMP/output" >&2
     cat "$DOCKER_CALLS" >&2
     exit 1
 fi
 
-echo 'PASS: gluetun watcher recovery and event filtering'
+echo 'PASS: VPN namespace watcher recovery and event filtering'

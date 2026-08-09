@@ -1,5 +1,27 @@
 # Media Orchestrator Scaffold
 
+## Active Torrent VPN Gateway
+
+The torrent stack uses `qmcgaw/gluetun:latest` with Watchtower updates enabled.
+Gluetun selects Proton VPN port-forwarding servers in Bulgaria, and
+`qbittorrent-port-sync` applies the current forwarded port to qBittorrent over
+its local API without restarting qBittorrent.
+
+Before the first start, create the ignored runtime files with permissions that
+allow the unprivileged sync container to read the non-secret forwarded port:
+
+```bash
+install -d -m 0755 media/gluetun/data
+install -m 0644 /dev/null media/gluetun/data/forwarded_port
+install -d -m 0700 media/secrets
+install -m 0600 /dev/null media/secrets/protonvpn_wireguard_private_key
+install -m 0600 /dev/null media/secrets/gluetun_control_auth_config
+install -m 0600 /dev/null media/secrets/gluetun_control_api_key
+```
+
+The forwarded-port file is not a credential. The WireGuard private key and
+control API credentials must remain mode `0600` and must never be committed.
+
 `compose.media-orchestrator.yml` is intentionally separate from the active
 `media/compose.yml`. It cannot affect the running homelab stack until it is
 explicitly enabled after immutable application images have been built and

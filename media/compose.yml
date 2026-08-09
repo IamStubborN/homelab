@@ -27,7 +27,6 @@ services:
       - PORT_FORWARD_ONLY=on # Use only ProtonVPN servers with port forwarding
       - SERVER_COUNTRIES=Bulgaria # Prefer nearby ProtonVPN P2P servers
       - WIREGUARD_PRIVATE_KEY_SECRETFILE=/run/secrets/protonvpn_wireguard_private_key
-      - UPDATER_PERIOD=6h
       - DNS_SERVER=on
       - DNS_UPSTREAM_RESOLVERS=cloudflare,google
       - BLOCK_MALICIOUS=off

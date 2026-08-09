@@ -16,6 +16,8 @@ usage() {
 Usage:
   vpn-server list
   vpn-server status
+  vpn-server save <profile>
+  vpn-server derive <profile> <endpoint> <peer-public-key>
   vpn-server use <profile>
 
 Profiles are private WireGuard configurations stored in:
@@ -92,6 +94,45 @@ show_status() {
   printf 'endpoint=%s\n' "$(config_endpoint "${ACTIVE_CONFIG}")"
   printf 'container_health=%s\n' "$(container_health)"
   printf 'forwarded_port=%s\n' "${port}"
+}
+
+save_profile() {
+  local name="$1" target
+  validate_profile_name "${name}"
+  target="${PROFILE_DIR}/${name}.conf"
+  [[ ! -e "${target}" ]] || die "profile already exists: ${name}"
+  umask 077
+  cp -- "${ACTIVE_CONFIG}" "${target}"
+  validate_config "${target}"
+  printf 'Saved current VPN configuration as %s.\n' "${name}"
+}
+
+derive_profile() {
+  local name="$1" endpoint="$2" public_key="$3" target temp port
+  validate_profile_name "${name}"
+  [[ "${endpoint}" =~ ^([a-zA-Z0-9.-]+|\[[0-9a-fA-F:]+\]):[0-9]{1,5}$ ]] || die "invalid WireGuard endpoint"
+  port="${endpoint##*:}"
+  (( port >= 1 && port <= 65535 )) || die "WireGuard endpoint port is out of range"
+  [[ "${public_key}" =~ ^[a-zA-Z0-9+/]{43}=$ ]] || die "invalid WireGuard public key"
+  target="${PROFILE_DIR}/${name}.conf"
+  temp="${target}.new"
+  [[ ! -e "${target}" ]] || die "profile already exists: ${name}"
+
+  umask 077
+  awk -v endpoint="${endpoint}" -v public_key="${public_key}" '
+    /^[[:space:]]*PublicKey[[:space:]]*=/ {
+      print "PublicKey = " public_key
+      next
+    }
+    /^[[:space:]]*Endpoint[[:space:]]*=/ {
+      print "Endpoint = " endpoint
+      next
+    }
+    { print }
+  ' "${ACTIVE_CONFIG}" > "${temp}"
+  validate_config "${temp}"
+  mv -- "${temp}" "${target}"
+  printf 'Derived VPN profile %s for %s.\n' "${name}" "${endpoint}"
 }
 
 wait_for_vpn() {
@@ -172,6 +213,14 @@ main() {
     status)
       [[ $# -eq 1 ]] || die "status does not accept arguments"
       show_status
+      ;;
+    save)
+      [[ $# -eq 2 ]] || die "save requires exactly one profile name"
+      save_profile "$2"
+      ;;
+    derive)
+      [[ $# -eq 4 ]] || die "derive requires a profile name, endpoint and peer public key"
+      derive_profile "$2" "$3" "$4"
       ;;
     use)
       [[ $# -eq 2 ]] || die "use requires exactly one profile name"

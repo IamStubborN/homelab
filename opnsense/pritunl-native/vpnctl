@@ -41,17 +41,23 @@ find_openvpn_pid() {
 
 status() {
     watcher_pid="$(find_watcher_pid || true)"
-    if [ -n "$watcher_pid" ]; then
-        printf 'running pid=%s\n' "$watcher_pid"
-    elif [ -e "$STATE_DIR/lockout" ]; then
-        printf 'locked out\n'
-    else
-        printf 'stopped\n'
-    fi
     openvpn_pid="$(find_openvpn_pid || true)"
-    if [ -n "$openvpn_pid" ]; then
-        printf 'openvpn_pid=%s\n' "$openvpn_pid"
+
+    if [ -n "$watcher_pid" ] && [ -n "$openvpn_pid" ] && [ -e "$RUN_DIR/connected" ]; then
+        printf 'state=connected\n'
+    elif [ -n "$watcher_pid" ]; then
+        printf 'state=running\n'
+    elif [ -n "$openvpn_pid" ]; then
+        printf 'state=orphaned_openvpn\n'
+    elif [ -e "$STATE_DIR/lockout" ]; then
+        printf 'state=locked_out\n'
+    else
+        printf 'state=stopped\n'
     fi
+
+    [ -n "$watcher_pid" ] && printf 'watcher_pid=%s\n' "$watcher_pid"
+    [ -n "$openvpn_pid" ] && printf 'openvpn_pid=%s\n' "$openvpn_pid"
+
     now="$(date +%s)"
     cutoff=$((now - 86400))
     if [ -r "$STATE_DIR/attempt-history" ]; then
@@ -59,19 +65,28 @@ status() {
     else
         attempts="$(cat "$STATE_DIR/failures-since-reset" 2>/dev/null || printf 0)"
     fi
-    printf 'attempts_last_24h=%s\n' "$attempts"
+    printf 'attempts_last_24h=%s/%s\n' "$attempts" "${MAX_ATTEMPTS:-3}"
     printf 'consecutive_failures=%s\n' "$(cat "$STATE_DIR/consecutive-failures" 2>/dev/null || printf 0)"
+
+    if [ -e "$STATE_DIR/lockout" ]; then
+        printf 'retry_budget=exhausted\n'
+        if [ -n "$watcher_pid" ] || [ -n "$openvpn_pid" ]; then
+            printf 'next_disconnect=stop_and_lock\n'
+        fi
+    else
+        printf 'retry_budget=available\n'
+    fi
 }
 
 start_locked() {
         mkdir -p "$RUN_DIR" "$LOG_DIR"
-        if [ -e "$STATE_DIR/lockout" ]; then
-            printf 'Locked out. Run vpnctl reset first.\n' >&2
-            exit 78
-        fi
         watcher_pid="$(find_watcher_pid || true)"
         if [ -n "$watcher_pid" ]; then
-            printf 'Already running.\n'
+            if [ -n "$(find_openvpn_pid || true)" ] && [ -e "$RUN_DIR/connected" ]; then
+                printf 'Already connected; no new attempt.\n'
+            else
+                printf 'Already running; no new attempt.\n'
+            fi
             exit 0
         fi
         watcher_daemon_pid="$(find_watcher_daemon_pid || true)"
@@ -83,6 +98,10 @@ start_locked() {
         if [ -n "$openvpn_pid" ]; then
             printf 'Refusing to start while OpenVPN pid %s is still running.\n' "$openvpn_pid" >&2
             exit 70
+        fi
+        if [ -e "$STATE_DIR/lockout" ]; then
+            printf 'Locked out. Run vpnctl recover, then vpnctl start.\n' >&2
+            exit 78
         fi
         /usr/sbin/daemon -f -p "$PID_FILE" /usr/bin/lockf -t 0 "$WATCHER_LOCK_FILE" "$WATCHER"
         sleep 1
@@ -136,13 +155,13 @@ case "${1:-status}" in
         rm -f "$OPENVPN_PID_FILE"
         printf 'Stopped.\n'
         ;;
-    reset)
+    recover)
         if [ -n "$(find_watcher_pid || true)" ] || [ -n "$(find_openvpn_pid || true)" ]; then
-            printf 'Stop both the watcher and OpenVPN before reset.\n' >&2
+            printf 'Stop both the watcher and OpenVPN before recovery. No state was changed.\n' >&2
             exit 69
         fi
         rm -f "$STATE_DIR/lockout" "$STATE_DIR/attempts-since-reset" "$STATE_DIR/attempt-history" "$STATE_DIR/failures-since-reset" "$STATE_DIR/consecutive-failures" "$STATE_DIR/last-attempt"
-        printf 'Manual reset: lockout and all retry attempt history cleared.\n'
+        printf 'Recovery complete: lockout and all retry attempt history cleared. VPN remains stopped; run vpnctl start when ready.\n'
         ;;
     status)
         status
@@ -179,7 +198,7 @@ case "${1:-status}" in
         fi
         ;;
     *)
-        printf 'Usage: vpnctl {start|stop|reset|status|logs|refresh-routes|test-retry-contract}\n' >&2
+        printf 'Usage: vpnctl {start|stop|recover|status|logs|refresh-routes|test-retry-contract}\n' >&2
         exit 64
         ;;
 esac

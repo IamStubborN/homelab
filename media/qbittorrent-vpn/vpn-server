@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+HOMELAB_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+WIREGUARD_DIR="${WIREGUARD_DIR:-${HOMELAB_ROOT}/media/qbittorrent/config/wireguard}"
+PROFILE_DIR="${PROFILE_DIR:-${WIREGUARD_DIR}/profiles}"
+ACTIVE_CONFIG="${ACTIVE_CONFIG:-${WIREGUARD_DIR}/wg0.conf}"
+CONTAINER_NAME="${CONTAINER_NAME:-qbittorrent}"
+SWITCH_TIMEOUT_SECONDS="${SWITCH_TIMEOUT_SECONDS:-240}"
+POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
+LOCK_DIR="${WIREGUARD_DIR}/.vpn-server.lock"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  vpn-server list
+  vpn-server status
+  vpn-server use <profile>
+
+Profiles are private WireGuard configurations stored in:
+  media/qbittorrent/config/wireguard/profiles
+
+Switching is always manual. A failed switch is rolled back automatically.
+EOF
+}
+
+die() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+require_runtime() {
+  command -v docker >/dev/null 2>&1 || die "docker is required"
+  [[ -r "${ACTIVE_CONFIG}" ]] || die "active WireGuard config is missing"
+  [[ -d "${PROFILE_DIR}" ]] || die "profile directory is missing"
+}
+
+validate_profile_name() {
+  [[ "$1" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "invalid profile name: $1"
+}
+
+validate_config() {
+  local config="$1"
+  [[ -f "${config}" ]] || die "profile does not exist: ${config}"
+  [[ "$(grep -Ec '^[[:space:]]*PrivateKey[[:space:]]*=' "${config}")" -eq 1 ]] || die "profile must contain exactly one PrivateKey"
+  [[ "$(grep -Ec '^[[:space:]]*Address[[:space:]]*=' "${config}")" -eq 1 ]] || die "profile must contain exactly one Address"
+  [[ "$(grep -Ec '^[[:space:]]*PublicKey[[:space:]]*=' "${config}")" -eq 1 ]] || die "profile must contain exactly one peer PublicKey"
+  [[ "$(grep -Ec '^[[:space:]]*Endpoint[[:space:]]*=' "${config}")" -eq 1 ]] || die "profile must contain exactly one Endpoint"
+  grep -Eq '^[[:space:]]*AllowedIPs[[:space:]]*=.*0\.0\.0\.0/0' "${config}" || die "profile must route IPv4 through the VPN"
+}
+
+config_endpoint() {
+  sed -nE 's/^[[:space:]]*Endpoint[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' "$1"
+}
+
+active_profile() {
+  local profile
+  for profile in "${PROFILE_DIR}"/*.conf; do
+    [[ -e "${profile}" ]] || continue
+    if cmp -s "${ACTIVE_CONFIG}" "${profile}"; then
+      basename "${profile}" .conf
+      return 0
+    fi
+  done
+  printf 'custom\n'
+}
+
+container_health() {
+  docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${CONTAINER_NAME}" 2>/dev/null || printf 'missing\n'
+}
+
+list_profiles() {
+  local current profile name endpoint marker
+  current="$(active_profile)"
+  for profile in "${PROFILE_DIR}"/*.conf; do
+    [[ -e "${profile}" ]] || continue
+    name="$(basename "${profile}" .conf)"
+    endpoint="$(config_endpoint "${profile}")"
+    marker=' '
+    [[ "${name}" == "${current}" ]] && marker='*'
+    printf '%s %-12s %s\n' "${marker}" "${name}" "${endpoint}"
+  done
+}
+
+show_status() {
+  local port='unavailable'
+  if [[ -s "${WIREGUARD_DIR}/forwarded_port" ]]; then
+    read -r port < "${WIREGUARD_DIR}/forwarded_port"
+  fi
+  printf 'profile=%s\n' "$(active_profile)"
+  printf 'endpoint=%s\n' "$(config_endpoint "${ACTIVE_CONFIG}")"
+  printf 'container_health=%s\n' "$(container_health)"
+  printf 'forwarded_port=%s\n' "${port}"
+}
+
+wait_for_vpn() {
+  local since="$1" expected_endpoint="$2" deadline health live_endpoint port
+  deadline=$((SECONDS + SWITCH_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    health="$(container_health)"
+    live_endpoint="$(docker exec "${CONTAINER_NAME}" wg show wg0 endpoints 2>/dev/null | awk 'NR == 1 {print $2}')"
+    port=''
+    [[ -s "${WIREGUARD_DIR}/forwarded_port" ]] && read -r port < "${WIREGUARD_DIR}/forwarded_port"
+
+    if [[ "${health}" == 'healthy' && "${live_endpoint}" == "${expected_endpoint}" && "${port}" =~ ^[0-9]+$ ]] && \
+      docker logs --since "${since}" "${CONTAINER_NAME}" 2>&1 | grep -Eq 'Forwarded port \[[0-9]+\] is open\.'; then
+      return 0
+    fi
+    sleep "${POLL_INTERVAL_SECONDS}"
+  done
+  return 1
+}
+
+restart_with_config() {
+  local config="$1" since expected_endpoint temp_config
+  expected_endpoint="$(config_endpoint "${config}")"
+  temp_config="${ACTIVE_CONFIG}.new"
+  cp -- "${config}" "${temp_config}"
+  chmod 0600 "${temp_config}"
+  mv -f -- "${temp_config}" "${ACTIVE_CONFIG}"
+  rm -f -- "${WIREGUARD_DIR}/forwarded_port" "${WIREGUARD_DIR}/forwarded_port_validated"
+  since="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  docker restart "${CONTAINER_NAME}" >/dev/null
+  wait_for_vpn "${since}" "${expected_endpoint}"
+}
+
+use_profile() {
+  local name="$1" target rollback
+  validate_profile_name "${name}"
+  target="${PROFILE_DIR}/${name}.conf"
+  validate_config "${target}"
+
+  if cmp -s "${ACTIVE_CONFIG}" "${target}"; then
+    printf 'Profile %s is already active.\n' "${name}"
+    show_status
+    return 0
+  fi
+
+  mkdir "${LOCK_DIR}" 2>/dev/null || die "another VPN profile switch is in progress"
+  trap 'rmdir -- "${LOCK_DIR}" 2>/dev/null || true' EXIT
+
+  rollback="${WIREGUARD_DIR}/.wg0.rollback.conf"
+  cp -- "${ACTIVE_CONFIG}" "${rollback}"
+  chmod 0600 "${rollback}"
+
+  printf 'Switching qBittorrent VPN to %s...\n' "${name}"
+  if restart_with_config "${target}"; then
+    rm -f -- "${rollback}"
+    printf 'VPN profile %s is healthy and its forwarded port is open.\n' "${name}"
+    show_status
+    return 0
+  fi
+
+  printf 'Profile %s failed validation; rolling back.\n' "${name}" >&2
+  if restart_with_config "${rollback}"; then
+    rm -f -- "${rollback}"
+    printf 'Rollback succeeded.\n' >&2
+  else
+    printf 'Rollback did not become healthy; qBittorrent remains fail-closed.\n' >&2
+  fi
+  return 1
+}
+
+main() {
+  require_runtime
+  case "${1:-}" in
+    list)
+      [[ $# -eq 1 ]] || die "list does not accept arguments"
+      list_profiles
+      ;;
+    status)
+      [[ $# -eq 1 ]] || die "status does not accept arguments"
+      show_status
+      ;;
+    use)
+      [[ $# -eq 2 ]] || die "use requires exactly one profile name"
+      use_profile "$2"
+      ;;
+    -h|--help|help|'')
+      usage
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

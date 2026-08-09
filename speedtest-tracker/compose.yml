@@ -62,7 +62,7 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
     depends_on:
-      qbittorrent:
+      gluetun:
         condition: service_healthy
         restart: true
     healthcheck:
@@ -71,7 +71,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    network_mode: "service:qbittorrent"
+    network_mode: "service:gluetun"
 
 networks:
   proxy:

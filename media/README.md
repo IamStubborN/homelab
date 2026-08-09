@@ -103,10 +103,10 @@ docker compose --env-file .env \
 
 Do not run these commands until the images, root environment values, and two
 Gluetun secret files are ready. The service talks to Prowlarr directly through
-`http://prowlarr:9696`, to qBittorrent through `http://qbittorrent:8400`, and to
+`http://prowlarr:9696`, to qBittorrent through `http://gluetun:8400`, and to
 Plex through `http://plex:32400`. Prowlarr stays outside the VPN so indexer
 sites see the server address, while qBittorrent remains inside the dedicated
-Netherlands P2P VPN namespace.
+Bulgaria P2P VPN namespace.
 
 `media-service` also acts as the only media-admin facade for Hermes. It receives
 qBittorrent and Plex credentials, plus one scoped `/data/internal` bind mount;
@@ -124,9 +124,8 @@ docker compose --env-file .env \
   --profile media-orchestrator ps
 ```
 
-The existing `vpn-namespace-watcher` recreates `speedtest-tracker-vpn` after
-the qBittorrent VPN namespace changes. `gluetun-rezka-watcher` watches only
-`gluetun-rezka` and restarts only
+The existing `gluetun-watcher` remains paired only with the torrent Gluetun
+stack. `gluetun-rezka-watcher` watches only `gluetun-rezka` and restarts only
 `download-runner` when that dedicated container is recreated. An in-process VPN
 rotation does not restart the runner, preserving one runner job per namespace.
 

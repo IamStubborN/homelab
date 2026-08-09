@@ -294,17 +294,23 @@ pages:
               Authorization: Bearer ${SPEEDTEST_TRACKER_API_TOKEN}
               Accept: application/json
             subrequests:
+              vpnInfo:
+                url: ${GLUETUN_CONTROL_URL}/v1/publicip/ip
+                headers:
+                  Accept: application/json
+                  X-API-Key: ${GLUETUN_CONTROL_API_KEY}
               vpnStats:
                 url: ${SPEEDTEST_VPN_URL}/api/v1/stats
                 headers:
                   Authorization: Bearer ${SPEEDTEST_TRACKER_API_TOKEN}
                   Accept: application/json
             template: |
+              {{ $vpnInfo := .Subrequest "vpnInfo" }}
               {{ $vpnStats := .Subrequest "vpnStats" }}
               {{ $vpnDownloadChange := percentChange (.JSON.Float "data.download_bits") ($vpnStats.JSON.Float "data.download.avg_bits") }}
               {{ $vpnUploadChange := percentChange (.JSON.Float "data.upload_bits") ($vpnStats.JSON.Float "data.upload.avg_bits") }}
               {{ $vpnPingChange := percentChange (.JSON.Float "data.ping") ($vpnStats.JSON.Float "data.ping.avg") }}
-              <div class="speed-meta">ProtonVPN · qBittorrent gateway</div>
+              <div class="speed-meta">{{ $vpnInfo.JSON.String "city" }}, {{ $vpnInfo.JSON.String "country" }} · {{ $vpnInfo.JSON.String "public_ip" }}</div>
               <div class="speed-grid">
                 <div>
                   <div class="size-small {{ if gt $vpnDownloadChange 0.0 }}color-positive{{ else if lt $vpnDownloadChange 0.0 }}color-negative{{ else }}color-primary{{ end }}">{{ $vpnDownloadChange | printf "%+.1f%%" }}</div>

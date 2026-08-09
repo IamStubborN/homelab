@@ -1,6 +1,8 @@
 services:
   gluetun:
-    image: qmcgaw/gluetun:latest
+    # Pin the last stable release. The floating latest tag tracks development
+    # builds and introduced unstable ProtonVPN NAT-PMP lease renewals.
+    image: qmcgaw/gluetun:v3.41.1@sha256:1a5bf4b4820a879cdf8d93d7ef0d2d963af56670c9ebff8981860b6804ebc8ab
     container_name: gluetun
     restart: unless-stopped
     cap_add:
@@ -41,7 +43,7 @@ services:
       - protonvpn_wireguard_private_key
       - gluetun_control_auth_config
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.enable=false"
       - "traefik.enable=true"
 
       - "traefik.http.routers.qbittorrent.tls=true"
@@ -130,9 +132,10 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    # The sync loop already retries every five seconds. Keep its health status
+    # observable, but do not restart it when Proton temporarily withdraws a port.
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
-      - "deunhealth.restart.on.unhealthy=true"
     networks:
       - proxy
 

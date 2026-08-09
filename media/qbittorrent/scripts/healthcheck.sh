@@ -13,6 +13,8 @@
 #
 # Benign states (NOT failures):
 #   - dht_nodes=0 with 0 active torrents — libtorrent sleeps DHT when idle
+#   - ProtonVPN forwarded port is temporarily unavailable — restarting qBT
+#     cannot repair the upstream NAT-PMP lease and only causes churn
 
 WEBUI_PORT="${WEBUI_PORT:-8400}"
 GLUETUN_API="${GLUETUN_API:-http://localhost:8000}"
@@ -67,15 +69,20 @@ if [ -n "$QB_EXTERNAL_IP" ] && [ "$QB_EXTERNAL_IP" != "$VPN_IP" ]; then
     exit 1
 fi
 
-FORWARDED_PORT=$(tr -dc '0-9' < "$FORWARDED_PORT_FILE" 2>/dev/null || true)
+if [ -r "$FORWARDED_PORT_FILE" ]; then
+    FORWARDED_PORT=$(tr -dc '0-9' < "$FORWARDED_PORT_FILE" 2>/dev/null || true)
+else
+    FORWARDED_PORT=""
+fi
 if [ -z "$FORWARDED_PORT" ] || [ "$FORWARDED_PORT" -lt 1 ] || [ "$FORWARDED_PORT" -gt 65535 ] 2>/dev/null; then
-    log "FAIL: ProtonVPN forwarded port unavailable"
-    exit 1
+    rm -f "$PORT_MISMATCH_STATE_FILE" 2>/dev/null || true
+    log "WARN: ProtonVPN forwarded port unavailable; keeping qBittorrent running"
+    FORWARDED_PORT=""
 fi
 
 QB_PREFS=$(wget -qO- --timeout=5 "http://localhost:${WEBUI_PORT}/api/v2/app/preferences" 2>/dev/null) || true
 LISTEN_PORT=$(echo "$QB_PREFS" | sed -n 's/.*"listen_port":\([0-9]*\).*/\1/p')
-if [ "$LISTEN_PORT" != "$FORWARDED_PORT" ]; then
+if [ -n "$FORWARDED_PORT" ] && [ "$LISTEN_PORT" != "$FORWARDED_PORT" ]; then
 	NOW=$(date +%s)
 	if [ -f "$PORT_MISMATCH_STATE_FILE" ]; then
 		SINCE=$(cat "$PORT_MISMATCH_STATE_FILE" 2>/dev/null || echo "$NOW")
@@ -91,7 +98,9 @@ if [ "$LISTEN_PORT" != "$FORWARDED_PORT" ]; then
 	fi
 	exit 0
 fi
-rm -f "$PORT_MISMATCH_STATE_FILE" 2>/dev/null || true
+if [ -n "$FORWARDED_PORT" ]; then
+    rm -f "$PORT_MISMATCH_STATE_FILE" 2>/dev/null || true
+fi
 
 # Count torrents that should be actively talking to the network.
 # Exclude paused, queued, errored, checking, or moving states.

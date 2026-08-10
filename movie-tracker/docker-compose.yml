@@ -13,7 +13,9 @@ services:
       - LOG_LEVEL=${MT_LOG_LEVEL}
       - TG_BOT_API_KEY=${MT_TG_BOT_API_KEY}
       - TG_BOT_CHAT_IDS=${MT_TG_BOT_CHAT_IDS}
-      - QBITTORRENT_URL=${MT_QBITTORRENT_URL}
+      # qBittorrent shares Gluetun's network namespace and therefore has no
+      # independent Docker DNS record.
+      - QBITTORRENT_URL=http://gluetun:8400
       - QBITTORRENT_USERNAME=${MT_QBITTORRENT_USERNAME}
       - QBITTORRENT_PASSWORD=${MT_QBITTORRENT_PASSWORD}
       - PROWLARR_URL=${MT_PROWLARR_URL}

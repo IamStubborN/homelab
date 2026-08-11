@@ -75,18 +75,9 @@ pages:
                   - title: SearXNG
                     url: https://search.${DOCKER_DOMAIN}/
                     icon: si:searxng
-                  - title: Search Ladder
-                    url: https://search-ladder.${DOCKER_DOMAIN}/healthz
-                    icon: /assets/search-ladder.svg
-                  - title: Firecrawl
-                    url: https://crawl.${DOCKER_DOMAIN}/
-                    icon: /assets/firecrawl.png
                   - title: CLIProxy Management
                     url: https://llm.${DOCKER_DOMAIN}/management.html
                     icon: si:openai
-                  - title: Hindsight API Docs
-                    url: https://hindsight.${DOCKER_DOMAIN}/docs
-                    icon: si:postgresql
 
           - type: rss
             title: Self-hosted
@@ -565,15 +556,6 @@ pages:
                   - title: SearXNG
                     url: https://search.${DOCKER_DOMAIN}/
                     icon: si:searxng
-                  - title: Search Ladder
-                    url: https://search-ladder.${DOCKER_DOMAIN}/healthz
-                    icon: /assets/search-ladder.svg
-                  - title: Firecrawl
-                    url: https://crawl.${DOCKER_DOMAIN}/
-                    icon: /assets/firecrawl.png
                   - title: CLIProxy Management
                     url: https://llm.${DOCKER_DOMAIN}/management.html
                     icon: si:openai
-                  - title: Hindsight API Docs
-                    url: https://hindsight.${DOCKER_DOMAIN}/docs
-                    icon: si:postgresql

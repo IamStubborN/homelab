@@ -19,7 +19,7 @@ x-firecrawl-environment: &firecrawl-environment
   SEARXNG_ENDPOINT: http://searxng:8080
   OPENAI_BASE_URL: http://cli-proxy-api:8317/v1
   OPENAI_API_KEY: ${CLIPROXY_FIRECRAWL_KEY:?set CLIPROXY_FIRECRAWL_KEY}
-  MODEL_NAME: gpt-5.6-luna(high)
+  MODEL_NAME: gpt-5.3-codex-spark(high)
 
 services:
   searxng:

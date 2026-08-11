@@ -484,6 +484,12 @@ pages:
                 check-url: https://search.${DOCKER_DOMAIN}/healthz
                 icon: si:searxng
                 timeout: 5s
+              - title: Search Ladder
+                url: https://search-ladder.${DOCKER_DOMAIN}/healthz
+                timeout: 5s
+              - title: Firecrawl
+                url: https://crawl.${DOCKER_DOMAIN}/
+                timeout: 5s
               - title: CLIProxy Management
                 url: https://llm.${DOCKER_DOMAIN}/management.html
                 icon: si:openai
@@ -535,6 +541,10 @@ pages:
                   - title: SearXNG
                     url: https://search.${DOCKER_DOMAIN}/
                     icon: si:searxng
+                  - title: Search Ladder
+                    url: https://search-ladder.${DOCKER_DOMAIN}/healthz
+                  - title: Firecrawl
+                    url: https://crawl.${DOCKER_DOMAIN}/
                   - title: CLIProxy Management
                     url: https://llm.${DOCKER_DOMAIN}/management.html
                     icon: si:openai

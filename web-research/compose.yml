@@ -16,6 +16,10 @@ x-firecrawl-environment: &firecrawl-environment
   BULL_AUTH_KEY: ${FIRECRAWL_BULL_AUTH_KEY:?set FIRECRAWL_BULL_AUTH_KEY}
   LOGGING_LEVEL: info
   ENV: local
+  SEARXNG_ENDPOINT: http://searxng:8080
+  OPENAI_BASE_URL: http://cli-proxy-api:8317/v1
+  OPENAI_API_KEY: ${CLIPROXY_FIRECRAWL_KEY:?set CLIPROXY_FIRECRAWL_KEY}
+  MODEL_NAME: gpt-5.6-luna(high)
 
 services:
   searxng:
@@ -50,6 +54,32 @@ services:
       - agent-tools
       - proxy
 
+  cli-proxy-api:
+    image: eceasy/cli-proxy-api:latest
+    pull_policy: always
+    container_name: cli-proxy-api
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      MANAGEMENT_PASSWORD: ${CLIPROXY_MANAGEMENT_PASSWORD:?set CLIPROXY_MANAGEMENT_PASSWORD}
+    volumes:
+      - ./cliproxy/config.yaml:/CLIProxyAPI/config.yaml
+      - ./cliproxy/auths:/root/.cli-proxy-api
+    mem_limit: 512m
+    cpus: 1.0
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.cli-proxy-api.tls=true"
+      - "traefik.http.routers.cli-proxy-api.entrypoints=http,https"
+      - "traefik.http.routers.cli-proxy-api.rule=Host(`llm.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.cli-proxy-api.loadbalancer.server.port=8317"
+    networks:
+      - agent-tools
+      - proxy
+
   firecrawl-api:
     image: ghcr.io/firecrawl/firecrawl@sha256:ad3049ae703d6c6438211ee084e20fcf5eaa0f1cfef54351393df1ca6faff190
     container_name: firecrawl-api
@@ -72,6 +102,8 @@ services:
       firecrawl-rabbitmq:
         condition: service_healthy
       firecrawl-playwright:
+        condition: service_started
+      cli-proxy-api:
         condition: service_started
     mem_limit: 2g
     cpus: 2.0

@@ -59,14 +59,16 @@ services:
     pull_policy: always
     container_name: cli-proxy-api
     restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
     environment:
       MANAGEMENT_PASSWORD: ${CLIPROXY_MANAGEMENT_PASSWORD:?set CLIPROXY_MANAGEMENT_PASSWORD}
+      MANAGEMENT_STATIC_PATH: /data/static
+    command: [./CLIProxyAPI, -config, /data/config.yaml]
     volumes:
-      - ./cliproxy/config.yaml:/CLIProxyAPI/config.yaml
-      - ./cliproxy/auths:/root/.cli-proxy-api
+      - ./cliproxy:/data
     mem_limit: 512m
     cpus: 1.0
     labels:

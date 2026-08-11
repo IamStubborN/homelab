@@ -136,6 +136,7 @@ zeroclaw/config/daemon_state.json
 # Real service configs containing secrets; keep sanitized examples instead
 web-research/cliproxy/config.yaml
 web-research/cliproxy/auths/
+web-research/cliproxy/static/
 samba/config/config.yml
 glance/config/glance.yml
 traefik/config/config.yml

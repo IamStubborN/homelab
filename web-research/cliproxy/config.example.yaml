@@ -7,7 +7,7 @@ remote-management:
   disable-control-panel: false
   disable-auto-update-panel: false
 
-auth-dir: "/root/.cli-proxy-api"
+auth-dir: "/data/auths"
 
 # Replace this in the ignored config.yaml. Add one key per client from the
 # management UI so individual consumers can be revoked independently.

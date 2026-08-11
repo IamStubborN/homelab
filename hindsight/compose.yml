@@ -38,6 +38,7 @@ services:
       HINDSIGHT_API_HOST: 0.0.0.0
       HINDSIGHT_API_PORT: "8888"
       HINDSIGHT_API_LOG_LEVEL: info
+      HINDSIGHT_API_WORKER_ID: hindsight
       HINDSIGHT_API_DATABASE_URL: postgresql://hindsight:${HINDSIGHT_DB_PASSWORD:?set HINDSIGHT_DB_PASSWORD}@hindsight-db:5432/hindsight
 
       HINDSIGHT_API_LLM_PROVIDER: openai

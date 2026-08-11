@@ -20,6 +20,7 @@ include:
     - movie-tracker/docker-compose.yml
     - bitwarden/compose.yml
     - web-research/compose.yml
+    - hindsight/compose.yml
 
 networks:
     proxy:

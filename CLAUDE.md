@@ -59,7 +59,7 @@ make check-codecs VIDEO_DIR=/path/to/dir  # Custom directory
 3. **Custom Apps**: KaraKeep (web scraper with AI/MeiliSearch), Freedium (Medium proxy), Movie-Tracker (Telegram bot)
 4. **File Management**: Samba shares, Kavita (ebook reader), FileBrowser (disabled)
 5. **Monitoring**: Watchtower (auto-updates), DeUnhealth (health checks)
-6. **Other Services**: Bitwarden (Vaultwarden), Mosquitto (MQTT broker), RustDesk (remote desktop relay)
+6. **Other Services**: Bitwarden (Vaultwarden), Hindsight (shared Pi memory), Mosquitto (MQTT broker), RustDesk (remote desktop relay)
 
 ### VPN Routing (Gluetun)
 Media services route through Gluetun container:
@@ -159,6 +159,8 @@ Use the tracked helper for database backups:
 ```bash
 freedium/backup-db.sh
 ```
+
+**Hindsight** (`/hindsight/`): Shared authenticated memory API for Pi clients. It uses PostgreSQL/pgvector, CLIProxy for LLM calls, and Gemini embeddings. See `hindsight/README.md` for secrets, deployment, and backup/restore.
 
 **Movie-Tracker** (`/movie-tracker/`): Python Telegram bot deployed from the private image `ghcr.io/example/movie-tracker:latest`. The homelab repository intentionally tracks only the compose wrapper. A clean host must be logged in to GHCR before pulling:
 ```bash

@@ -13,6 +13,7 @@ auth-dir: "/data/auths"
 # management UI so individual consumers can be revoked independently.
 api-keys:
   - "replace-with-CLIPROXY_FIRECRAWL_KEY"
+  - "replace-with-CLIPROXY_HINDSIGHT_KEY"
 
 debug: false
 pprof:

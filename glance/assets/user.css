@@ -13,6 +13,18 @@ html[data-scheme="light"] {
   --color-negative: hsl(358, 67%, 48%);
 }
 
+img[src$="/assets/search-ladder.svg"],
+img[src$="/assets/firecrawl.png"] {
+  filter: grayscale(1);
+  opacity: 0.65;
+}
+
+html[data-scheme="dark"] img[src$="/assets/search-ladder.svg"],
+html[data-scheme="dark"] img[src$="/assets/firecrawl.png"] {
+  filter: grayscale(1) invert(1);
+  opacity: 0.72;
+}
+
 .page-column-small .widget,
 .page-column-full .widget {
   border-radius: 8px;

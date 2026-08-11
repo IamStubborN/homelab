@@ -39,8 +39,16 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.searxng.tls=true"
+      - "traefik.http.routers.searxng.entrypoints=http,https"
+      - "traefik.http.routers.searxng.rule=Host(`search.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.searxng.loadbalancer.server.port=8080"
     networks:
       - agent-tools
+      - proxy
 
   firecrawl-api:
     image: ghcr.io/firecrawl/firecrawl@sha256:ad3049ae703d6c6438211ee084e20fcf5eaa0f1cfef54351393df1ca6faff190
@@ -73,9 +81,17 @@ services:
       timeout: 5s
       retries: 10
       start_period: 60s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.firecrawl.tls=true"
+      - "traefik.http.routers.firecrawl.entrypoints=http,https"
+      - "traefik.http.routers.firecrawl.rule=Host(`crawl.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.firecrawl.loadbalancer.server.port=3002"
     networks:
       - agent-tools
       - web-research-backend
+      - proxy
 
   firecrawl-playwright:
     image: ghcr.io/firecrawl/playwright-service@sha256:6359b0d9070f27400b4a9b615509be06919e40121fc1fdc42d4efeddf02653d2
@@ -164,6 +180,8 @@ networks:
     name: agent-tools
   web-research-backend:
     internal: true
+  proxy:
+    external: true
 
 volumes:
   firecrawl_postgres:

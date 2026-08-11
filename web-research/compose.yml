@@ -22,6 +22,111 @@ x-firecrawl-environment: &firecrawl-environment
   MODEL_NAME: gpt-5.3-codex-spark(high)
 
 services:
+  omniroute-redis:
+    image: redis:8-alpine
+    container_name: omniroute-redis
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - omniroute_redis:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - web-research-backend
+
+  omniroute:
+    image: ghcr.io/diegosouzapw/omniroute:latest
+    container_name: omniroute
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      omniroute-redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "20128"
+      API_PORT: "20129"
+      HOSTNAME: 0.0.0.0
+      API_HOST: 0.0.0.0
+      DATA_DIR: /app/data
+      REDIS_URL: redis://omniroute-redis:6379
+      JWT_SECRET: ${OMNIROUTE_JWT_SECRET:?set OMNIROUTE_JWT_SECRET}
+      API_KEY_SECRET: ${OMNIROUTE_API_KEY_SECRET:?set OMNIROUTE_API_KEY_SECRET}
+      STORAGE_ENCRYPTION_KEY: ${OMNIROUTE_STORAGE_ENCRYPTION_KEY:?set OMNIROUTE_STORAGE_ENCRYPTION_KEY}
+      INITIAL_PASSWORD: ${OMNIROUTE_INITIAL_PASSWORD:?set OMNIROUTE_INITIAL_PASSWORD}
+      REQUIRE_API_KEY: "false"
+      AUTH_COOKIE_SECURE: "true"
+      NEXT_PUBLIC_BASE_URL: https://omniroute.${DOCKER_DOMAIN}
+      BASE_URL: http://127.0.0.1:20128
+      OMNIROUTE_ALLOW_PRIVATE_PROVIDER_URLS: "true"
+    volumes:
+      - omniroute_data:/app/data
+    mem_limit: 1g
+    healthcheck:
+      test: [CMD, node, healthcheck.mjs]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.omniroute.rule=Host(`omniroute.${DOCKER_DOMAIN}`)"
+      - "traefik.http.routers.omniroute.entrypoints=https"
+      - "traefik.http.routers.omniroute.tls=true"
+      - "traefik.http.services.omniroute.loadbalancer.server.port=20128"
+      - "com.centurylinklabs.watchtower.enable=true"
+    networks:
+      - agent-tools
+      - web-research-backend
+      - proxy
+
+  search-ladder:
+    image: ghcr.io/iamstubborn/search-ladder:latest
+    container_name: search-ladder
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      omniroute:
+        condition: service_healthy
+    environment:
+      OMNIROUTE_URL: http://omniroute:20129
+      OMNIROUTE_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
+      BROKER_API_KEY: ${SEARCH_LADDER_API_KEY:?set SEARCH_LADDER_API_KEY}
+      DB_PATH: /data/search-ladder.db
+      QUOTA_COOLDOWN: 12h
+    volumes:
+      - search_ladder_data:/data
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=16m
+    mem_limit: 128m
+    healthcheck:
+      test: [CMD, search-ladder, healthcheck]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.search-ladder.rule=Host(`search-ladder.${DOCKER_DOMAIN}`)"
+      - "traefik.http.routers.search-ladder.entrypoints=https"
+      - "traefik.http.routers.search-ladder.tls=true"
+      - "traefik.http.services.search-ladder.loadbalancer.server.port=8080"
+      - "com.centurylinklabs.watchtower.enable=true"
+    networks:
+      - agent-tools
+      - proxy
+
   searxng:
     image: ghcr.io/searxng/searxng@sha256:f433294b46a93564993c4371005341e013d94aa8ea4662d8ee521cd2cccb08e8
     container_name: searxng
@@ -219,3 +324,6 @@ networks:
 
 volumes:
   firecrawl_postgres:
+  omniroute_data:
+  omniroute_redis:
+  search_ladder_data:

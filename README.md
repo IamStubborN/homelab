@@ -20,7 +20,8 @@ with the documented Docker Compose or guarded media deployment commands.
 - Inactive media-orchestrator Compose scaffold with a dedicated Rezka VPN
 - KaraKeep, Freedium, Movie Tracker, Glance, Speedtest Tracker
 - Bitwarden (Vaultwarden), Mosquitto, RustDesk
-- Internal SearXNG and Firecrawl services shared by household Hermes agents
+- Internal SearXNG and Firecrawl services shared by household agents
+- Hindsight shared memory server for Pi clients
 - Home Assistant with public-safe example config only
 
 ## Setup
@@ -53,9 +54,10 @@ Fill real values only in ignored local files:
 - `homeassistant/config/secrets.yaml`
 
 Generate independent random values for `SEARXNG_SECRET`,
-`FIRECRAWL_POSTGRES_PASSWORD`, and `FIRECRAWL_BULL_AUTH_KEY` in the root `.env`.
-The web-research services are reachable only from the `agent-tools` Docker
-network and publish no host ports.
+`FIRECRAWL_POSTGRES_PASSWORD`, `FIRECRAWL_BULL_AUTH_KEY`, and the Hindsight
+secrets documented in `hindsight/README.md` in the root `.env`. The
+web-research services publish no host ports; authenticated routes are exposed
+through Traefik where configured.
 
 Initialize the Freedium submodule:
 

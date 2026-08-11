@@ -467,6 +467,32 @@ pages:
                 url: https://speedtest.${DOCKER_DOMAIN}/
                 icon: si:speedtest
                 timeout: 5s
+              - title: VPN Speedtest
+                url: https://speedtest-vpn.${DOCKER_DOMAIN}/
+                icon: si:speedtest
+                timeout: 5s
+              - title: Media Preview
+                url: https://media-preview.${DOCKER_DOMAIN}/
+                icon: si:plex
+                timeout: 5s
+              - title: OmniRoute
+                url: https://omniroute.${DOCKER_DOMAIN}/
+                icon: si:openrouter
+                timeout: 5s
+              - title: SearXNG
+                url: https://search.${DOCKER_DOMAIN}/
+                check-url: https://search.${DOCKER_DOMAIN}/healthz
+                icon: si:searxng
+                timeout: 5s
+              - title: CLIProxy Management
+                url: https://llm.${DOCKER_DOMAIN}/management.html
+                icon: si:openai
+                timeout: 5s
+              - title: Hindsight API Docs
+                url: https://hindsight.${DOCKER_DOMAIN}/docs
+                check-url: https://hindsight.${DOCKER_DOMAIN}/health
+                icon: si:postgresql
+                timeout: 5s
               - title: Proxmox
                 url: https://proxmox.${LAN_DOMAIN}/
                 icon: si:proxmox
@@ -493,3 +519,25 @@ pages:
                   - title: Freedium
                     url: https://freedium.${DOCKER_DOMAIN}/
                     icon: si:medium
+                  - title: VPN Speedtest
+                    url: https://speedtest-vpn.${DOCKER_DOMAIN}/
+                    icon: si:speedtest
+                  - title: Media Preview
+                    url: https://media-preview.${DOCKER_DOMAIN}/
+                    icon: si:plex
+
+              - title: Research & AI
+                color: 194 54 42
+                links:
+                  - title: OmniRoute
+                    url: https://omniroute.${DOCKER_DOMAIN}/
+                    icon: si:openrouter
+                  - title: SearXNG
+                    url: https://search.${DOCKER_DOMAIN}/
+                    icon: si:searxng
+                  - title: CLIProxy Management
+                    url: https://llm.${DOCKER_DOMAIN}/management.html
+                    icon: si:openai
+                  - title: Hindsight API Docs
+                    url: https://hindsight.${DOCKER_DOMAIN}/docs
+                    icon: si:postgresql

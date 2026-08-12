@@ -86,6 +86,7 @@ networks:
 volumes:
   health-pg-data:
     name: health-pg-data
+    external: true
 
 secrets:
   health_pg_bootstrap_password:

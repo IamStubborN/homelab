@@ -1,0 +1,95 @@
+x-locked-down: &locked-down
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  health-postgres:
+    <<: *locked-down
+    image: postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
+    container_name: health-postgres
+    restart: unless-stopped
+    read_only: true
+    cap_add:
+      # Required by the official entrypoint to initialize and drop to postgres.
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    environment:
+      POSTGRES_DB: health
+      POSTGRES_USER: health
+      POSTGRES_PASSWORD_FILE: /run/secrets/health_pg_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    secrets: [health_pg_password]
+    volumes:
+      - type: volume
+        source: health-pg-data
+        target: /var/lib/postgresql/data
+        volume:
+          nocopy: true
+    tmpfs:
+      - /run/postgresql:size=16m,mode=0770
+      - /tmp:size=64m,mode=1777
+    networks: [health-internal]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U health -d health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+
+  health-service:
+    <<: *locked-down
+    image: family-health-service:local
+    container_name: health-service
+    restart: unless-stopped
+    read_only: true
+    pids_limit: 128
+    depends_on:
+      health-postgres:
+        condition: service_healthy
+    environment:
+      HEALTH_DB_HOST: health-postgres
+      HEALTH_DB_PORT: "5432"
+      HEALTH_DB_NAME: health
+      HEALTH_DB_USER: health
+      HEALTH_DB_PASSWORD_FILE: /run/secrets/health_pg_password
+      HEALTH_TOKEN_FILE_ANDRII: /run/secrets/andrii_health_api_token
+      HEALTH_TOKEN_FILE_VALENTYNA: /run/secrets/valentyna_health_api_token
+      HEALTH_LISTEN_ADDR: 0.0.0.0:8080
+      RUST_LOG: info
+    secrets:
+      - health_pg_password
+      - andrii_health_api_token
+      - valentyna_health_api_token
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    expose: ["8080"]
+    networks: [health-internal]
+    healthcheck:
+      test: [CMD, /usr/local/bin/health-service, healthcheck]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+
+networks:
+  health-internal:
+    name: health-internal
+    external: true
+
+volumes:
+  health-pg-data:
+
+secrets:
+  health_pg_password:
+    file: ./secrets/health_pg_password
+  andrii_health_api_token:
+    file: ./secrets/andrii.health_api_token
+  valentyna_health_api_token:
+    file: ./secrets/valentyna.health_api_token

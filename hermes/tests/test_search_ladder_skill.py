@@ -35,7 +35,7 @@ class SearchLadderSkillTests(unittest.TestCase):
                 self.assertEqual(
                     json.loads(request.data),
                     {
-                        "mode": "auto",
+                        "mode": "research",
                         "max_results": 3,
                         "max_pages": 2,
                         "max_chars": 12000,
@@ -43,7 +43,7 @@ class SearchLadderSkillTests(unittest.TestCase):
                     },
                 )
                 return Response(
-                    b'{"mode":"auto","provider":"tavily","results":[{"title":"Go","url":"https://go.dev"}],"evidence":[{"source_id":"S1","title":"Go","final_url":"https://go.dev","summary":"Current release.","excerpts":["Go is available."],"cached":false,"truncated":true,"warnings":[]}]}'
+                    b'{"mode":"research","provider":"tavily","results":[{"title":"Go","url":"https://go.dev"}],"evidence":[{"source_id":"S1","title":"Go","final_url":"https://go.dev","summary":"Current release.","excerpts":["Go is available."],"cached":false,"truncated":true,"warnings":[]}]}'
                 )
 
             payload = MODULE.research(query="current Go release", limit=3, pages=2, opener=opener)
@@ -68,7 +68,7 @@ class SearchLadderSkillTests(unittest.TestCase):
 
     def test_render_rejects_empty_results(self):
         with self.assertRaisesRegex(RuntimeError, "no results"):
-            MODULE.render({"mode": "auto", "results": [], "evidence": []})
+            MODULE.render({"mode": "research", "results": [], "evidence": []})
 
 
 if __name__ == "__main__":

@@ -10,13 +10,16 @@ person's data. Never use terminal, direct HTTP, files, or SQL for health data.
 Hide tokens, endpoints, raw JSON, and internal record IDs unless explicitly
 requested for technical details.
 
+All user-facing health text and buttons are in Russian. Internal identifiers
+and tool arguments stay in English.
+
 ## Resolve the person
 
 - The bot owner is the default person.
 - An explicitly named person always wins.
-- When genuinely ambiguous, ask exactly «Это относится к Andrii или
-  Valentyna?» with two buttons: `Andrii` and `Valentyna`. Never guess. Do not
-  write until the person is resolved.
+- When genuinely ambiguous, use native `clarify` to ask exactly «Это относится
+  к Andrii или Valentyna?» with two buttons: `Andrii` and `Valentyna`. Never
+  guess. Do not write until the person is resolved.
 
 Omit `person` for the owner default. Pass `person=andrii` or
 `person=valentyna` only after an explicit name or completed clarification.
@@ -45,7 +48,8 @@ Times use RFC 3339; dates use `YYYY-MM-DD`.
 Write routine measurements, meals, symptoms, and sleep immediately. Echo the
 recorded fact and offer `✏️ Исправить`.
 
-For medication, condition, and correction operations, first show
+For medication, condition, and correction operations, first use native
+`clarify` with exactly three buttons:
 `✅ Записать / ✏️ Исправить / 🚫 Отмена`. Call no write tool before the choice.
 Only after `✅ Записать`, call the tool. Pass `confirmed=true` to
 `add_medication`, `stop_medication`, and `correct_measurement`. `add_condition`
@@ -54,6 +58,14 @@ send only catalogued fields. Edit returns to correction; cancel writes nothing.
 
 Repeat allergies and laboratory fields before writing when interpretation is
 unclear. Never invent missing values.
+
+## Interaction contract
+
+| Flow | Before tool | After choice |
+| --- | --- | --- |
+| `ambiguous-person` | `native clarify: Andrii / Valentyna; no write` | `after selection: resolve person, then apply matching flow` |
+| `routine-fact` | `no confirmation` | `write immediately, then echo with ✏️ Исправить` |
+| `sensitive-write` | `native clarify: ✅ Записать / ✏️ Исправить / 🚫 Отмена; no write` | `only after ✅: call the exact tool; cancel writes nothing` |
 
 ## Results
 

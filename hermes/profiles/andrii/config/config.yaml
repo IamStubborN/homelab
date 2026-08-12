@@ -55,7 +55,7 @@ mcp_servers:
     url: ${HEALTH_MCP_URL}
     lazy: true
     headers:
-      Authorization: "Bearer ${HEALTH_API_TOKEN}"
+      Authorization: "Bearer ${HEALTH_API_TOKEN_FILE}"
     tools:
       resources: false
       prompts: false

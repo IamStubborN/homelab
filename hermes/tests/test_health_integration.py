@@ -1,9 +1,9 @@
-import importlib.util
 import json
 import os
 import pathlib
 import re
 import subprocess
+import tempfile
 import unittest
 
 import yaml
@@ -120,53 +120,197 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
                 HOMELAB_ROOT / f"health/secrets/{profile}.health_api_token",
             )
 
-    def test_entrypoint_exports_copies_and_manages_health(self):
+    def test_entrypoint_copies_health_without_exporting_it(self):
         entrypoint = read("scripts/hermes-home-entrypoint")
-        self.assertIn(
-            "read_secret HEALTH_API_TOKEN /run/secrets/health_api_token", entrypoint
-        )
+        self.assertNotIn("read_secret HEALTH_API_TOKEN", entrypoint)
+        self.assertIn("unset HEALTH_API_TOKEN", entrypoint)
         copied = re.search(r"for secret in ([^;]+); do", entrypoint)
         self.assertIsNotNone(copied)
         self.assertIn("health_api_token", copied.group(1).split())
         self.assertIn('install -o 10000 -g 10000 -m 0400 "$source"', entrypoint)
-        managed = re.search(
-            r'install_skills /etc/hermes-home/skills "([^"]+)"', entrypoint
+        self.assertIn(
+            '"$runtime_secret_dir/health_api_token"',
+            entrypoint,
         )
-        self.assertIsNotNone(managed)
+
+        probe = next(
+            line.strip()
+            for line in entrypoint.splitlines()
+            if line.strip() == "unset HEALTH_API_TOKEN"
+        )
+        environment = os.environ.copy()
+        environment["HEALTH_API_TOKEN"] = "must-not-reach-child"
+        child = subprocess.run(
+            ["sh", "-c", f"{probe}\nexec env"],
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotIn("HEALTH_API_TOKEN=", child.stdout)
+
+    def test_install_skills_executes_current_catalog_and_legacy_tombstones(self):
+        entrypoint = read("scripts/hermes-home-entrypoint")
+        function = re.search(
+            r"install_skills\(\) \{\n.*?\n\}", entrypoint, flags=re.DOTALL
+        )
+        self.assertIsNotNone(function)
+        current_match = re.search(
+            r'^shared_skills="([^"]+)"$', entrypoint, re.MULTILINE
+        )
+        self.assertIsNotNone(current_match)
+        current = current_match.group(1)
         self.assertEqual(
-            set(managed.group(1).split()),
-            {"health", "home-assistant", "media", "web-research"},
+            current.split(), ["health", "home-assistant", "media", "web-research"]
         )
+        cleanup = f"{current} media-admin movies series trending watching"
+        self.assertIn(
+            'shared_skill_cleanup="$shared_skills media-admin movies series trending watching"',
+            entrypoint,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / "source"
+            destination = root / "destination"
+            source.mkdir()
+            destination.mkdir()
+            for name in (*current.split(), "unmanaged-source"):
+                skill = source / name
+                skill.mkdir()
+                (skill / "marker").write_text(name, encoding="utf-8")
+            for name in (
+                "health",
+                "media-admin",
+                "movies",
+                "series",
+                "trending",
+                "watching",
+                "user-custom",
+            ):
+                (destination / name).mkdir()
+
+            script = root / "install-test.sh"
+            script.write_text(
+                "#!/bin/sh\nset -eu\n"
+                + function.group(0)
+                + f'\ninstall_skills "$1" "{current}" "{cleanup}" "$2"\n',
+                encoding="utf-8",
+            )
+            subprocess.run(
+                ["sh", str(script), str(source), str(destination)], check=True
+            )
+
+            self.assertEqual(
+                {
+                    path.name
+                    for path in destination.iterdir()
+                    if path.is_dir()
+                },
+                {*current.split(), "user-custom"},
+            )
+            for name in current.split():
+                self.assertEqual(
+                    (destination / name / "marker").read_text(encoding="utf-8"),
+                    name,
+                )
 
 
 class EmbeddedHealthConfigTests(unittest.TestCase):
-    def test_generated_profile_config_has_exact_lazy_http_bearer_contract(self):
-        path = HERMES_ROOT / "scripts/merge_hermes_config.py"
-        spec = importlib.util.spec_from_file_location("merge_hermes_config", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
+    def test_generated_profile_exactly_replaces_health_from_private_file(self):
         for profile in PROFILES:
-            managed = yaml.safe_load(read(f"profiles/{profile}/config/config.yaml"))
-            current = {
-                "mcp_servers": {
-                    "health": {
-                        "url": "http://stale.invalid/mcp",
-                        "tools": {"include": ["stale"], "exclude": ["stale"]},
-                    }
-                }
-            }
-            generated = module.merge(current, managed)
+            with tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                current_path = root / "current.yaml"
+                output_path = root / "output.yaml"
+                secret_path = root / "health-token"
+                secret = f"private-{profile}-token"
+                current_path.write_text(
+                    yaml.safe_dump(
+                        {
+                            "mcp_servers": {
+                                "health": {
+                                    "transport": "sse",
+                                    "command": "stale-command",
+                                    "args": ["--stale"],
+                                    "url": "http://stale.invalid/mcp",
+                                    "headers": {
+                                        "Authorization": "Bearer stale",
+                                        "X-Stale": "stale",
+                                    },
+                                    "tools": {
+                                        "include": ["stale"],
+                                        "exclude": ["stale"],
+                                        "resources": True,
+                                    },
+                                }
+                            }
+                        },
+                        sort_keys=False,
+                    ),
+                    encoding="utf-8",
+                )
+                secret_path.write_text(f"{secret}\n", encoding="utf-8")
+                environment = os.environ.copy()
+                environment["HEALTH_API_TOKEN"] = "process-environment-token"
+                result = subprocess.run(
+                    [
+                        os.fspath(pathlib.Path(os.sys.executable)),
+                        str(HERMES_ROOT / "scripts/merge_hermes_config.py"),
+                        str(HERMES_ROOT / f"profiles/{profile}/config/config.yaml"),
+                        str(current_path),
+                        str(output_path),
+                        str(secret_path),
+                    ],
+                    env=environment,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "")
+                self.assertNotIn(secret, result.stdout + result.stderr)
+                self.assertNotIn("process-environment-token", output_path.read_text())
+                generated = yaml.safe_load(output_path.read_text(encoding="utf-8"))
+
             server = generated["mcp_servers"]["health"]
-            self.assertEqual(server["url"], "${HEALTH_MCP_URL}")
-            self.assertTrue(server["lazy"])
             self.assertEqual(
-                server["headers"]["Authorization"], "Bearer ${HEALTH_API_TOKEN}"
+                server,
+                {
+                    "url": "${HEALTH_MCP_URL}",
+                    "lazy": True,
+                    "headers": {"Authorization": f"Bearer {secret}"},
+                    "tools": {"resources": False, "prompts": False},
+                },
             )
-            self.assertEqual(server["tools"], {"resources": False, "prompts": False})
+
+    def test_invalid_health_secret_fails_without_disclosure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            current = root / "current.yaml"
+            output = root / "output.yaml"
+            secret = root / "secret"
+            current.write_text("{}\n", encoding="utf-8")
+            secret.write_bytes(b"do-not-log\nembedded\n")
+            result = subprocess.run(
+                [
+                    os.fspath(pathlib.Path(os.sys.executable)),
+                    str(HERMES_ROOT / "scripts/merge_hermes_config.py"),
+                    str(HERMES_ROOT / "profiles/andrii/config/config.yaml"),
+                    str(current),
+                    str(output),
+                    str(secret),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr, "")
+            self.assertFalse(output.exists())
 
 
-class EmbeddedHealthSkillTests(unittest.TestCase):
+class EmbeddedHealthSkillContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.skill = read("shared/skills/health/SKILL.md")
@@ -195,9 +339,38 @@ class EmbeddedHealthSkillTests(unittest.TestCase):
             "Never set `status` above `user_reported`",
             "Never invent",
             "never loop",
+            "All user-facing health text and buttons are in Russian.",
+            "Internal identifiers and tool arguments stay in English.",
+            "native `clarify`",
         )
         for rule in required:
             self.assertIn(rule, self.compact)
+
+    def test_skill_contract_has_exact_no_write_then_tool_sequences(self):
+        rows = {}
+        for line in self.skill.splitlines():
+            match = re.fullmatch(
+                r"\| `([^`]+)` \| `([^`]+)` \| `([^`]+)` \|", line
+            )
+            if match:
+                rows[match.group(1)] = (match.group(2), match.group(3))
+        self.assertEqual(
+            rows,
+            {
+                "ambiguous-person": (
+                    "native clarify: Andrii / Valentyna; no write",
+                    "after selection: resolve person, then apply matching flow",
+                ),
+                "routine-fact": (
+                    "no confirmation",
+                    "write immediately, then echo with ✏️ Исправить",
+                ),
+                "sensitive-write": (
+                    "native clarify: ✅ Записать / ✏️ Исправить / 🚫 Отмена; no write",
+                    "only after ✅: call the exact tool; cancel writes nothing",
+                ),
+            },
+        )
 
     def test_worked_examples_cover_required_routes(self):
         rows = re.findall(r"^\| «.+?\| `.+?` \|$", self.skill, flags=re.MULTILINE)

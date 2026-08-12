@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+unset HEALTH_API_TOKEN
+
 read_secret() {
     variable=$1
     path=$2
@@ -15,7 +17,6 @@ read_secret() {
 read_secret TELEGRAM_BOT_TOKEN /run/secrets/telegram_bot_token
 read_secret API_SERVER_KEY /run/secrets/webhook_hmac
 read_secret MEDIA_API_TOKEN /run/secrets/media_api_token
-read_secret HEALTH_API_TOKEN /run/secrets/health_api_token
 read_secret HOMEASSISTANT_API_TOKEN /run/secrets/homeassistant_api_token
 read_secret OPENAI_API_KEY /run/secrets/omniroute_api_key
 export OPENAI_BASE_URL=http://omniroute:20129/v1
@@ -36,34 +37,39 @@ for secret in media_api_token health_api_token broker_api_token webhook_hmac sea
 done
 
 /opt/hermes/.venv/bin/python /usr/local/bin/merge-hermes-config \
-    /etc/hermes-home/config.yaml /opt/data/config.yaml /tmp/hermes-config.yaml
+    /etc/hermes-home/config.yaml /opt/data/config.yaml /tmp/hermes-config.yaml \
+    "$runtime_secret_dir/health_api_token"
 install -o 10000 -g 10000 -m 0640 /tmp/hermes-config.yaml /opt/data/config.yaml
 rm -f /tmp/hermes-config.yaml
 install -o 10000 -g 10000 -m 0644 /etc/hermes-home/SOUL.md /opt/data/SOUL.md
 
 install_skills() {
     source=$1
-    managed=$2
+    install_catalog=$2
+    cleanup_catalog=$3
+    destination_root=${4:-/opt/data/skills}
     current=
-    for skill in "$source"/*; do
+    for name in $install_catalog; do
+        skill="$source/$name"
         [ -d "$skill" ] || continue
-        name=$(basename "$skill")
         current="$current $name"
-        destination="/opt/data/skills/$name"
+        destination="$destination_root/$name"
         mkdir -p "$destination"
         cp -R "$skill"/. "$destination"/
     done
-    for skill in /opt/data/skills/*; do
+    for skill in "$destination_root"/*; do
         [ -d "$skill" ] || continue
         name=$(basename "$skill")
-        case " $managed " in
+        case " $cleanup_catalog " in
             *" $name "*) case " $current " in *" $name "*) ;; *) rm -rf "$skill" ;; esac ;;
         esac
     done
 }
 
-install_skills /etc/hermes-home/skills "health home-assistant media web-research"
-install_skills /etc/hermes-home/personal-skills "vaultwarden-login"
+shared_skills="health home-assistant media web-research"
+shared_skill_cleanup="$shared_skills media-admin movies series trending watching"
+install_skills /etc/hermes-home/skills "$shared_skills" "$shared_skill_cleanup"
+install_skills /etc/hermes-home/personal-skills "vaultwarden-login" "vaultwarden-login"
 chown -R 10000:10000 /opt/data/skills
 
 # Shared skills are managed by this repository, not by background reviews.

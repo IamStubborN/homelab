@@ -56,12 +56,23 @@ Only after `✅ Записать`, call the tool. Pass `confirmed=true` to
 `correct_measurement`. Edit returns to correction; cancel writes nothing.
 
 For routine event writes, pass `event_time` from the Telegram source message
-timestamp and `source_event_id` from a stable Telegram source update/message
-identifier. Reuse both when retrying the same source message. Never invent
-either value when the live gateway does not expose that metadata; without
-`source_event_id`, the service makes no retry-deduplication promise. Reusing a
-source ID with changed values returns the original record as a duplicate and
-does not overwrite it.
+timestamp. When transport metadata exposes a stable source update/message ID,
+form `source_event_id` as a stable per-fact identity: append a deterministic
+fact ordinal such as `:fact:1`, `:fact:2` to that source ID. Two facts parsed
+from one message must use different ordinals, and a retry must reuse the same
+ordinal for the same fact. Never pass the raw message/update ID alone and never
+invent either value when the live gateway does not expose that metadata;
+without `source_event_id`, the service makes no retry-deduplication promise.
+Reusing a per-fact source ID with changed values returns the original record as
+a duplicate and does not overwrite it.
+
+Before writing a user-intended verbatim repeat with no new time or context,
+call `query_health_data` for the same person and matching section or
+measurement kind with a small recent limit. Compare the complete typed values
+or content, not a summary. If the latest matching record is exact, report in
+Russian that it is already recorded and do not call a write tool. A repeat with
+an explicit new time or context is an independent fact and must be written.
+This is an agent-side preflight, not a fuzzy server deduplication rule.
 
 Before correcting a blood-pressure pulse, query the current measurement first
 and reuse its complete `systolic`, `diastolic`, and `pulse` values. The

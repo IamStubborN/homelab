@@ -105,15 +105,11 @@ trap - EXIT HUP INT TERM
 ```
 
 Deploy from the repository root so the health and embedded Hermes services use
-one Compose project. Capture a rollback tag before replacing an existing local
-image, start health first, wait for both health checks, then recreate both
-Hermes services so their entrypoint installs the current config and skill:
+one Compose project. Start health first, wait for both health checks, then
+recreate both Hermes services so their entrypoint installs the current config
+and skill:
 
 ```bash
-previous_health_image=$(docker image inspect family-health-service:local --format '{{.Id}}' 2>/dev/null || true)
-if [ -n "$previous_health_image" ]; then
-  docker tag "$previous_health_image" family-health-service:rollback
-fi
 docker compose build health-service
 docker compose up -d health-postgres health-service
 docker compose up --wait health-postgres health-service
@@ -124,9 +120,65 @@ docker compose logs --since=5m health-service hermes-andrii hermes-valentyna
 
 The logs must show applied migrations and no `health` MCP discovery/auth error.
 From each Telegram bot, run one read-only health query and confirm that the
-`health` tools are discovered before writing real data. If rollback is needed,
-retag `family-health-service:rollback` as `family-health-service:local`, recreate
-`health-service`, wait for health, and then recreate both Hermes services again.
+`health` tools are discovered before writing real data.
+
+Image-only rollback is blocked. The previous `6c2b8b3` health binary exits once
+`m20260813_000002_sleep_time_order` is recorded, and its strict MCP schemas do
+not accept `source_event_id`. A rollback must keep the repository revision,
+health image, Hermes skill/config, and database migration history aligned.
+
+For this release only, the following coordinated downgrade preserves existing
+rows. Run it from a clean checkout after verifying the pre-deploy backup above.
+It stops writers, verifies both exact migration objects, drops only the named
+check and its exact migration-history row in one transaction, then rebuilds the
+matching prior revision. Do not reuse this procedure for a later migration:
+
+```bash
+set -eu
+prior_revision=6c2b8b30a4a7a7415784c5a2257df03015129777
+hermes_digest='nousresearch/hermes-agent@sha256:1eafbbd7357ef92265ab2ba3e11edd0ff550b36bd7a1643ca88a142d5a4d4f8f'
+test -z "$(git status --porcelain)"
+git cat-file -e "$prior_revision^{commit}"
+docker pull "$hermes_digest"
+docker tag "$hermes_digest" nousresearch/hermes-agent:latest
+docker compose stop hermes-andrii hermes-valentyna health-service
+docker compose exec -T health-postgres psql -U health -d health -v ON_ERROR_STOP=1 <<'SQL'
+BEGIN;
+DO $$
+DECLARE
+  migration_count integer;
+  constraint_count integer;
+BEGIN
+  SELECT count(*) INTO migration_count
+    FROM seaql_migrations
+   WHERE version = 'm20260813_000002_sleep_time_order';
+  SELECT count(*) INTO constraint_count
+    FROM pg_constraint
+   WHERE conrelid = 'sleep_records'::regclass
+     AND conname = 'sleep_records_end_after_start';
+  IF migration_count <> 1 OR constraint_count <> 1 THEN
+    RAISE EXCEPTION 'refusing rollback: expected one migration row and one named constraint';
+  END IF;
+  ALTER TABLE sleep_records DROP CONSTRAINT sleep_records_end_after_start;
+  DELETE FROM seaql_migrations
+   WHERE version = 'm20260813_000002_sleep_time_order';
+END $$;
+COMMIT;
+SQL
+test "$(docker compose exec -T health-postgres psql -U health -d health -v ON_ERROR_STOP=1 -tAc "SELECT count(*) FROM seaql_migrations WHERE version = 'm20260813_000002_sleep_time_order'")" = 0
+test "$(docker compose exec -T health-postgres psql -U health -d health -v ON_ERROR_STOP=1 -tAc "SELECT count(*) FROM pg_constraint WHERE conrelid = 'sleep_records'::regclass AND conname = 'sleep_records_end_after_start'")" = 0
+git switch --detach "$prior_revision"
+docker compose build health-service
+docker compose up -d --pull never health-postgres health-service
+docker compose up --wait health-postgres health-service
+docker compose up -d --pull never --force-recreate hermes-andrii hermes-valentyna
+docker compose ps health-postgres health-service hermes-andrii hermes-valentyna
+```
+
+If those exact preconditions cannot be met, stop. Restore the verified
+pre-deploy backup only together with its matching repository revision and
+images; restoring it discards post-deploy writes and therefore requires an
+explicit data-retention decision.
 
 For isolated maintenance, retain the root project name explicitly:
 

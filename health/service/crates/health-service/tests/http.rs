@@ -125,7 +125,12 @@ async fn mcp_lists_exactly_the_phase_one_tools() {
             .iter()
             .find(|tool| tool["name"] == name)
             .unwrap();
-        assert!(tool["inputSchema"]["properties"]["source_event_id"].is_object());
+        let source_event_id = &tool["inputSchema"]["properties"]["source_event_id"];
+        assert!(source_event_id.is_object());
+        assert_eq!(
+            source_event_id["description"],
+            "Stable transport source identity plus a deterministic per-fact ordinal."
+        );
     }
 }
 

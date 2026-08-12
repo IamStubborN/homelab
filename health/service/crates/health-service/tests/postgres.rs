@@ -1050,7 +1050,7 @@ async fn stable_source_event_id_deduplicates_across_boundaries_and_keeps_origina
             source: None,
             status: health_core::FactStatus::UserReported,
             event_time: first_time,
-            source_event_id: Some("telegram:42:100".to_owned()),
+            source_event_id: Some("telegram:42:100:fact:1".to_owned()),
         },
     )
     .await
@@ -1065,7 +1065,7 @@ async fn stable_source_event_id_deduplicates_across_boundaries_and_keeps_origina
             source: None,
             status: health_core::FactStatus::UserReported,
             event_time: retry_time,
-            source_event_id: Some("telegram:42:100".to_owned()),
+            source_event_id: Some("telegram:42:100:fact:1".to_owned()),
         },
     )
     .await
@@ -1118,7 +1118,7 @@ async fn source_identity_avoids_old_bucket_false_positives() {
         &ctx_valentyna(),
         add(
             time::macros::datetime!(2026-08-13 10:00:31 UTC),
-            Some("telegram:42:200"),
+            Some("telegram:42:200:fact:1"),
         ),
     )
     .await
@@ -1128,7 +1128,7 @@ async fn source_identity_avoids_old_bucket_false_positives() {
         &ctx_valentyna(),
         add(
             time::macros::datetime!(2026-08-13 10:05:29 UTC),
-            Some("telegram:42:201"),
+            Some("telegram:42:201:fact:1"),
         ),
     )
     .await
@@ -1137,7 +1137,7 @@ async fn source_identity_avoids_old_bucket_false_positives() {
     assert!(matches!(independent, storage::WriteOutcome::Created { .. }));
 
     let same_time = time::macros::datetime!(2026-08-13 10:30:00 UTC);
-    for source_event_id in ["telegram:42:202", "telegram:42:203"] {
+    for source_event_id in ["telegram:42:202:fact:1", "telegram:42:203:fact:1"] {
         assert!(matches!(
             storage::add_measurement(&db, &ctx_valentyna(), add(same_time, Some(source_event_id)),)
                 .await
@@ -1174,12 +1174,87 @@ async fn source_identity_avoids_old_bucket_false_positives() {
     )
     .await
     .unwrap();
+    let storage::WriteOutcome::Created { id: same_second_id } = same_second_a else {
+        panic!("first exact-second write must create")
+    };
+    assert_eq!(
+        same_second_b,
+        storage::WriteOutcome::Duplicate {
+            existing_id: same_second_id
+        }
+    );
+}
+
+#[tokio::test]
+async fn per_fact_source_identity_allows_multiple_facts_from_one_message() {
+    let db = fresh_db().await;
+    let event_time = time::macros::datetime!(2026-08-13 12:00 UTC);
+    let symptom = |person, description: &str, ordinal| storage::AddSymptom {
+        person,
+        description: description.to_owned(),
+        severity: Some(4),
+        status: health_core::FactStatus::UserReported,
+        event_time,
+        source_event_id: Some(format!("telegram:42:500:fact:{ordinal}")),
+    };
+
+    let storage::WriteOutcome::Created { id: fact_one_id } = storage::add_symptom(
+        &db,
+        &ctx_valentyna(),
+        symptom(health_core::Person::Andrii, "Headache", 1),
+    )
+    .await
+    .unwrap() else {
+        panic!("first fact must create")
+    };
     assert!(matches!(
-        same_second_a,
+        storage::add_symptom(
+            &db,
+            &ctx_valentyna(),
+            symptom(health_core::Person::Andrii, "Nausea", 2),
+        )
+        .await
+        .unwrap(),
+        storage::WriteOutcome::Created { .. }
+    ));
+    assert_eq!(
+        storage::add_symptom(
+            &db,
+            &ctx_valentyna(),
+            symptom(health_core::Person::Andrii, "Changed retry payload", 1),
+        )
+        .await
+        .unwrap(),
+        storage::WriteOutcome::Duplicate {
+            existing_id: fact_one_id
+        }
+    );
+    assert!(matches!(
+        storage::add_meal(
+            &db,
+            &ctx_valentyna(),
+            storage::AddMeal {
+                person: health_core::Person::Andrii,
+                description: "Soup".into(),
+                items: None,
+                calories: None,
+                status: health_core::FactStatus::UserReported,
+                event_time,
+                source_event_id: Some("telegram:42:500:fact:1".into()),
+            },
+        )
+        .await
+        .unwrap(),
         storage::WriteOutcome::Created { .. }
     ));
     assert!(matches!(
-        same_second_b,
+        storage::add_symptom(
+            &db,
+            &ctx_valentyna(),
+            symptom(health_core::Person::Valentyna, "Headache", 1),
+        )
+        .await
+        .unwrap(),
         storage::WriteOutcome::Created { .. }
     ));
 }
@@ -1191,7 +1266,7 @@ async fn mcp_duplicate_is_normal_json_and_chart_is_png_image_content() {
     let arguments = serde_json::json!({
         "kind": "weight",
         "values": {"value": 81.4},
-        "source_event_id": "telegram:42:300"
+        "source_event_id": "telegram:42:300:fact:1"
     });
     let first = mcp_json(
         app.clone()
@@ -1329,6 +1404,81 @@ async fn identical_measurement_is_reported_duplicate() {
         .unwrap()
         .expect("duplicate audit row count");
     assert_eq!(audit.try_get::<i64>("", "count").unwrap(), 1);
+}
+
+#[tokio::test]
+async fn legacy_second_based_measurement_and_lab_hashes_remain_duplicates() {
+    let db = fresh_db().await;
+    use sea_orm::ConnectionTrait;
+    let measurement_id = "00000000-0000-0000-0000-000000000710".parse().unwrap();
+    let lab_id = "00000000-0000-0000-0000-000000000711".parse().unwrap();
+    db.execute_unprepared(
+        "INSERT INTO measurements (
+            id, person_id, kind, values_json, status, actor, via, event_time, dedup_hash
+         ) VALUES (
+            '00000000-0000-0000-0000-000000000710', 'andrii', 'weight',
+            '{\"value\":120.5}'::jsonb, 'user_reported', 'andrii', 'hermes_andrii',
+            '2026-08-04T11:30:00Z',
+            decode('ad5b15733dfdc8e4b49038c5dc839c179b87f752ae4d4a5cb4bb6b453b12eb4e', 'hex')
+         );
+         INSERT INTO labs (
+            id, person_id, test_date, test_name, value, status, actor, via, dedup_hash
+         ) VALUES (
+            '00000000-0000-0000-0000-000000000711', 'andrii', '2026-08-06',
+            'Glucose', 5.4, 'confirmed_by_document', 'andrii', 'hermes_andrii',
+            decode('a8fb10f6f60335e958630299cbeca7dda37013cfb7f0e770c4a52ad963ee0ea7', 'hex')
+         )",
+    )
+    .await
+    .unwrap();
+
+    let measurement = storage::add_measurement(
+        &db,
+        &ctx_valentyna(),
+        storage::AddMeasurement {
+            person: health_core::Person::Andrii,
+            kind: health_core::MeasurementKind::Weight,
+            values: serde_json::json!({"value": 120.5}),
+            source: None,
+            status: health_core::FactStatus::UserReported,
+            event_time: time::macros::datetime!(2026-08-04 14:30 +03:00),
+            source_event_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    let lab = storage::add_lab_result(
+        &db,
+        &ctx_valentyna(),
+        storage::AddLabResult {
+            person: health_core::Person::Andrii,
+            test_date: time::macros::date!(2026 - 08 - 06),
+            test_name: "Glucose".into(),
+            value: 5.4,
+            unit: None,
+            reference_min: None,
+            reference_max: None,
+            flag: None,
+            laboratory: None,
+            source_document: None,
+            status: health_core::FactStatus::ConfirmedByDocument,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        measurement,
+        storage::WriteOutcome::Duplicate {
+            existing_id: measurement_id
+        }
+    );
+    assert_eq!(
+        lab,
+        storage::WriteOutcome::Duplicate {
+            existing_id: lab_id
+        }
+    );
 }
 
 #[tokio::test]

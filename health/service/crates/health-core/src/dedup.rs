@@ -10,7 +10,7 @@ pub fn event_dedup_hash(
     normalized_values: &serde_json::Value,
     attachment_sha256: Option<&[u8; 32]>,
 ) -> [u8; 32] {
-    let timestamp = event_time.unix_timestamp_nanos().to_string();
+    let timestamp = event_time.unix_timestamp().to_string();
     let values = serde_json::to_string(normalized_values)
         .expect("serializing serde_json::Value cannot fail");
     let attachment = attachment_sha256.map(hex::encode).unwrap_or_default();
@@ -29,9 +29,10 @@ pub fn event_dedup_hash(
     hasher.finalize().into()
 }
 
-/// Stable retry identity supplied by the source transport. The payload and
-/// clinical timestamp are deliberately excluded: reusing one source event ID
-/// always resolves to the original write, even if a retry is malformed.
+/// Stable per-fact retry identity derived from a source transport ID and fact
+/// ordinal. The payload and clinical timestamp are deliberately excluded:
+/// reusing one source event ID always resolves to the original write, even if
+/// a retry is malformed.
 pub fn source_event_dedup_hash(
     person: Person,
     event_type: &str,
@@ -120,7 +121,7 @@ mod tests {
 
         assert_eq!(
             hex::encode(event_dedup_hash(Person::Andrii, "weight", t, &v, None,)),
-            "2ef949345bca41f242d214dde3cfc258c74fcdcff16b401f3e151a95548e0da5",
+            "ad5b15733dfdc8e4b49038c5dc839c179b87f752ae4d4a5cb4bb6b453b12eb4e",
         );
     }
 

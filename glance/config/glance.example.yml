@@ -72,9 +72,9 @@ pages:
                   - title: OmniRoute
                     url: https://omniroute.${DOCKER_DOMAIN}/
                     icon: si:openrouter
-                  - title: CLIProxy Management
-                    url: https://llm.${DOCKER_DOMAIN}/management.html
-                    icon: si:openai
+                  - title: Hindsight
+                    url: https://hindsight.${DOCKER_DOMAIN}/
+                    icon: si:postgresql
 
           - type: rss
             title: Self-hosted
@@ -493,13 +493,9 @@ pages:
                 url: https://search-ladder.${DOCKER_DOMAIN}/healthz
                 icon: /assets/search-ladder.svg
                 timeout: 5s
-              - title: CLIProxy Management
-                url: https://llm.${DOCKER_DOMAIN}/management.html
-                icon: si:openai
-                timeout: 5s
-              - title: Hindsight API Docs
-                url: https://hindsight.${DOCKER_DOMAIN}/docs
-                check-url: https://hindsight.${DOCKER_DOMAIN}/health
+              - title: Hindsight
+                url: https://hindsight.${DOCKER_DOMAIN}/
+                check-url: https://hindsight.${DOCKER_DOMAIN}/api/health
                 icon: si:postgresql
                 timeout: 5s
               - title: Proxmox
@@ -541,6 +537,6 @@ pages:
                   - title: OmniRoute
                     url: https://omniroute.${DOCKER_DOMAIN}/
                     icon: si:openrouter
-                  - title: CLIProxy Management
-                    url: https://llm.${DOCKER_DOMAIN}/management.html
-                    icon: si:openai
+                  - title: Hindsight
+                    url: https://hindsight.${DOCKER_DOMAIN}/
+                    icon: si:postgresql

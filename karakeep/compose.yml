@@ -27,6 +27,11 @@ services:
       CRAWLER_ALLOWED_INTERNAL_HOSTNAMES: ${KARAKEEP_CRAWLER_ALLOWED_INTERNAL_HOSTNAMES}
 
       DATA_DIR: /data # DON'T CHANGE THIS
+    depends_on:
+      chrome:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
@@ -36,25 +41,32 @@ services:
       - "traefik.http.services.karakeep.loadbalancer.server.port=3000"
     networks:
       - proxy
+      - karakeep-internal
 
   chrome:
     container_name: karakeep-chrome
-    image: gcr.io/zenika-hub/alpine-chrome:latest
+    image: ghcr.io/karakeep-app/karakeep-chrome:release
     restart: unless-stopped
+    init: true
     security_opt:
       - no-new-privileges:true
     command:
-      - --no-sandbox
       - --disable-gpu
       - --disable-dev-shm-usage
-      - --remote-debugging-address=0.0.0.0
-      - --remote-debugging-port=9222
       - --hide-scrollbars
+      - --disable-blink-features=AutomationControlled
+      - --window-size=1440,900
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9222"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
     networks:
-      - proxy
+      - karakeep-internal
 
   meilisearch:
     container_name: karakeep-meilisearch
@@ -67,12 +79,20 @@ services:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
     volumes:
       - ./data/meilisearch:/meili_data
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:7700/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
 
     networks:
-      - proxy
+      - karakeep-internal
 
 networks:
+  karakeep-internal:
+    internal: true
   proxy:
     external: true

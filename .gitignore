@@ -118,6 +118,11 @@ movie-tracker/.git/
 .claude/settings.local.json
 **/.claude/settings.local.json
 
+# Guarded Media Orchestrator deployment scratch/rollback artifacts
+media/.media-orchestrator.deploy.lock
+media/.media-orchestrator-images.previous
+media/.media-orchestrator-images.previous.generation.*/
+
 # Service-specific runtime folders with only compose/config tracked
 ai/ollama/
 ai/ollama-webui/
@@ -134,9 +139,6 @@ zeroclaw/config/auth-profiles.json
 zeroclaw/config/daemon_state.json
 
 # Real service configs containing secrets; keep sanitized examples instead
-web-research/cliproxy/config.yaml
-web-research/cliproxy/auths/
-web-research/cliproxy/static/
 samba/config/config.yml
 glance/config/glance.yml
 traefik/config/config.yml

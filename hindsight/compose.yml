@@ -32,8 +32,6 @@ services:
     depends_on:
       hindsight-db:
         condition: service_healthy
-      cli-proxy-api:
-        condition: service_started
     environment:
       HINDSIGHT_API_HOST: 0.0.0.0
       HINDSIGHT_API_PORT: "8888"
@@ -42,19 +40,26 @@ services:
       HINDSIGHT_API_DATABASE_URL: postgresql://hindsight:${HINDSIGHT_DB_PASSWORD:?set HINDSIGHT_DB_PASSWORD}@hindsight-db:5432/hindsight
 
       HINDSIGHT_API_LLM_PROVIDER: openai
-      HINDSIGHT_API_LLM_BASE_URL: http://cli-proxy-api:8317/v1
-      HINDSIGHT_API_LLM_API_KEY: ${CLIPROXY_HINDSIGHT_KEY:?set CLIPROXY_HINDSIGHT_KEY}
+      HINDSIGHT_API_LLM_BASE_URL: http://omniroute:20129/v1
+      HINDSIGHT_API_LLM_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
       HINDSIGHT_API_LLM_MODEL: gpt-5.6-luna
       HINDSIGHT_API_LLM_STRICT_SCHEMA: "true"
       HINDSIGHT_API_LLM_TRACE_ENABLED: "false"
 
-      HINDSIGHT_API_EMBEDDINGS_PROVIDER: google
-      HINDSIGHT_API_EMBEDDINGS_GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY}
-      HINDSIGHT_API_EMBEDDINGS_GEMINI_MODEL: gemini-embedding-001
-      HINDSIGHT_API_RERANKER_PROVIDER: rrf
+      HINDSIGHT_API_EMBEDDINGS_PROVIDER: openai
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: http://omniroute:20129/v1
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ollama-ipex/bge-m3:latest
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS: "1024"
+      HINDSIGHT_API_RERANKER_PROVIDER: cohere
+      HINDSIGHT_API_RERANKER_COHERE_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
+      HINDSIGHT_API_RERANKER_COHERE_BASE_URL: http://omniroute:20129/v1/rerank
+      HINDSIGHT_API_RERANKER_COHERE_MODEL: nvidia/nv-rerank-qa-mistral-4b:1
 
       HINDSIGHT_API_TENANT_EXTENSION: hindsight_api.extensions.builtin.tenant:ApiKeyTenantExtension
       HINDSIGHT_API_TENANT_API_KEY: ${HINDSIGHT_API_TOKEN:?set HINDSIGHT_API_TOKEN}
+      HINDSIGHT_CP_ACCESS_KEY: ${HINDSIGHT_API_TOKEN:?set HINDSIGHT_API_TOKEN}
+      HINDSIGHT_CP_DATAPLANE_API_KEY: ${HINDSIGHT_API_TOKEN:?set HINDSIGHT_API_TOKEN}
       HINDSIGHT_API_CONSOLIDATION_LLM_PARALLELISM: "1"
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=128m
@@ -72,7 +77,14 @@ services:
       - "traefik.http.routers.hindsight.rule=Host(`hindsight.${DOCKER_DOMAIN}`)"
       - "traefik.http.routers.hindsight.entrypoints=https"
       - "traefik.http.routers.hindsight.tls=true"
-      - "traefik.http.services.hindsight.loadbalancer.server.port=8888"
+      - "traefik.http.routers.hindsight.service=hindsight-ui"
+      - "traefik.http.services.hindsight-ui.loadbalancer.server.port=9999"
+      - "traefik.http.routers.hindsight-api.rule=Host(`hindsight.${DOCKER_DOMAIN}`) && (PathPrefix(`/v1`) || PathPrefix(`/mcp`) || Path(`/health`) || Path(`/openapi.json`) || PathPrefix(`/docs`) || Path(`/metrics`))"
+      - "traefik.http.routers.hindsight-api.entrypoints=https"
+      - "traefik.http.routers.hindsight-api.tls=true"
+      - "traefik.http.routers.hindsight-api.priority=100"
+      - "traefik.http.routers.hindsight-api.service=hindsight-api"
+      - "traefik.http.services.hindsight-api.loadbalancer.server.port=8888"
       - "com.centurylinklabs.watchtower.enable=false"
     networks:
       - agent-tools

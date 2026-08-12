@@ -3,7 +3,7 @@ SHELL := /bin/bash
 INTERNAL_STORAGE ?= /mnt/internal
 VIDEO_DIR ?= $(INTERNAL_STORAGE)/torrents/tv
 
-.PHONY: ip-test speedtest dns-leak-test update-containers prune danger-prune check-codecs
+.PHONY: ip-test speedtest dns-leak-test update-containers check-runtime prune danger-prune check-codecs
 
 ip-test:
 	docker run --rm --network=container:gluetun alpine:3.20 sh -c "apk add wget && wget -qO- https://ipinfo.io"
@@ -17,7 +17,12 @@ dns-leak-test:
 update-containers:
 	docker compose config --quiet
 	docker compose pull
-	docker compose up -d --remove-orphans
+	docker compose up -d
+
+check-runtime:
+	@bad="$$(docker ps -q | xargs -r docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}|{{index .Config.Labels "com.docker.compose.project.config_files"}}|{{.Name}}' | awk -F'|' -v root="$(CURDIR)" 'index($$1, root) == 1 && $$2 !~ ("^" root "/compose.yml(,|$$)")')"; \
+	if [[ -n "$$bad" ]]; then printf 'Containers launched outside root Compose:\n%s\n' "$$bad"; exit 1; fi
+	@echo "All homelab containers use the root Compose entrypoint"
 
 prune:
 	@echo "Refusing to run docker system prune without an explicit confirmation."

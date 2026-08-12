@@ -2,10 +2,11 @@
 
 Shared memory server for Pi clients.
 
-- API and built-in MCP: `https://hindsight.${DOCKER_DOMAIN}`
-- LLM: `gpt-5.6-luna` through the internal CLIProxy service
-- Embeddings: `gemini-embedding-001`
-- Reranking: RRF (no extra model)
+- Control Plane UI: `https://hindsight.${DOCKER_DOMAIN}`
+- API and built-in MCP: internal port `8888` (proxied by the Control Plane)
+- LLM: `gpt-5.6-luna` through OmniRoute (Codex OAuth)
+- Embeddings: local Ollama `bge-m3` at 1024 dimensions through OmniRoute
+- Reranking: NVIDIA `nv-rerank-qa-mistral-4b:1` through OmniRoute
 - Storage: PostgreSQL 17 with pgvector
 - Authentication: bearer token from `HINDSIGHT_API_TOKEN`
 
@@ -20,11 +21,9 @@ Generate unique hex values in the ignored root `.env`:
 ```bash
 HINDSIGHT_DB_PASSWORD=$(openssl rand -hex 32)
 HINDSIGHT_API_TOKEN=$(openssl rand -hex 32)
-CLIPROXY_HINDSIGHT_KEY=$(openssl rand -hex 32)
 ```
 
-Add `CLIPROXY_HINDSIGHT_KEY` to the ignored
-`web-research/cliproxy/config.yaml` `api-keys` list, then restart CLIProxy.
+Hindsight reuses the internal `SEARCH_LADDER_OMNIROUTE_KEY`; OmniRoute stores upstream provider credentials.
 
 ## Validate and start
 

@@ -17,7 +17,7 @@ with the documented Docker Compose or guarded media deployment commands.
 - Gluetun VPN routing for selected media services
 - qBittorrent and Prowlarr
 - Plex, Kavita, Samba, Watchtower, DeUnhealth
-- Inactive media-orchestrator Compose scaffold with a dedicated Rezka VPN
+- Media Orchestrator with a dedicated Rezka VPN, managed by the root Compose project
 - KaraKeep, Freedium, Movie Tracker, Glance, Speedtest Tracker
 - Bitwarden (Vaultwarden), Mosquitto, RustDesk
 - OmniRoute and Search Ladder shared by household agents
@@ -69,9 +69,8 @@ Validate compose:
 docker compose config --quiet
 ```
 
-The media-orchestrator scaffold is a separate opt-in Compose project. See
-`media/README.md` for image pinning, secret creation, validation, startup, and
-rollback commands. It is not included in the active root Compose file.
+Media Orchestrator is included in the root Compose project. See
+`media/README.md` for its image build, secrets, validation, and rollback notes.
 
 Start services:
 

@@ -501,10 +501,6 @@ pages:
                 url: https://search-ladder.${DOCKER_DOMAIN}/healthz
                 icon: /assets/search-ladder.svg
                 timeout: 5s
-              - title: Firecrawl
-                url: https://crawl.${DOCKER_DOMAIN}/
-                icon: /assets/firecrawl.png
-                timeout: 5s
               - title: CLIProxy Management
                 url: https://llm.${DOCKER_DOMAIN}/management.html
                 icon: si:openai

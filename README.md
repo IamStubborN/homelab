@@ -20,7 +20,7 @@ with the documented Docker Compose or guarded media deployment commands.
 - Inactive media-orchestrator Compose scaffold with a dedicated Rezka VPN
 - KaraKeep, Freedium, Movie Tracker, Glance, Speedtest Tracker
 - Bitwarden (Vaultwarden), Mosquitto, RustDesk
-- Internal SearXNG and Firecrawl services shared by household agents
+- OmniRoute, Search Ladder, and internal SearXNG shared by household agents
 - Hindsight shared memory server for Pi clients
 - Home Assistant with public-safe example config only
 

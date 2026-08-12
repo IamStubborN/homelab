@@ -56,10 +56,11 @@ make check-codecs VIDEO_DIR=/path/to/dir  # Custom directory
 ### Key Service Groups
 1. **Media Stack**: Plex, plex-auto-languages, media-preview-generator, qBittorrent, Prowlarr (active); Sonarr, Radarr, Bazarr, Lidarr, Readarr, Overseerr, Jellyfin (disabled)
 2. **Media Orchestrator**: Active root-Compose module (`media/compose.media-orchestrator.yml`) with a dedicated `gluetun-rezka` VPN namespace; see `media/README.md`
-3. **Custom Apps**: KaraKeep (web scraper with AI/MeiliSearch), Freedium (Medium proxy), Movie-Tracker (Telegram bot)
-4. **File Management**: Samba shares, Kavita (ebook reader), FileBrowser (disabled)
-5. **Monitoring**: Watchtower (auto-updates), DeUnhealth (health checks)
-6. **Other Services**: Bitwarden (Vaultwarden), Hindsight (shared Pi memory), Mosquitto (MQTT broker), RustDesk (remote desktop relay)
+3. **Family Health**: Local `health-service` with PostgreSQL on the shared external `health-internal` network; see `health/README.md`
+4. **Custom Apps**: KaraKeep (web scraper with AI/MeiliSearch), Freedium (Medium proxy), Movie-Tracker (Telegram bot)
+5. **File Management**: Samba shares, Kavita (ebook reader), FileBrowser (disabled)
+6. **Monitoring**: Watchtower (auto-updates), DeUnhealth (health checks)
+7. **Other Services**: Bitwarden (Vaultwarden), Hindsight (shared Pi memory), Mosquitto (MQTT broker), RustDesk (remote desktop relay)
 
 ### VPN Routing (Gluetun)
 Media services route through Gluetun container:

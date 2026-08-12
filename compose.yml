@@ -23,6 +23,7 @@ include:
     - hindsight/compose.yml
     - hermes/compose.yaml
     - media/compose.media-orchestrator.yml
+    - health/compose.yml
 
 networks:
     proxy:

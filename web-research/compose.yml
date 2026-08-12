@@ -44,9 +44,11 @@ services:
       NEXT_PUBLIC_BASE_URL: https://omniroute.${DOCKER_DOMAIN}
       BASE_URL: http://127.0.0.1:20128
       OMNIROUTE_ALLOW_PRIVATE_PROVIDER_URLS: "true"
+    command: [/bin/sh, /app/patches/start.sh]
     volumes:
       - omniroute_data:/app/data
-    mem_limit: 1g
+      - ./omniroute/start.sh:/app/patches/start.sh:ro
+    mem_limit: 2g
     healthcheck:
       test: [CMD, node, healthcheck.mjs]
       interval: 30s
@@ -66,6 +68,38 @@ services:
       - web-research-backend
       - proxy
 
+  ollama-ipex:
+    image: intelanalytics/ipex-llm-inference-cpp-xpu@sha256:a184d695b63690d3799a2dc1497c052bee5a7e4c1f85638ab5bd9ab80640d02b
+    container_name: ollama-ipex
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_NUM_GPU: "999"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_KEEP_ALIVE: "-1"
+      ZES_ENABLE_SYSMAN: "1"
+      ONEAPI_DEVICE_SELECTOR: level_zero:0
+    command:
+      - /bin/bash
+      - -lc
+      - source /opt/intel/oneapi/setvars.sh >/dev/null 2>&1; mkdir -p /llm/ollama-bin; cd /llm/ollama-bin; init-ollama; ./ollama serve & pid=$$!; trap 'kill $$pid; wait $$pid' TERM INT; until ./ollama list >/dev/null 2>&1; do sleep 1; done; ./ollama pull bge-m3; wait $$pid
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: [CMD-SHELL, /llm/ollama-bin/ollama show bge-m3 >/dev/null]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks:
+      agent-tools:
+        aliases:
+          - ollama-ipex.local
+
   search-ladder:
     image: ghcr.io/iamstubborn/search-ladder:latest
     container_name: search-ladder
@@ -77,14 +111,12 @@ services:
     depends_on:
       omniroute:
         condition: service_healthy
-      cli-proxy-api:
-        condition: service_started
     environment:
       OMNIROUTE_URL: http://omniroute:20129
       OMNIROUTE_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
       BROKER_API_KEY: ${SEARCH_LADDER_API_KEY:?set SEARCH_LADDER_API_KEY}
-      SPARK_URL: http://cli-proxy-api:8317/v1
-      SPARK_API_KEY: ${CLIPROXY_FIRECRAWL_KEY:?set CLIPROXY_FIRECRAWL_KEY}
+      SPARK_URL: http://omniroute:20129/v1
+      SPARK_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
       SPARK_MODEL: gpt-5.3-codex-spark
       FALLBACK_MODEL: auto/best-free
       SEARCH_PROVIDERS: exa-search,tavily-search,firecrawl,ollama-search
@@ -114,33 +146,6 @@ services:
       - agent-tools
       - proxy
 
-  cli-proxy-api:
-    image: eceasy/cli-proxy-api:latest
-    pull_policy: always
-    container_name: cli-proxy-api
-    restart: unless-stopped
-    user: "${PUID:-1000}:${PGID:-1000}"
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    environment:
-      MANAGEMENT_PASSWORD: ${CLIPROXY_MANAGEMENT_PASSWORD:?set CLIPROXY_MANAGEMENT_PASSWORD}
-      MANAGEMENT_STATIC_PATH: /data/static
-    command: [./CLIProxyAPI, -config, /data/config.yaml]
-    volumes:
-      - ./cliproxy:/data
-    mem_limit: 512m
-    cpus: 1.0
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=proxy"
-      - "traefik.http.routers.cli-proxy-api.tls=true"
-      - "traefik.http.routers.cli-proxy-api.entrypoints=http,https"
-      - "traefik.http.routers.cli-proxy-api.rule=Host(`llm.${DOCKER_DOMAIN}`)"
-      - "traefik.http.services.cli-proxy-api.loadbalancer.server.port=8317"
-    networks:
-      - agent-tools
-      - proxy
 
 networks:
   agent-tools:
@@ -151,6 +156,7 @@ networks:
     external: true
 
 volumes:
+  ollama_data:
   omniroute_data:
   omniroute_redis:
   search_ladder_data:

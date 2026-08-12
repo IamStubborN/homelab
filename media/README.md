@@ -1,4 +1,4 @@
-# Media Orchestrator Scaffold
+# Media Stack and Orchestrator
 
 ## Active Torrent VPN Gateway
 
@@ -22,10 +22,9 @@ install -m 0600 /dev/null media/secrets/gluetun_control_api_key
 The forwarded-port file is not a credential. The WireGuard private key and
 control API credentials must remain mode `0600` and must never be committed.
 
-`compose.media-orchestrator.yml` is intentionally separate from the active
-`media/compose.yml`. It cannot affect the running homelab stack until it is
-explicitly enabled after immutable application images have been built and
-published.
+`compose.media-orchestrator.yml` is included by the root `compose.yml` and is
+managed as part of the `homelab` Compose project. Application images must be
+built before running a root deployment.
 
 ## Prerequisites
 
@@ -33,8 +32,8 @@ Copy the media-orchestrator placeholders from the root `.env.example` into the
 real ignored `.env`, replacing every image digest and provider placeholder.
 The application images provide their own `media healthcheck` command; no
 additional HTTP client is required in the runtime images. Create the external
-networks used by this media-orchestrator profile once (the Hermes profiles and
-credential broker live in separate deployments):
+networks used by Media Orchestrator once (the Hermes services and credential
+broker live in a separate deployment):
 
 ```bash
 docker network create media-internal
@@ -116,9 +115,7 @@ For an operator-side render using the real ignored environment and the two
 Gluetun secret file paths:
 
 ```bash
-docker compose --env-file .env \
-  -f media/compose.media-orchestrator.yml \
-  --profile media-orchestrator config --quiet
+docker compose --env-file .env config --quiet
 ```
 
 ## Start And Operate
@@ -137,13 +134,9 @@ the Docker socket is not mounted, and file mutations move data into
 `/data/internal/media-orchestrator/quarantine`.
 
 ```bash
-docker compose --env-file .env \
-  -f media/compose.media-orchestrator.yml \
-  --profile media-orchestrator up -d
+docker compose --env-file .env up -d
 
-docker compose --env-file .env \
-  -f media/compose.media-orchestrator.yml \
-  --profile media-orchestrator ps
+docker compose --env-file .env ps
 ```
 
 The existing `gluetun-watcher` remains paired only with the torrent Gluetun
@@ -168,9 +161,7 @@ diagnostics, then disabled before the container is recreated.
 
 `glance/config/glance.example.yml` includes a `custom-api` widget ("Media Queue")
 that calls `GET http://media-service:8080/v1/queue/status` and renders the
-`queued` count and `active` flag from `QueueStatusDto`. It is wired for the
-final topology but stays dark (Glance's own request-failed state) until this
-profile is deployed, simply because `media-service` does not exist yet.
+`queued` count and `active` flag from `QueueStatusDto`. It uses the shared `proxy` network to reach the active `media-service`.
 
 No network change is needed on the `glance` side: both `glance/compose.yml`
 and this file already declare `proxy` as an `external: true` network, so once
@@ -190,16 +181,16 @@ inventing a new credential.
 
 ## Rollback
 
-Stopping this separate project leaves Plex, qBittorrent, Prowlarr, and the
-existing Gluetun stack untouched:
+Do not use `down` for an orchestrator-only rollback because it belongs to the
+root project. Restore the previous application image values in `.env`, then
+recreate only its long-running services:
 
 ```bash
-docker compose --env-file .env \
-  -f media/compose.media-orchestrator.yml \
-  --profile media-orchestrator down
+docker compose --env-file .env config --quiet
+docker compose --env-file .env up -d \
+  media-postgres media-service gluetun-rezka download-runner gluetun-rezka-watcher
 ```
 
-Named database, Gluetun, and encrypted session volumes are retained by default.
-Never add `--volumes` during normal rollback. To roll back an image release,
-restore the previous immutable digest in `.env`, run `config --quiet`, and then
-run `up -d` again.
+The database, Gluetun, lifecycle, and encrypted-session volumes have explicit
+`media-orchestrator_*` names so the root-project migration preserves existing
+data. Never delete those volumes during a normal rollback.

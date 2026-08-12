@@ -53,7 +53,7 @@ export MEDIA_REZKA_COOKIE_KEY=ZHVtbXktMzItYnl0ZS1yZXprYS1jb29raWUta2V5ISE=
 export MT_TMDB_API_KEY=dummy-tmdb-api-key
 export MT_TMDB_LANGUAGE=ru
 
-docker compose -f "$COMPOSE_FILE" --profile media-orchestrator config > "$TMP_DIR/rendered.yml"
+docker compose -f "$COMPOSE_FILE" config > "$TMP_DIR/rendered.yml"
 
 assert_yq() {
     expression=$1
@@ -174,6 +174,8 @@ assert_yq '.services.download-runner.volumes | any_c(.source == "rezka_session_e
     'runner must persist the shared encrypted Rezka session snapshot'
 assert_yq '(.volumes | has("rezka_session_encrypted")) and (.volumes | has("rezka_service_session_encrypted") | not)' \
     'service and runner must share one encrypted Rezka session volume'
+assert_yq '.volumes.media_postgres_data.name == "media-orchestrator_media_postgres_data" and .volumes.media_postgres_data.external == true and .volumes.gluetun_rezka_state.name == "media-orchestrator_gluetun_rezka_state" and .volumes.gluetun_rezka_state.external == true and .volumes.gluetun_rezka_lifecycle.name == "media-orchestrator_gluetun_rezka_lifecycle" and .volumes.gluetun_rezka_lifecycle.external == true and .volumes.rezka_session_encrypted.name == "media-orchestrator_rezka_session_encrypted" and .volumes.rezka_session_encrypted.external == true' \
+    'root project migration must preserve and reuse the existing orchestrator volumes'
 
 for service in media-postgres media-session-init media-migrate media-service gluetun-rezka download-runner gluetun-rezka-watcher; do
     image=$(yq -r ".services.\"$service\".image" "$TMP_DIR/rendered.yml")

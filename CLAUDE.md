@@ -14,7 +14,7 @@ This is a self-hosted homelab infrastructure project using Docker Compose. The s
 docker compose up -d
 
 # Restart services after changes
-docker compose config --quiet && docker compose up -d --remove-orphans
+docker compose config --quiet && docker compose up -d
 
 # View logs for a specific service
 docker compose logs -f [service_name]
@@ -43,19 +43,19 @@ make check-codecs VIDEO_DIR=/path/to/dir  # Custom directory
 
 ### Service Organization
 - Main orchestration: `/compose.yml` includes all active services via `include:` directive
-- Each service has its own directory with `compose.yml`
-- Disabled services are commented out in main compose.yml
+- Each service group has its own directory and Compose file
+- All active services under this repository are launched from the root project
 
 ### Network Architecture
 - **Traefik** reverse proxy handles all HTTP/HTTPS traffic with Cloudflare DNS challenge
-- **Gluetun** VPN container routes media services through NordVPN WireGuard
+- **Gluetun** VPN containers route media services through Proton VPN WireGuard
 - Services use `network_mode: service:gluetun` to route through VPN
 - Shared `proxy` network (external) connects all services to Traefik
 - All services accessible via `*.${DOCKER_DOMAIN}` domain
 
 ### Key Service Groups
 1. **Media Stack**: Plex, plex-auto-languages, media-preview-generator, qBittorrent, Prowlarr (active); Sonarr, Radarr, Bazarr, Lidarr, Readarr, Overseerr, Jellyfin (disabled)
-2. **Media Orchestrator**: Inactive opt-in Compose scaffold (`media/compose.media-orchestrator.yml`) with a dedicated `gluetun-rezka` VPN namespace; see `media/README.md`
+2. **Media Orchestrator**: Active root-Compose module (`media/compose.media-orchestrator.yml`) with a dedicated `gluetun-rezka` VPN namespace; see `media/README.md`
 3. **Custom Apps**: KaraKeep (web scraper with AI/MeiliSearch), Freedium (Medium proxy), Movie-Tracker (Telegram bot)
 4. **File Management**: Samba shares, Kavita (ebook reader), FileBrowser (disabled)
 5. **Monitoring**: Watchtower (auto-updates), DeUnhealth (health checks)
@@ -63,7 +63,7 @@ make check-codecs VIDEO_DIR=/path/to/dir  # Custom directory
 
 ### VPN Routing (Gluetun)
 Media services route through Gluetun container:
-- qBittorrent and Prowlarr: `network_mode: service:gluetun`
+- qBittorrent uses `network_mode: service:gluetun`; Prowlarr connects directly
 - speedtest-tracker-vpn also routes through the same Gluetun container: `network_mode: service:gluetun`
 - Plex: Does NOT route through VPN (direct network access)
 - Health checks integrated with DeUnhealth for auto-restart
@@ -114,6 +114,8 @@ cd bitwarden && docker compose pull && docker compose up -d
 cd traefik && docker compose pull && docker compose up -d
 ```
 
+Run `make check-runtime` after deployment to detect containers launched directly from child Compose files.
+
 ## Development Notes
 
 ### Adding New Services
@@ -160,7 +162,7 @@ Use the tracked helper for database backups:
 freedium/backup-db.sh
 ```
 
-**Hindsight** (`/hindsight/`): Shared authenticated memory API for Pi clients. It uses PostgreSQL/pgvector, CLIProxy for LLM calls, and Gemini embeddings. See `hindsight/README.md` for secrets, deployment, and backup/restore.
+**Hindsight** (`/hindsight/`): Shared authenticated memory API for Pi clients. It uses PostgreSQL/pgvector and OmniRoute for Codex OAuth LLM calls, local BGE-M3 embeddings, and NVIDIA reranking. See `hindsight/README.md` for secrets, deployment, and backup/restore.
 
 **Movie-Tracker** (`/movie-tracker/`): Python Telegram bot deployed from the private image `ghcr.io/example/movie-tracker:latest`. The homelab repository intentionally tracks only the compose wrapper. A clean host must be logged in to GHCR before pulling:
 ```bash

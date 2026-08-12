@@ -57,9 +57,14 @@ The root filesystem is read-only. `/run` is the only executable tmpfs because s6
 Both profiles discover the internal streamable-HTTP `health` MCP server at `health-service:8080/internal/mcp` through the external `health-internal` network. Each profile uses its own bearer token and owner default, while an explicitly named spouse may override that default. Hermes reuses the exact ignored token files owned by the embedded `health` stack; the health service must be available for first MCP discovery. The shared health skill specifies Russian user-facing text and native clarification choices, but these repository checks assert the skill contract rather than live Telegram behavior. Live Telegram acceptance and MCP discovery remain part of Task 14 after the service and credentials are available. Deployment remains the guarded manual flow.
 
 Stable retry identity is live-deferred until the Hermes Telegram gateway is
-verified to expose a source update/message identifier to the skill context. The
-skill must not invent `source_event_id`; without it, only exact event-time
-deduplication applies.
+verified to expose a source update/message identifier to the skill context. If
+available, the skill derives a per-fact identity from that stable transport ID
+plus a deterministic fact ordinal; it never passes the raw message ID or
+invents `source_event_id`. Without it, only exact event-time deduplication
+applies. The skill's preflight for a user-intended verbatim repeat is likewise
+a contract assertion pending live Telegram acceptance in Task 14; it queries
+recent full values and skips the write only for an exact match with no new time
+or context.
 
 The media service maps each MCP token server-side to its fixed owner. No
 model-supplied owner field is accepted. The standalone `hermes-media` wrapper

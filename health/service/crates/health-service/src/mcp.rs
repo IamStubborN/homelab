@@ -39,6 +39,7 @@ struct AddMeasurementInput {
     source: Option<String>,
     status: Option<String>,
     event_time: Option<String>,
+    /// Stable transport source identity plus a deterministic per-fact ordinal.
     source_event_id: Option<String>,
 }
 
@@ -60,6 +61,7 @@ struct AddMealInput {
     calories: Option<i32>,
     status: Option<String>,
     event_time: Option<String>,
+    /// Stable transport source identity plus a deterministic per-fact ordinal.
     source_event_id: Option<String>,
 }
 
@@ -71,6 +73,7 @@ struct AddSymptomInput {
     severity: Option<i32>,
     status: Option<String>,
     event_time: Option<String>,
+    /// Stable transport source identity plus a deterministic per-fact ordinal.
     source_event_id: Option<String>,
 }
 
@@ -83,6 +86,7 @@ struct AddSleepRecordInput {
     quality: Option<i32>,
     notes: Option<String>,
     status: Option<String>,
+    /// Stable transport source identity plus a deterministic per-fact ordinal.
     source_event_id: Option<String>,
 }
 

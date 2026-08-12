@@ -155,6 +155,19 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
         self.assertIn('test "$(docker compose exec -T health-postgres psql', runbook)
         self.assertNotIn("createdb -U health health_restore_verify\n", runbook)
 
+    def test_health_runbook_blocks_image_only_rollback(self):
+        runbook = (HOMELAB_ROOT / "health/README.md").read_text(encoding="utf-8")
+        compact = " ".join(runbook.split())
+        self.assertIn("Image-only rollback is blocked", runbook)
+        self.assertIn("repository revision, health image, Hermes skill/config", compact)
+        self.assertIn("m20260813_000002_sleep_time_order", runbook)
+        self.assertIn("sleep_records_end_after_start", runbook)
+        self.assertIn("migration_count <> 1 OR constraint_count <> 1", runbook)
+        self.assertIn("git switch --detach \"$prior_revision\"", runbook)
+        self.assertIn("docker compose up -d --pull never", runbook)
+        self.assertNotIn("family-health-service:rollback", runbook)
+        self.assertNotIn("retag `family-health-service:rollback`", runbook)
+
     def test_health_network_guard_rejects_legacy_non_internal_network(self):
         runbook = (HOMELAB_ROOT / "health/README.md").read_text(encoding="utf-8")
         block = re.search(
@@ -778,8 +791,18 @@ class EmbeddedHealthSkillContractTests(unittest.TestCase):
         self.assertIn("`add_condition`", self.skill)
         self.assertIn("confirmed=true", self.skill)
         self.assertIn("Telegram source message timestamp", self.compact)
-        self.assertIn("stable Telegram source update/message identifier", self.compact)
+        self.assertIn("stable source update/message ID", self.compact)
+        self.assertIn("stable per-fact identity", self.compact)
+        self.assertIn("deterministic fact ordinal", self.compact)
+        self.assertIn(":fact:1", self.skill)
+        self.assertIn("raw message/update ID alone", self.compact)
         self.assertIn("makes no retry-deduplication promise", self.compact)
+        self.assertIn("user-intended verbatim repeat", self.compact)
+        self.assertIn("call `query_health_data`", self.compact)
+        self.assertIn("Compare the complete typed values", self.compact)
+        self.assertIn("do not call a write tool", self.compact)
+        self.assertIn("explicit new time or context", self.compact)
+        self.assertIn("agent-side preflight", self.compact)
 
 
 if __name__ == "__main__":

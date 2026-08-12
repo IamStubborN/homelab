@@ -155,18 +155,48 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
         self.assertIn('test "$(docker compose exec -T health-postgres psql', runbook)
         self.assertNotIn("createdb -U health health_restore_verify\n", runbook)
 
-    def test_health_runbook_blocks_image_only_rollback(self):
+    def test_health_runbook_fails_closed_without_in_place_rollback_recipe(self):
         runbook = (HOMELAB_ROOT / "health/README.md").read_text(encoding="utf-8")
         compact = " ".join(runbook.split())
-        self.assertIn("Image-only rollback is blocked", runbook)
-        self.assertIn("repository revision, health image, Hermes skill/config", compact)
-        self.assertIn("m20260813_000002_sleep_time_order", runbook)
-        self.assertIn("sleep_records_end_after_start", runbook)
-        self.assertIn("migration_count <> 1 OR constraint_count <> 1", runbook)
-        self.assertIn("git switch --detach \"$prior_revision\"", runbook)
-        self.assertIn("docker compose up -d --pull never", runbook)
+        lower = compact.lower()
+        self.assertIn("image-only rollback and in-place downgrade are unsupported", lower)
+        self.assertIn("stop `health-service` and both hermes services", lower)
+        self.assertIn("preserve the current external `health-pg-data` volume", lower)
+        self.assertIn("take a new private dump", lower)
+        self.assertIn("recommended default is to roll forward", lower)
+        self.assertIn("operator-selected destructive fallback", lower)
+        self.assertIn("will discard all post-deploy writes", lower)
+        self.assertIn("matching repository revision, images, and config", lower)
+        self.assertIn("uses `latest` and watchtower", lower)
+        self.assertIn("operator decision for the live incident", lower)
         self.assertNotIn("family-health-service:rollback", runbook)
         self.assertNotIn("retag `family-health-service:rollback`", runbook)
+        self.assertNotIn("ALTER TABLE sleep_records DROP CONSTRAINT", runbook)
+        self.assertNotIn("DELETE FROM seaql_migrations", runbook)
+        self.assertNotIn("git switch --detach", runbook)
+        self.assertNotIn("prior_revision=", runbook)
+        self.assertNotIn("coordinated downgrade", runbook)
+
+    def test_health_image_rebuilds_local_workspace_packages_after_cached_dependencies(self):
+        dockerfile = (HOMELAB_ROOT / "health/service/Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        clean = (
+            "cargo clean --release --package health-core "
+            "--package health-migration --package health-service"
+        )
+        self.assertIn(clean, " ".join(dockerfile.split()))
+        self.assertLess(
+            dockerfile.index("cargo clean --release"),
+            dockerfile.rindex("cargo build --release"),
+        )
+
+        probe = HOMELAB_ROOT / "health/service/scripts/test-docker-cache.sh"
+        self.assertTrue(os.access(probe, os.X_OK))
+        source = probe.read_text(encoding="utf-8")
+        self.assertIn("cache_fixture_old", source)
+        self.assertIn("m20260813_000002_sleep_time_order", source)
+        self.assertIn("health-target-", dockerfile)
 
     def test_health_network_guard_rejects_legacy_non_internal_network(self):
         runbook = (HOMELAB_ROOT / "health/README.md").read_text(encoding="utf-8")

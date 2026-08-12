@@ -22,6 +22,7 @@ COPY . .
 RUN --mount=type=cache,id=health-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=health-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=health-target-${TARGETARCH},target=/app/target,sharing=locked \
+    cargo clean --release --package health-core --package health-migration --package health-service && \
     cargo build --release --locked --package health-service && \
     install -D -m 0755 target/release/health-service /out/health-service && \
     strip /out/health-service

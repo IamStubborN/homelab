@@ -51,6 +51,9 @@ Upgrades are manual: update the managed profile `_config_version` to the schema
 supported by the candidate image, run the full config/runtime and official-image
 bootstrap checks, verify that no `config.yaml.bak-*` captures runtime secrets,
 and only then change the digest. Automatic image/schema upgrades are forbidden.
+After a database or MCP contract change, image-only rollback and in-place
+downgrade are unsupported; follow the fail-closed incident guidance in the
+health runbook and make the recovery choice explicitly.
 
 The root filesystem is read-only. `/run` is the only executable tmpfs because s6-overlay stages its init binary there; `/tmp` remains `noexec`. All Linux capabilities are dropped except the official bootstrap requirements. Hermes runs as UID/GID `10000:10000`. Before privileges are dropped, the entrypoint copies only the media, health, and browser-broker client tokens into a private `0400` runtime directory owned by that user. The copies live only in `/run` and disappear with the container. The health token is not exported to the Hermes process environment. The config merger keeps a sanitized persistent base at `/opt/data/config.base.yaml`, writes the bearer-bearing active config as `0600` on `/run` tmpfs, and leaves only a symlink at `/opt/data/config.yaml`. Container restarts rematerialize the runtime file; generation failures remove temporary/runtime outputs, so named-volume files and snapshots do not retain the bearer.
 

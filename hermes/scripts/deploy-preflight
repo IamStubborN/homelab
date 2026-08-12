@@ -2,9 +2,8 @@
 set -eu
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-orchestrator=${MEDIA_ORCHESTRATOR_DIR:-"$root/../../media-orchestrator"}
+: "${MEDIA_RELEASE_DIR:?MEDIA_RELEASE_DIR is required}"
 checker=${HERMES_CAPABILITY_CHECKER:-"$root/scripts/check-media-capabilities"}
-schema=${MEDIA_MCP_SCHEMA_FILE:-"$root/shared/skills/media/MCP_SCHEMA.json"}
 
 live_tools=
 live_attestation=
@@ -27,18 +26,21 @@ while test "$#" -gt 0; do
     esac
 done
 
-python3 "$checker" --orchestrator "$orchestrator"
+python3 "$checker" --release-dir "$MEDIA_RELEASE_DIR"
 
 if test -n "$live_tools"; then
-    python3 - "$schema" "$live_tools" <<'PY'
+    python3 - "$root/scripts" "$MEDIA_RELEASE_DIR" "$live_tools" <<'PY'
 import json
+import pathlib
 import sys
 
-with open(sys.argv[1], encoding="utf-8") as source:
-    expected = json.load(source)["tools"]
-with open(sys.argv[2], encoding="utf-8") as source:
-    actual = json.load(source)
+sys.path.insert(0, sys.argv[1])
+from media_release_contract import load_release_contract
 
+release_dir = pathlib.Path(sys.argv[2])
+load_release_contract(release_dir)
+expected = json.loads((release_dir / "MCP_SCHEMA.json").read_text(encoding="utf-8"))["tools"]
+actual = json.loads(pathlib.Path(sys.argv[3]).read_text(encoding="utf-8"))
 canonical = lambda tools: json.dumps(
     sorted(tools, key=lambda tool: tool["name"]),
     ensure_ascii=False,
@@ -46,40 +48,47 @@ canonical = lambda tools: json.dumps(
     separators=(",", ":"),
 )
 if canonical(expected) != canonical(actual):
-    raise SystemExit("live media MCP tools/list differs from local schema artifact")
+    raise SystemExit("live media MCP tools/list differs from the release bundle")
 PY
 fi
 
 if test -n "$live_attestation"; then
-    python3 - "$orchestrator" "$live_attestation" <<'PY'
+    python3 - "$root/scripts" "$MEDIA_RELEASE_DIR" "$live_attestation" <<'PY'
 import json
 import pathlib
-import subprocess
 import sys
 
-root = pathlib.Path(sys.argv[1])
-raw = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+sys.path.insert(0, sys.argv[1])
+from media_release_contract import load_release_contract
+
+release = load_release_contract(pathlib.Path(sys.argv[2]))
+raw = json.loads(pathlib.Path(sys.argv[3]).read_text(encoding="utf-8"))
 if isinstance(raw, list):
-    labels = raw[0]["Config"]["Labels"]
+    if len(raw) != 1 or not isinstance(raw[0], dict):
+        raise SystemExit("live media OCI attestation is invalid")
+    config = raw[0].get("Config")
+    if not isinstance(config, dict) or not isinstance(config.get("Labels"), dict):
+        raise SystemExit("live media OCI attestation is invalid")
+    labels = config["Labels"]
     actual = {
+        "image": config.get("Image"),
         "revision": labels.get("org.opencontainers.image.revision"),
         "version": labels.get("org.opencontainers.image.version"),
         "source_tree_digest": labels.get("dev.iamstubborn.media.source-tree-digest"),
+        "runner_build_digest": labels.get("dev.iamstubborn.media.runner-build-digest"),
     }
-else:
+elif isinstance(raw, dict):
     actual = raw
-
-build_script = root / "scripts" / "docker-build.sh"
+else:
+    raise SystemExit("live media OCI attestation is invalid")
 expected = {
-    "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
-    "version": subprocess.check_output(
-        [str(build_script), "--print-source-version"], cwd=root, text=True
-    ).strip(),
-    "source_tree_digest": subprocess.check_output(
-        [str(build_script), "--print-source-tree-digest"], cwd=root, text=True
-    ).strip(),
+    "image": release["service_image"],
+    "revision": release["source_revision"],
+    "version": release["application_version"],
+    "source_tree_digest": release["source_tree_digest"],
+    "runner_build_digest": release["runner_build_digest"],
 }
 if actual != expected:
-    raise SystemExit("backend source attestation differs from local source/version")
+    raise SystemExit("live media OCI attestation differs from the release bundle")
 PY
 fi

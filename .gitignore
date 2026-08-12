@@ -65,6 +65,7 @@ media/readarr/
 media/recyclarr/
 media/sonarr/config/
 media/gluetun/data/
+media/release/
 miniflux/postgres/
 mosquitto/data/
 mosquitto/log/

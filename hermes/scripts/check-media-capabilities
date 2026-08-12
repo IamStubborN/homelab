@@ -1,30 +1,21 @@
 #!/usr/bin/env python3
-"""Check Hermes media capability discovery against the canonical MCP manifest."""
+"""Check Hermes media capabilities against an exported release bundle."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import pathlib
 import re
-import subprocess
 import sys
-import tempfile
+
+from media_release_contract import ContractError, load_release_contract
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DEFAULT_ORCHESTRATOR = ROOT.parent / "media-orchestrator"
 CAPABILITY_DOC = ROOT / "shared/skills/media/CAPABILITIES.md"
 SCHEMA_ARTIFACT = ROOT / "shared/skills/media/MCP_SCHEMA.json"
-SCHEMA_SOURCE_PATHS = (
-    "Cargo.lock",
-    "Cargo.toml",
-    "config/media-capabilities.json",
-    "crates/media-api/Cargo.toml",
-    "crates/media-api/src/mcp.rs",
-)
 PROFILES = (
     ROOT / "profiles/andrii/config/config.yaml",
     ROOT / "profiles/valentyna/config/config.yaml",
@@ -32,13 +23,11 @@ PROFILES = (
 
 
 def expected_document(tool_names: list[str]) -> str:
-    source = "media-orchestrator/config/media-capabilities.json"
     return "\n".join(
         [
             "# Media MCP Capabilities",
             "",
-            "This file is generated from the canonical media-service manifest:",
-            f"`{source}`.",
+            "This file is generated from the validated Media Orchestrator release bundle.",
             "",
             "Hermes discovers every published tool dynamically. This catalog is",
             "documentation, not an allowlist or an authorization policy.",
@@ -49,269 +38,77 @@ def expected_document(tool_names: list[str]) -> str:
     )
 
 
-def load_manifest(path: pathlib.Path) -> list[str]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("schema_version") != 1 or payload.get("mcp_server") != "media_admin":
-        raise ValueError("unsupported media capability manifest")
-    names = payload.get("tools")
-    if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
-        raise ValueError("manifest tools must be a non-empty string array")
-    if len(names) != len(set(names)):
-        raise ValueError("manifest contains duplicate tool names")
-    return names
-
-
-def schema_source_digest(orchestrator: pathlib.Path) -> str:
-    digest = hashlib.sha256()
-    for relative in SCHEMA_SOURCE_PATHS:
-        path = orchestrator / relative
-        digest.update(relative.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
-def generate_schema_artifact(orchestrator: pathlib.Path) -> dict:
-    with tempfile.TemporaryDirectory(prefix="media-mcp-schema-") as directory:
-        snapshot = pathlib.Path(directory) / "tools.json"
-        env = dict(os.environ)
-        env["MCP_SCHEMA_SNAPSHOT"] = str(snapshot)
-        subprocess.run(
-            [
-                "cargo",
-                "test",
-                "-p",
-                "media-api",
-                "--test",
-                "mcp",
-                "stateless_mcp_2026_lists_tools_without_initialize_or_session",
-                "--",
-                "--exact",
-            ],
-            cwd=orchestrator,
-            env=env,
-            check=True,
-        )
-        tools = json.loads(snapshot.read_text(encoding="utf-8"))
-    if not isinstance(tools, list) or not tools:
-        raise ValueError("generated MCP schema must be a non-empty tool array")
-    return {
-        "schema_version": 1,
-        "source_digest": schema_source_digest(orchestrator),
-        "tools": tools,
-    }
-
-
-def validate_schema_artifact(payload: dict) -> None:
-    if payload.get("schema_version") != 1:
-        raise ValueError("unsupported MCP schema artifact")
-    if not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("source_digest", ""))):
-        raise ValueError("invalid MCP schema source digest")
-    tools = payload.get("tools")
-    if not isinstance(tools, list) or not tools:
-        raise ValueError("MCP schema artifact tools must be a non-empty array")
-    names = [tool.get("name") for tool in tools if isinstance(tool, dict)]
-    if len(names) != len(tools) or not all(isinstance(name, str) and name for name in names):
-        raise ValueError("MCP schema artifact contains an invalid tool")
-    if len(names) != len(set(names)):
-        raise ValueError("MCP schema artifact contains duplicate tools")
-
-
-def load_schema_artifact(path: pathlib.Path) -> dict:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    validate_schema_artifact(payload)
-    return payload
-
-
-def canonical_tools(tools: list[dict]) -> str:
-    return json.dumps(
-        sorted(tools, key=lambda tool: tool["name"]),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
-def stage_text(path: pathlib.Path, value: str, mode: int) -> pathlib.Path:
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = pathlib.Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-            output.write(value)
-            output.flush()
-            os.fsync(output.fileno())
-        temporary.chmod(mode)
-        return temporary
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
-def restore_file(path: pathlib.Path, original: tuple[bytes, int] | None) -> None:
-    if original is None:
-        path.unlink(missing_ok=True)
-        return
-    content, mode = original
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.rollback.", dir=path.parent)
-    temporary = pathlib.Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as output:
-            output.write(content)
-            output.flush()
-            os.fsync(output.fileno())
-        temporary.chmod(mode)
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def atomic_write_texts(updates: tuple[tuple[pathlib.Path, str], ...]) -> None:
-    originals: dict[pathlib.Path, tuple[bytes, int] | None] = {}
-    staged: dict[pathlib.Path, pathlib.Path] = {}
-    published: list[pathlib.Path] = []
-    try:
-        for path, value in updates:
-            original = (
-                (path.read_bytes(), path.stat().st_mode & 0o777)
-                if path.exists()
-                else None
-            )
-            originals[path] = original
-            mode = original[1] if original is not None else 0o644
-            staged[path] = stage_text(path, value, mode)
-
-        try:
-            for path, _ in updates:
-                os.replace(staged[path], path)
-                staged.pop(path)
-                published.append(path)
-        except OSError as publish_error:
-            rollback_errors: list[OSError] = []
-            for path in reversed(published):
-                try:
-                    restore_file(path, originals[path])
-                except OSError as rollback_error:
-                    rollback_errors.append(rollback_error)
-            if rollback_errors:
-                raise OSError(
-                    f"generated file publication failed and rollback failed: {rollback_errors[0]}"
-                ) from publish_error
-            raise
-    finally:
-        for temporary in staged.values():
-            temporary.unlink(missing_ok=True)
-
-
-def discovered_rust_tools(orchestrator: pathlib.Path) -> list[str]:
-    source = (orchestrator / "crates/media-api/src/mcp.rs").read_text(encoding="utf-8")
-    return re.findall(r'\bname\s*=\s*"([a-z][a-z0-9_]*)"', source)
-
-
 def referenced_tools() -> set[str]:
     references: set[str] = set()
     for path in ROOT.glob("shared/skills/*/SKILL.md"):
         source = path.read_text(encoding="utf-8")
-        references.update(
-            re.findall(r"`((?:media|plex|qbittorrent)_[a-z0-9_]+)`", source)
-        )
+        references.update(re.findall(r"`((?:media|plex|qbittorrent)_[a-z0-9_]+)`", source))
     for path in ROOT.glob("shared/plugins/**/*.py"):
         source = path.read_text(encoding="utf-8")
         references.update(re.findall(r"mcp__media_admin__([a-z][a-z0-9_]*)", source))
-    # This is a destructive action value accepted by a tool, not a tool name.
     references.discard("plex_delete")
     return references
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--orchestrator",
-        type=pathlib.Path,
-        default=DEFAULT_ORCHESTRATOR,
-        help="path to the media-orchestrator checkout",
-    )
-    parser.add_argument("--sync", action="store_true", help="regenerate the checked-in catalog")
+    parser.add_argument("--release-dir", type=pathlib.Path)
+    parser.add_argument("--sync", action="store_true", help="copy validated bundle artifacts")
     args = parser.parse_args()
-
-    orchestrator = args.orchestrator.resolve()
-    manifest_path = orchestrator / "config/media-capabilities.json"
-    try:
-        manifest_names = load_manifest(manifest_path)
-    except (OSError, ValueError, json.JSONDecodeError) as error:
-        print(f"media capability manifest error: {error}", file=sys.stderr)
+    configured = args.release_dir or os.environ.get("MEDIA_RELEASE_DIR")
+    if not configured:
+        print("MEDIA_RELEASE_DIR is required", file=sys.stderr)
         return 1
+    release_dir = pathlib.Path(configured).resolve()
 
-    expected = expected_document(manifest_names)
     try:
-        runtime_artifact = generate_schema_artifact(orchestrator)
-        validate_schema_artifact(runtime_artifact)
-    except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
-        print(f"media MCP schema generation failed: {error}", file=sys.stderr)
-        return 1
-
-    errors: list[str] = []
-    rust_names = discovered_rust_tools(orchestrator)
-    if rust_names != manifest_names:
-        errors.append(
-            "Rust MCP tool order/content differs from config/media-capabilities.json"
+        load_release_contract(release_dir)
+        schema_text = (release_dir / "MCP_SCHEMA.json").read_text(encoding="utf-8")
+        schema = json.loads(schema_text)
+        capabilities = json.loads(
+            (release_dir / "media-capabilities.json").read_text(encoding="utf-8")
         )
+    except (ContractError, OSError, UnicodeError, json.JSONDecodeError) as error:
+        print(f"media release contract error: {error}", file=sys.stderr)
+        return 1
 
+    names = capabilities["tools"]
+    errors: list[str] = []
     for profile in PROFILES:
         source = profile.read_text(encoding="utf-8")
         if "media_admin:" not in source:
             errors.append(f"{profile}: media_admin MCP server is missing")
         if re.search(r"^\s+(?:include|exclude):", source, flags=re.MULTILINE):
             errors.append(f"{profile}: media MCP tools must be discovered without include/exclude")
-
     references = referenced_tools()
-    unknown = sorted(references - set(manifest_names))
+    unknown = sorted(references - set(names))
     if unknown:
-        errors.append(f"Hermes references tools absent from the manifest: {', '.join(unknown)}")
-    undocumented = sorted(set(manifest_names) - references)
+        errors.append(f"Hermes references tools absent from the release bundle: {', '.join(unknown)}")
+    undocumented = sorted(set(names) - references)
     if undocumented:
-        errors.append(f"Manifest tools absent from Hermes skills/plugins: {', '.join(undocumented)}")
-
+        errors.append(f"Release tools absent from Hermes skills/plugins: {', '.join(undocumented)}")
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
 
+    expected = expected_document(names)
     if args.sync:
-        artifact_text = (
-            json.dumps(runtime_artifact, ensure_ascii=False, separators=(",", ":")) + "\n"
-        )
-        try:
-            atomic_write_texts(
-                (
-                    (SCHEMA_ARTIFACT, artifact_text),
-                    (CAPABILITY_DOC, expected),
-                )
-            )
-        except OSError as error:
-            print(f"media MCP artifact update failed: {error}", file=sys.stderr)
-            return 1
-
+        SCHEMA_ARTIFACT.write_text(schema_text, encoding="utf-8")
+        CAPABILITY_DOC.write_text(expected, encoding="utf-8")
     errors = []
     if not CAPABILITY_DOC.exists() or CAPABILITY_DOC.read_text(encoding="utf-8") != expected:
         errors.append("shared/skills/media/CAPABILITIES.md is stale; run with --sync")
-
     try:
-        artifact = load_schema_artifact(SCHEMA_ARTIFACT)
-    except (OSError, ValueError, json.JSONDecodeError) as error:
+        checked_schema = json.loads(SCHEMA_ARTIFACT.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
         errors.append(f"shared/skills/media/MCP_SCHEMA.json is invalid: {error}")
     else:
-        artifact_names = [tool.get("name") for tool in artifact["tools"]]
-        if artifact_names != sorted(manifest_names):
-            errors.append("MCP schema artifact differs from the capability manifest; run with --sync")
-        if artifact["source_digest"] != runtime_artifact["source_digest"]:
-            errors.append("MCP schema artifact source digest is stale; run with --sync")
-        if canonical_tools(artifact["tools"]) != canonical_tools(runtime_artifact["tools"]):
-            errors.append("MCP schema artifact differs from the runtime tools/list snapshot; run with --sync")
-
+        if checked_schema != schema:
+            errors.append("MCP schema artifact differs from the release bundle; run with --sync")
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
-    print(f"media capabilities OK: {len(manifest_names)} dynamically discovered tools")
+    print(f"media capabilities OK: {len(names)} dynamically discovered tools")
     return 0
 
 

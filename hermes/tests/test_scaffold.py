@@ -51,7 +51,7 @@ class ImageContractTests(unittest.TestCase):
         self.assertIn("hmac.compare_digest", installer)
 
 
-class ComposeContractTests(unittest.TestCase):
+class _ComposeContractBase:
     @classmethod
     def setUpClass(cls):
         cls.compose_text = read("compose.yaml")
@@ -79,6 +79,156 @@ class ComposeContractTests(unittest.TestCase):
             self.assertIn(f"hermes_{profile}_browser:/opt/data/browser_auth", mounts)
             self.assertNotIn("/opt/data/vaultwarden", mounts)
         self.assertNotIn("vaultwarden", "\n".join(valentyna["volumes"]))
+
+
+class ReleaseContractTests(unittest.TestCase):
+    @staticmethod
+    def load_contract_module():
+        path = ROOT / "scripts/media_release_contract.py"
+        if not path.is_file():
+            raise AssertionError(f"media release contract consumer is missing: {path}")
+        spec = importlib.util.spec_from_file_location("media_release_contract", path)
+        if spec is None or spec.loader is None:
+            raise AssertionError(f"cannot load media release contract consumer: {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    @staticmethod
+    def write_bundle(path: pathlib.Path) -> None:
+        path.mkdir()
+        schema = {
+            "schema_version": 1,
+            "source_digest": "a" * 64,
+            "tools": [
+                {"name": "media_jobs_list", "inputSchema": {"type": "object"}},
+                {"name": "media_queue_status", "inputSchema": {"type": "object"}},
+            ],
+        }
+        capabilities = {
+            "schema_version": 1,
+            "mcp_server": "media_admin",
+            "description": "Sanitized test fixture.",
+            "tools": ["media_jobs_list", "media_queue_status"],
+        }
+        artifacts = {
+            "MCP_SCHEMA.json": json.dumps(
+                schema, sort_keys=True, separators=(",", ":")
+            ) + "\n",
+            "media-capabilities.json": json.dumps(
+                capabilities, sort_keys=True, separators=(",", ":")
+            ) + "\n",
+            "media-linux-amd64.sha256": f"{'c' * 64}  media-linux-amd64\n",
+        }
+        for name, content in artifacts.items():
+            (path / name).write_text(content, encoding="utf-8")
+        release = {
+            "application_version": "v0.0.0-example",
+            "files": {
+                name: {"sha256": hashlib.sha256(content.encode()).hexdigest()}
+                for name, content in artifacts.items()
+            },
+            "migration_version": "m20260810_000040_example",
+            "runner_build_digest": "b" * 64,
+            "runner_image": f"registry.example.invalid/example/media-runner@sha256:{'2' * 64}",
+            "schema_version": 1,
+            "service_image": f"registry.example.invalid/example/media-service@sha256:{'1' * 64}",
+            "source_revision": "d" * 40,
+            "source_tree_digest": "a" * 64,
+        }
+        (path / "release.json").write_text(
+            json.dumps(release, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+
+    def mutate_release(self, path: pathlib.Path, mutation) -> None:
+        release_path = path / "release.json"
+        release = json.loads(release_path.read_text(encoding="utf-8"))
+        mutation(release)
+        release_path.write_text(json.dumps(release), encoding="utf-8")
+
+    def test_valid_example_release_bundle_loads(self):
+        contract = self.load_contract_module()
+        release = contract.load_release_contract(ROOT.parent / "media/release.example")
+        self.assertEqual(release["schema_version"], 1)
+        self.assertIn("example.invalid", release["service_image"])
+
+    def test_release_contract_rejects_missing_or_malformed_fields(self):
+        contract = self.load_contract_module()
+        mutations = {
+            "missing application version": lambda value: value.pop("application_version"),
+            "boolean schema version": lambda value: value.__setitem__("schema_version", True),
+            "short source revision": lambda value: value.__setitem__("source_revision", "abc"),
+            "invalid migration": lambda value: value.__setitem__("migration_version", "latest"),
+            "missing file metadata": lambda value: value["files"].pop("MCP_SCHEMA.json"),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                bundle = pathlib.Path(directory) / "release"
+                self.write_bundle(bundle)
+                self.mutate_release(bundle, mutation)
+                with self.assertRaises(contract.ContractError):
+                    contract.load_release_contract(bundle)
+
+    def test_release_contract_rejects_mutable_image_references(self):
+        contract = self.load_contract_module()
+        for field in ("service_image", "runner_image"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                bundle = pathlib.Path(directory) / "release"
+                self.write_bundle(bundle)
+                self.mutate_release(bundle, lambda value: value.__setitem__(field, "example/media:latest"))
+                with self.assertRaisesRegex(contract.ContractError, "immutable"):
+                    contract.load_release_contract(bundle)
+
+    def test_release_contract_rejects_checksum_drift(self):
+        contract = self.load_contract_module()
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory) / "release"
+            self.write_bundle(bundle)
+            (bundle / "media-linux-amd64.sha256").write_text(
+                f"{'0' * 64}  media-linux-amd64\n", encoding="ascii"
+            )
+            with self.assertRaisesRegex(contract.ContractError, "hash"):
+                contract.load_release_contract(bundle)
+
+    def test_release_contract_rejects_capability_schema_tool_drift(self):
+        contract = self.load_contract_module()
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory) / "release"
+            self.write_bundle(bundle)
+            capabilities_path = bundle / "media-capabilities.json"
+            capabilities = json.loads(capabilities_path.read_text(encoding="utf-8"))
+            capabilities["tools"].reverse()
+            capabilities_path.write_text(json.dumps(capabilities), encoding="utf-8")
+            self.mutate_release(
+                bundle,
+                lambda value: value["files"]["media-capabilities.json"].__setitem__(
+                    "sha256", hashlib.sha256(capabilities_path.read_bytes()).hexdigest()
+                ),
+            )
+            with self.assertRaisesRegex(contract.ContractError, "tool names differ"):
+                contract.load_release_contract(bundle)
+
+    def test_release_contract_rejects_duplicate_tools(self):
+        contract = self.load_contract_module()
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory) / "release"
+            self.write_bundle(bundle)
+            schema_path = bundle / "MCP_SCHEMA.json"
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+            schema["tools"].append(schema["tools"][0])
+            schema_path.write_text(json.dumps(schema), encoding="utf-8")
+            self.mutate_release(
+                bundle,
+                lambda value: value["files"]["MCP_SCHEMA.json"].__setitem__(
+                    "sha256", hashlib.sha256(schema_path.read_bytes()).hexdigest()
+                ),
+            )
+            with self.assertRaisesRegex(contract.ContractError, "unique"):
+                contract.load_release_contract(bundle)
+
+
+class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
 
     def test_profiles_register_the_owner_scoped_media_admin_mcp(self):
         for profile in ("andrii", "valentyna"):
@@ -593,382 +743,73 @@ class SkillContractTests(unittest.TestCase):
         )
         self.assertEqual(len(artifact["tools"]), 43)
 
-    def test_media_capability_sync_generates_before_any_atomic_replace(self):
-        checker = self.load_capability_checker()
-        with tempfile.TemporaryDirectory() as directory:
-            temporary = pathlib.Path(directory)
-            capability_doc = temporary / "CAPABILITIES.md"
-            schema_artifact = temporary / "MCP_SCHEMA.json"
-            capability_doc.write_text("old capabilities", encoding="utf-8")
-            schema_artifact.write_text("old schema", encoding="utf-8")
-
-            with (
-                mock.patch.object(checker, "CAPABILITY_DOC", capability_doc),
-                mock.patch.object(checker, "SCHEMA_ARTIFACT", schema_artifact),
-                mock.patch.object(checker, "load_manifest", return_value=["media_search"]),
-                mock.patch.object(
-                    checker,
-                    "generate_schema_artifact",
-                    side_effect=subprocess.CalledProcessError(1, ["cargo", "test"]),
-                ),
-                mock.patch.object(sys, "argv", ["check-media-capabilities", "--sync"]),
-            ):
-                with contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(checker.main(), 1)
-
-            self.assertEqual(capability_doc.read_text(encoding="utf-8"), "old capabilities")
-            self.assertEqual(schema_artifact.read_text(encoding="utf-8"), "old schema")
-
-            runtime_artifact = {
-                "schema_version": 1,
-                "source_digest": "0" * 64,
-                "tools": [{"name": "media_search", "inputSchema": {"type": "object"}}],
-            }
-            with (
-                mock.patch.object(checker, "CAPABILITY_DOC", capability_doc),
-                mock.patch.object(checker, "SCHEMA_ARTIFACT", schema_artifact),
-                mock.patch.object(checker, "load_manifest", return_value=["media_search"]),
-                mock.patch.object(checker, "generate_schema_artifact", return_value=runtime_artifact),
-                mock.patch.object(checker, "discovered_rust_tools", return_value=[]),
-                mock.patch.object(checker, "referenced_tools", return_value={"media_search"}),
-                mock.patch.object(sys, "argv", ["check-media-capabilities", "--sync"]),
-            ):
-                with contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(checker.main(), 1)
-
-            self.assertEqual(capability_doc.read_text(encoding="utf-8"), "old capabilities")
-            self.assertEqual(schema_artifact.read_text(encoding="utf-8"), "old schema")
-
-    def test_media_capability_sync_rolls_back_when_second_replace_fails(self):
-        checker = self.load_capability_checker()
-        with tempfile.TemporaryDirectory() as directory:
-            temporary = pathlib.Path(directory)
-            schema_artifact = temporary / "MCP_SCHEMA.json"
-            capability_doc = temporary / "CAPABILITIES.md"
-            schema_artifact.write_text("old schema", encoding="utf-8")
-            capability_doc.write_text("old capabilities", encoding="utf-8")
-            schema_artifact.chmod(0o600)
-            capability_doc.chmod(0o640)
-
-            real_replace = os.replace
-            replacements = 0
-
-            def fail_second_replace(source, destination):
-                nonlocal replacements
-                replacements += 1
-                if replacements == 2:
-                    raise OSError("simulated second publication failure")
-                return real_replace(source, destination)
-
-            with mock.patch.object(checker.os, "replace", side_effect=fail_second_replace):
-                with self.assertRaisesRegex(OSError, "simulated second publication failure"):
-                    checker.atomic_write_texts(
-                        (
-                            (schema_artifact, "new schema"),
-                            (capability_doc, "new capabilities"),
-                        )
-                    )
-
-            self.assertEqual(schema_artifact.read_text(encoding="utf-8"), "old schema")
-            self.assertEqual(capability_doc.read_text(encoding="utf-8"), "old capabilities")
-            self.assertEqual(schema_artifact.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(capability_doc.stat().st_mode & 0o777, 0o640)
-            self.assertEqual(
-                sorted(path.name for path in temporary.iterdir()),
-                ["CAPABILITIES.md", "MCP_SCHEMA.json"],
-            )
-
-    def test_media_capability_schema_comparison_is_canonical(self):
-        checker = self.load_capability_checker()
-        artifact = json.loads(read("shared/skills/media/MCP_SCHEMA.json"))
-        reordered = [dict(reversed(list(tool.items()))) for tool in reversed(artifact["tools"])]
-        self.assertEqual(
-            checker.canonical_tools(artifact["tools"]),
-            checker.canonical_tools(reordered),
+    def test_media_capability_check_consumes_the_release_bundle(self):
+        env = os.environ.copy()
+        env["MEDIA_RELEASE_DIR"] = str(ROOT.parent / "media/release.example")
+        result = subprocess.run(
+            [str(ROOT / "scripts/check-media-capabilities")],
+            text=True,
+            capture_output=True,
+            env=env,
+            check=False,
         )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("43 dynamically discovered tools", result.stdout)
 
-    def test_media_capability_check_rejects_runtime_schema_drift(self):
-        checker = self.load_capability_checker()
-        artifact = json.loads(read("shared/skills/media/MCP_SCHEMA.json"))
-        runtime_artifact = json.loads(json.dumps(artifact))
-        runtime_artifact["tools"][0]["description"] += " changed at runtime"
 
-        with tempfile.TemporaryDirectory() as directory:
-            temporary = pathlib.Path(directory)
-            schema_artifact = temporary / "MCP_SCHEMA.json"
-            capability_doc = temporary / "CAPABILITIES.md"
-            profiles = (temporary / "andrii.yaml", temporary / "valentyna.yaml")
-            schema_artifact.write_text(json.dumps(artifact), encoding="utf-8")
-            capability_doc.write_text(
-                checker.expected_document([tool["name"] for tool in artifact["tools"]]),
-                encoding="utf-8",
-            )
-            for profile in profiles:
-                profile.write_text("media_admin:\n  tools: {}\n", encoding="utf-8")
-
-            with (
-                mock.patch.object(checker, "SCHEMA_ARTIFACT", schema_artifact),
-                mock.patch.object(checker, "CAPABILITY_DOC", capability_doc),
-                mock.patch.object(checker, "PROFILES", profiles),
-                mock.patch.object(
-                    checker,
-                    "load_manifest",
-                    return_value=[tool["name"] for tool in artifact["tools"]],
-                ),
-                mock.patch.object(checker, "generate_schema_artifact", return_value=runtime_artifact),
-                mock.patch.object(
-                    checker,
-                    "discovered_rust_tools",
-                    return_value=[tool["name"] for tool in artifact["tools"]],
-                ),
-                mock.patch.object(
-                    checker,
-                    "referenced_tools",
-                    return_value={tool["name"] for tool in artifact["tools"]},
-                ),
-                mock.patch.object(sys, "argv", ["check-media-capabilities"]),
-            ):
-                with contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(checker.main(), 1)
-
-    def test_media_capability_check_rejects_stale_source_digest(self):
-        checker = self.load_capability_checker()
-        artifact = json.loads(read("shared/skills/media/MCP_SCHEMA.json"))
-        runtime_artifact = json.loads(json.dumps(artifact))
-        runtime_artifact["source_digest"] = "f" * 64
-        if runtime_artifact["source_digest"] == artifact["source_digest"]:
-            runtime_artifact["source_digest"] = "e" * 64
-
-        with tempfile.TemporaryDirectory() as directory:
-            temporary = pathlib.Path(directory)
-            schema_artifact = temporary / "MCP_SCHEMA.json"
-            capability_doc = temporary / "CAPABILITIES.md"
-            profiles = (temporary / "andrii.yaml", temporary / "valentyna.yaml")
-            schema_artifact.write_text(json.dumps(artifact), encoding="utf-8")
-            capability_doc.write_text(
-                checker.expected_document([tool["name"] for tool in artifact["tools"]]),
-                encoding="utf-8",
-            )
-            for profile in profiles:
-                profile.write_text("media_admin:\n  tools: {}\n", encoding="utf-8")
-
-            with (
-                mock.patch.object(checker, "SCHEMA_ARTIFACT", schema_artifact),
-                mock.patch.object(checker, "CAPABILITY_DOC", capability_doc),
-                mock.patch.object(checker, "PROFILES", profiles),
-                mock.patch.object(
-                    checker,
-                    "load_manifest",
-                    return_value=[tool["name"] for tool in artifact["tools"]],
-                ),
-                mock.patch.object(checker, "generate_schema_artifact", return_value=runtime_artifact),
-                mock.patch.object(
-                    checker,
-                    "discovered_rust_tools",
-                    return_value=[tool["name"] for tool in artifact["tools"]],
-                ),
-                mock.patch.object(
-                    checker,
-                    "referenced_tools",
-                    return_value={tool["name"] for tool in artifact["tools"]},
-                ),
-                mock.patch.object(sys, "argv", ["check-media-capabilities"]),
-            ):
-                stderr = io.StringIO()
-                with contextlib.redirect_stderr(stderr):
-                    self.assertEqual(checker.main(), 1)
-                self.assertIn("source digest is stale", stderr.getvalue())
-
-    def test_media_deploy_preflight_is_fail_closed(self):
+    def test_media_deploy_preflight_uses_only_the_release_directory(self):
         preflight = ROOT / "scripts/deploy-preflight"
         source = preflight.read_text(encoding="utf-8")
-
+        checker = (ROOT / "scripts/check-media-capabilities").read_text(encoding="utf-8")
         self.assertTrue(os.access(preflight, os.X_OK))
         self.assertIn("set -eu", source)
-        self.assertIn("MEDIA_ORCHESTRATOR_DIR", source)
-        self.assertIn("check-media-capabilities", source)
-        self.assertIn("--live-tools", source)
+        self.assertIn("MEDIA_RELEASE_DIR is required", source)
+        self.assertNotIn("MEDIA_ORCHESTRATOR_DIR", source + checker)
+        self.assertNotIn("../../media-orchestrator", source + checker)
         self.assertIn("./scripts/deploy-preflight", read("scripts/check"))
         subprocess.run(["sh", "-n", str(preflight)], check=True)
 
     def test_media_deploy_preflight_compares_live_tools_canonically(self):
-        artifact = json.loads(read("shared/skills/media/MCP_SCHEMA.json"))
+        release_dir = ROOT.parent / "media/release.example"
+        artifact = json.loads((release_dir / "MCP_SCHEMA.json").read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as directory:
-            checker = pathlib.Path(directory) / "checker.py"
-            checker.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
             live_tools = pathlib.Path(directory) / "live-tools.json"
-            live_tools.write_text(
-                json.dumps(list(reversed(artifact["tools"]))), encoding="utf-8"
-            )
+            live_tools.write_text(json.dumps(list(reversed(artifact["tools"]))), encoding="utf-8")
             env = os.environ.copy()
-            env["HERMES_CAPABILITY_CHECKER"] = str(checker)
-            matching = subprocess.run(
-                [str(ROOT / "scripts/deploy-preflight"), "--live-tools", str(live_tools)],
-                text=True,
-                capture_output=True,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(matching.returncode, 0, matching.stderr)
-
-            artifact["tools"][0]["description"] += " drift"
-            live_tools.write_text(json.dumps(artifact["tools"]), encoding="utf-8")
-            drifted = subprocess.run(
-                [str(ROOT / "scripts/deploy-preflight"), "--live-tools", str(live_tools)],
-                text=True,
-                capture_output=True,
-                env=env,
-                check=False,
-            )
-            self.assertNotEqual(drifted.returncode, 0)
-            self.assertIn("live media MCP tools/list differs", drifted.stderr)
-
-    def test_media_deploy_preflight_attests_dirty_backend_independently(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = pathlib.Path(directory)
-            orchestrator = root / "media-orchestrator"
-            orchestrator.mkdir()
-            subprocess.run(["git", "init", "-q"], cwd=orchestrator, check=True)
-            subprocess.run(
-                ["git", "config", "user.email", "deploy-test@example.invalid"],
-                cwd=orchestrator,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "config", "user.name", "Deploy Test"],
-                cwd=orchestrator,
-                check=True,
-            )
-            (orchestrator / "crates" / "media" / "src").mkdir(parents=True)
-            (orchestrator / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
-            (orchestrator / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
-            (orchestrator / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
-            (orchestrator / ".dockerignore").write_text(
-                ".git\ndocs\ntarget\nscripts\n", encoding="utf-8"
-            )
-            (orchestrator / "rust-toolchain.toml").write_text(
-                "[toolchain]\nchannel = \"stable\"\n", encoding="utf-8"
-            )
-            (orchestrator / ".cargo").mkdir()
-            cargo_config = orchestrator / ".cargo" / "config.toml"
-            cargo_config.write_text("[build]\nincremental = false\n", encoding="utf-8")
-            (orchestrator / "config").mkdir()
-            (orchestrator / "config" / "runtime.json").write_text("{}\n", encoding="utf-8")
-            source = orchestrator / "crates" / "media" / "src" / "lib.rs"
-            source.write_text("pub fn version() -> u8 { 1 }\n", encoding="utf-8")
-            subprocess.run(["git", "add", "."], cwd=orchestrator, check=True)
-            subprocess.run(["git", "commit", "-qm", "initial"], cwd=orchestrator, check=True)
-
-            checker = root / "checker.py"
-            checker.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
-            revision = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], cwd=orchestrator, text=True
-            ).strip()
-            build_script = orchestrator / "scripts" / "docker-build.sh"
-            build_script.parent.mkdir()
-            build_script.write_bytes((ROOT.parents[1] / "media-orchestrator" / "scripts" / "docker-build.sh").read_bytes())
-            build_script.chmod(0o755)
-            digest_env = os.environ.copy()
-            digest_env["MEDIA_BUILD_TARGETS"] = "preflight-test"
-            digest = subprocess.check_output(
-                [str(build_script), "--print-source-tree-digest"], cwd=orchestrator, text=True, env=digest_env
-            ).strip()
-            runner_digest = subprocess.check_output(
-                [str(build_script), "--print-runner-build-digest"], cwd=orchestrator, text=True, env=digest_env
-            ).strip()
-            self.assertEqual(runner_digest, digest)
-            version = subprocess.check_output(
-                [str(build_script), "--print-source-version"], cwd=orchestrator, text=True, env=digest_env
-            ).strip()
-            self.assertTrue(version.endswith("-dirty"), version)
-            live = root / "live-attestation.json"
-            live.write_text(
-                json.dumps({"revision": revision, "version": version, "source_tree_digest": digest}),
-                encoding="utf-8",
-            )
-            env = os.environ.copy()
-            env["HERMES_CAPABILITY_CHECKER"] = str(checker)
-            env["MEDIA_ORCHESTRATOR_DIR"] = str(orchestrator)
-
-            command = [str(ROOT / "scripts/deploy-preflight"), "--live-attestation", str(live)]
+            env["MEDIA_RELEASE_DIR"] = str(release_dir)
+            command = [str(ROOT / "scripts/deploy-preflight"), "--live-tools", str(live_tools)]
             matching = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
             self.assertEqual(matching.returncode, 0, matching.stderr)
+            artifact["tools"][0]["description"] += " drift"
+            live_tools.write_text(json.dumps(artifact["tools"]), encoding="utf-8")
+            drifted = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
+            self.assertNotEqual(drifted.returncode, 0)
+            self.assertIn("differs from the release bundle", drifted.stderr)
 
-            source.write_text("pub fn version() -> u8 { 2 }\n", encoding="utf-8")
-            dirty = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
-            self.assertNotEqual(dirty.returncode, 0)
-            self.assertIn("backend source attestation differs", dirty.stderr)
+    def test_media_deploy_preflight_compares_live_oci_attestation(self):
+        release_dir = ROOT.parent / "media/release.example"
+        release = json.loads((release_dir / "release.json").read_text(encoding="utf-8"))
+        expected = {
+            "image": release["service_image"],
+            "revision": release["source_revision"],
+            "version": release["application_version"],
+            "source_tree_digest": release["source_tree_digest"],
+            "runner_build_digest": release["runner_build_digest"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            attestation = pathlib.Path(directory) / "attestation.json"
+            attestation.write_text(json.dumps(expected), encoding="utf-8")
+            env = os.environ.copy()
+            env["MEDIA_RELEASE_DIR"] = str(release_dir)
+            command = [str(ROOT / "scripts/deploy-preflight"), "--live-attestation", str(attestation)]
+            matching = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
+            self.assertEqual(matching.returncode, 0, matching.stderr)
+            expected["revision"] = "0" * 40
+            attestation.write_text(json.dumps(expected), encoding="utf-8")
+            drifted = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
+            self.assertNotEqual(drifted.returncode, 0)
+            self.assertIn("OCI attestation differs from the release bundle", drifted.stderr)
 
-            source.write_text("pub fn version() -> u8 { 1 }\n", encoding="utf-8")
-            (orchestrator / "crates" / "media" / "src" / "new.rs").write_text(
-                "pub fn new() {}\n", encoding="utf-8"
-            )
-            untracked = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
-            self.assertNotEqual(untracked.returncode, 0)
-            self.assertIn("backend source attestation differs", untracked.stderr)
-
-            (orchestrator / "crates" / "media" / "src" / "new.rs").unlink()
-            (orchestrator / "docs").mkdir()
-            (orchestrator / "docs" / "ignored.md").write_text("ignored\n", encoding="utf-8")
-            ignored = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
-            self.assertEqual(ignored.returncode, 0, ignored.stderr)
-
-            root_target = orchestrator / "target"
-            root_target.mkdir()
-            (root_target / "ignored.bin").write_bytes(b"ignored")
-            ignored_root_target = subprocess.run(
-                command, text=True, capture_output=True, env=env, check=False
-            )
-            self.assertEqual(ignored_root_target.returncode, 0, ignored_root_target.stderr)
-
-            nested_target = orchestrator / "crates" / "media" / "target"
-            nested_target.mkdir()
-            (nested_target / "context.bin").write_bytes(b"sent-to-docker")
-            nested_context = subprocess.run(
-                command, text=True, capture_output=True, env=env, check=False
-            )
-            self.assertNotEqual(nested_context.returncode, 0)
-            self.assertIn("backend source attestation differs", nested_context.stderr)
-            shutil.rmtree(nested_target)
-
-            toolchain = orchestrator / "rust-toolchain.toml"
-            original_toolchain = toolchain.read_text(encoding="utf-8")
-            toolchain.write_text("[toolchain]\nchannel = \"beta\"\n", encoding="utf-8")
-            changed_runner_digest = subprocess.check_output(
-                [str(build_script), "--print-runner-build-digest"], cwd=orchestrator, text=True, env=digest_env
-            ).strip()
-            self.assertNotEqual(changed_runner_digest, runner_digest)
-            toolchain_drift = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
-            self.assertNotEqual(toolchain_drift.returncode, 0)
-            toolchain.write_text(original_toolchain, encoding="utf-8")
-
-            original_cargo_config = cargo_config.read_text(encoding="utf-8")
-            cargo_config.write_text("[build]\nincremental = true\n", encoding="utf-8")
-            changed_runner_digest = subprocess.check_output(
-                [str(build_script), "--print-runner-build-digest"], cwd=orchestrator, text=True, env=digest_env
-            ).strip()
-            self.assertNotEqual(changed_runner_digest, runner_digest)
-            cargo_config.write_text(original_cargo_config, encoding="utf-8")
-
-            dockerignore = orchestrator / ".dockerignore"
-            original_ignore = dockerignore.read_text(encoding="utf-8")
-            dockerignore.write_text(original_ignore + "dist\n", encoding="utf-8")
-            changed_runner_digest = subprocess.check_output(
-                [str(build_script), "--print-runner-build-digest"], cwd=orchestrator, text=True, env=digest_env
-            ).strip()
-            self.assertNotEqual(changed_runner_digest, runner_digest)
-            ignore_drift = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
-            self.assertNotEqual(ignore_drift.returncode, 0)
-            dockerignore.write_text(original_ignore, encoding="utf-8")
-
-            (orchestrator / "config" / "new-tool.json").write_text("{}\n", encoding="utf-8")
-            changed_runner_digest = subprocess.check_output(
-                [str(build_script), "--print-runner-build-digest"], cwd=orchestrator, text=True, env=digest_env
-            ).strip()
-            self.assertNotEqual(changed_runner_digest, runner_digest)
-            context_untracked = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
-            self.assertNotEqual(context_untracked.returncode, 0)
-            self.assertIn("backend source attestation differs", context_untracked.stderr)
 
 
 class WrapperContractTests(unittest.TestCase):

@@ -150,6 +150,76 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
         )
         self.assertNotIn("HEALTH_API_TOKEN=", child.stdout)
 
+    def test_entrypoint_cleans_generated_config_when_install_fails(self):
+        entrypoint = read("scripts/hermes-home-entrypoint")
+        function = re.search(
+            r"materialize_hermes_config\(\) \{\n.*?\n\}",
+            entrypoint,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(function)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            bin_dir = root / "bin"
+            temp_dir = root / "temp"
+            bin_dir.mkdir()
+            temp_dir.mkdir()
+            current = root / "current.yaml"
+            current.write_text("{}\n", encoding="utf-8")
+            secret_path = root / "health-token"
+            secret = "post-generation-install-failure-token"
+            secret_path.write_text(f"{secret}\n", encoding="utf-8")
+            install_attempted = root / "install-attempted"
+
+            failing_install = bin_dir / "install"
+            failing_install.write_text(
+                "#!/bin/sh\n"
+                "set -eu\n"
+                '[ "$1" = -o ] && [ "$2" = 10000 ]\n'
+                '[ "$3" = -g ] && [ "$4" = 10000 ]\n'
+                '[ "$5" = -m ] && [ "$6" = 0640 ]\n'
+                '[ -s "$7" ]\n'
+                ': > "$INSTALL_ATTEMPTED"\n'
+                "exit 73\n",
+                encoding="utf-8",
+            )
+            failing_install.chmod(0o755)
+
+            probe = root / "probe.sh"
+            probe.write_text(
+                "#!/bin/sh\nset -eu\n"
+                + function.group(0)
+                + '\nmaterialize_hermes_config "$1" "$2" "$3" "$4" '
+                '"$5" "$6" "$7"\n',
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
+            environment["INSTALL_ATTEMPTED"] = str(install_attempted)
+            result = subprocess.run(
+                [
+                    "sh",
+                    str(probe),
+                    os.fspath(pathlib.Path(os.sys.executable)),
+                    str(HERMES_ROOT / "scripts/merge_hermes_config.py"),
+                    str(HERMES_ROOT / "profiles/andrii/config/config.yaml"),
+                    str(current),
+                    str(root / "persisted-config.yaml"),
+                    str(secret_path),
+                    str(temp_dir),
+                ],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 73)
+            self.assertTrue(install_attempted.is_file())
+            self.assertEqual(list(temp_dir.iterdir()), [])
+            self.assertNotIn(secret, result.stdout + result.stderr)
+            self.assertFalse((root / "persisted-config.yaml").exists())
+
     def test_install_skills_executes_current_catalog_and_legacy_tombstones(self):
         entrypoint = read("scripts/hermes-home-entrypoint")
         function = re.search(

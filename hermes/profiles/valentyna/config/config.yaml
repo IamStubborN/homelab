@@ -79,6 +79,68 @@ compression:
   codex_responses_native: true
 skills:
   creation_nudge_interval: 10
+  platform_disabled:
+    telegram: &disabled-telegram-skills
+      - airtable
+      - architecture-diagram
+      - ascii-art
+      - ascii-video
+      - audiocraft-audio-generation
+      - baoyu-infographic
+      - blogwatcher
+      - claude-code
+      - claude-design
+      - codebase-inspection
+      - codex
+      - comfyui
+      - computer-use
+      - design-md
+      - dogfood
+      - evaluating-llms-harness
+      - excalidraw
+      - gif-search
+      - github-auth
+      - github-code-review
+      - github-issues
+      - github-pr-workflow
+      - github-repo-management
+      - heartmula
+      - hermes-agent-skill-authoring
+      - himalaya
+      - huggingface-hub
+      - humanizer
+      - jupyter-live-kernel
+      - llama-cpp
+      - llm-wiki
+      - manim-video
+      - nano-pdf
+      - node-inspect-debugger
+      - notion
+      - opencode
+      - openhue
+      - p5js
+      - petdex
+      - plan
+      - polymarket
+      - popular-web-designs
+      - powerpoint
+      - pretext
+      - python-debugpy
+      - requesting-code-review
+      - segment-anything-model
+      - serving-llms-vllm
+      - simplify-code
+      - sketch
+      - songsee
+      - songwriting-and-ai-music
+      - spike
+      - systematic-debugging
+      - teams-meeting-pipeline
+      - test-driven-development
+      - touchdesigner-mcp
+      - weights-and-biases
+      - xurl
+      - yuanbao
 agent:
   verify_on_stop: false
   service_tier: fast

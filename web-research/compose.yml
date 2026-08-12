@@ -87,7 +87,7 @@ services:
       SPARK_API_KEY: ${CLIPROXY_FIRECRAWL_KEY:?set CLIPROXY_FIRECRAWL_KEY}
       SPARK_MODEL: gpt-5.3-codex-spark
       FALLBACK_MODEL: auto/best-free
-      SEARCH_PROVIDERS: tavily-search,exa-search,firecrawl,ollama-search
+      SEARCH_PROVIDERS: exa-search,tavily-search,firecrawl,ollama-search
       DB_PATH: /data/search-ladder.db
       PAGE_CACHE_TTL: 6h
       QUOTA_COOLDOWN: 12h

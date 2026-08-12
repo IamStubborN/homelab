@@ -119,6 +119,7 @@ class ComposeContractTests(unittest.TestCase):
                 {
                     f"{profile}_telegram_token",
                     f"{profile}_media_api_token",
+                    f"{profile}_health_api_token",
                     f"{profile}_homeassistant_token",
                     f"{profile}_omniroute_api_key",
                     f"{profile}_webhook_hmac",
@@ -453,7 +454,7 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("/run/hermes-home-secrets", entrypoint)
         self.assertIn("install -o 10000 -g 10000 -m 0400", entrypoint)
         self.assertIn(
-            "for secret in media_api_token broker_api_token webhook_hmac search_ladder_api_key",
+            "for secret in media_api_token health_api_token broker_api_token webhook_hmac search_ladder_api_key",
             entrypoint,
         )
         self.assertIn('source="/run/secrets/$secret"', entrypoint)

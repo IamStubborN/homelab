@@ -235,6 +235,8 @@ services:
       HERMES_UID: "10000"
       HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
       HERMES_TELEGRAM_USE_DEFAULT_HTTP: "false"
+      HEALTH_DEFAULT_PERSON: primary
+      HEALTH_MCP_URL: http://health-service:8080/internal/mcp
       MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-primary:8644
       TELEGRAM_ALLOWED_USERS: ${PRIMARY_TELEGRAM_USER_ID:?set PRIMARY_TELEGRAM_USER_ID}
       TELEGRAM_HOME_CHANNEL: ${PRIMARY_TELEGRAM_CHAT_ID:?set PRIMARY_TELEGRAM_CHAT_ID}
@@ -264,6 +266,8 @@ services:
         target: telegram_bot_token
       - source: primary_media_api_token
         target: media_api_token
+      - source: primary_health_api_token
+        target: health_api_token
       - source: primary_homeassistant_token
         target: homeassistant_api_token
       - source: primary_omniroute_api_key
@@ -274,7 +278,7 @@ services:
         target: webhook_hmac
       - source: search_ladder_api_key
         target: search_ladder_api_key
-    networks: [media, agent-tools, primary-private]
+    networks: [media, agent-tools, health-internal, primary-private]
 
   hermes-secondary:
     <<: *hermes-common
@@ -296,6 +300,8 @@ services:
       HERMES_UID: "10000"
       HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
       HERMES_TELEGRAM_USE_DEFAULT_HTTP: "false"
+      HEALTH_DEFAULT_PERSON: secondary
+      HEALTH_MCP_URL: http://health-service:8080/internal/mcp
       MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-secondary:8644
       TELEGRAM_ALLOWED_USERS: ${SECONDARY_TELEGRAM_USER_ID:?set SECONDARY_TELEGRAM_USER_ID}
       TELEGRAM_HOME_CHANNEL: ${SECONDARY_TELEGRAM_CHAT_ID:?set SECONDARY_TELEGRAM_CHAT_ID}
@@ -322,6 +328,8 @@ services:
         target: telegram_bot_token
       - source: secondary_media_api_token
         target: media_api_token
+      - source: secondary_health_api_token
+        target: health_api_token
       - source: secondary_homeassistant_token
         target: homeassistant_api_token
       - source: secondary_omniroute_api_key
@@ -330,7 +338,7 @@ services:
         target: webhook_hmac
       - source: search_ladder_api_key
         target: search_ladder_api_key
-    networks: [media, agent-tools, secondary-private]
+    networks: [media, agent-tools, health-internal, secondary-private]
 
 networks:
   media:
@@ -340,6 +348,9 @@ networks:
     name: agent-tools
   rezka-credentials:
     name: rezka-credentials
+    external: true
+  health-internal:
+    name: health-internal
     external: true
   primary-private:
     name: hermes-home_primary-private
@@ -392,6 +403,8 @@ secrets:
     file: ./secrets/primary.telegram_token
   primary_media_api_token:
     file: ./secrets/primary.media_api_token
+  primary_health_api_token:
+    file: ../health/secrets/primary.health_api_token
   primary_homeassistant_token:
     file: ./secrets/primary.homeassistant_token
   primary_omniroute_api_key:
@@ -406,6 +419,8 @@ secrets:
     file: ./secrets/secondary.telegram_token
   secondary_media_api_token:
     file: ./secrets/secondary.media_api_token
+  secondary_health_api_token:
+    file: ../health/secrets/secondary.health_api_token
   secondary_homeassistant_token:
     file: ./secrets/secondary.homeassistant_token
   secondary_omniroute_api_key:

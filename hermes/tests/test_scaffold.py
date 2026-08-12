@@ -293,14 +293,13 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("`web_search` once", skill)
         self.assertIn("then `web_extract` only", skill)
         self.assertIn("untrusted data", skill)
-        self.assertIn("Do not probe services with curl", skill)
+        self.assertIn("Do not probe internal services", skill)
+        self.assertIn("supporting excerpts", skill)
 
-    def test_media_web_research_uses_native_tools_not_terminal_or_browser(self):
+    def test_media_routes_public_evidence_to_web_research(self):
         skill = read("shared/skills/media/SKILL.md")
-        self.assertIn("client searches and fetches bounded source evidence", skill)
-        self.assertIn("Use native `web_search`", skill)
-        self.assertIn("Never use\nterminal HTTP or browser search", skill)
-        self.assertIn("Do not treat search-result snippets as verified", skill)
+        self.assertIn("`web-research`", skill)
+        self.assertNotIn("curl", skill.lower())
 
     def test_rezka_login_allowlist_is_bound_to_one_vault_item(self):
         policy = json.loads(read("config/vaultwarden-login-allowlist.json"))
@@ -329,20 +328,16 @@ class SkillContractTests(unittest.TestCase):
     def test_tracking_distinguishes_release_only_and_rezka_download_modes(self):
         skill = read("shared/skills/media/SKILL.md")
         self.assertIn("Ordinary tracking is source-independent", skill)
-        self.assertIn(
-            "Never ask whether\nordinary tracking should use Rezka or Prowlarr",
-            skill,
-        )
-        self.assertIn("search Rezka and Prowlarr and show one unified ranked", skill)
-        self.assertIn("Rezka-only download mode", skill)
+        self.assertIn("Never create ordinary tracking from a title alone", skill)
+        self.assertIn("later checks search both providers", skill)
+        self.assertIn("Rezka-only mode", skill)
         self.assertIn("media_tracking_create", skill)
         self.assertIn("media_tracking_set_baseline", skill)
         self.assertIn("media_tracking_check", skill)
         self.assertIn("media_tracking_enable_download", skill)
         self.assertIn("a `release_identity`", skill)
         self.assertIn("positive `source_id`", skill)
-        self.assertIn("Never create ordinary tracking from a title alone", skill)
-        self.assertIn("Ordinary subscriptions are checked once per hour", skill)
+        self.assertIn("Ordinary subscriptions run hourly", skill)
         self.assertIn("do not delete and recreate", skill)
         self.assertNotIn("tracking add --provider PROVIDER", skill)
 
@@ -362,27 +357,12 @@ class SkillContractTests(unittest.TestCase):
     def test_media_skill_routes_weekly_trending_through_media_service(self):
         skill = read("shared/skills/media/SKILL.md")
         self.assertIn("media_trending", skill)
-        self.assertIn("popular movies", skill)
-        self.assertIn("show more", skill)
-        self.assertIn("TMDB", skill)
+        self.assertIn("worldwide weekly TMDB trends", skill)
+        self.assertIn("(`all`, `movie`, or `tv`)", skill)
 
-    def test_media_shortcut_skills_use_read_only_mcp_tools(self):
-        expected = {
-            "watching": "mcp_media_admin_plex_now_playing",
-            "movies": "mcp_media_admin_media_trending",
-            "series": "mcp_media_admin_media_trending",
-            "trending": "mcp_media_admin_media_trending",
-        }
-        for name, tool in expected.items():
-            skill = read(f"shared/skills/{name}/SKILL.md")
-            self.assertIn(f"name: {name}", skill)
-            self.assertIn(tool, skill)
-            self.assertIn("read-only", skill)
-            self.assertNotIn("hermes-media", skill)
-
-        self.assertIn("category=movie", read("shared/skills/movies/SKILL.md"))
-        self.assertIn("category=tv", read("shared/skills/series/SKILL.md"))
-        self.assertIn("category=all", read("shared/skills/trending/SKILL.md"))
+    def test_deterministic_media_shortcuts_are_not_llm_skills(self):
+        for name in ("watching", "movies", "series", "trending"):
+            self.assertFalse((ROOT / "shared" / "skills" / name).exists())
 
     def test_media_shortcuts_are_prioritized_in_both_telegram_profiles(self):
         for profile in ("andrii", "valentyna"):
@@ -391,66 +371,37 @@ class SkillContractTests(unittest.TestCase):
             for command in ("watching", "movies", "series", "trending"):
                 self.assertIn(f"- {command}", config)
 
-    def test_media_admin_skill_uses_the_mcp_facade_without_privileged_access(self):
-        skill = read("shared/skills/media-admin/SKILL.md")
+    def test_media_admin_rules_live_in_one_bounded_media_skill(self):
+        self.assertFalse((ROOT / "shared/skills/media-admin").exists())
+        skill = read("shared/skills/media/SKILL.md")
+        self.assertLessEqual(len(skill.split()), 500)
         for required in (
             "mcp_media_admin_*",
             "media_jobs_list",
-            "media_job_cancel",
-            "media_job_retry",
             "media_tracking_check",
             "plex_search",
             "qbittorrent_list",
             "media_file_inspect",
             "media_destructive_prepare",
             "media_destructive_confirm",
-            "MCP ownership is enforced by media-service",
-            "quarantine data instead of permanently deleting it",
-            "Never infer confirmation",
+            "one-time confirmation token",
         ):
             self.assertIn(required, skill)
-        for forbidden in ("Do not use Docker", "arbitrary filesystem access"):
-            self.assertIn(forbidden, skill)
+        self.assertNotIn("Docker", skill)
 
-    def test_media_skill_explains_detailed_progress_without_llm_or_status_spam(self):
+    def test_media_skill_leaves_deterministic_card_details_to_the_plugin(self):
         skill = read("shared/skills/media/SKILL.md")
         normalized = " ".join(skill.split())
-        for required in (
-            "10-cell progress bar",
-            "downloaded_bytes",
-            "total_bytes",
-            "download_speed_bps",
-            "eta_seconds",
-            "seeds",
-            "peers",
-            "updated_at",
-            "Do not invent a percentage or ETA",
-            "updates that card at most every ten seconds",
-            "without an LLM call or model-token usage",
-            "do not answer these edits",
-            "one Telegram status card for its complete lifecycle",
-            "updates that card at most every ten seconds when progress changes",
-            "terminal transition",
-            "existing card is edited into the final result",
-            "one short reply",
-            "details remain in the card",
-            "Direct notifier cards must not be answered or summarized by the agent",
-            "retry-missing",
-            "retries only those missing episodes",
-            "without invoking the conversational agent or consuming model tokens",
-            "technical IDs are shown only after `Подробнее`",
-            "`completed` state alone does not prove upscale or transcode",
-        ):
-            self.assertIn(required, normalized)
-        self.assertNotIn("Terminal notifications remain separate messages", normalized)
         self.assertIn("media_job_get", normalized)
-        self.assertIn("explicit user status question", normalized)
+        self.assertIn("Do not invent progress", normalized)
+        self.assertIn("return exactly `NO_REPLY`", normalized)
+        self.assertNotIn("10-cell progress bar", normalized)
+        self.assertNotIn("at most every ten seconds", normalized)
 
     def test_media_replies_hide_internal_ids_and_offer_safe_quick_actions(self):
         skill = read("shared/skills/media/SKILL.md")
         normalized = " ".join(skill.split())
-        self.assertIn("IDs as private state", normalized)
-        self.assertIn("only after an explicit request for technical details", normalized)
+        self.assertIn("Hide credentials, endpoints, paths, raw JSON, and internal IDs", normalized)
         self.assertIn("native `clarify`", skill)
         self.assertNotIn("<telegram-quick-replies>", skill)
         self.assertIn("destructive action", normalized)
@@ -465,25 +416,15 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("complete tracking lifecycle", readme)
         self.assertIn("never invokes\n`hermes-media`", readme)
 
-    def test_media_skill_is_bounded_and_never_spoofs_identity(self):
-        skill = read("shared/skills/media/SKILL.md")
-        lowered = skill.lower()
-        for required in (
-            "maximum of five",
-            "rezka",
-            "prowlarr",
-            "show more",
-            "job status",
-            "tracking",
-            "family",
-            "explicit",
-        ):
-            self.assertIn(required, lowered)
-        self.assertNotIn("curl", lowered)
-        self.assertNotIn("docker", lowered)
-        self.assertNotIn("requested_by", skill)
-        self.assertIn("structured results", skill)
-        self.assertNotIn("hermes-media search", skill)
+    def test_custom_skills_have_valid_compact_frontmatter(self):
+        paths = list((ROOT / "shared/skills").glob("*/SKILL.md"))
+        paths += list((ROOT / "profiles/andrii/skills").glob("*/SKILL.md"))
+        for path in paths:
+            content = path.read_text(encoding="utf-8")
+            frontmatter = yaml.safe_load(content.split("---", 2)[1])
+            description = frontmatter["description"]
+            self.assertLessEqual(len(description), 60, path)
+            self.assertTrue(description.endswith("."), path)
 
     def test_profile_identity_files_are_fixed(self):
         self.assertEqual(read("profiles/andrii/identity").strip(), "andrii")
@@ -555,8 +496,7 @@ class SkillContractTests(unittest.TestCase):
             self.assertIn(command, client)
 
         self.assertIn("available only to Andrii", skill)
-        self.assertIn("native approval prompt", skill)
-        self.assertIn("Telegram approval control", skill)
+        self.assertIn("native Telegram approval control", skill)
         self.assertIn("andrii) ;;", client)
         self.assertNotIn("valentyna", client.lower())
         self.assertNotIn("password", client.lower())

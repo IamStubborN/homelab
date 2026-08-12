@@ -21,7 +21,7 @@ export OPENAI_BASE_URL=http://omniroute:20129/v1
 
 python_packages=/opt/data/python-packages
 if [ ! -d "$python_packages/youtube_transcript_api" ]; then
-    uv pip install --target "$python_packages" youtube-transcript-api==1.2.4
+    UV_CACHE_DIR=/tmp/uv-cache uv pip install --target "$python_packages" youtube-transcript-api==1.2.4
     chown -R 10000:10000 "$python_packages"
 fi
 export PYTHONPATH="$python_packages${PYTHONPATH:+:$PYTHONPATH}"

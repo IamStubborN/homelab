@@ -2,6 +2,7 @@ import json
 import os
 import pathlib
 import re
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -255,6 +256,10 @@ class EmbeddedHealthConfigTests(unittest.TestCase):
                 environment["HEALTH_API_TOKEN"] = "process-environment-token"
                 result = subprocess.run(
                     [
+                        "sh",
+                        "-c",
+                        'umask 022\nexec "$@"',
+                        "sh",
                         os.fspath(pathlib.Path(os.sys.executable)),
                         str(HERMES_ROOT / "scripts/merge_hermes_config.py"),
                         str(HERMES_ROOT / f"profiles/{profile}/config/config.yaml"),
@@ -271,6 +276,7 @@ class EmbeddedHealthConfigTests(unittest.TestCase):
                 self.assertEqual(result.stderr, "")
                 self.assertNotIn(secret, result.stdout + result.stderr)
                 self.assertNotIn("process-environment-token", output_path.read_text())
+                self.assertEqual(stat.S_IMODE(output_path.stat().st_mode), 0o600)
                 generated = yaml.safe_load(output_path.read_text(encoding="utf-8"))
 
             server = generated["mcp_servers"]["health"]
@@ -308,6 +314,43 @@ class EmbeddedHealthConfigTests(unittest.TestCase):
             self.assertEqual(result.stdout, "")
             self.assertEqual(result.stderr, "")
             self.assertFalse(output.exists())
+            self.assertEqual(
+                {path.name for path in root.iterdir()},
+                {"current.yaml", "secret"},
+            )
+
+    def test_failed_atomic_replace_removes_private_temporary_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            current = root / "current.yaml"
+            output = root / "output.yaml"
+            secret_path = root / "secret"
+            secret = "must-not-remain-on-disk"
+            current.write_text("{}\n", encoding="utf-8")
+            output.mkdir()
+            secret_path.write_text(f"{secret}\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    os.fspath(pathlib.Path(os.sys.executable)),
+                    str(HERMES_ROOT / "scripts/merge_hermes_config.py"),
+                    str(HERMES_ROOT / "profiles/andrii/config/config.yaml"),
+                    str(current),
+                    str(output),
+                    str(secret_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr, "")
+            self.assertEqual(list(output.iterdir()), [])
+            self.assertEqual(
+                {path.name for path in root.iterdir()},
+                {"current.yaml", "output.yaml", "secret"},
+            )
 
 
 class EmbeddedHealthSkillContractTests(unittest.TestCase):

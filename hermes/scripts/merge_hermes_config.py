@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
+import os
 import sys
+import tempfile
 from copy import deepcopy
 from pathlib import Path
 
@@ -60,6 +62,33 @@ def materialize_health_token(managed: dict, secret_path: Path | None) -> dict:
     return result
 
 
+def write_private_atomic(path: Path, content: str) -> None:
+    descriptor = -1
+    temporary_path = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", dir=path.parent
+        )
+        temporary_path = Path(temporary_name)
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            descriptor = -1
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+        raise
+
+
 def main() -> int:
     if len(sys.argv) not in (4, 5):
         return 2
@@ -67,18 +96,14 @@ def main() -> int:
     secret_path = Path(sys.argv[4]) if len(sys.argv) == 5 else None
     try:
         managed = materialize_health_token(load(managed_path), secret_path)
-    except (OSError, UnicodeError, ValueError):
+        if not managed:
+            return 2
+        content = yaml.safe_dump(
+            merge(load(current_path), managed), allow_unicode=True, sort_keys=False
+        )
+        write_private_atomic(output_path, content)
+    except (OSError, UnicodeError, ValueError, yaml.YAMLError):
         return 2
-    if not managed:
-        return 2
-    output_path.write_text(
-        yaml.safe_dump(
-            merge(load(current_path), managed),
-            allow_unicode=True,
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
     return 0
 
 

@@ -20,7 +20,8 @@ with the documented Docker Compose or guarded media deployment commands.
 - Media Orchestrator with a dedicated Rezka VPN, managed by the root Compose project
 - KaraKeep, Freedium, Movie Tracker, Glance, Speedtest Tracker
 - Bitwarden (Vaultwarden), Mosquitto, RustDesk
-- OmniRoute and Search Ladder shared by household agents
+- OmniRoute LLM gateway, Ollama IPEX embeddings, and Search Ladder
+- Cursorpipe OpenAI-compatible proxy for the official Cursor API key
 - Hindsight shared memory server for Pi clients
 - Family Health Rust MCP service with dedicated PostgreSQL
 - Home Assistant with public-safe example config only
@@ -54,9 +55,9 @@ Fill real values only in ignored local files:
 - `media/secrets/plex_token`
 - `homeassistant/config/secrets.yaml`
 
-Generate the Hindsight secrets documented in `hindsight/README.md` in the root `.env`. The
-web-research services publish no host ports; authenticated routes are exposed
-through Traefik where configured.
+Generate the Hindsight secrets documented in `hindsight/README.md` in the root `.env`.
+Cursorpipe and Ollama IPEX publish no host ports. OmniRoute exposes its API only
+on host loopback (`127.0.0.1:20129`); authenticated public routes use Traefik.
 
 Initialize the Freedium submodule:
 
@@ -72,6 +73,11 @@ docker compose config --quiet
 
 Media Orchestrator is included in the root Compose project. See
 `media/README.md` for its image build, secrets, validation, and rollback notes.
+
+The tracked Compose definitions for Plex and the torrent stack are split into
+`plex/` and `download/`. Their mutable data and secret files intentionally stay
+under `media/` so an existing installation can upgrade without moving state or
+briefly starting against empty directories.
 
 Family Health is also built by the root Compose project directly from
 `health/service`; no separate service repository checkout is needed. See

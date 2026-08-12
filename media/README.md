@@ -1,8 +1,11 @@
 # Media Stack and Orchestrator
 
+Plex and its helpers live in `plex/`. The torrent VPN stack lives in `download/`.
+This directory keeps Media Orchestrator, the dedicated Rezka VPN, and their secrets.
+
 ## Active Torrent VPN Gateway
 
-The torrent stack uses `qmcgaw/gluetun:latest` with Watchtower updates enabled.
+The torrent stack lives in `download/compose.yml` and uses `qmcgaw/gluetun:latest` with Watchtower updates enabled.
 Gluetun selects Proton VPN port-forwarding servers in Bulgaria, and
 `qbittorrent-port-sync` applies the current forwarded port to qBittorrent over
 its local API without restarting qBittorrent.
@@ -21,6 +24,9 @@ install -m 0600 /dev/null media/secrets/gluetun_control_api_key
 
 The forwarded-port file is not a credential. The WireGuard private key and
 control API credentials must remain mode `0600` and must never be committed.
+Although the tracked Compose definitions now live in `download/` and `plex/`,
+their mutable state and secrets remain in these existing `media/` paths. This
+keeps upgrades non-destructive and avoids silently starting with empty state.
 
 `compose.media-orchestrator.yml` is included by the root `compose.yml` and is
 managed as part of the `homelab` Compose project. Application images must be
@@ -139,7 +145,7 @@ docker compose --env-file .env up -d
 docker compose --env-file .env ps
 ```
 
-The existing `gluetun-watcher` remains paired only with the torrent Gluetun
+The existing `gluetun-watcher` in `download/compose.yml` remains paired only with the torrent Gluetun
 stack. `gluetun-rezka-watcher` watches only `gluetun-rezka` and restarts only
 `download-runner` when that dedicated container is recreated. An in-process VPN
 rotation does not restart the runner, preserving one runner job per namespace.

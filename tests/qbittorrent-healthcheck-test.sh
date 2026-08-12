@@ -24,6 +24,6 @@ PATH="$TMP/bin:$PATH" \
 GLUETUN_API_KEY_FILE="$TMP/api-key" \
 FORWARDED_PORT_FILE="$TMP/forwarded_port" \
 HEALTH_STATE_DIR="$TMP/state" \
-  "$ROOT/media/qbittorrent/scripts/healthcheck.sh"
+  "$ROOT/download/qbittorrent/scripts/healthcheck.sh"
 
 test -s "$TMP/state/port_mismatch_since"

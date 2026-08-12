@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(unset CDPATH; cd -- "$(dirname -- "$0")/.." && pwd)
-WATCHER="$ROOT/media/gluetun-watcher/watch.sh"
+WATCHER="$ROOT/download/gluetun-watcher/watch.sh"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 

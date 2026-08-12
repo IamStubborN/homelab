@@ -54,13 +54,14 @@ make check-codecs VIDEO_DIR=/path/to/dir  # Custom directory
 - All services accessible via `*.${DOCKER_DOMAIN}` domain
 
 ### Key Service Groups
-1. **Media Stack**: Plex, plex-auto-languages, media-preview-generator, qBittorrent, Prowlarr (active); Sonarr, Radarr, Bazarr, Lidarr, Readarr, Overseerr, Jellyfin (disabled)
-2. **Media Orchestrator**: Active root-Compose module (`media/compose.media-orchestrator.yml`) with a dedicated `gluetun-rezka` VPN namespace; see `media/README.md`
-3. **Family Health**: Local `health-service` with PostgreSQL on the shared external `health-internal` network; see `health/README.md`
-4. **Custom Apps**: KaraKeep (web scraper with AI/MeiliSearch), Freedium (Medium proxy), Movie-Tracker (Telegram bot)
-5. **File Management**: Samba shares, Kavita (ebook reader), FileBrowser (disabled)
-6. **Monitoring**: Watchtower (auto-updates), DeUnhealth (health checks)
-7. **Other Services**: Bitwarden (Vaultwarden), Hindsight (shared Pi memory), Mosquitto (MQTT broker), RustDesk (remote desktop relay)
+1. **Media library**: Plex, plex-auto-languages, media-preview-generator (`plex/compose.yml`); Kavita is a separate module
+2. **Download VPN stack**: Gluetun, qBittorrent, Prowlarr, FlareSolverr (`download/compose.yml`)
+3. **Media Orchestrator**: Active root-Compose module (`media/compose.media-orchestrator.yml`) with a dedicated `gluetun-rezka` VPN namespace; see `media/README.md`
+4. **Family Health**: Local `health-service` with PostgreSQL on the shared external `health-internal` network; see `health/README.md`
+5. **Custom Apps**: KaraKeep (web scraper with AI/MeiliSearch), Freedium (Medium proxy), Movie-Tracker (Telegram bot)
+6. **File Management**: Samba shares, Kavita (ebook reader), FileBrowser (disabled)
+7. **Monitoring**: Watchtower (auto-updates), DeUnhealth (health checks)
+8. **Other Services**: Bitwarden (Vaultwarden), Hindsight (shared Pi memory), Mosquitto (MQTT broker), RustDesk (remote desktop relay)
 
 ### VPN Routing (Gluetun)
 Media services route through Gluetun container:
@@ -80,11 +81,11 @@ Media services route through Gluetun container:
 
 Use this file and the tracked `*.example.*` files for clean-host recovery. The repository intentionally does not contain runtime data, local Home Assistant state, or secrets. Freedium source is tracked as a pinned git submodule.
 
-Clean-host restore requires more than the root `.env`: create service-local env files for services with `env_file` (`glance/.env`, `speedtest-tracker/.env`), restore Docker secret files under `traefik/secrets/` and `media/secrets/`, restore ignored runtime data directories, and verify host prerequisites such as storage mounts, `/dev/net/tun`, `/dev/dri`, `/run/dbus`, Docker socket access, ports `80/443`, and the external `proxy` network.
+Clean-host restore requires more than the root `.env`: create service-local env files for services with `env_file` (`glance/.env`, `speedtest-tracker/.env`), restore Docker secret files under `traefik/secrets/` and `media/secrets/` (`MEDIA_SECRETS_DIR`), restore ignored runtime data directories, and verify host prerequisites such as storage mounts, `/dev/net/tun`, `/dev/dri`, `/run/dbus`, Docker socket access, ports `80/443`, and the external `proxy` network. The Plex and download Compose definitions are split into `plex/` and `download/`, but their mutable state deliberately remains under `media/` for upgrade compatibility.
 
 ### Gluetun control-server API key
 
-The main Gluetun control server (`media/compose.yml`) binds on `:8000` so the
+The main Gluetun control server (`download/compose.yml`) binds on `:8000` so the
 Glance "VPN Speed" widget can reach `/v1/publicip/ip` cross-container, but every
 route is locked behind an apikey. Generate one key and place the SAME value in
 three spots:
@@ -92,7 +93,7 @@ three spots:
 ```bash
 KEY=$(docker run --rm qmcgaw/gluetun:<pinned-version> genkey)
 # 1. Gluetun auth config (copy the tracked example, then set apikey = "$KEY"):
-cp media/gluetun/control-auth-config.example.toml media/secrets/gluetun_control_auth_config
+cp download/gluetun/control-auth-config.example.toml media/secrets/gluetun_control_auth_config
 # 2. Raw key for the qBittorrent healthcheck:
 printf '%s' "$KEY" > media/secrets/gluetun_control_api_key
 # 3. glance/.env: GLUETUN_CONTROL_API_KEY=$KEY
@@ -163,7 +164,15 @@ Use the tracked helper for database backups:
 freedium/backup-db.sh
 ```
 
+**OmniRoute** (`/omniroute/`): Household LLM gateway plus its private Redis. Startup patches and provider registration live in `omniroute/start.sh`. See `omniroute/README.md`.
+
+**Ollama IPEX** (`/ollama-ipex/`): Local Intel GPU embeddings (`bge-m3`) consumed through OmniRoute. See `ollama-ipex/README.md`.
+
+**Search Ladder** (`/search-ladder/`): Authenticated research broker for the Hermes `web-research` skill. See `search-ladder/README.md`.
+
 **Hindsight** (`/hindsight/`): Shared authenticated memory API for Pi clients. It uses PostgreSQL/pgvector and OmniRoute for Codex OAuth LLM calls, local BGE-M3 embeddings, and NVIDIA reranking. See `hindsight/README.md` for secrets, deployment, and backup/restore.
+
+**Cursorpipe** (`/cursorpipe/`): Internal OpenAI-compatible proxy for the official Cursor API key. OmniRoute registers it as a custom chat provider. See `cursorpipe/README.md`.
 
 **Movie-Tracker** (`/movie-tracker/`): Python Telegram bot deployed from the private image `ghcr.io/example/movie-tracker:latest`. The homelab repository intentionally tracks only the compose wrapper. A clean host must be logged in to GHCR before pulling:
 ```bash

@@ -1,0 +1,59 @@
+services:
+  search-ladder:
+    image: ghcr.io/iamstubborn/search-ladder:latest
+    container_name: search-ladder
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      omniroute:
+        condition: service_healthy
+    environment:
+      OMNIROUTE_URL: http://omniroute:20129
+      OMNIROUTE_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
+      BROKER_API_KEY: ${SEARCH_LADDER_API_KEY:?set SEARCH_LADDER_API_KEY}
+      FINALIZER_URL: http://omniroute:20129/v1
+      FINALIZER_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
+      FINALIZER_MODEL: gpt-5.3-codex-spark
+      FINALIZER_REASONING_EFFORT: high
+      RERANKER_URL: http://omniroute:20129/v1
+      RERANKER_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
+      RERANKER_MODEL: nvidia/nv-rerank-qa-mistral-4b:1
+      FALLBACK_MODEL: auto/best-free
+      SEARCH_PROVIDERS: exa-search,tavily-search,firecrawl,ollama-search
+      DB_PATH: /data/search-ladder.db
+      PAGE_CACHE_TTL: 6h
+      QUOTA_COOLDOWN: 12h
+    volumes:
+      - search_ladder_data:/data
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=16m
+    mem_limit: 128m
+    healthcheck:
+      test: [CMD, search-ladder, healthcheck]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.search-ladder.rule=Host(`search-ladder.${DOCKER_DOMAIN}`)"
+      - "traefik.http.routers.search-ladder.entrypoints=https"
+      - "traefik.http.routers.search-ladder.tls=true"
+      - "traefik.http.services.search-ladder.loadbalancer.server.port=8080"
+      - "com.centurylinklabs.watchtower.enable=true"
+    networks:
+      - agent-tools
+      - proxy
+
+networks:
+  agent-tools:
+    name: agent-tools
+  proxy:
+    external: true
+
+volumes:
+  search_ladder_data:

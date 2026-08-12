@@ -31,7 +31,7 @@ WGET_STATE="$TMP/qbit-port" \
 FORWARDED_PORT_FILE="$TMP/forwarded_port" \
 SYNC_STATE_FILE="$TMP/synced_port" \
 QBITTORRENT_URL=http://qbittorrent:8400 \
-  "$ROOT/media/qbittorrent/scripts/port-sync.sh" --once
+  "$ROOT/download/qbittorrent/scripts/port-sync.sh" --once
 
 grep -q 'listen_port.*62938' "$TMP/request"
 test "$(cat "$TMP/synced_port")" = 62938

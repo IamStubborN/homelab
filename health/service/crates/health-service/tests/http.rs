@@ -113,6 +113,20 @@ async fn mcp_lists_exactly_the_phase_one_tools() {
             tool["name"]
         );
     }
+    for name in [
+        "add_measurement",
+        "add_meal",
+        "add_symptom",
+        "add_sleep_record",
+    ] {
+        let tool = body["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap();
+        assert!(tool["inputSchema"]["properties"]["source_event_id"].is_object());
+    }
 }
 
 #[tokio::test]

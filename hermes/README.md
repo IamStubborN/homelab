@@ -1,6 +1,6 @@
 # Hermes
 
-Private, Docker-first Hermes profiles for Andrii and Valentyna. Both profiles run the unmodified official `nousresearch/hermes-agent:latest` image while keeping configuration, memory, browser identity, Telegram credentials, and media credentials isolated. Vaultwarden login automation is available only to Andrii.
+Private, Docker-first Hermes profiles for Andrii and Valentyna. Both profiles run the unmodified official `nousresearch/hermes-agent` image pinned by repository digest while keeping configuration, memory, browser identity, Telegram credentials, and media credentials isolated. Vaultwarden login automation is available only to Andrii.
 
 The umbrella design is maintained in [`media-orchestrator`](https://github.com/IamStubborN/media-orchestrator/blob/main/docs/superpowers/specs/2026-07-10-media-orchestrator-mvp-design.md).
 
@@ -17,15 +17,15 @@ script after confirming that no media job is active.
 Hermes is not rebuilt or patched by this repository. Compose pulls:
 
 ```text
-nousresearch/hermes-agent:latest
+nousresearch/hermes-agent@sha256:1eafbbd7357ef92265ab2ba3e11edd0ff550b36bd7a1643ca88a142d5a4d4f8f
 ```
 
 Configuration, skills, plugins, and deterministic notifier support are mounted
 into the container. Conversational media operations and Telegram callbacks use
 the media-service MCP endpoint. The media CLI is a trusted-host operator tool
-and is not mounted into either Hermes container. Watchtower tracks both profile
-containers and replaces them when the official `latest` image changes; profile
-volumes remain intact.
+and is not mounted into either Hermes container. Watchtower is explicitly
+disabled for both profile containers; their image changes only through the
+manual schema-aware upgrade gate documented below.
 
 - [Docker runtime](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/docker.md)
 - [isolated Hermes profiles](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/profiles.md)
@@ -46,9 +46,20 @@ agent-browser-updater     vaultwarden-broker-andrii
 
 The Hermes containers share the official image but not state or credentials. Each has its own profile, config, SOUL, personal skills, memory, browser metadata, Telegram bot token, media client token, and health client token. Andrii alone has a Vaultwarden broker, login skill, and approval plugin. Profile sources are mounted read-only under `/etc/hermes-home`; the entrypoint installs shared and profile-local skills and plugins into the writable profile volume before the official bootstrap runs. Neither container receives the Docker socket.
 
+Hermes services are excluded from Watchtower and pinned to an exact digest.
+Upgrades are manual: update the managed profile `_config_version` to the schema
+supported by the candidate image, run the full config/runtime and official-image
+bootstrap checks, verify that no `config.yaml.bak-*` captures runtime secrets,
+and only then change the digest. Automatic image/schema upgrades are forbidden.
+
 The root filesystem is read-only. `/run` is the only executable tmpfs because s6-overlay stages its init binary there; `/tmp` remains `noexec`. All Linux capabilities are dropped except the official bootstrap requirements. Hermes runs as UID/GID `10000:10000`. Before privileges are dropped, the entrypoint copies only the media, health, and browser-broker client tokens into a private `0400` runtime directory owned by that user. The copies live only in `/run` and disappear with the container. The health token is not exported to the Hermes process environment. The config merger keeps a sanitized persistent base at `/opt/data/config.base.yaml`, writes the bearer-bearing active config as `0600` on `/run` tmpfs, and leaves only a symlink at `/opt/data/config.yaml`. Container restarts rematerialize the runtime file; generation failures remove temporary/runtime outputs, so named-volume files and snapshots do not retain the bearer.
 
 Both profiles discover the internal streamable-HTTP `health` MCP server at `health-service:8080/internal/mcp` through the external `health-internal` network. Each profile uses its own bearer token and owner default, while an explicitly named spouse may override that default. Hermes reuses the exact ignored token files owned by the embedded `health` stack; the health service must be available for first MCP discovery. The shared health skill specifies Russian user-facing text and native clarification choices, but these repository checks assert the skill contract rather than live Telegram behavior. Live Telegram acceptance and MCP discovery remain part of Task 14 after the service and credentials are available. Deployment remains the guarded manual flow.
+
+Stable retry identity is live-deferred until the Hermes Telegram gateway is
+verified to expose a source update/message identifier to the skill context. The
+skill must not invent `source_event_id`; without it, only exact event-time
+deduplication applies.
 
 The media service maps each MCP token server-side to its fixed owner. No
 model-supplied owner field is accepted. The standalone `hermes-media` wrapper
@@ -259,4 +270,7 @@ Hermes documents durable login persistence only for Camofox when an external Cam
 ./scripts/check
 ```
 
-The check covers use of the unmodified official image, Watchtower labels, profile and secret isolation, notifier HMAC/state behavior, mounted plugins and tools, Andrii-only Vaultwarden login contracts, wrapper redaction, ShellCheck, YAML lint, and rendered Compose validation.
+The check covers use of the digest-pinned unmodified official image, disabled
+Hermes Watchtower updates, profile and secret isolation, notifier HMAC/state
+behavior, mounted plugins and tools, Andrii-only Vaultwarden login contracts,
+wrapper redaction, ShellCheck, YAML lint, and rendered Compose validation.

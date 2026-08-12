@@ -10,7 +10,7 @@ pub fn event_dedup_hash(
     normalized_values: &serde_json::Value,
     attachment_sha256: Option<&[u8; 32]>,
 ) -> [u8; 32] {
-    let timestamp = event_time.unix_timestamp().to_string();
+    let timestamp = event_time.unix_timestamp_nanos().to_string();
     let values = serde_json::to_string(normalized_values)
         .expect("serializing serde_json::Value cannot fail");
     let attachment = attachment_sha256.map(hex::encode).unwrap_or_default();
@@ -26,6 +26,24 @@ pub fn event_dedup_hash(
     hasher.update(b"\x1f");
     hasher.update(attachment);
 
+    hasher.finalize().into()
+}
+
+/// Stable retry identity supplied by the source transport. The payload and
+/// clinical timestamp are deliberately excluded: reusing one source event ID
+/// always resolves to the original write, even if a retry is malformed.
+pub fn source_event_dedup_hash(
+    person: Person,
+    event_type: &str,
+    source_event_id: &str,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"source-event-v1\x1f");
+    hasher.update(person.as_str());
+    hasher.update(b"\x1f");
+    hasher.update(event_type);
+    hasher.update(b"\x1f");
+    hasher.update(source_event_id);
     hasher.finalize().into()
 }
 
@@ -102,7 +120,28 @@ mod tests {
 
         assert_eq!(
             hex::encode(event_dedup_hash(Person::Andrii, "weight", t, &v, None,)),
-            "ad5b15733dfdc8e4b49038c5dc839c179b87f752ae4d4a5cb4bb6b453b12eb4e",
+            "2ef949345bca41f242d214dde3cfc258c74fcdcff16b401f3e151a95548e0da5",
+        );
+    }
+
+    #[test]
+    fn source_identity_is_namespaced_by_person_type_and_exact_id() {
+        let base = source_event_dedup_hash(Person::Andrii, "weight", "telegram:42:100");
+        assert_eq!(
+            base,
+            source_event_dedup_hash(Person::Andrii, "weight", "telegram:42:100")
+        );
+        assert_ne!(
+            base,
+            source_event_dedup_hash(Person::Andrii, "weight", "telegram:42:101")
+        );
+        assert_ne!(
+            base,
+            source_event_dedup_hash(Person::Andrii, "meal", "telegram:42:100")
+        );
+        assert_ne!(
+            base,
+            source_event_dedup_hash(Person::Valentyna, "weight", "telegram:42:100")
         );
     }
 }

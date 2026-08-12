@@ -25,16 +25,19 @@ def read(relative_path: str) -> str:
 
 
 class ImageContractTests(unittest.TestCase):
-    def test_hermes_uses_unmodified_official_latest_image(self):
+    def test_hermes_uses_unmodified_official_pinned_image_without_watchtower(self):
         compose = yaml.safe_load(read("compose.yaml"))
         self.assertFalse((ROOT / "Dockerfile").exists())
         self.assertFalse((ROOT / "scripts/patch_hermes_telegram.py").exists())
         for profile in ("andrii", "valentyna"):
             service = compose["services"][f"hermes-{profile}"]
-            self.assertEqual(service["image"], "nousresearch/hermes-agent:latest")
+            self.assertEqual(
+                service["image"],
+                "nousresearch/hermes-agent@sha256:1eafbbd7357ef92265ab2ba3e11edd0ff550b36bd7a1643ca88a142d5a4d4f8f",
+            )
             self.assertNotIn("pull_policy", service)
             self.assertEqual(
-                service["labels"]["com.centurylinklabs.watchtower.enable"], "true"
+                service["labels"]["com.centurylinklabs.watchtower.enable"], "false"
             )
 
     def test_external_tools_update_without_rebuilding_hermes(self):

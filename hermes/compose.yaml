@@ -4,7 +4,7 @@ x-watchtower: &watchtower
   com.centurylinklabs.watchtower.enable: "true"
 
 x-hermes-common: &hermes-common
-  image: nousresearch/hermes-agent:latest
+  image: nousresearch/hermes-agent@sha256:1eafbbd7357ef92265ab2ba3e11edd0ff550b36bd7a1643ca88a142d5a4d4f8f
   entrypoint: [/usr/local/bin/hermes-home-entrypoint]
   command: [gateway, run]
   restart: unless-stopped
@@ -17,7 +17,8 @@ x-hermes-common: &hermes-common
   tmpfs:
     - /run:rw,exec,nosuid,nodev,size=32m
     - /tmp:rw,nosuid,nodev,noexec,size=256m
-  labels: *watchtower
+  labels:
+    com.centurylinklabs.watchtower.enable: "false"
   extra_hosts:
     - api.telegram.org=149.154.167.220
   environment:

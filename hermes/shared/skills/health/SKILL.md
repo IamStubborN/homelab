@@ -30,11 +30,11 @@ Times use RFC 3339; dates use `YYYY-MM-DD`.
 
 | Tool | Parameters |
 | --- | --- |
-| `add_measurement` | `person?`, `kind`, `values`, `source?`, `status?`, `event_time?` |
+| `add_measurement` | `person?`, `kind`, `values`, `source?`, `status?`, `event_time?`, `source_event_id?` |
 | `correct_measurement` | `measurement_id`, `new_values`, `reason`, `confirmed?` |
-| `add_meal` | `person?`, `description`, `items?`, `calories?`, `status?`, `event_time?` |
-| `add_symptom` | `person?`, `description`, `severity?`, `status?`, `event_time?` |
-| `add_sleep_record` | `person?`, `start_time`, `end_time`, `quality?`, `notes?`, `status?` |
+| `add_meal` | `person?`, `description`, `items?`, `calories?`, `status?`, `event_time?`, `source_event_id?` |
+| `add_symptom` | `person?`, `description`, `severity?`, `status?`, `event_time?`, `source_event_id?` |
+| `add_sleep_record` | `person?`, `start_time`, `end_time`, `quality?`, `notes?`, `status?`, `source_event_id?` |
 | `add_medication` | `person?`, `name`, `dose?`, `schedule?`, `started_at?`, `status?`, `confirmed?` |
 | `stop_medication` | `person?`, `medication_id`, `stopped_at?`, `reason?`, `confirmed?` |
 | `add_condition` | `person?`, `name`, `notes?`, `diagnosed_at?`, `status?`, `confirmed?` |
@@ -56,9 +56,12 @@ Only after `✅ Записать`, call the tool. Pass `confirmed=true` to
 `correct_measurement`. Edit returns to correction; cancel writes nothing.
 
 For routine event writes, pass `event_time` from the Telegram source message
-timestamp. Reuse that stable timestamp when retrying the same source message.
-If source metadata is unavailable, omit `event_time`; the service uses a short
-deterministic retry bucket, so this fallback is for immediate retries only.
+timestamp and `source_event_id` from a stable Telegram source update/message
+identifier. Reuse both when retrying the same source message. Never invent
+either value when the live gateway does not expose that metadata; without
+`source_event_id`, the service makes no retry-deduplication promise. Reusing a
+source ID with changed values returns the original record as a duplicate and
+does not overwrite it.
 
 Before correcting a blood-pressure pulse, query the current measurement first
 and reuse its complete `systolic`, `diastolic`, and `pulse` values. The

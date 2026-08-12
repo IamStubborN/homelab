@@ -81,6 +81,14 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
             )
             self.assertEqual(service["environment"]["HEALTH_DEFAULT_PERSON"], profile)
             self.assertIn("health-internal", service["networks"])
+            self.assertEqual(
+                service["image"],
+                "nousresearch/hermes-agent@sha256:1eafbbd7357ef92265ab2ba3e11edd0ff550b36bd7a1643ca88a142d5a4d4f8f",
+            )
+            self.assertEqual(
+                service["labels"]["com.centurylinklabs.watchtower.enable"],
+                "false",
+            )
             self.assertIn(
                 {
                     "source": f"{profile}_health_api_token",
@@ -130,6 +138,59 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
             )
             self.assertEqual(config["_config_version"], 34)
 
+    def test_health_runbook_fails_closed_and_restore_is_private_and_unique(self):
+        runbook = (HOMELAB_ROOT / "health/README.md").read_text(encoding="utf-8")
+        self.assertIn('if [ "$internal" != true ] || [ "$attachable" != true ]; then', runbook)
+        self.assertIn('exit 1', runbook)
+        self.assertIn('set -eu', runbook)
+        self.assertIn('umask 077', runbook)
+        self.assertIn('install -d -m 0700 health/backups', runbook)
+        self.assertIn('chmod 0600 "$backup"', runbook)
+        self.assertLess(
+            runbook.index("docker compose up --wait health-postgres"),
+            runbook.index("pg_dump -U health"),
+        )
+        self.assertIn('verify_db="health_restore_verify_$(date -u +%Y%m%d%H%M%S)_$$"', runbook)
+        self.assertIn('if [ "$verify_db_created" = true ]; then', runbook)
+        self.assertIn('test "$(docker compose exec -T health-postgres psql', runbook)
+        self.assertNotIn("createdb -U health health_restore_verify\n", runbook)
+
+    def test_health_network_guard_rejects_legacy_non_internal_network(self):
+        runbook = (HOMELAB_ROOT / "health/README.md").read_text(encoding="utf-8")
+        block = re.search(
+            r"before the first `up`:\n\n```bash\n(.*?)\n```", runbook, re.DOTALL
+        )
+        self.assertIsNotNone(block)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            docker = root / "docker"
+            calls = root / "calls"
+            docker.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >> \"$DOCKER_CALLS\"\n"
+                "case \"$*\" in\n"
+                "  'network inspect health-internal') exit 0 ;;\n"
+                "  *Internal*) printf 'false\\n'; exit 0 ;;\n"
+                "  *Attachable*) printf 'true\\n'; exit 0 ;;\n"
+                "esac\n"
+                "exit 90\n",
+                encoding="utf-8",
+            )
+            docker.chmod(0o755)
+            environment = os.environ.copy()
+            environment["PATH"] = f"{root}:{environment['PATH']}"
+            environment["DOCKER_CALLS"] = str(calls)
+            result = subprocess.run(
+                ["sh", "-c", block.group(1)],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Internal=true and Attachable=true", result.stderr)
+            self.assertNotIn("volume create", calls.read_text(encoding="utf-8"))
+
     def test_entrypoint_copies_health_without_exporting_it(self):
         entrypoint = read("scripts/hermes-home-entrypoint")
         self.assertNotIn("read_secret HEALTH_API_TOKEN", entrypoint)
@@ -174,8 +235,15 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
             temp_dir = root / "temp"
             bin_dir.mkdir()
             temp_dir.mkdir()
-            current = root / "current.yaml"
-            current.write_text("{}\n", encoding="utf-8")
+            current = root / "config.yaml"
+            legacy_secret = "legacy-persistent-bearer"
+            current.write_text(
+                "mcp_servers:\n"
+                "  health:\n"
+                "    headers:\n"
+                f"      Authorization: Bearer {legacy_secret}\n",
+                encoding="utf-8",
+            )
             secret_path = root / "health-token"
             secret = "post-generation-install-failure-token"
             secret_path.write_text(f"{secret}\n", encoding="utf-8")
@@ -230,10 +298,83 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
             self.assertTrue(install_attempted.is_file())
             self.assertEqual(list(temp_dir.iterdir()), [])
             self.assertNotIn(secret, result.stdout + result.stderr)
+            self.assertNotIn(legacy_secret, result.stdout + result.stderr)
             self.assertNotIn(
-                secret,
+                legacy_secret,
                 (root / "persisted-config.yaml").read_text(encoding="utf-8"),
             )
+            self.assertFalse(current.exists())
+            self.assertEqual(list(root.glob("config.yaml.bak-*")), [])
+            self.assertFalse((root / "runtime-config.yaml").exists())
+
+    def test_invalid_health_secret_removes_legacy_persistent_bearer_first(self):
+        entrypoint = read("scripts/hermes-home-entrypoint")
+        function = re.search(
+            r"materialize_hermes_config\(\) \{\n.*?\n\}",
+            entrypoint,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(function)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            bin_dir = root / "bin"
+            temporary = root / "tmp"
+            bin_dir.mkdir()
+            temporary.mkdir()
+            active = root / "config.yaml"
+            legacy_secret = "legacy-invalid-secret-bearer"
+            active.write_text(
+                "mcp_servers:\n"
+                "  health:\n"
+                "    headers:\n"
+                f"      Authorization: Bearer {legacy_secret}\n",
+                encoding="utf-8",
+            )
+            invalid_secret = root / "health-token"
+            invalid_secret.write_text("contains whitespace\n", encoding="utf-8")
+            install = bin_dir / "install"
+            install.write_text(
+                "#!/bin/sh\nset -eu\n"
+                "while [ $# -gt 2 ]; do shift 2; done\n"
+                'cp "$1" "$2"\n',
+                encoding="utf-8",
+            )
+            install.chmod(0o755)
+            probe = root / "probe.sh"
+            probe.write_text(
+                "#!/bin/sh\nset -eu\n"
+                + function.group(0)
+                + '\nmaterialize_hermes_config "$1" "$2" "$3" "$4" '
+                '"$5" "$6" "$7" "$8"\n',
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
+            result = subprocess.run(
+                [
+                    "sh",
+                    str(probe),
+                    os.fspath(pathlib.Path(os.sys.executable)),
+                    str(HERMES_ROOT / "scripts/merge_hermes_config.py"),
+                    str(HERMES_ROOT / "profiles/andrii/config/config.yaml"),
+                    str(root / "config.base.yaml"),
+                    str(active),
+                    str(root / "runtime-config.yaml"),
+                    str(invalid_secret),
+                    str(temporary),
+                ],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertFalse(active.exists())
+            persistent = (root / "config.base.yaml").read_text(encoding="utf-8")
+            self.assertNotIn(legacy_secret, persistent)
+            self.assertNotIn(legacy_secret, result.stdout + result.stderr)
+            self.assertEqual(list(root.glob("config.yaml.bak-*")), [])
             self.assertFalse((root / "runtime-config.yaml").exists())
 
     def test_entrypoint_keeps_health_bearer_only_in_runtime_config_across_restart(self):
@@ -637,6 +778,8 @@ class EmbeddedHealthSkillContractTests(unittest.TestCase):
         self.assertIn("`add_condition`", self.skill)
         self.assertIn("confirmed=true", self.skill)
         self.assertIn("Telegram source message timestamp", self.compact)
+        self.assertIn("stable Telegram source update/message identifier", self.compact)
+        self.assertIn("makes no retry-deduplication promise", self.compact)
 
 
 if __name__ == "__main__":

@@ -56,10 +56,13 @@ materialize_hermes_config() {
     "$python" "$merger" \
         "$managed" "$current" "$generated_base" --sanitize-health
     install -o 10000 -g 10000 -m 0640 "$generated_base" "$persistent_base"
+    # The sanitized base now contains every preserved setting. Remove a legacy
+    # regular active config before secret validation or runtime installation can
+    # fail, so an old health bearer cannot survive in the named volume.
+    rm -f "$active_link"
     "$python" "$merger" \
         "$managed" "$persistent_base" "$generated_config" "$health_secret"
     install -o 10000 -g 10000 -m 0600 "$generated_config" "$runtime_config"
-    rm -f "$active_link"
     ln -s "$runtime_config" "$active_link"
     rm -f "$generated_base" "$generated_config"
     trap - EXIT HUP INT TERM

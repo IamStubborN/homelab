@@ -33,6 +33,44 @@ async fn migration_applies_and_seeds_people() {
     assert_eq!(rows.len(), 2);
 }
 
+#[tokio::test]
+async fn forward_migration_adds_named_sleep_time_order_constraint() {
+    let db = fresh_db().await;
+    health_migration::Migrator::down(&db, Some(1))
+        .await
+        .expect("return to the previously deployed initial schema");
+
+    use sea_orm::ConnectionTrait;
+    let invalid_insert = "INSERT INTO sleep_records (
+            id, person_id, start_time, end_time, status, actor, via, event_time, dedup_hash
+        ) VALUES (
+            '00000000-0000-0000-0000-000000000901', 'andrii',
+            '2026-08-13T08:00:00Z', '2026-08-13T07:00:00Z',
+            'user_reported', 'andrii', 'hermes_andrii',
+            '2026-08-13T08:00:00Z', decode('01', 'hex')
+        )";
+    db.execute_unprepared(invalid_insert)
+        .await
+        .expect("the old initial schema did not have the constraint");
+    db.execute_unprepared("DELETE FROM sleep_records")
+        .await
+        .unwrap();
+
+    health_migration::Migrator::up(&db, None)
+        .await
+        .expect("apply forward migration");
+    let constraint = db
+        .query_one_raw(sea_orm::Statement::from_string(
+            sea_orm::DatabaseBackend::Postgres,
+            "SELECT conname FROM pg_constraint WHERE conname = 'sleep_records_end_after_start'"
+                .to_owned(),
+        ))
+        .await
+        .unwrap();
+    assert!(constraint.is_some());
+    assert!(db.execute_unprepared(invalid_insert).await.is_err());
+}
+
 fn ctx_valentyna() -> health_core::RequestCtx {
     health_core::RequestCtx {
         actor: health_core::Person::Valentyna,
@@ -55,6 +93,7 @@ async fn ops_defaults_person_status_and_event_time() {
             source: None,
             status: None,
             event_time: None,
+            source_event_id: None,
         },
     )
     .await
@@ -80,10 +119,7 @@ async fn ops_defaults_person_status_and_event_time() {
         .try_get::<time::OffsetDateTime>("", "event_time")
         .unwrap();
     assert!(event_time <= after);
-    assert!(event_time >= before - time::Duration::minutes(6));
-    assert_eq!(event_time.minute() % 5, 0);
-    assert_eq!(event_time.second(), 0);
-    assert_eq!(event_time.nanosecond(), 0);
+    assert!(event_time >= before);
 }
 
 #[tokio::test]
@@ -100,6 +136,7 @@ async fn ops_explicit_person_status_and_event_time_override_defaults() {
             source: None,
             status: Some(health_core::FactStatus::ConfirmedByDoctor),
             event_time: Some(event_time),
+            source_event_id: None,
         },
     )
     .await
@@ -140,6 +177,7 @@ async fn ops_rejects_invalid_measurement_values_before_writing() {
             source: None,
             status: None,
             event_time: None,
+            source_event_id: None,
         },
     )
     .await
@@ -272,6 +310,7 @@ async fn ops_rejects_non_positive_sleep_interval_before_storage() {
                 quality: None,
                 notes: None,
                 status: None,
+                source_event_id: None,
             },
         )
         .await
@@ -372,6 +411,7 @@ async fn ops_query_applies_inclusive_time_bounds_to_every_temporal_section() {
                 source: None,
                 status: health_core::FactStatus::UserReported,
                 event_time,
+                source_event_id: None,
             },
         )
         .await
@@ -389,6 +429,7 @@ async fn ops_query_applies_inclusive_time_bounds_to_every_temporal_section() {
                 calories: None,
                 status: health_core::FactStatus::UserReported,
                 event_time,
+                source_event_id: None,
             },
         )
         .await
@@ -407,6 +448,7 @@ async fn ops_query_applies_inclusive_time_bounds_to_every_temporal_section() {
                 severity: None,
                 status: health_core::FactStatus::UserReported,
                 event_time,
+                source_event_id: None,
             },
         )
         .await
@@ -423,6 +465,7 @@ async fn ops_query_applies_inclusive_time_bounds_to_every_temporal_section() {
                 quality: None,
                 notes: None,
                 status: health_core::FactStatus::UserReported,
+                source_event_id: None,
             },
         )
         .await
@@ -617,6 +660,7 @@ async fn latest_measurement_series_applies_limit_in_sql_and_returns_chronologica
                 source: None,
                 status: health_core::FactStatus::UserReported,
                 event_time,
+                source_event_id: None,
             },
         )
         .await
@@ -992,32 +1036,36 @@ async fn valentyna_mcp_rejects_mistaken_person_id_without_writing() {
 }
 
 #[tokio::test]
-async fn omitted_event_time_verbatim_repeat_is_duplicate() {
+async fn stable_source_event_id_deduplicates_across_boundaries_and_keeps_original_payload() {
     let db = fresh_db().await;
-    let first = ops::add_measurement(
+    let first_time = time::macros::datetime!(2026-08-13 10:05:29 UTC);
+    let retry_time = time::macros::datetime!(2026-08-13 10:05:31 UTC);
+    let first = storage::add_measurement(
         &db,
         &ctx_valentyna(),
-        ops::AddMeasurementParams {
-            person: None,
+        storage::AddMeasurement {
+            person: health_core::Person::Valentyna,
             kind: health_core::MeasurementKind::Weight,
             values: serde_json::json!({"value": 78.2}),
             source: None,
-            status: None,
-            event_time: None,
+            status: health_core::FactStatus::UserReported,
+            event_time: first_time,
+            source_event_id: Some("telegram:42:100".to_owned()),
         },
     )
     .await
     .unwrap();
-    let repeated = ops::add_measurement(
+    let repeated = storage::add_measurement(
         &db,
         &ctx_valentyna(),
-        ops::AddMeasurementParams {
-            person: None,
+        storage::AddMeasurement {
+            person: health_core::Person::Valentyna,
             kind: health_core::MeasurementKind::Weight,
-            values: serde_json::json!({"value": 78.2}),
+            values: serde_json::json!({"value": 99.9}),
             source: None,
-            status: None,
-            event_time: None,
+            status: health_core::FactStatus::UserReported,
+            event_time: retry_time,
+            source_event_id: Some("telegram:42:100".to_owned()),
         },
     )
     .await
@@ -1030,6 +1078,110 @@ async fn omitted_event_time_verbatim_repeat_is_duplicate() {
         repeated,
         storage::WriteOutcome::Duplicate { existing_id: id }
     );
+
+    use sea_orm::ConnectionTrait;
+    let row = db
+        .query_one_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Postgres,
+            "SELECT event_time, values_json FROM measurements WHERE id = $1",
+            [id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.try_get::<time::OffsetDateTime>("", "event_time")
+            .unwrap(),
+        first_time
+    );
+    assert_eq!(
+        row.try_get::<serde_json::Value>("", "values_json").unwrap(),
+        serde_json::json!({"value": 78.2})
+    );
+}
+
+#[tokio::test]
+async fn source_identity_avoids_old_bucket_false_positives() {
+    let db = fresh_db().await;
+    let add = |event_time, source_event_id: Option<&str>| storage::AddMeasurement {
+        person: health_core::Person::Valentyna,
+        kind: health_core::MeasurementKind::Weight,
+        values: serde_json::json!({"value": 78.2}),
+        source: None,
+        status: health_core::FactStatus::UserReported,
+        event_time,
+        source_event_id: source_event_id.map(str::to_owned),
+    };
+
+    let first = storage::add_measurement(
+        &db,
+        &ctx_valentyna(),
+        add(
+            time::macros::datetime!(2026-08-13 10:00:31 UTC),
+            Some("telegram:42:200"),
+        ),
+    )
+    .await
+    .unwrap();
+    let independent = storage::add_measurement(
+        &db,
+        &ctx_valentyna(),
+        add(
+            time::macros::datetime!(2026-08-13 10:05:29 UTC),
+            Some("telegram:42:201"),
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(first, storage::WriteOutcome::Created { .. }));
+    assert!(matches!(independent, storage::WriteOutcome::Created { .. }));
+
+    let same_time = time::macros::datetime!(2026-08-13 10:30:00 UTC);
+    for source_event_id in ["telegram:42:202", "telegram:42:203"] {
+        assert!(matches!(
+            storage::add_measurement(&db, &ctx_valentyna(), add(same_time, Some(source_event_id)),)
+                .await
+                .unwrap(),
+            storage::WriteOutcome::Created { .. }
+        ));
+    }
+
+    let no_source_a = storage::add_measurement(
+        &db,
+        &ctx_valentyna(),
+        add(time::macros::datetime!(2026-08-13 11:00:31 UTC), None),
+    )
+    .await
+    .unwrap();
+    let no_source_b = storage::add_measurement(
+        &db,
+        &ctx_valentyna(),
+        add(time::macros::datetime!(2026-08-13 11:05:29 UTC), None),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(no_source_a, storage::WriteOutcome::Created { .. }));
+    assert!(matches!(no_source_b, storage::WriteOutcome::Created { .. }));
+
+    let exact = time::macros::datetime!(2026-08-13 11:10:00 UTC);
+    let same_second_a = storage::add_measurement(&db, &ctx_valentyna(), add(exact, None))
+        .await
+        .unwrap();
+    let same_second_b = storage::add_measurement(
+        &db,
+        &ctx_valentyna(),
+        add(exact + time::Duration::nanoseconds(1), None),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        same_second_a,
+        storage::WriteOutcome::Created { .. }
+    ));
+    assert!(matches!(
+        same_second_b,
+        storage::WriteOutcome::Created { .. }
+    ));
 }
 
 #[tokio::test]
@@ -1038,7 +1190,8 @@ async fn mcp_duplicate_is_normal_json_and_chart_is_png_image_content() {
     let app = mcp_app(db);
     let arguments = serde_json::json!({
         "kind": "weight",
-        "values": {"value": 81.4}
+        "values": {"value": 81.4},
+        "source_event_id": "telegram:42:300"
     });
     let first = mcp_json(
         app.clone()
@@ -1101,6 +1254,7 @@ async fn add_measurement_writes_row_and_audit() {
             source: Some("home_device".into()),
             status: health_core::FactStatus::UserReported,
             event_time: time::macros::datetime!(2026-08-04 14:30 +03:00),
+            source_event_id: None,
         },
     )
     .await
@@ -1144,6 +1298,7 @@ async fn identical_measurement_is_reported_duplicate() {
         source: None,
         status: health_core::FactStatus::UserReported,
         event_time: time::macros::datetime!(2026-08-04 08:00 +03:00),
+        source_event_id: None,
     };
     let storage::WriteOutcome::Created { id } =
         storage::add_measurement(&db, &ctx_valentyna(), args())
@@ -1189,6 +1344,7 @@ async fn concurrent_identical_measurements_create_once_and_audit_duplicate() {
         source: Some("home_thermometer".into()),
         status: health_core::FactStatus::UserReported,
         event_time: time::macros::datetime!(2026-08-04 08:15 +03:00),
+        source_event_id: None,
     };
 
     let ctx_a = ctx_valentyna();
@@ -1243,6 +1399,7 @@ async fn add_meal_writes_row_and_audit() {
             calories: Some(540),
             status: health_core::FactStatus::UserReported,
             event_time: time::macros::datetime!(2026-08-05 12:30 +03:00),
+            source_event_id: None,
         },
     )
     .await
@@ -1285,6 +1442,7 @@ async fn same_meal_twice_is_duplicate() {
         calories: Some(320),
         status: health_core::FactStatus::UserReported,
         event_time: time::macros::datetime!(2026-08-05 08:00 +03:00),
+        source_event_id: None,
     };
     let ctx_a = ctx_valentyna();
     let ctx_b = ctx_valentyna();
@@ -1309,6 +1467,7 @@ async fn add_symptom_writes_row_and_audit() {
             severity: Some(6),
             status: health_core::FactStatus::Suspected,
             event_time: time::macros::datetime!(2026-08-05 16:15 +03:00),
+            source_event_id: None,
         },
     )
     .await
@@ -1347,6 +1506,7 @@ async fn concurrent_identical_symptoms_create_once_and_audit_duplicate() {
         severity: Some(4),
         status: health_core::FactStatus::UserReported,
         event_time: time::macros::datetime!(2026-08-06 15:00 +03:00),
+        source_event_id: None,
     };
     let ctx_a = ctx_valentyna();
     let ctx_b = ctx_valentyna();
@@ -1374,6 +1534,7 @@ async fn add_sleep_record_writes_row_and_audit() {
             quality: Some(8),
             notes: Some("Woke once".into()),
             status: health_core::FactStatus::UserReported,
+            source_event_id: None,
         },
     )
     .await
@@ -1420,6 +1581,7 @@ async fn equivalent_sleep_offsets_are_duplicate() {
         quality: Some(8),
         notes: None,
         status: health_core::FactStatus::UserReported,
+        source_event_id: None,
     };
     let storage::WriteOutcome::Created { id } = storage::add_sleep_record(
         &db,
@@ -1461,6 +1623,7 @@ async fn concurrent_identical_sleep_records_create_once_and_audit_duplicate() {
         quality: Some(7),
         notes: None,
         status: health_core::FactStatus::UserReported,
+        source_event_id: None,
     };
     let ctx_a = ctx_valentyna();
     let ctx_b = ctx_valentyna();
@@ -1913,6 +2076,7 @@ async fn correction_preserves_original_value_and_dedup_identity() {
         source: None,
         status: health_core::FactStatus::UserReported,
         event_time: time::macros::datetime!(2026-08-04 14:30 +03:00),
+        source_event_id: None,
     };
     let storage::WriteOutcome::Created { id } =
         storage::add_measurement(&db, &ctx_valentyna(), args())
@@ -2019,6 +2183,7 @@ async fn measurement_series_is_oldest_first_and_excludes_deleted() {
         source: None,
         status: health_core::FactStatus::UserReported,
         event_time,
+        source_event_id: None,
     };
     let storage::WriteOutcome::Created { id: deleted_id } = storage::add_measurement(
         &db,
@@ -2160,6 +2325,7 @@ async fn recent_returns_latest_first_and_excludes_deleted() {
         calories: None,
         status: health_core::FactStatus::UserReported,
         event_time,
+        source_event_id: None,
     };
     storage::add_meal(
         &db,

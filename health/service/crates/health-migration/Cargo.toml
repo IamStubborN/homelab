@@ -1,0 +1,10 @@
+[package]
+name = "health-migration"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+sea-orm-migration = { workspace = true, features = ["cli"] }
+tokio.workspace = true

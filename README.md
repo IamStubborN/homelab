@@ -22,6 +22,7 @@ with the documented Docker Compose or guarded media deployment commands.
 - Bitwarden (Vaultwarden), Mosquitto, RustDesk
 - OmniRoute and Search Ladder shared by household agents
 - Hindsight shared memory server for Pi clients
+- Family Health Rust MCP service with dedicated PostgreSQL
 - Home Assistant with public-safe example config only
 
 ## Setup
@@ -71,6 +72,10 @@ docker compose config --quiet
 
 Media Orchestrator is included in the root Compose project. See
 `media/README.md` for its image build, secrets, validation, and rollback notes.
+
+Family Health is also built by the root Compose project directly from
+`health/service`; no separate service repository checkout is needed. See
+`health/README.md` for secrets, local checks, build, and startup instructions.
 
 Start services:
 

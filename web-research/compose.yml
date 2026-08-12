@@ -121,6 +121,9 @@ services:
       FINALIZER_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
       FINALIZER_MODEL: gpt-5.3-codex-spark
       FINALIZER_REASONING_EFFORT: high
+      RERANKER_URL: http://omniroute:20129/v1
+      RERANKER_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
+      RERANKER_MODEL: nvidia/nv-rerank-qa-mistral-4b:1
       FALLBACK_MODEL: auto/best-free
       SEARCH_PROVIDERS: exa-search,tavily-search,firecrawl,ollama-search
       DB_PATH: /data/search-ladder.db

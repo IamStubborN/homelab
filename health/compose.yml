@@ -19,9 +19,9 @@ services:
     environment:
       POSTGRES_DB: health
       POSTGRES_USER: health
-      POSTGRES_PASSWORD_FILE: /run/secrets/health_pg_password
+      POSTGRES_PASSWORD_FILE: /run/secrets/health_pg_bootstrap_password
       PGDATA: /var/lib/postgresql/data/pgdata
-    secrets: [health_pg_password]
+    secrets: [health_pg_bootstrap_password]
     volumes:
       - type: volume
         source: health-pg-data
@@ -56,13 +56,13 @@ services:
       HEALTH_DB_PORT: "5432"
       HEALTH_DB_NAME: health
       HEALTH_DB_USER: health
-      HEALTH_DB_PASSWORD_FILE: /run/secrets/health_pg_password
+      HEALTH_DB_PASSWORD_FILE: /run/secrets/health_service_db_password
       HEALTH_TOKEN_FILE_ANDRII: /run/secrets/andrii_health_api_token
       HEALTH_TOKEN_FILE_VALENTYNA: /run/secrets/valentyna_health_api_token
       HEALTH_LISTEN_ADDR: 0.0.0.0:8080
       RUST_LOG: info
     secrets:
-      - health_pg_password
+      - health_service_db_password
       - andrii_health_api_token
       - valentyna_health_api_token
     tmpfs:
@@ -85,10 +85,13 @@ networks:
 
 volumes:
   health-pg-data:
+    name: health-pg-data
 
 secrets:
-  health_pg_password:
-    file: ./secrets/health_pg_password
+  health_pg_bootstrap_password:
+    file: ./secrets/health_pg_bootstrap_password
+  health_service_db_password:
+    file: ./secrets/health_service_db_password
   andrii_health_api_token:
     file: ./secrets/andrii.health_api_token
   valentyna_health_api_token:

@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+python3 -m unittest discover -v tests
+./scripts/deploy-preflight
+shellcheck scripts/hermes-home-entrypoint scripts/hermes-media scripts/vaultwarden-safe \
+    scripts/agent-browser scripts/vaultwarden-broker-entrypoint \
+    scripts/init-primary-vaultwarden scripts/deploy-preflight scripts/check
+yamllint -d '{extends: default, rules: {line-length: disable, document-start: disable, truthy: disable}}' \
+    compose.yaml profiles/primary/config/config.yaml profiles/secondary/config/config.yaml
+
+PRIMARY_TELEGRAM_USER_ID=1 \
+PRIMARY_TELEGRAM_CHAT_ID=1 \
+SECONDARY_TELEGRAM_USER_ID=2 \
+SECONDARY_TELEGRAM_CHAT_ID=2 \
+docker compose -f compose.yaml config --quiet

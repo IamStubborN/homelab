@@ -21,6 +21,7 @@ include:
     - bitwarden/compose.yml
     - web-research/compose.yml
     - hindsight/compose.yml
+    - hermes/compose.yaml
     - media/compose.media-orchestrator.yml
 
 networks:

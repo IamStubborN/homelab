@@ -1,0 +1,76 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+    search|download|jobs|queue|tracking|release|trending|rezka) ;;
+    *) echo "Unsupported media command" >&2; exit 64 ;;
+esac
+media_command=$1
+
+for argument in "$@"; do
+    case "$argument" in
+        --requested-by|--requested_by|--token|--token-file|--service-url|\
+        --requested-by=*|--requested_by=*|--token=*|--token-file=*|--service-url=*|\
+        MEDIA_TOKEN_FILE=*|MEDIA_SERVICE_URL=*)
+            echo "Refusing identity-controlled option: $argument" >&2
+            exit 64
+            ;;
+    esac
+done
+
+if [ "${HERMES_HOME_TESTING:-}" = "1" ]; then
+    media_bin=$(command -v media)
+    token_file=/dev/null
+    service_url=http://media-service.test
+else
+    media_bin=/usr/local/bin/media
+    token_file=/run/hermes-home-secrets/media_api_token
+    service_url=$(tr -d '\r\n' < /etc/hermes-home/media-service-url)
+    test -s "$token_file"
+fi
+
+session_platform=${HERMES_SESSION_PLATFORM:-cli}
+session_chat_id=${HERMES_SESSION_CHAT_ID:-local}
+session_thread_id=${HERMES_SESSION_THREAD_ID:-}
+callback_invocation=${HERMES_MEDIA_CALLBACK:-0}
+silence_marker=${HERMES_MEDIA_SILENCE_MARKER:-${HERMES_HOME:-/opt/data}/runtime/media-download-succeeded}
+
+has_json=false
+for argument in "$@"; do
+    [ "$argument" = "--json" ] && has_json=true
+done
+
+if [ "$has_json" = true ]; then
+    set -- "$@"
+else
+    set -- "$@" --json
+fi
+
+if output=$(env -i \
+    PATH="$PATH" \
+    HOME="${HERMES_HOME:-/opt/data}/home" \
+    MEDIA_SERVICE_URL="$service_url" \
+    MEDIA_TOKEN_FILE="$token_file" \
+    HERMES_SESSION_PLATFORM="$session_platform" \
+    HERMES_SESSION_CHAT_ID="$session_chat_id" \
+    HERMES_SESSION_THREAD_ID="$session_thread_id" \
+    "$media_bin" "$@"); then
+    status=0
+else
+    status=$?
+fi
+
+printf '%s\n' "$output"
+
+if [ "$status" -eq 0 ] \
+    && [ "$media_command" = "download" ] \
+    && [ "$session_platform" = "telegram" ] \
+    && [ "$callback_invocation" != "1" ]; then
+    marker_dir=$(dirname "$silence_marker")
+    mkdir -p "$marker_dir"
+    marker_tmp="${silence_marker}.$$"
+    date +%s > "$marker_tmp"
+    mv "$marker_tmp" "$silence_marker"
+fi
+
+exit "$status"

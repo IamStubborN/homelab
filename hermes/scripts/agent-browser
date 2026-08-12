@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+
+exec /opt/tools/node_modules/.bin/agent-browser "$@"

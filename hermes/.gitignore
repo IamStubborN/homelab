@@ -1,0 +1,9 @@
+.env
+artifacts/*
+!artifacts/.gitkeep
+secrets/*
+!secrets/*.example
+__pycache__/
+*.pyc
+.worktrees/
+.superpowers/

@@ -1,0 +1,1116 @@
+#!/usr/bin/env python3
+"""Receive signed media events and render them through Telegram Bot API."""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import logging
+import mimetypes
+import os
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from dataclasses import dataclass
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+from hermes_media_notifications import (
+    CardView,
+    DeliveryKind,
+    MAX_STATE_ITEMS,
+    UpdateDecision,
+    card_fingerprint,
+    card_storage_key,
+    decide_update,
+    has_push_receipt,
+    is_missing_telegram_message,
+    load_state,
+    parse_notification,
+    parse_source_choice,
+    push_receipt_key,
+    record_push_receipt,
+    render_card,
+    render_event,
+    render_push,
+    render_source_choice,
+    save_state,
+    update_card_state,
+)
+
+
+MAX_BODY_BYTES = 65_536
+MAX_CLOCK_SKEW_SECONDS = 300
+MAX_LEGACY_ITEMS = 1_000
+
+
+@dataclass(frozen=True)
+class ControlResponse:
+    status: HTTPStatus
+    payload: dict[str, str]
+
+
+class TelegramError(RuntimeError):
+    def __init__(self, message: str, *, delivery_unknown: bool = True) -> None:
+        super().__init__(message)
+        self.delivery_unknown = delivery_unknown
+
+
+def push_delivery_aliases(delivery_id: str) -> tuple[str, ...]:
+    if delivery_id.startswith("media-event:"):
+        return delivery_id, delivery_id.replace("media-event:", "media-job:", 1)
+    if delivery_id.startswith("media-job:"):
+        return delivery_id.replace("media-job:", "media-event:", 1), delivery_id
+    return (delivery_id,)
+
+
+class TelegramClient:
+    def __init__(self, token: str, chat_id: str) -> None:
+        self._base_url = f"https://api.telegram.org/bot{token}/"
+        self._chat_id = chat_id
+
+    def _call(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
+        request = urllib.request.Request(
+            self._base_url + method,
+            data=urllib.parse.urlencode(payload).encode("utf-8"),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        response_status = None
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                result = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            response_status = error.code
+            try:
+                result = json.loads(error.read().decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise TelegramError(
+                    "Telegram request failed",
+                    delivery_unknown=not 400 <= error.code < 500,
+                ) from error
+        except (OSError, json.JSONDecodeError) as error:
+            raise TelegramError("Telegram request failed") from error
+        if not isinstance(result, dict):
+            raise TelegramError("Telegram response is invalid")
+        if result.get("ok") is not True:
+            description = result.get("description")
+            raise TelegramError(
+                str(description or "Telegram rejected the request"),
+                delivery_unknown=not (
+                    isinstance(response_status, int)
+                    and 400 <= response_status < 500
+                ),
+            )
+        response_value = result.get("result")
+        return response_value if isinstance(response_value, dict) else {}
+
+    def _call_multipart(
+        self,
+        method: str,
+        payload: dict[str, Any],
+        *,
+        field_name: str,
+        file_path: Path,
+    ) -> dict[str, Any]:
+        boundary = f"----hermes-media-{uuid.uuid4().hex}"
+        body = bytearray()
+        for name, value in payload.items():
+            body.extend(f"--{boundary}\r\n".encode())
+            body.extend(
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+            )
+            body.extend(str(value).encode("utf-8"))
+            body.extend(b"\r\n")
+        body.extend(f"--{boundary}\r\n".encode())
+        body.extend(
+            (
+                f'Content-Disposition: form-data; name="{field_name}"; '
+                f'filename="{file_path.name}"\r\n'
+            ).encode()
+        )
+        content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        body.extend(f"Content-Type: {content_type}\r\n\r\n".encode())
+        body.extend(file_path.read_bytes())
+        body.extend(f"\r\n--{boundary}--\r\n".encode())
+        request = urllib.request.Request(
+            self._base_url + method,
+            data=bytes(body),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST",
+        )
+        response_status = None
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                result = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            response_status = error.code
+            try:
+                result = json.loads(error.read().decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise TelegramError(
+                    "Telegram request failed",
+                    delivery_unknown=not 400 <= error.code < 500,
+                ) from error
+        except (OSError, json.JSONDecodeError) as error:
+            raise TelegramError("Telegram request failed") from error
+        if not isinstance(result, dict):
+            raise TelegramError("Telegram response is invalid")
+        if result.get("ok") is not True:
+            description = result.get("description")
+            raise TelegramError(
+                str(description or "Telegram rejected the request"),
+                delivery_unknown=not (
+                    isinstance(response_status, int)
+                    and 400 <= response_status < 500
+                ),
+            )
+        response_value = result.get("result")
+        return response_value if isinstance(response_value, dict) else {}
+
+    @staticmethod
+    def _markup(button_rows: tuple[tuple[Any, ...], ...]) -> str | None:
+        if not button_rows:
+            return None
+        return json.dumps(
+            {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": action.label,
+                            "callback_data": action.callback_data,
+                        }
+                        for action in row
+                    ]
+                    for row in button_rows
+                ]
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    def _send(
+        self,
+        text: str,
+        *,
+        button_rows: tuple[tuple[Any, ...], ...] = (),
+        reply_to_message_id: str | None = None,
+        photo: str | None = None,
+    ) -> tuple[str, bool]:
+        payload: dict[str, Any] = {
+            "chat_id": self._chat_id,
+            "text": text,
+            "disable_web_page_preview": "true",
+        }
+        markup = self._markup(button_rows)
+        if markup is not None:
+            payload["reply_markup"] = markup
+        if reply_to_message_id is not None:
+            payload["reply_parameters"] = json.dumps(
+                {"message_id": int(reply_to_message_id)}, separators=(",", ":")
+            )
+        result = None
+        sent_as_photo = False
+        if photo:
+            photo_path = Path(photo)
+            if photo_path.is_file():
+                photo_payload = dict(payload)
+                photo_payload["caption"] = photo_payload.pop("text")
+                photo_payload.pop("disable_web_page_preview", None)
+                try:
+                    result = self._call_multipart(
+                        "sendPhoto",
+                        photo_payload,
+                        field_name="photo",
+                        file_path=photo_path,
+                    )
+                    sent_as_photo = True
+                except OSError:
+                    logging.warning("Media notification photo failed; using text fallback")
+                except TelegramError as error:
+                    if error.delivery_unknown:
+                        raise
+                    logging.warning("Media notification photo failed; using text fallback")
+            elif photo.startswith("https://"):
+                photo_payload = dict(payload)
+                photo_payload["caption"] = photo_payload.pop("text")
+                photo_payload.pop("disable_web_page_preview", None)
+                photo_payload["photo"] = photo
+                try:
+                    result = self._call("sendPhoto", photo_payload)
+                    sent_as_photo = True
+                except TelegramError as error:
+                    if error.delivery_unknown:
+                        raise
+                    logging.warning("Remote media poster failed; using text fallback")
+        if result is None:
+            result = self._call("sendMessage", payload)
+        message_id = result.get("message_id")
+        if not isinstance(message_id, int):
+            raise TelegramError("Telegram response has no message ID")
+        return str(message_id), sent_as_photo
+
+    def send(
+        self,
+        text: str,
+        *,
+        button_rows: tuple[tuple[Any, ...], ...] = (),
+        reply_to_message_id: str | None = None,
+        photo: str | None = None,
+    ) -> str:
+        message_id, _ = self._send(
+            text,
+            button_rows=button_rows,
+            reply_to_message_id=reply_to_message_id,
+            photo=photo,
+        )
+        return message_id
+
+    def send_card(
+        self,
+        text: str,
+        *,
+        button_rows: tuple[tuple[Any, ...], ...] = (),
+        photo: str | None = None,
+    ) -> tuple[str, bool]:
+        return self._send(text, button_rows=button_rows, photo=photo)
+
+    def edit(
+        self,
+        message_id: str,
+        text: str,
+        *,
+        button_rows: tuple[tuple[Any, ...], ...] = (),
+        has_photo: bool = False,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "chat_id": self._chat_id,
+            "message_id": int(message_id),
+            "reply_markup": self._markup(button_rows)
+            or json.dumps({"inline_keyboard": []}, separators=(",", ":")),
+        }
+        if has_photo:
+            payload["caption"] = text
+            method = "editMessageCaption"
+        else:
+            payload["text"] = text
+            payload["disable_web_page_preview"] = "true"
+            method = "editMessageText"
+        try:
+            self._call(method, payload)
+        except TelegramError as error:
+            if "message is not modified" not in str(error).lower():
+                raise
+
+
+class NotificationDispatcher:
+    def __init__(self, telegram: TelegramClient, state_dir: Path, chat_id: str) -> None:
+        self._telegram = telegram
+        self._chat_id = chat_id
+        self._state_path = state_dir / "media-notifications.json"
+        self._legacy_path = state_dir / "legacy-notifications.json"
+        self._state = load_state(self._state_path)
+        self._legacy = self._load_legacy()
+        self._lock = threading.Lock()
+
+    def _load_legacy(self) -> dict[str, Any]:
+        try:
+            value = json.loads(self._legacy_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return {"status_messages": {}, "receipts": [], "pending_receipts": {}}
+        if not isinstance(value, dict):
+            return {"status_messages": {}, "receipts": [], "pending_receipts": {}}
+        messages = value.get("status_messages")
+        receipts = value.get("receipts")
+        pending_receipts = value.get("pending_receipts")
+        if isinstance(pending_receipts, list):
+            pending_receipts = {
+                item: {"phase": "sending"}
+                for item in pending_receipts
+                if isinstance(item, str)
+            }
+        return {
+            "status_messages": dict(list(messages.items())[-MAX_LEGACY_ITEMS:])
+            if isinstance(messages, dict)
+            else {},
+            "receipts": [item for item in receipts if isinstance(item, str)][-MAX_LEGACY_ITEMS:]
+            if isinstance(receipts, list)
+            else [],
+            "pending_receipts": dict(
+                list(
+                    (
+                        (item, dict(intent))
+                        for item, intent in pending_receipts.items()
+                        if isinstance(item, str)
+                        and isinstance(intent, dict)
+                        and intent.get("phase") in {"sending", "sent"}
+                    )
+                )[-MAX_LEGACY_ITEMS:]
+            )
+            if isinstance(pending_receipts, dict)
+            else {},
+        }
+
+    def _save_legacy(self) -> None:
+        messages = self._legacy["status_messages"]
+        while len(messages) > MAX_LEGACY_ITEMS:
+            messages.pop(next(iter(messages)))
+        self._legacy["receipts"] = self._legacy["receipts"][-MAX_LEGACY_ITEMS:]
+        self._legacy_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._legacy_path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(self._legacy, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        os.replace(temporary, self._legacy_path)
+
+    def deliver(self, payload: dict[str, Any], request_id: str) -> HTTPStatus:
+        with self._lock:
+            if payload.get("schema_version") == 2:
+                return self._deliver_media(payload)
+            if (
+                payload.get("event_type") == "media.source-choice"
+                and payload.get("schema_version") == 1
+            ):
+                return self._deliver_source_choice(payload, request_id)
+            return self._deliver_legacy(payload, request_id)
+
+    def _deliver_source_choice(
+        self, payload: dict[str, Any], request_id: str
+    ) -> HTTPStatus:
+        receipts: list[str] = self._legacy["receipts"]
+        pending_receipts: dict[str, dict[str, Any]] = self._legacy[
+            "pending_receipts"
+        ]
+        if request_id and request_id in receipts:
+            return HTTPStatus.OK
+        intent = pending_receipts.get(request_id) if request_id else None
+        if intent is not None:
+            if intent.get("phase") != "sent":
+                # Telegram has no idempotency key or sent-message lookup by our
+                # request ID. Retrying an ambiguous send would risk a duplicate.
+                return HTTPStatus.SERVICE_UNAVAILABLE
+            pending_receipts.pop(request_id, None)
+            receipts.append(request_id)
+            self._save_legacy()
+            return HTTPStatus.OK
+        notification = parse_source_choice(payload)
+        rendered = render_source_choice(notification)
+        if request_id:
+            if len(pending_receipts) >= MAX_LEGACY_ITEMS:
+                return HTTPStatus.SERVICE_UNAVAILABLE
+            pending_receipts[request_id] = {"phase": "sending"}
+            try:
+                self._save_legacy()
+            except OSError:
+                pending_receipts.pop(request_id, None)
+                raise
+        try:
+            message_id = self._telegram.send(
+                rendered.text,
+                button_rows=rendered.button_rows,
+                photo=rendered.photo,
+            )
+        except TelegramError as error:
+            if request_id and not error.delivery_unknown:
+                pending_receipts.pop(request_id, None)
+                self._save_legacy()
+            raise
+        if request_id:
+            pending_receipts[request_id] = {
+                "phase": "sent",
+                "message_id": message_id,
+            }
+            self._save_legacy()
+            pending_receipts.pop(request_id, None)
+            receipts.append(request_id)
+        self._save_legacy()
+        return HTTPStatus.OK
+
+    def _deliver_media(self, payload: dict[str, Any]) -> HTTPStatus:
+        notification = parse_notification(payload)
+        key = card_storage_key(self._chat_id, notification)
+        legacy_job_card = notification.card_key.startswith("media-job:")
+        event_delivery = (
+            notification.delivery_kind == DeliveryKind.FINAL_PUSH
+            and notification.card_key.startswith(("media-event:", "media-job:"))
+        ) or (
+            notification.delivery_kind == DeliveryKind.CARD
+            and notification.terminal
+            and legacy_job_card
+        )
+        if event_delivery:
+            legacy_key = f"{self._chat_id}:media-job:{notification.media.job_id}"
+            key = legacy_key
+        if (
+            notification.delivery_kind == DeliveryKind.CARD
+            and not notification.terminal
+            and legacy_job_card
+        ):
+            stored = self._state.cards.get(key)
+            if stored is not None and (
+                notification.lifecycle_cycle < stored.lifecycle_cycle
+                or (
+                    notification.lifecycle_cycle == stored.lifecycle_cycle
+                    and (
+                        stored.terminal
+                        or notification.revision <= stored.revision
+                    )
+                )
+            ):
+                return HTTPStatus.OK
+            rendered = render_card(notification, CardView.COMPACT)
+            self._state.pending_card_deliveries.pop(key, None)
+            update_card_state(
+                self._state,
+                key,
+                notification,
+                stored.message_id if stored is not None else None,
+                rendered=rendered,
+                notification_payload=payload,
+                has_photo=stored.has_photo if stored is not None else False,
+            )
+            save_state(self._state_path, self._state)
+            return HTTPStatus.OK
+        if not self._reconcile_card_delivery(key):
+            return HTTPStatus.SERVICE_UNAVAILABLE
+        stored = self._state.cards.get(key)
+        if notification.delivery_kind == DeliveryKind.CARD and not event_delivery:
+            view = (
+                stored.view
+                if stored is not None
+                and stored.lifecycle_cycle == notification.lifecycle_cycle
+                else CardView.COMPACT
+            )
+            if notification.terminal:
+                view = CardView.COMPACT
+            if view == CardView.CONFIRM_CANCEL and "cancel" not in notification.actions:
+                view = CardView.COMPACT
+            rendered = render_card(notification, view)
+            fingerprint = card_fingerprint(rendered)
+            action_callbacks = tuple(action.callback_data for action in rendered.actions)
+            decision = decide_update(
+                stored,
+                notification,
+                fingerprint=fingerprint,
+                action_callbacks=action_callbacks,
+            )
+            if decision == UpdateDecision.IGNORE:
+                if (
+                    stored is not None
+                    and notification.revision > stored.revision
+                    and stored.fingerprint == fingerprint
+                ):
+                    update_card_state(
+                        self._state,
+                        key,
+                        notification,
+                        stored.message_id,
+                        rendered=rendered,
+                        view=view,
+                        notification_payload=payload,
+                        now=stored.updated_at,
+                    )
+                    save_state(self._state_path, self._state)
+                return HTTPStatus.OK
+            if decision == UpdateDecision.RETRY:
+                return HTTPStatus.SERVICE_UNAVAILABLE
+            message_id = stored.message_id if stored is not None else None
+            has_photo = stored.has_photo if stored is not None else False
+            if decision == UpdateDecision.EDIT and message_id is not None:
+                try:
+                    self._telegram.edit(
+                        message_id,
+                        rendered.text,
+                        button_rows=rendered.button_rows,
+                        has_photo=has_photo,
+                    )
+                except TelegramError as error:
+                    if not is_missing_telegram_message(error):
+                        raise
+                    sent = self._send_card_durable(key, payload, view, rendered)
+                    if sent is None:
+                        return HTTPStatus.SERVICE_UNAVAILABLE
+                    message_id, has_photo = sent
+            else:
+                sent = self._send_card_durable(key, payload, view, rendered)
+                if sent is None:
+                    return HTTPStatus.SERVICE_UNAVAILABLE
+                message_id, has_photo = sent
+            update_card_state(
+                self._state,
+                key,
+                notification,
+                message_id,
+                rendered=rendered,
+                view=view,
+                notification_payload=payload,
+                has_photo=has_photo,
+            )
+            self._state.pending_card_deliveries.pop(key, None)
+            save_state(self._state_path, self._state)
+            return HTTPStatus.OK
+
+        if has_push_receipt(self._state, notification):
+            return HTTPStatus.OK
+        rendered = render_event(notification) if event_delivery else None
+        if event_delivery and notification.state == "cancelled":
+            update_card_state(
+                self._state,
+                key,
+                notification,
+                stored.message_id if stored is not None else None,
+                rendered=rendered,
+                notification_payload=payload,
+                has_photo=stored.has_photo if stored is not None else False,
+            )
+            record_push_receipt(self._state, notification)
+            save_state(self._state_path, self._state)
+            return HTTPStatus.OK
+        if not event_delivery and (
+            stored is None
+            or stored.message_id is None
+            or not stored.terminal
+            or stored.lifecycle_cycle != notification.lifecycle_cycle
+            or stored.revision != notification.revision
+        ):
+            return HTTPStatus.SERVICE_UNAVAILABLE
+        if event_delivery and stored is not None and stored.message_id is not None:
+            try:
+                self._telegram.edit(
+                    stored.message_id,
+                    rendered.text,
+                    button_rows=rendered.button_rows,
+                    has_photo=stored.has_photo,
+                )
+            except TelegramError as error:
+                if not is_missing_telegram_message(error):
+                    raise
+            else:
+                update_card_state(
+                    self._state,
+                    key,
+                    notification,
+                    stored.message_id,
+                    rendered=rendered,
+                    notification_payload=payload,
+                    has_photo=stored.has_photo,
+                )
+                record_push_receipt(self._state, notification)
+                save_state(self._state_path, self._state)
+                return HTTPStatus.OK
+        intent_keys = [
+            f"push:{delivery_id}"
+            for delivery_id in push_delivery_aliases(push_receipt_key(notification))
+        ]
+        intent_key = next(
+            (
+                candidate
+                for candidate in intent_keys
+                if candidate in self._state.pending_card_deliveries
+            ),
+            intent_keys[0],
+        )
+        intent = self._state.pending_card_deliveries.get(intent_key)
+        if intent is not None:
+            if intent.get("phase") != "sent":
+                return HTTPStatus.SERVICE_UNAVAILABLE
+            if event_delivery:
+                message_id = intent.get("message_id")
+                if not isinstance(message_id, str) or not message_id.isdigit():
+                    return HTTPStatus.SERVICE_UNAVAILABLE
+                update_card_state(
+                    self._state,
+                    key,
+                    notification,
+                    message_id,
+                    rendered=rendered,
+                    notification_payload=payload,
+                    has_photo=False,
+                )
+            record_push_receipt(self._state, notification)
+            self._state.pending_card_deliveries.pop(intent_key, None)
+            save_state(self._state_path, self._state)
+            return HTTPStatus.OK
+        if len(self._state.pending_card_deliveries) >= MAX_STATE_ITEMS:
+            return HTTPStatus.SERVICE_UNAVAILABLE
+        self._state.pending_card_deliveries[intent_key] = {
+            "phase": "sending",
+            "receipt_key": push_receipt_key(notification),
+        }
+        try:
+            save_state(self._state_path, self._state)
+        except OSError:
+            self._state.pending_card_deliveries.pop(intent_key, None)
+            raise
+        try:
+            message_id = self._telegram.send(
+                rendered.text if rendered is not None else render_push(notification),
+                button_rows=rendered.button_rows if rendered is not None else (),
+                reply_to_message_id=(
+                    None if event_delivery else stored.message_id
+                ),
+            )
+        except TelegramError as error:
+            if not error.delivery_unknown:
+                self._state.pending_card_deliveries.pop(intent_key, None)
+                save_state(self._state_path, self._state)
+            raise
+        self._state.pending_card_deliveries[intent_key] = {
+            "phase": "sent",
+            "message_id": message_id,
+        }
+        save_state(self._state_path, self._state)
+        if event_delivery:
+            update_card_state(
+                self._state,
+                key,
+                notification,
+                message_id,
+                rendered=rendered,
+                notification_payload=payload,
+                has_photo=False,
+            )
+        record_push_receipt(self._state, notification)
+        self._state.pending_card_deliveries.pop(intent_key, None)
+        save_state(self._state_path, self._state)
+        return HTTPStatus.OK
+
+    def _send_card_durable(self, key, payload, view, rendered):
+        if len(self._state.pending_card_deliveries) >= MAX_STATE_ITEMS:
+            return None
+        self._state.pending_card_deliveries[key] = {
+            "phase": "sending",
+            "payload": json.loads(json.dumps(payload)),
+            "view": view.value,
+        }
+        try:
+            save_state(self._state_path, self._state)
+        except OSError:
+            self._state.pending_card_deliveries.pop(key, None)
+            raise
+        try:
+            message_id, has_photo = self._telegram.send_card(
+                rendered.text,
+                button_rows=rendered.button_rows,
+                photo=rendered.photo,
+            )
+        except TelegramError as error:
+            if not error.delivery_unknown:
+                self._state.pending_card_deliveries.pop(key, None)
+                save_state(self._state_path, self._state)
+            raise
+        self._state.pending_card_deliveries[key].update(
+            phase="sent", message_id=message_id, has_photo=has_photo
+        )
+        save_state(self._state_path, self._state)
+        return message_id, has_photo
+
+    def _reconcile_card_delivery(self, key: str) -> bool:
+        intent = self._state.pending_card_deliveries.get(key)
+        if intent is None:
+            return True
+        if intent.get("phase") != "sent":
+            logging.error(
+                "Unresolved Telegram send for %s; refusing a duplicate send", key
+            )
+            return False
+        raw_payload = intent.get("payload")
+        message_id = intent.get("message_id")
+        has_photo = intent.get("has_photo")
+        try:
+            pending = parse_notification(raw_payload)
+            view = CardView(intent.get("view"))
+        except (TypeError, ValueError):
+            return False
+        if (
+            card_storage_key(self._chat_id, pending) != key
+            or not isinstance(message_id, str)
+            or not message_id.isdigit()
+            or not isinstance(has_photo, bool)
+        ):
+            return False
+        rendered = render_card(pending, view)
+        update_card_state(
+            self._state,
+            key,
+            pending,
+            message_id,
+            rendered=rendered,
+            view=view,
+            notification_payload=raw_payload,
+            has_photo=has_photo,
+        )
+        self._state.pending_card_deliveries.pop(key, None)
+        save_state(self._state_path, self._state)
+        return True
+
+    def control(self, payload: dict[str, Any], request_id: str) -> ControlResponse:
+        with self._lock:
+            if (
+                not request_id
+                or len(request_id) > 128
+                or not request_id.isascii()
+                or not request_id.isprintable()
+            ):
+                return ControlResponse(
+                    HTTPStatus.BAD_REQUEST, {"error": "invalid_request_id"}
+                )
+            if request_id in self._state.control_receipts:
+                return ControlResponse(
+                    HTTPStatus.CONFLICT, {"error": "replayed_request"}
+                )
+            command = payload.get("command")
+            job_id = payload.get("job_id")
+            message_id = payload.get("message_id")
+            if (
+                command
+                not in {"expand", "collapse", "confirm-cancel", "dismiss-cancel"}
+                or not isinstance(job_id, str)
+                or not isinstance(message_id, str)
+                or not message_id.isdigit()
+            ):
+                return ControlResponse(
+                    HTTPStatus.BAD_REQUEST, {"error": "invalid_payload"}
+                )
+            try:
+                if str(uuid.UUID(job_id)) != job_id:
+                    raise ValueError("job id is not canonical")
+            except (AttributeError, ValueError):
+                return ControlResponse(
+                    HTTPStatus.BAD_REQUEST, {"error": "invalid_payload"}
+                )
+
+            matches: list[tuple[str, Any, Any]] = []
+            for key, card in self._state.cards.items():
+                if card.notification_payload is None:
+                    continue
+                try:
+                    notification = parse_notification(card.notification_payload)
+                except ValueError:
+                    continue
+                if notification.media.job_id == job_id:
+                    matches.append((key, card, notification))
+            if not matches:
+                return ControlResponse(
+                    HTTPStatus.NOT_FOUND, {"error": "card_not_found"}
+                )
+            if len(matches) != 1:
+                return ControlResponse(
+                    HTTPStatus.CONFLICT, {"error": "stale_card"}
+                )
+            key, card, notification = matches[0]
+            if card.message_id != message_id:
+                return ControlResponse(
+                    HTTPStatus.CONFLICT, {"error": "stale_card"}
+                )
+
+            view = {
+                "expand": CardView.DETAILS,
+                "collapse": CardView.COMPACT,
+                "confirm-cancel": CardView.CONFIRM_CANCEL,
+                "dismiss-cancel": CardView.COMPACT,
+            }[command]
+            if view == CardView.CONFIRM_CANCEL and (
+                notification.terminal or "cancel" not in notification.actions
+            ):
+                return ControlResponse(
+                    HTTPStatus.CONFLICT, {"error": "stale_card"}
+                )
+            rendered = render_card(notification, view)
+            if card.view == view and card.fingerprint == card_fingerprint(rendered):
+                self._state.control_receipts.append(request_id)
+                save_state(self._state_path, self._state)
+                return ControlResponse(HTTPStatus.OK, {"status": "unchanged"})
+            self._telegram.edit(
+                message_id,
+                rendered.text,
+                button_rows=rendered.button_rows,
+                has_photo=card.has_photo,
+            )
+            update_card_state(
+                self._state,
+                key,
+                notification,
+                message_id,
+                rendered=rendered,
+                view=view,
+                notification_payload=card.notification_payload,
+                has_photo=card.has_photo,
+            )
+            self._state.control_receipts.append(request_id)
+            save_state(self._state_path, self._state)
+            return ControlResponse(HTTPStatus.OK, {"status": "updated"})
+
+    def reconcile_delivery(
+        self, payload: dict[str, Any], request_id: str
+    ) -> ControlResponse:
+        with self._lock:
+            if (
+                not request_id
+                or len(request_id) > 128
+                or not request_id.isascii()
+                or not request_id.isprintable()
+            ):
+                return ControlResponse(
+                    HTTPStatus.BAD_REQUEST, {"error": "invalid_request_id"}
+                )
+            if request_id in self._state.control_receipts:
+                return ControlResponse(
+                    HTTPStatus.CONFLICT, {"error": "replayed_request"}
+                )
+            kind = payload.get("kind")
+            delivery_id = payload.get("delivery_id")
+            resolution = payload.get("resolution")
+            if (
+                kind not in {"card", "push", "source"}
+                or not isinstance(delivery_id, str)
+                or not delivery_id
+                or len(delivery_id) > 160
+                or not delivery_id.isprintable()
+                or resolution not in {"delivered", "retry"}
+            ):
+                return ControlResponse(
+                    HTTPStatus.BAD_REQUEST, {"error": "invalid_payload"}
+                )
+
+            if kind == "source":
+                pending = self._legacy["pending_receipts"]
+                if delivery_id not in pending:
+                    return ControlResponse(
+                        HTTPStatus.NOT_FOUND, {"error": "delivery_not_found"}
+                    )
+                pending.pop(delivery_id, None)
+                if resolution == "delivered":
+                    receipts = self._legacy["receipts"]
+                    if delivery_id not in receipts:
+                        receipts.append(delivery_id)
+                self._save_legacy()
+            else:
+                intent_keys = (
+                    [f"{self._chat_id}:{delivery_id}"]
+                    if kind == "card"
+                    else [
+                        f"push:{candidate}"
+                        for candidate in push_delivery_aliases(delivery_id)
+                    ]
+                )
+                intent_key = next(
+                    (
+                        candidate
+                        for candidate in intent_keys
+                        if candidate in self._state.pending_card_deliveries
+                    ),
+                    intent_keys[0],
+                )
+                intent = self._state.pending_card_deliveries.get(intent_key)
+                if intent is None:
+                    return ControlResponse(
+                        HTTPStatus.NOT_FOUND, {"error": "delivery_not_found"}
+                    )
+                if resolution == "retry":
+                    self._state.pending_card_deliveries.pop(intent_key, None)
+                elif kind == "push":
+                    receipt_key = intent.get("receipt_key")
+                    aliases = push_delivery_aliases(delivery_id)
+                    if not isinstance(receipt_key, str) or receipt_key not in aliases:
+                        return ControlResponse(
+                            HTTPStatus.CONFLICT, {"error": "invalid_intent"}
+                        )
+                    canonical_receipt = aliases[0]
+                    if canonical_receipt not in self._state.push_receipts:
+                        self._state.push_receipts.append(canonical_receipt)
+                    self._state.pending_card_deliveries.pop(intent_key, None)
+                else:
+                    message_id = payload.get("message_id")
+                    has_photo = payload.get("has_photo", False)
+                    if (
+                        not isinstance(message_id, str)
+                        or not message_id.isdigit()
+                        or not isinstance(has_photo, bool)
+                    ):
+                        return ControlResponse(
+                            HTTPStatus.BAD_REQUEST, {"error": "invalid_payload"}
+                        )
+                    intent.update(
+                        phase="sent",
+                        message_id=message_id,
+                        has_photo=has_photo,
+                    )
+                    if not self._reconcile_card_delivery(intent_key):
+                        return ControlResponse(
+                            HTTPStatus.CONFLICT, {"error": "invalid_intent"}
+                        )
+                save_state(self._state_path, self._state)
+
+            self._state.control_receipts.append(request_id)
+            save_state(self._state_path, self._state)
+            return ControlResponse(HTTPStatus.OK, {"status": resolution})
+
+    def _deliver_legacy(self, payload: dict[str, Any], request_id: str) -> HTTPStatus:
+        if payload.get("event_type") != "media.notification":
+            raise ValueError("unsupported event")
+        message = payload.get("message")
+        if not isinstance(message, str) or not message.strip() or len(message) > 16_000:
+            raise ValueError("invalid message")
+        receipts: list[str] = self._legacy["receipts"]
+        if request_id and request_id in receipts:
+            return HTTPStatus.OK
+        status_key = payload.get("status_key")
+        messages: dict[str, str] = self._legacy["status_messages"]
+        if isinstance(status_key, str) and status_key:
+            message_id = messages.get(status_key)
+            if message_id is not None:
+                try:
+                    self._telegram.edit(message_id, message)
+                except TelegramError as error:
+                    if not is_missing_telegram_message(error):
+                        raise
+                    message_id = self._telegram.send(message)
+            else:
+                message_id = self._telegram.send(message)
+            messages[status_key] = message_id
+        else:
+            self._telegram.send(message)
+        if request_id:
+            receipts.append(request_id)
+        self._save_legacy()
+        return HTTPStatus.OK
+
+
+def _read_secret(path: str) -> str:
+    value = Path(path).read_text(encoding="utf-8").strip()
+    if not value:
+        raise RuntimeError(f"Required secret is empty: {path}")
+    return value
+
+
+def _verify_signed_request(
+    body: bytes,
+    timestamp: str,
+    signature: str,
+    secret: bytes,
+    *,
+    now: int,
+) -> bool:
+    try:
+        timestamp_value = int(timestamp)
+    except ValueError:
+        return False
+    expected = hmac.new(
+        secret,
+        timestamp.encode("ascii", errors="ignore") + b"." + body,
+        hashlib.sha256,
+    ).hexdigest()
+    return (
+        abs(now - timestamp_value) <= MAX_CLOCK_SKEW_SECONDS
+        and hmac.compare_digest(signature, expected)
+    )
+
+
+def _handler(dispatcher: NotificationDispatcher, secret: bytes):
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "media-notifier/1"
+
+        def log_message(self, message: str, *args: Any) -> None:
+            logging.info("%s - %s", self.address_string(), message % args)
+
+        def _json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
+            encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def do_GET(self) -> None:
+            if self.path == "/health":
+                self._json(HTTPStatus.OK, {"status": "ok"})
+            else:
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+
+        def do_POST(self) -> None:
+            if self.path not in {
+                "/webhooks/media-notify",
+                "/control/card",
+                "/control/delivery",
+            }:
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                length = 0
+            if length <= 0 or length > MAX_BODY_BYTES:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid_body"})
+                return
+            body = self.rfile.read(length)
+            timestamp = self.headers.get("X-Webhook-Timestamp", "")
+            signature = self.headers.get("X-Webhook-Signature-V2", "")
+            if not _verify_signed_request(
+                body,
+                timestamp,
+                signature,
+                secret,
+                now=int(time.time()),
+            ):
+                self._json(HTTPStatus.UNAUTHORIZED, {"error": "invalid_signature"})
+                return
+            try:
+                payload = json.loads(body.decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("payload must be an object")
+                request_id = self.headers.get("X-Request-ID", "")
+                if self.path == "/control/card":
+                    control_response = dispatcher.control(payload, request_id)
+                    status = control_response.status
+                    response_payload = control_response.payload
+                elif self.path == "/control/delivery":
+                    control_response = dispatcher.reconcile_delivery(
+                        payload, request_id
+                    )
+                    status = control_response.status
+                    response_payload = control_response.payload
+                else:
+                    status = dispatcher.deliver(payload, request_id)
+                    response_payload = (
+                        {"status": "delivered"}
+                        if status == HTTPStatus.OK
+                        else {"error": "retry"}
+                    )
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid_payload"})
+                return
+            except TelegramError:
+                logging.exception("Telegram delivery failed")
+                self._json(HTTPStatus.BAD_GATEWAY, {"error": "telegram_unavailable"})
+                return
+            self._json(status, response_payload)
+
+    return Handler
+
+
+def main() -> None:
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
+    token = _read_secret(os.getenv("TELEGRAM_TOKEN_FILE", "/run/secrets/telegram_bot_token"))
+    secret = _read_secret(os.getenv("WEBHOOK_SECRET_FILE", "/run/secrets/webhook_hmac")).encode()
+    chat_id = os.environ["TELEGRAM_CHAT_ID"].strip()
+    if not chat_id.lstrip("-").isdigit():
+        raise RuntimeError("TELEGRAM_CHAT_ID must be numeric")
+    state_dir = Path(os.getenv("STATE_DIR", "/data"))
+    dispatcher = NotificationDispatcher(TelegramClient(token, chat_id), state_dir, chat_id)
+    address = os.getenv("LISTEN_ADDR", "0.0.0.0:8644")
+    host, port = address.rsplit(":", 1)
+    server = ThreadingHTTPServer((host, int(port)), _handler(dispatcher, secret))
+    logging.info("Media notifier listening on %s", address)
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

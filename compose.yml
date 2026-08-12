@@ -6,12 +6,13 @@ include:
 
     # services
     - glance/compose.yml
+    - download/compose.yml
     - speedtest-tracker/compose.yml
     - mosquitto/compose.yml
     - homeassistant/compose.yml
     - karakeep/compose.yml
     - kavita/compose.yml
-    - media/compose.yml
+    - plex/compose.yml
     - watchtower/compose.yml
     - deunhealth/compose.yml
     - samba/compose.yml
@@ -19,7 +20,10 @@ include:
     - freedium/compose.yml
     - movie-tracker/docker-compose.yml
     - bitwarden/compose.yml
-    - web-research/compose.yml
+    - omniroute/compose.yml
+    - ollama-ipex/compose.yml
+    - cursorpipe/compose.yml
+    - search-ladder/compose.yml
     - hindsight/compose.yml
     - hermes/compose.yaml
     - media/compose.media-orchestrator.yml

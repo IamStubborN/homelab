@@ -1,6 +1,5 @@
 services:
   gluetun:
-    # Follow stable Gluetun releases automatically through Watchtower.
     image: qmcgaw/gluetun:latest
     container_name: gluetun
     restart: unless-stopped
@@ -9,10 +8,11 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     ports:
-      - 6881:6881 # qBittorrent
-      - 6881:6881/udp # qBittorrent
+      - 6881:6881
+      - 6881:6881/udp
     volumes:
-      - ./gluetun/data:/gluetun
+      # Keep mutable state in its pre-split location for upgrade compatibility.
+      - ../media/gluetun/data:/gluetun
       - ./gluetun/scripts:/scripts:ro
     healthcheck:
       test: [ "CMD-SHELL", "/scripts/healthcheck.sh" ]
@@ -21,18 +21,16 @@ services:
       retries: 2
       start_period: 60s
     environment:
-      - TZ=${TIMEZONE:-UTC} # Specify your timezone here
-      - VPN_SERVICE_PROVIDER=protonvpn # Specify your VPN provider here
-      - VPN_TYPE=wireguard # Specify your VPN type here
-      - PORT_FORWARD_ONLY=on # Use only ProtonVPN servers with port forwarding
-      - SERVER_COUNTRIES=Bulgaria # Prefer nearby ProtonVPN P2P servers
+      - TZ=${TIMEZONE:-UTC}
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - PORT_FORWARD_ONLY=on
+      - SERVER_COUNTRIES=Bulgaria
       - WIREGUARD_PRIVATE_KEY_SECRETFILE=/run/secrets/protonvpn_wireguard_private_key
       - DNS_SERVER=on
       - DNS_UPSTREAM_RESOLVERS=cloudflare,google
       - BLOCK_MALICIOUS=off
       - DNS_UPSTREAM_IPV6=off
-      # Control server must be reachable cross-container (Glance VPN widget) but
-      # is locked down with an apikey; see gluetun/control-auth-config.example.toml.
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH=/run/secrets/gluetun_control_auth_config
       - VPN_PORT_FORWARDING=on
@@ -43,19 +41,16 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
-
       - "traefik.http.routers.qbittorrent.tls=true"
       - "traefik.http.routers.qbittorrent.entrypoints=http,https"
       - "traefik.http.routers.qbittorrent.service=qbittorrent"
       - "traefik.http.routers.qbittorrent.rule=Host(`qbittorrent.${DOCKER_DOMAIN}`)"
       - "traefik.http.services.qbittorrent.loadbalancer.server.port=8400"
-
       - "traefik.http.routers.speedtest-vpn.tls=true"
       - "traefik.http.routers.speedtest-vpn.entrypoints=http,https"
       - "traefik.http.routers.speedtest-vpn.service=speedtest-vpn"
       - "traefik.http.routers.speedtest-vpn.rule=Host(`speedtest-vpn.${DOCKER_DOMAIN}`)"
       - "traefik.http.services.speedtest-vpn.loadbalancer.server.port=80"
-
       - "deunhealth.restart.on.unhealthy=true"
     networks:
       - proxy
@@ -91,10 +86,10 @@ services:
     secrets:
       - gluetun_control_api_key
     volumes:
-      - ./qbittorrent/config:/config
-      - ./qbittorrent/ui:/ui
+      - ../media/qbittorrent/config:/config
+      - ../media/qbittorrent/ui:/ui
       - ./qbittorrent/scripts:/scripts
-      - ./gluetun/data/forwarded_port:/gluetun/forwarded_port:ro
+      - ../media/gluetun/data/forwarded_port:/gluetun/forwarded_port:ro
       - /etc/localtime:/etc/localtime:ro
       - ${INTERNAL_STORAGE:-/mnt/internal}/torrents:/data/internal/torrents
       - ${USB_STORAGE:-/mnt/usb_drive}/torrents:/data/usb_drive/torrents
@@ -120,7 +115,7 @@ services:
       - POLL_INTERVAL=5
     volumes:
       - ./qbittorrent/scripts/port-sync.sh:/scripts/port-sync.sh:ro
-      - ./gluetun/data/forwarded_port:/gluetun/forwarded_port:ro
+      - ../media/gluetun/data/forwarded_port:/gluetun/forwarded_port:ro
     tmpfs:
       - /tmp:size=1m,mode=1777
     entrypoint: ["sh", "/scripts/port-sync.sh"]
@@ -130,8 +125,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    # The sync loop already retries every five seconds. Keep its health status
-    # observable, but do not restart it when Proton temporarily withdraws a port.
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
     networks:
@@ -159,8 +152,6 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
       - "deunhealth.restart.on.unhealthy=true"
       - "traefik.enable=true"
-      # A distinct router/service name prevents a stale pre-migration Gluetun
-      # container from joining this load-balancer until its next safe restart.
       - "traefik.http.routers.prowlarr-direct.tls=true"
       - "traefik.http.routers.prowlarr-direct.entrypoints=http,https"
       - "traefik.http.routers.prowlarr-direct.service=prowlarr-direct"
@@ -168,7 +159,7 @@ services:
       - "traefik.http.routers.prowlarr-direct.rule=Host(`prowlarr.${DOCKER_DOMAIN}`)"
       - "traefik.http.services.prowlarr-direct.loadbalancer.server.port=9696"
     volumes:
-      - ./prowlarr/config:/config
+      - ../media/prowlarr/config:/config
       - /etc/localtime:/etc/localtime:ro
     networks:
       - proxy
@@ -180,7 +171,6 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      # INFO logs include request bodies and can expose private-indexer credentials.
       - LOG_LEVEL=warning
       - LOG_HTML=false
       - CAPTCHA_SOLVER=none
@@ -218,168 +208,19 @@ services:
       - SETTLE_DELAY=10
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
-
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./gluetun-watcher/watch.sh:/watch.sh:ro
       - ${HOMELAB_ROOT:-/opt/homelab}:${HOMELAB_ROOT:-/opt/homelab}:ro
     entrypoint: ["sh", "/watch.sh"]
 
-  plex-orphan-watcher:
-    image: ${PLEX_ORPHAN_WATCHER_IMAGE:-ghcr.io/iamstubborn/plex-orphan-watcher:0.4.4@sha256:b7e418b81c62301447aae609a9017f59c511594bbf5c3dac6e70a6c6b02c8f2a}
-    container_name: plex-orphan-watcher
-    restart: unless-stopped
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    depends_on:
-      plex:
-        condition: service_healthy
-    environment:
-      - PLEX_URL=http://plex:32400
-      - PLEX_TOKEN_FILE=/run/secrets/plex_token
-      - DELETE_ROOTS=/data/internal/media,/data/usb_drive/media
-      - AUDIT_ROOTS=/data/internal/torrents,/data/usb_drive/torrents
-      - STATE_PATH=/state/watcher.db
-      - DRY_RUN=false
-      - SETTLE_DELAY=15m
-      - RECONCILE_INTERVAL=1h
-      - HEALTH_ADDRESS=:8080
-    volumes:
-      - ./plex-orphan-watcher/state:/state
-      - ${INTERNAL_STORAGE:-/mnt/internal}/media:/data/internal/media
-      - ${USB_STORAGE:-/mnt/usb_drive}/media:/data/usb_drive/media
-      - ${INTERNAL_STORAGE:-/mnt/internal}/torrents:/data/internal/torrents:ro
-      - ${USB_STORAGE:-/mnt/usb_drive}/torrents:/data/usb_drive/torrents:ro
-    secrets:
-      - plex_token
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
-      - "deunhealth.restart.on.unhealthy=true"
-    networks:
-      - proxy
-
-  plex:
-    image: linuxserver/plex:latest
-    container_name: plex
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    devices:
-      - /dev/dri:/dev/dri
-    ports:
-      - 32400:32400
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - VERSION=docker
-      - TZ=${TIMEZONE:-UTC}
-      - PLEX_CLAIM=${PLEX_CLAIM}
-    volumes:
-      - ./plex/config:/config
-      - /etc/localtime:/etc/localtime:ro
-      - /dev/shm:/transcode
-      - ${INTERNAL_STORAGE:-/mnt/internal}:/data/internal
-      - ${USB_STORAGE:-/mnt/usb_drive}:/data/usb_drive
-    healthcheck:
-      test: "curl -sf http://localhost:32400/identity || exit 1"
-      interval: 1m
-      timeout: 10s
-      retries: 3
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-      - "deunhealth.restart.on.unhealthy=true"
-      - "traefik.enable=true"
-      - "traefik.http.routers.plex.tls=true"
-      - "traefik.http.routers.plex.entrypoints=http,https"
-      - "traefik.http.routers.plex.service=plex"
-      - "traefik.http.routers.plex.rule=Host(`plex.${DOCKER_DOMAIN}`)"
-      - "traefik.http.services.plex.loadbalancer.server.port=32400"
-    networks:
-      - proxy
-
-
-  plex-auto-languages:
-    image: ghcr.io/journeydocker/plex-auto-languages:latest
-    container_name: plex-auto-languages
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    environment:
-      - PLEX_URL=http://plex:32400
-      - PLEX_TOKEN_FILE=/run/secrets/plex_token
-      - TZ=${TIMEZONE:-UTC}
-      - UPDATE_LEVEL=show
-      - UPDATE_STRATEGY=all
-      - TRIGGER_ON_PLAY=true
-      - TRIGGER_ON_SCAN=false
-      - SCHEDULER_ENABLE=false
-      - DEBUG=true
-    volumes:
-      - ./plex-auto-languages/config:/config
-      - ./plex-auto-languages/logs:/logs
-    secrets:
-      - plex_token
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-
-    networks:
-      - proxy
-
-
-  media-preview-generator:
-    image: stevezzau/media_preview_generator:latest
-    container_name: media-preview-generator
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    depends_on:
-      plex:
-        condition: service_healthy
-    devices:
-      - /dev/dri:/dev/dri
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - TZ=${TIMEZONE:-UTC}
-    volumes:
-      - ./media-preview-generator/config:/config
-      - ./plex/config:/plex:rw
-      - /etc/localtime:/etc/localtime:ro
-      - ${INTERNAL_STORAGE:-/mnt/internal}:/data/internal:ro
-      - ${USB_STORAGE:-/mnt/usb_drive}:/data/usb_drive:ro
-    healthcheck:
-      test: "curl -sf http://localhost:8080/api/health || curl -sf http://localhost:8080/api/system/status || exit 1"
-      interval: 1m
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-      - "deunhealth.restart.on.unhealthy=true"
-      - "traefik.enable=true"
-      - "traefik.http.routers.media-preview.tls=true"
-      - "traefik.http.routers.media-preview.entrypoints=http,https"
-      - "traefik.http.routers.media-preview.service=media-preview"
-      - "traefik.http.routers.media-preview.rule=Host(`media-preview.${DOCKER_DOMAIN}`)"
-      - "traefik.http.services.media-preview.loadbalancer.server.port=8080"
-    networks:
-      - proxy
-
 secrets:
   protonvpn_wireguard_private_key:
-    file: ./secrets/protonvpn_wireguard_private_key
-  plex_token:
-    file: ./secrets/plex_token
-  # Gluetun control-server auth: the TOML role file for Gluetun and the raw
-  # apikey for the qBittorrent healthcheck. Both must carry the SAME key.
-  # See gluetun/control-auth-config.example.toml and media/README.md.
+    file: ../media/secrets/protonvpn_wireguard_private_key
   gluetun_control_auth_config:
-    file: ./secrets/gluetun_control_auth_config
+    file: ../media/secrets/gluetun_control_auth_config
   gluetun_control_api_key:
-    file: ./secrets/gluetun_control_api_key
+    file: ../media/secrets/gluetun_control_api_key
 
 networks:
   proxy:

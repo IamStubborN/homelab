@@ -1,0 +1,149 @@
+services:
+  plex-orphan-watcher:
+    image: ${PLEX_ORPHAN_WATCHER_IMAGE:-ghcr.io/iamstubborn/plex-orphan-watcher:0.4.4@sha256:b7e418b81c62301447aae609a9017f59c511594bbf5c3dac6e70a6c6b02c8f2a}
+    container_name: plex-orphan-watcher
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      plex:
+        condition: service_healthy
+    environment:
+      - PLEX_URL=http://plex:32400
+      - PLEX_TOKEN_FILE=/run/secrets/plex_token
+      - DELETE_ROOTS=/data/internal/media,/data/usb_drive/media
+      - AUDIT_ROOTS=/data/internal/torrents,/data/usb_drive/torrents
+      - STATE_PATH=/state/watcher.db
+      - DRY_RUN=false
+      - SETTLE_DELAY=15m
+      - RECONCILE_INTERVAL=1h
+      - HEALTH_ADDRESS=:8080
+    volumes:
+      # Keep mutable state in its pre-split location for upgrade compatibility.
+      - ../media/plex-orphan-watcher/state:/state
+      - ${INTERNAL_STORAGE:-/mnt/internal}/media:/data/internal/media
+      - ${USB_STORAGE:-/mnt/usb_drive}/media:/data/usb_drive/media
+      - ${INTERNAL_STORAGE:-/mnt/internal}/torrents:/data/internal/torrents:ro
+      - ${USB_STORAGE:-/mnt/usb_drive}/torrents:/data/usb_drive/torrents:ro
+    secrets:
+      - plex_token
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+      - "deunhealth.restart.on.unhealthy=true"
+    networks:
+      - proxy
+
+  plex:
+    image: linuxserver/plex:latest
+    container_name: plex
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    devices:
+      - /dev/dri:/dev/dri
+    ports:
+      - 32400:32400
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - VERSION=docker
+      - TZ=${TIMEZONE:-UTC}
+      - PLEX_CLAIM=${PLEX_CLAIM}
+    volumes:
+      - ../media/plex/config:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /dev/shm:/transcode
+      - ${INTERNAL_STORAGE:-/mnt/internal}:/data/internal
+      - ${USB_STORAGE:-/mnt/usb_drive}:/data/usb_drive
+    healthcheck:
+      test: "curl -sf http://localhost:32400/identity || exit 1"
+      interval: 1m
+      timeout: 10s
+      retries: 3
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "deunhealth.restart.on.unhealthy=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.plex.tls=true"
+      - "traefik.http.routers.plex.entrypoints=http,https"
+      - "traefik.http.routers.plex.service=plex"
+      - "traefik.http.routers.plex.rule=Host(`plex.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.plex.loadbalancer.server.port=32400"
+    networks:
+      - proxy
+
+  plex-auto-languages:
+    image: ghcr.io/journeydocker/plex-auto-languages:latest
+    container_name: plex-auto-languages
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - PLEX_URL=http://plex:32400
+      - PLEX_TOKEN_FILE=/run/secrets/plex_token
+      - TZ=${TIMEZONE:-UTC}
+      - UPDATE_LEVEL=show
+      - UPDATE_STRATEGY=all
+      - TRIGGER_ON_PLAY=true
+      - TRIGGER_ON_SCAN=false
+      - SCHEDULER_ENABLE=false
+      - DEBUG=true
+    volumes:
+      - ../media/plex-auto-languages/config:/config
+      - ../media/plex-auto-languages/logs:/logs
+    secrets:
+      - plex_token
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    networks:
+      - proxy
+
+  media-preview-generator:
+    image: stevezzau/media_preview_generator:latest
+    container_name: media-preview-generator
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      plex:
+        condition: service_healthy
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TIMEZONE:-UTC}
+    volumes:
+      - ../media/media-preview-generator/config:/config
+      - ../media/plex/config:/plex:rw
+      - /etc/localtime:/etc/localtime:ro
+      - ${INTERNAL_STORAGE:-/mnt/internal}:/data/internal:ro
+      - ${USB_STORAGE:-/mnt/usb_drive}:/data/usb_drive:ro
+    healthcheck:
+      test: "curl -sf http://localhost:8080/api/health || curl -sf http://localhost:8080/api/system/status || exit 1"
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "deunhealth.restart.on.unhealthy=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.media-preview.tls=true"
+      - "traefik.http.routers.media-preview.entrypoints=http,https"
+      - "traefik.http.routers.media-preview.service=media-preview"
+      - "traefik.http.routers.media-preview.rule=Host(`media-preview.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.media-preview.loadbalancer.server.port=8080"
+    networks:
+      - proxy
+
+secrets:
+  plex_token:
+    file: ../media/secrets/plex_token
+
+networks:
+  proxy:
+    external: true

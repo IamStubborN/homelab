@@ -235,6 +235,8 @@ services:
       HERMES_UID: "10000"
       HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
       HERMES_TELEGRAM_USE_DEFAULT_HTTP: "false"
+      HEALTH_DEFAULT_PERSON: andrii
+      HEALTH_MCP_URL: http://health-service:8080/internal/mcp
       MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-andrii:8644
       TELEGRAM_ALLOWED_USERS: ${ANDRII_TELEGRAM_USER_ID:?set ANDRII_TELEGRAM_USER_ID}
       TELEGRAM_HOME_CHANNEL: ${ANDRII_TELEGRAM_CHAT_ID:?set ANDRII_TELEGRAM_CHAT_ID}
@@ -264,6 +266,8 @@ services:
         target: telegram_bot_token
       - source: andrii_media_api_token
         target: media_api_token
+      - source: andrii_health_api_token
+        target: health_api_token
       - source: andrii_homeassistant_token
         target: homeassistant_api_token
       - source: andrii_omniroute_api_key
@@ -274,7 +278,7 @@ services:
         target: webhook_hmac
       - source: search_ladder_api_key
         target: search_ladder_api_key
-    networks: [media, agent-tools, andrii-private]
+    networks: [media, agent-tools, health-internal, andrii-private]
 
   hermes-valentyna:
     <<: *hermes-common
@@ -296,6 +300,8 @@ services:
       HERMES_UID: "10000"
       HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
       HERMES_TELEGRAM_USE_DEFAULT_HTTP: "false"
+      HEALTH_DEFAULT_PERSON: valentyna
+      HEALTH_MCP_URL: http://health-service:8080/internal/mcp
       MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-valentyna:8644
       TELEGRAM_ALLOWED_USERS: ${VALENTYNA_TELEGRAM_USER_ID:?set VALENTYNA_TELEGRAM_USER_ID}
       TELEGRAM_HOME_CHANNEL: ${VALENTYNA_TELEGRAM_CHAT_ID:?set VALENTYNA_TELEGRAM_CHAT_ID}
@@ -322,6 +328,8 @@ services:
         target: telegram_bot_token
       - source: valentyna_media_api_token
         target: media_api_token
+      - source: valentyna_health_api_token
+        target: health_api_token
       - source: valentyna_homeassistant_token
         target: homeassistant_api_token
       - source: valentyna_omniroute_api_key
@@ -330,7 +338,7 @@ services:
         target: webhook_hmac
       - source: search_ladder_api_key
         target: search_ladder_api_key
-    networks: [media, agent-tools, valentyna-private]
+    networks: [media, agent-tools, health-internal, valentyna-private]
 
 networks:
   media:
@@ -340,6 +348,9 @@ networks:
     name: agent-tools
   rezka-credentials:
     name: rezka-credentials
+    external: true
+  health-internal:
+    name: health-internal
     external: true
   andrii-private:
     name: hermes-home_andrii-private
@@ -392,6 +403,8 @@ secrets:
     file: ./secrets/andrii.telegram_token
   andrii_media_api_token:
     file: ./secrets/andrii.media_api_token
+  andrii_health_api_token:
+    file: ../health/secrets/andrii.health_api_token
   andrii_homeassistant_token:
     file: ./secrets/andrii.homeassistant_token
   andrii_omniroute_api_key:
@@ -406,6 +419,8 @@ secrets:
     file: ./secrets/valentyna.telegram_token
   valentyna_media_api_token:
     file: ./secrets/valentyna.media_api_token
+  valentyna_health_api_token:
+    file: ../health/secrets/valentyna.health_api_token
   valentyna_homeassistant_token:
     file: ./secrets/valentyna.homeassistant_token
   valentyna_omniroute_api_key:

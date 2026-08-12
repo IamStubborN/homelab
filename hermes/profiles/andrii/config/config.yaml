@@ -51,6 +51,14 @@ mcp_servers:
     tools:
       resources: false
       prompts: false
+  health:
+    url: ${HEALTH_MCP_URL}
+    lazy: true
+    headers:
+      Authorization: "Bearer ${HEALTH_API_TOKEN}"
+    tools:
+      resources: false
+      prompts: false
 
 platform_toolsets:
   telegram: [terminal, web, browser, skills]

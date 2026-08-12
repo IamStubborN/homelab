@@ -15,6 +15,7 @@ read_secret() {
 read_secret TELEGRAM_BOT_TOKEN /run/secrets/telegram_bot_token
 read_secret API_SERVER_KEY /run/secrets/webhook_hmac
 read_secret MEDIA_API_TOKEN /run/secrets/media_api_token
+read_secret HEALTH_API_TOKEN /run/secrets/health_api_token
 read_secret HOMEASSISTANT_API_TOKEN /run/secrets/homeassistant_api_token
 read_secret OPENAI_API_KEY /run/secrets/omniroute_api_key
 export OPENAI_BASE_URL=http://omniroute:20129/v1
@@ -28,7 +29,7 @@ export PYTHONPATH="$python_packages${PYTHONPATH:+:$PYTHONPATH}"
 
 runtime_secret_dir=/run/hermes-home-secrets
 install -d -o 10000 -g 10000 -m 0700 "$runtime_secret_dir"
-for secret in media_api_token broker_api_token webhook_hmac search_ladder_api_key; do
+for secret in media_api_token health_api_token broker_api_token webhook_hmac search_ladder_api_key; do
     source="/run/secrets/$secret"
     [ -f "$source" ] || continue
     install -o 10000 -g 10000 -m 0400 "$source" "$runtime_secret_dir/$secret"
@@ -61,7 +62,7 @@ install_skills() {
     done
 }
 
-install_skills /etc/hermes-home/skills "home-assistant media media-admin movies series trending watching web-research"
+install_skills /etc/hermes-home/skills "health home-assistant media web-research"
 install_skills /etc/hermes-home/personal-skills "vaultwarden-login"
 chown -R 10000:10000 /opt/data/skills
 

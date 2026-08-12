@@ -1,0 +1,36 @@
+[tools]
+rust = "1.97.0"
+sccache = "0.17.0"
+"cargo:cargo-nextest" = "0.9.140"
+"cargo:cargo-deny" = "0.20.2"
+"cargo:cargo-audit" = "0.22.2"
+"cargo:cargo-chef" = "0.1.77"
+"cargo:sea-orm-cli" = "2.0.0-rc.42"
+
+[env]
+RUST_BACKTRACE = "1"
+RUSTC_WRAPPER = "sccache"
+
+[tasks.format]
+run = "cargo fmt --all --check"
+
+[tasks.check]
+run = "cargo check --workspace --all-targets --all-features --locked"
+
+[tasks.lint]
+run = "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+
+[tasks.test]
+run = "cargo nextest run --workspace --locked --no-tests=pass"
+
+[tasks.test-integration]
+run = "./scripts/test-integration.sh"
+
+[tasks.audit]
+run = "cargo deny check && cargo audit"
+
+[tasks.build]
+run = "cargo build --workspace --all-targets --all-features --locked"
+
+[tasks.docker-build]
+run = "docker build -t family-health-service:local ."

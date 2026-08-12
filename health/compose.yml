@@ -43,6 +43,8 @@ services:
 
   health-service:
     <<: *locked-down
+    build:
+      context: ./service
     image: family-health-service:local
     container_name: health-service
     restart: unless-stopped

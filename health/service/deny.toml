@@ -1,0 +1,52 @@
+[graph]
+all-features = true
+
+[advisories]
+# SeaORM 2.0.0-rc.42 macros require sea-bae -> proc-macro-error2. The
+# advisory is informational (unmaintained), has no safe upgrade, and is
+# revisited whenever SeaORM is upgraded.
+ignore = ["RUSTSEC-2026-0173"]
+
+[licenses]
+allow = [
+  "Apache-2.0",
+  # Oxc's dragonbox_ecma dependency uses the LLVM exception with Apache-2.0.
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-3-Clause",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  # Unmodified transitive Servo HTML/CSS parser crates use MPL-2.0.
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+ignore = true
+registries = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+allow-workspace = true
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []

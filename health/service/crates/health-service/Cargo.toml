@@ -1,0 +1,32 @@
+[package]
+name = "health-service"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+integration-tests = []
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+health-core.workspace = true
+health-migration.workspace = true
+image.workspace = true
+plotters.workspace = true
+rmcp.workspace = true
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tower.workspace = true

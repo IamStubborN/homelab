@@ -1,8 +1,11 @@
 # Family Health stack
 
-The `health` stack runs the local `family-health-service:local` image with a
-dedicated PostgreSQL database. Both containers join the external attachable
-`health-internal` network so the Hermes stack can join it independently.
+The `health` stack builds `family-health-service:local` from the Rust workspace
+in `health/service` and runs it with a dedicated PostgreSQL database. Both
+containers join the external attachable `health-internal` network so the Hermes
+stack can join it independently. The homelab repository is the canonical source
+for both the service and its deployment; no separate `family-health` checkout is
+required.
 
 Create the external network and database volume once on a new Docker host,
 before the first `up`:
@@ -47,12 +50,12 @@ docker run --rm \
   -eu -c 'test -r /probe/health_service_db_password; test -r /probe/andrii.health_api_token; test -r /probe/valentyna.health_api_token; ! test -r /probe/health_pg_bootstrap_password'
 ```
 
-Build `family-health-service:local` from the family-health repository. The
-canonical workflow is the root Compose project, which preserves the same
-project identity as the rest of the homelab:
+Build and start from the repository root. This is the canonical workflow and
+preserves the same Compose project identity as the rest of the homelab:
 
 ```bash
 docker compose config --quiet
+docker compose build health-service
 docker compose up -d health-postgres health-service
 docker compose ps health-postgres health-service
 docker compose logs health-service
@@ -62,8 +65,29 @@ For isolated maintenance, retain the root project name explicitly:
 
 ```bash
 docker compose -p homelab -f health/compose.yml config --quiet
+docker compose -p homelab -f health/compose.yml build health-service
 docker compose -p homelab -f health/compose.yml up -d
 ```
+
+Run service-local checks from the embedded workspace:
+
+```bash
+cd health/service
+mise install
+mise run format
+mise run check
+mise run lint
+mise run test
+mise run test-integration
+mise run audit
+```
+
+Phase 1 core is implemented locally: the Rust service includes the PostgreSQL
+schema, token-to-profile authentication, typed MCP write/read operations,
+deduplication, append-only measurement corrections, audit records, validation,
+and PNG measurement charts. Remote homelab deployment and Telegram acceptance
+remain operational verification steps; later document/Drive sync, reminders,
+NotebookLM, reporting, and diet phases are not implemented here.
 
 The `health-pg-data` volume is external and has the explicit engine name
 `health-pg-data`, so both root and child workflows resolve the same persistent

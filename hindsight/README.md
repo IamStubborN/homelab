@@ -23,7 +23,7 @@ HINDSIGHT_DB_PASSWORD=$(openssl rand -hex 32)
 HINDSIGHT_API_TOKEN=$(openssl rand -hex 32)
 ```
 
-Hindsight reuses the internal `SEARCH_LADDER_OMNIROUTE_KEY`; OmniRoute stores upstream provider credentials.
+Hindsight uses its own internal `HINDSIGHT_OMNIROUTE_KEY`; OmniRoute stores upstream provider credentials.
 
 ## Validate and start
 

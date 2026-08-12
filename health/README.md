@@ -42,6 +42,14 @@ The expected modes are `0:0 400` for `health_pg_bootstrap_password` and
 Docker Desktop does not reproduce Linux bind-mount ownership faithfully; use
 the Linux ownership probe below before deploying to the homelab host.
 
+From the repository root, validate the canonical Compose project and build the
+image before running the ownership probe:
+
+```bash
+docker compose config --quiet
+docker compose build health-service
+```
+
 ```bash
 docker run --rm \
   -v "$PWD/health/secrets:/probe:ro" \
@@ -50,12 +58,10 @@ docker run --rm \
   -eu -c 'test -r /probe/health_service_db_password; test -r /probe/andrii.health_api_token; test -r /probe/valentyna.health_api_token; ! test -r /probe/health_pg_bootstrap_password'
 ```
 
-Build and start from the repository root. This is the canonical workflow and
-preserves the same Compose project identity as the rest of the homelab:
+Start from the repository root. This preserves the same Compose project
+identity as the rest of the homelab:
 
 ```bash
-docker compose config --quiet
-docker compose build health-service
 docker compose up -d health-postgres health-service
 docker compose ps health-postgres health-service
 docker compose logs health-service

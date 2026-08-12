@@ -1,7 +1,7 @@
 # Family Health System — Design
 
 Date: 2026-08-04
-Status: approved architecture, phase 1 (core) is the first implementation target
+Status: approved umbrella architecture; phase 1 is implemented in this repository
 
 ## 1. Goal
 
@@ -20,10 +20,11 @@ not to restrict the spouses.
 
 Existing infrastructure this design builds on:
 
-- `hermes-home`: two isolated Hermes profiles (`hermes-andrii`, `hermes-valentyna`)
-  already deployed on the homelab, each with its own Telegram bot, skills installed
-  from profile sources, secrets isolated per profile.
-- `homelab`: compose stacks on `docker.local.iamstubborn.dev`; already runs
+- `homelab/hermes`: two isolated Hermes profiles (`hermes-andrii`,
+  `hermes-valentyna`) already deployed on the homelab, each with its own Telegram
+  bot, skills installed from profile sources, and secrets isolated per profile.
+- `homelab`: the canonical repository and Compose project on
+  `docker.local.iamstubborn.dev`; already runs
   `media-service` (Rust + MCP + Postgres pattern), `traefik`, `firecrawl`, `searxng`,
   `samba`, `glance`, `watchtower`, `vaultwarden`.
 - `media-orchestrator`: Rust workspace whose service/MCP/auth/CI patterns are the
@@ -42,8 +43,9 @@ Existing infrastructure this design builds on:
 3. **Repository layout (superseded 2026-08-12).** The original design selected a
    new `family-health` repository for the service, with Hermes skills/config in
    `hermes-home` and the compose stack in `homelab`. The canonical one-repository
-   decision now keeps the service workspace in `homelab/health/service` beside
-   `homelab/health/compose.yml`; Hermes skills/config remain in `hermes-home`.
+   decision now keeps the service workspace in `homelab/health/service`, its
+   Compose stack in `homelab/health/compose.yml`, and Hermes skills/config in
+   `homelab/hermes`.
 4. **Everything backs up to Google Drive in plain readable form** — originals,
    generated reports/profiles, and database dumps (SQL + per-table CSV). Nothing
    is stored encrypted-only; recovery must be possible from Drive alone.
@@ -90,15 +92,16 @@ Telegram Valentyna → hermes-valentyna ─┘        │
 | `health-notebooklm` | broker wrapping the unofficial NotebookLM CLI; queue-driven; non-critical |
 
 Watchtower does not manage these containers; deployment is manual from the operator
-workstation, matching the `hermes-home` deployment policy.
+workstation, matching the `homelab/hermes` deployment policy.
 
-### Repository layout (new repo `family-health`)
+### Repository layout (`homelab`)
 
-- Rust workspace (crate layout decided in the implementation plan; expected shape:
-  `crates/health-service`, shared domain crate if needed, SQL migrations).
+- Rust workspace under `homelab/health/service` (`crates/health-service`,
+  `crates/health-core`, and `crates/health-migration`).
 - `mise` as the only dev entry point (`check` / `lint` / `test` / `test-integration`),
   mirroring `media-orchestrator`.
-- `docs/superpowers/specs|plans` for design docs and plans (this file).
+- `homelab/health/service/docs/superpowers/specs|plans` for design docs and plans
+  (this file).
 
 ## 5. Data model (Postgres)
 
@@ -218,23 +221,23 @@ implementation planning. Broker failure only pauses layer 2: the queue accumulat
 and drains after recovery; nothing else depends on it. Source removal requires user
 confirmation.
 
-## 9. Hermes skills (`hermes-home`)
+## 9. Hermes skills (`homelab/hermes`)
 
-One shared health skill under `shared/` installed into both profiles (no per-profile
-copies). It documents the MCP operations, person-resolution and confirmation rules,
-and the extraction discipline: LLM work (reading PDFs/photos, parsing free-form
-messages) happens in Hermes; the service stays deterministic. Profile differences
-are env only: `HEALTH_DEFAULT_PERSON`, the per-profile health API token (delivered
-via the existing `/run` private-secrets mechanism). The MCP endpoint is discovered
-on the internal Docker network (`health-service:8080/internal/mcp`), same as
-`media_admin`.
+One shared health skill under `homelab/hermes/shared/skills/health` is installed
+into both profiles (no per-profile copies). It documents the MCP operations,
+person-resolution and confirmation rules, and the extraction discipline: LLM work
+(reading PDFs/photos, parsing free-form messages) happens in Hermes; the service
+stays deterministic. Profile differences are env only: `HEALTH_DEFAULT_PERSON`,
+the per-profile health API token (delivered via the existing `/run` private-secrets
+mechanism). The MCP endpoint is discovered on the internal Docker network
+(`health-service:8080/internal/mcp`), same as `media_admin`.
 
 ### Telegram UX (in scope)
 
 - **Card-based confirmations.** Every write that needs review is a Telegram card
   with buttons (`✅ Записать / ✏️ Исправить / 🚫 Отмена`); person ambiguity is
   resolved with an `Andrii / Valentyna` button pair. Reuses the card pattern from
-  `telegram-media-card-ux` in `hermes-home`.
+  `telegram-media-card-ux` in `homelab/hermes`.
 - **Voice input.** Voice messages are transcribed by Hermes and flow into the same
   parse → typed operation → confirmation-card pipeline as text.
 - **Charts in chat.** `generate_chart` renders a PNG server-side (weight, blood
@@ -281,7 +284,7 @@ people's constraints, one common base, per-person portions and substitutions.
   token→owner mapping.
 - No secrets in Google Drive, ever (no `99_System` secrets folder in Drive).
 - Secrets live in the homelab secrets mechanism already used by the stacks;
-  runtime copies via the `/run` private-directory pattern from `hermes-home`.
+  runtime copies use the `/run` private-directory pattern from `homelab/hermes`.
 - Logs never contain full tokens.
 - Soft deletes only; Drive backup is the second full copy of all data.
 - rclone's Google OAuth credentials are mounted into `health-drive-sync` only.

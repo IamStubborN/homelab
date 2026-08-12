@@ -72,9 +72,6 @@ pages:
                   - title: OmniRoute
                     url: https://omniroute.${DOCKER_DOMAIN}/
                     icon: si:openrouter
-                  - title: SearXNG
-                    url: https://search.${DOCKER_DOMAIN}/
-                    icon: si:searxng
                   - title: CLIProxy Management
                     url: https://llm.${DOCKER_DOMAIN}/management.html
                     icon: si:openai
@@ -492,11 +489,6 @@ pages:
                 url: https://omniroute.${DOCKER_DOMAIN}/
                 icon: si:openrouter
                 timeout: 5s
-              - title: SearXNG
-                url: https://search.${DOCKER_DOMAIN}/
-                check-url: https://search.${DOCKER_DOMAIN}/healthz
-                icon: si:searxng
-                timeout: 5s
               - title: Search Ladder
                 url: https://search-ladder.${DOCKER_DOMAIN}/healthz
                 icon: /assets/search-ladder.svg
@@ -549,9 +541,6 @@ pages:
                   - title: OmniRoute
                     url: https://omniroute.${DOCKER_DOMAIN}/
                     icon: si:openrouter
-                  - title: SearXNG
-                    url: https://search.${DOCKER_DOMAIN}/
-                    icon: si:searxng
                   - title: CLIProxy Management
                     url: https://llm.${DOCKER_DOMAIN}/management.html
                     icon: si:openai

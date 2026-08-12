@@ -1,0 +1,92 @@
+terminal:
+  backend: local
+  cwd: /opt/data/workspace
+  home_mode: profile
+  timeout: 180
+
+model:
+  provider: openai-api
+  base_url: http://omniroute:20129/v1
+  default: gpt-5.6-luna
+
+fallback_providers:
+  - provider: openai-api
+    base_url: http://omniroute:20129/v1
+    model: gpt-5.6-terra
+  - provider: openai-api
+    base_url: http://omniroute:20129/v1
+    model: gpt-5.6-sol
+
+browser:
+  inactivity_timeout: 120
+  command_timeout: 30
+  record_sessions: false
+  camofox:
+    managed_persistence: false
+
+web:
+  search_backend: null
+  extract_backend: firecrawl
+
+tools:
+  tool_search:
+    enabled: auto
+    listing: auto
+    listing_max_tokens: 1000
+
+mcp_servers:
+  media_admin:
+    url: http://media-service:8080/internal/mcp
+    lazy: true
+    headers:
+      Authorization: "Bearer ${MEDIA_API_TOKEN}"
+    tools:
+      resources: false
+      prompts: false
+  home_assistant:
+    url: http://192.168.1.4:8123/api/mcp
+    lazy: true
+    headers:
+      Authorization: "Bearer ${HOMEASSISTANT_API_TOKEN}"
+    tools:
+      resources: false
+      prompts: false
+
+platform_toolsets:
+  telegram: [terminal, web, browser, skills]
+
+platforms:
+  telegram:
+    reply_to_mode: first
+    extra:
+      command_menu:
+        priority_mode: prepend
+        priority:
+          - media
+          - watching
+          - movies
+          - series
+          - trending
+  webhook: null
+
+display:
+  tool_progress: new
+  memory_notifications: "off"
+  platforms:
+    telegram:
+      tool_progress: "off"
+compression:
+  codex_responses_native: true
+skills:
+  creation_nudge_interval: 10
+agent:
+  verify_on_stop: false
+  service_tier: fast
+  reasoning_effort: low
+  reasoning_overrides:
+    gpt-5.6-terra: high
+    gpt-5.6-luna: high
+    gpt-5.6-sol: low
+plugins:
+  enabled: [telegram-home]
+_config_version: 33

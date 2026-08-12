@@ -1,0 +1,10 @@
+{
+  "description": "Each domain requires credential_item_id.",
+  "domains": [
+    {
+      "hostname": "rezka.ag",
+      "include_subdomains": false,
+      "credential_item_id": "81372e05-6f81-42b5-95bd-5da6dccaecd9"
+    }
+  ]
+}

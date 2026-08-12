@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Resolve an ambiguous media-notifier Telegram delivery as a trusted operator."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import hmac
+import json
+import subprocess
+import time
+import uuid
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--profile", choices=("andrii", "valentyna"), required=True)
+    parser.add_argument("--kind", choices=("card", "push", "source"), required=True)
+    parser.add_argument("--delivery-id", required=True)
+    parser.add_argument("--resolution", choices=("delivered", "retry"), required=True)
+    parser.add_argument("--message-id")
+    parser.add_argument("--has-photo", action="store_true")
+    args = parser.parse_args()
+    if args.kind == "card" and args.resolution == "delivered":
+        if args.message_id is None or not args.message_id.isdigit():
+            parser.error("delivered card resolution requires a numeric --message-id")
+    elif args.message_id is not None or args.has_photo:
+        parser.error("--message-id/--has-photo apply only to delivered cards")
+
+    payload: dict[str, object] = {
+        "kind": args.kind,
+        "delivery_id": args.delivery_id,
+        "resolution": args.resolution,
+    }
+    if args.message_id is not None:
+        payload["message_id"] = args.message_id
+        payload["has_photo"] = args.has_photo
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    timestamp = str(int(time.time()))
+    secret = (ROOT / "secrets" / f"{args.profile}.webhook_hmac").read_bytes().strip()
+    if not secret:
+        raise SystemExit("profile webhook HMAC secret is empty")
+    signature = hmac.new(
+        secret, timestamp.encode("ascii") + b"." + body, hashlib.sha256
+    ).hexdigest()
+    request_id = f"delivery-reconcile-{uuid.uuid4()}"
+    request_code = f"""
+import urllib.request
+request = urllib.request.Request(
+    "http://127.0.0.1:8644/control/delivery",
+    data={body!r},
+    headers={{
+        "Content-Type": "application/json",
+        "X-Webhook-Timestamp": {timestamp!r},
+        "X-Webhook-Signature-V2": {signature!r},
+        "X-Request-ID": {request_id!r},
+    }},
+    method="POST",
+)
+with urllib.request.urlopen(request, timeout=10) as response:
+    print(response.read().decode("utf-8"))
+"""
+    subprocess.run(
+        [
+            "docker",
+            "compose",
+            "exec",
+            "-T",
+            f"media-notifier-{args.profile}",
+            "python3",
+            "-c",
+            request_code,
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

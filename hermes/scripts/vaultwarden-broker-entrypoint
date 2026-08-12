@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+tools_dir=/opt/tools
+mkdir -p "$tools_dir"
+
+python3 /usr/local/bin/install-bitwarden-cli "$tools_dir/bw"
+export PATH="$tools_dir:$PATH"
+exec /usr/local/bin/vaultwarden-broker

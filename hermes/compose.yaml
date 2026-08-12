@@ -1,0 +1,416 @@
+name: hermes
+
+x-watchtower: &watchtower
+  com.centurylinklabs.watchtower.enable: "true"
+
+x-hermes-common: &hermes-common
+  image: nousresearch/hermes-agent:latest
+  entrypoint: [/usr/local/bin/hermes-home-entrypoint]
+  command: [gateway, run]
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 512
+  shm_size: 1gb
+  tmpfs:
+    - /run:rw,exec,nosuid,nodev,size=32m
+    - /tmp:rw,nosuid,nodev,noexec,size=256m
+  labels: *watchtower
+  extra_hosts:
+    - api.telegram.org=149.154.167.220
+  environment:
+    AGENT_BROWSER_CONTENT_BOUNDARIES: "1"
+    API_SERVER_ENABLED: "true"
+    API_SERVER_HOST: 127.0.0.1
+    API_SERVER_PORT: "8642"
+    FIRECRAWL_API_URL: http://firecrawl-api:3002
+    HERMES_GATEWAY_BOOTSTRAP_STATE: running
+    HERMES_GID: "10000"
+    HERMES_DISABLE_LAZY_INSTALLS: "1"
+    HERMES_UID: "10000"
+    HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
+    HERMES_TELEGRAM_USE_DEFAULT_HTTP: "false"
+  healthcheck:
+    test:
+      - CMD
+      - python3
+      - -c
+      - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8642/health', timeout=3).read()"
+    interval: 30s
+    timeout: 5s
+    retries: 5
+    start_period: 60s
+  networks: [media, agent-tools]
+
+x-notifier-common: &notifier-common
+  image: python:latest
+  command: [/usr/local/bin/media-notifier]
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  group_add: ["1000"]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 64
+  tmpfs: ["/tmp:rw,nosuid,nodev,noexec,size=32m"]
+  expose: ["8644"]
+  labels: *watchtower
+  environment:
+    LISTEN_ADDR: 0.0.0.0:8644
+    PYTHONPATH: /usr/local/lib/hermes-home
+    STATE_DIR: /data
+  healthcheck:
+    test:
+      - CMD
+      - python3
+      - -c
+      - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8644/health', timeout=3).read()"
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 10s
+  networks: [media, agent-tools]
+  volumes:
+    - ./scripts/media-notifier:/usr/local/bin/media-notifier:ro
+    - ./scripts/hermes_media_notifications.py:/usr/local/lib/hermes-home/hermes_media_notifications.py:ro
+    - ./shared/plugins/telegram-home/assets/media-menu.jpg:/usr/local/share/hermes-home/media-menu.jpg:ro
+
+services:
+  agent-browser-updater:
+    image: node:latest
+    container_name: agent-browser-updater
+    entrypoint: [/bin/sh, -c]
+    command:
+      - >-
+        while true; do
+          npm install --prefix /opt/tools agent-browser@latest &&
+          touch /opt/tools/.ready;
+          sleep 86400;
+        done
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    labels: *watchtower
+    environment:
+      HOME: /tmp
+      NPM_CONFIG_CACHE: /tmp/npm
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=128m"]
+    volumes:
+      - agent_browser_tools:/opt/tools
+    healthcheck:
+      test: [CMD, test, -x, /opt/tools/node_modules/.bin/agent-browser]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    networks: [agent-tools]
+
+  vaultwarden-init-andrii:
+    image: python:latest
+    entrypoint: [/bin/sh, -c]
+    command:
+      - >-
+        chown -R 10000:10000 /opt/data/vaultwarden /opt/tools &&
+        chmod 0700 /opt/data/vaultwarden
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+    labels: *watchtower
+    volumes:
+      - hermes_andrii_vaultwarden:/opt/data/vaultwarden
+      - vaultwarden_tools:/opt/tools
+    networks: [none]
+
+  vaultwarden-broker-andrii:
+    image: python:latest
+    container_name: vaultwarden-broker-andrii
+    entrypoint: [/usr/local/bin/vaultwarden-broker-entrypoint]
+    user: "10000:10000"
+    group_add: ["1000"]
+    depends_on:
+      vaultwarden-init-andrii:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    labels: *watchtower
+    environment:
+      BITWARDENCLI_APPDATA_DIR: /opt/data/vaultwarden
+      BW_PATH: /opt/tools/bw
+      HOME: /opt/data/vaultwarden
+    tmpfs: ["/tmp:rw,nosuid,nodev,noexec,size=128m"]
+    volumes:
+      - hermes_andrii_vaultwarden:/opt/data/vaultwarden
+      - vaultwarden_tools:/opt/tools
+      - ./scripts/vaultwarden-broker-entrypoint:/usr/local/bin/vaultwarden-broker-entrypoint:ro
+      - ./scripts/install_bitwarden_cli.py:/usr/local/bin/install-bitwarden-cli:ro
+      - ./scripts/vaultwarden_broker.py:/usr/local/bin/vaultwarden-broker:ro
+      - ./config/vaultwarden-server:/etc/hermes-home/vaultwarden-server:ro
+      - ./config/vaultwarden-login-allowlist.json:/etc/hermes-home/vaultwarden-login-allowlist.json:ro
+    secrets:
+      - source: andrii_vaultwarden_session
+        target: vaultwarden_session
+      - source: andrii_media_api_token
+        target: broker_api_token
+      - source: andrii_rezka_broker_token
+        target: rezka_broker_token
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/health', timeout=3).read()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks: [andrii-private, rezka-credentials]
+
+  media-notifier-andrii:
+    <<: *notifier-common
+    container_name: media-notifier-andrii
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8644
+      PYTHONPATH: /usr/local/lib/hermes-home
+      STATE_DIR: /data
+      TELEGRAM_CHAT_ID: ${ANDRII_TELEGRAM_CHAT_ID:?set ANDRII_TELEGRAM_CHAT_ID}
+    volumes:
+      - ./scripts/media-notifier:/usr/local/bin/media-notifier:ro
+      - ./scripts/hermes_media_notifications.py:/usr/local/lib/hermes-home/hermes_media_notifications.py:ro
+      - ./shared/plugins/telegram-home/assets/media-menu.jpg:/usr/local/share/hermes-home/media-menu.jpg:ro
+      - media_notifier_andrii:/data
+    secrets:
+      - source: andrii_telegram_token
+        target: telegram_bot_token
+      - source: andrii_webhook_hmac
+        target: webhook_hmac
+
+  media-notifier-valentyna:
+    <<: *notifier-common
+    container_name: media-notifier-valentyna
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8644
+      PYTHONPATH: /usr/local/lib/hermes-home
+      STATE_DIR: /data
+      TELEGRAM_CHAT_ID: ${VALENTYNA_TELEGRAM_CHAT_ID:?set VALENTYNA_TELEGRAM_CHAT_ID}
+    volumes:
+      - ./scripts/media-notifier:/usr/local/bin/media-notifier:ro
+      - ./scripts/hermes_media_notifications.py:/usr/local/lib/hermes-home/hermes_media_notifications.py:ro
+      - ./shared/plugins/telegram-home/assets/media-menu.jpg:/usr/local/share/hermes-home/media-menu.jpg:ro
+      - media_notifier_valentyna:/data
+    secrets:
+      - source: valentyna_telegram_token
+        target: telegram_bot_token
+      - source: valentyna_webhook_hmac
+        target: webhook_hmac
+
+  hermes-andrii:
+    <<: *hermes-common
+    container_name: hermes-andrii
+    depends_on:
+      agent-browser-updater:
+        condition: service_healthy
+      media-notifier-andrii:
+        condition: service_healthy
+      vaultwarden-broker-andrii:
+        condition: service_healthy
+    environment:
+      AGENT_BROWSER_ARGS: --disable-blink-features=AutomationControlled
+      AGENT_BROWSER_CONTENT_BOUNDARIES: "1"
+      AGENT_BROWSER_PLUGINS: >-
+        [{"name":"vaultwarden","command":"/usr/local/bin/agent-browser-plugin-vaultwarden","capabilities":["credential.read"]}]
+      AGENT_BROWSER_RESTORE: andrii
+      AGENT_BROWSER_USER_AGENT: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: 127.0.0.1
+      API_SERVER_PORT: "8642"
+      FIRECRAWL_API_URL: http://firecrawl-api:3002
+      HERMES_GATEWAY_BOOTSTRAP_STATE: running
+      HERMES_GID: "10000"
+      HERMES_DISABLE_LAZY_INSTALLS: "1"
+      HERMES_UID: "10000"
+      HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
+      HERMES_TELEGRAM_USE_DEFAULT_HTTP: "false"
+      MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-andrii:8644
+      TELEGRAM_ALLOWED_USERS: ${ANDRII_TELEGRAM_USER_ID:?set ANDRII_TELEGRAM_USER_ID}
+      TELEGRAM_HOME_CHANNEL: ${ANDRII_TELEGRAM_CHAT_ID:?set ANDRII_TELEGRAM_CHAT_ID}
+      WEBHOOK_SECRET_FILE: /run/hermes-home-secrets/webhook_hmac
+    volumes:
+      - hermes_andrii_profile:/opt/data
+      - hermes_andrii_memory:/opt/data/memories
+      - hermes_andrii_browser:/opt/data/browser_auth
+      - agent_browser_tools:/opt/tools:ro
+      - ./scripts/hermes-home-entrypoint:/usr/local/bin/hermes-home-entrypoint:ro
+      - ./scripts/merge_hermes_config.py:/usr/local/bin/merge-hermes-config:ro
+      - ./scripts/hermes-mcp-schema-revision:/usr/local/bin/hermes-mcp-schema-revision:ro
+      - ./scripts/vaultwarden-safe:/usr/local/bin/vaultwarden-safe:ro
+      - ./scripts/agent-browser:/usr/local/bin/agent-browser:ro
+      - ./scripts/agent_browser_plugin_vaultwarden.py:/usr/local/bin/agent-browser-plugin-vaultwarden:ro
+      - ./profiles/andrii/config/config.yaml:/etc/hermes-home/config.yaml:ro
+      - ./profiles/andrii/SOUL.md:/etc/hermes-home/SOUL.md:ro
+      - ./profiles/andrii/identity:/etc/hermes-home/profile-id:ro
+      - ./config/media-service-url:/etc/hermes-home/media-service-url:ro
+      - ./config/vaultwarden-server:/etc/hermes-home/vaultwarden-server:ro
+      - ./shared/skills:/etc/hermes-home/skills:ro
+      - ./shared/plugins:/etc/hermes-home/shared-plugins:ro
+      - ./profiles/andrii/skills:/etc/hermes-home/personal-skills:ro
+      - ./profiles/andrii/plugins:/etc/hermes-home/personal-plugins:ro
+    secrets:
+      - source: andrii_telegram_token
+        target: telegram_bot_token
+      - source: andrii_media_api_token
+        target: media_api_token
+      - source: andrii_homeassistant_token
+        target: homeassistant_api_token
+      - source: andrii_omniroute_api_key
+        target: omniroute_api_key
+      - source: andrii_media_api_token
+        target: broker_api_token
+      - source: andrii_webhook_hmac
+        target: webhook_hmac
+      - source: search_ladder_api_key
+        target: search_ladder_api_key
+    networks: [media, agent-tools, andrii-private]
+
+  hermes-valentyna:
+    <<: *hermes-common
+    container_name: hermes-valentyna
+    depends_on:
+      agent-browser-updater:
+        condition: service_healthy
+      media-notifier-valentyna:
+        condition: service_healthy
+    environment:
+      AGENT_BROWSER_CONTENT_BOUNDARIES: "1"
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: 127.0.0.1
+      API_SERVER_PORT: "8642"
+      FIRECRAWL_API_URL: http://firecrawl-api:3002
+      HERMES_GATEWAY_BOOTSTRAP_STATE: running
+      HERMES_GID: "10000"
+      HERMES_DISABLE_LAZY_INSTALLS: "1"
+      HERMES_UID: "10000"
+      HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
+      HERMES_TELEGRAM_USE_DEFAULT_HTTP: "false"
+      MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-valentyna:8644
+      TELEGRAM_ALLOWED_USERS: ${VALENTYNA_TELEGRAM_USER_ID:?set VALENTYNA_TELEGRAM_USER_ID}
+      TELEGRAM_HOME_CHANNEL: ${VALENTYNA_TELEGRAM_CHAT_ID:?set VALENTYNA_TELEGRAM_CHAT_ID}
+      WEBHOOK_SECRET_FILE: /run/hermes-home-secrets/webhook_hmac
+    volumes:
+      - hermes_valentyna_profile:/opt/data
+      - hermes_valentyna_memory:/opt/data/memories
+      - hermes_valentyna_browser:/opt/data/browser_auth
+      - agent_browser_tools:/opt/tools:ro
+      - ./scripts/hermes-home-entrypoint:/usr/local/bin/hermes-home-entrypoint:ro
+      - ./scripts/merge_hermes_config.py:/usr/local/bin/merge-hermes-config:ro
+      - ./scripts/hermes-mcp-schema-revision:/usr/local/bin/hermes-mcp-schema-revision:ro
+      - ./scripts/agent-browser:/usr/local/bin/agent-browser:ro
+      - ./profiles/valentyna/config/config.yaml:/etc/hermes-home/config.yaml:ro
+      - ./profiles/valentyna/SOUL.md:/etc/hermes-home/SOUL.md:ro
+      - ./profiles/valentyna/identity:/etc/hermes-home/profile-id:ro
+      - ./config/media-service-url:/etc/hermes-home/media-service-url:ro
+      - ./shared/skills:/etc/hermes-home/skills:ro
+      - ./shared/plugins:/etc/hermes-home/shared-plugins:ro
+      - ./profiles/valentyna/skills:/etc/hermes-home/personal-skills:ro
+      - ./profiles/valentyna/plugins:/etc/hermes-home/personal-plugins:ro
+    secrets:
+      - source: valentyna_telegram_token
+        target: telegram_bot_token
+      - source: valentyna_media_api_token
+        target: media_api_token
+      - source: valentyna_homeassistant_token
+        target: homeassistant_api_token
+      - source: valentyna_omniroute_api_key
+        target: omniroute_api_key
+      - source: valentyna_webhook_hmac
+        target: webhook_hmac
+      - source: search_ladder_api_key
+        target: search_ladder_api_key
+    networks: [media, agent-tools, valentyna-private]
+
+networks:
+  media:
+    name: ${MEDIA_NETWORK:-media-internal}
+    external: true
+  agent-tools:
+    name: agent-tools
+  rezka-credentials:
+    name: rezka-credentials
+    external: true
+  andrii-private:
+    name: hermes-home_andrii-private
+    external: true
+  valentyna-private:
+    name: hermes-home_valentyna-private
+    external: true
+  none:
+    name: hermes-home_none
+    external: true
+    internal: true
+
+volumes:
+  agent_browser_tools:
+    name: hermes-home_agent_browser_tools
+    external: true
+  hermes_andrii_profile:
+    name: hermes-home_hermes_andrii_profile
+    external: true
+  hermes_andrii_memory:
+    name: hermes-home_hermes_andrii_memory
+    external: true
+  hermes_andrii_browser:
+    name: hermes-home_hermes_andrii_browser
+    external: true
+  hermes_andrii_vaultwarden:
+    name: hermes-home_hermes_andrii_vaultwarden
+    external: true
+  hermes_valentyna_profile:
+    name: hermes-home_hermes_valentyna_profile
+    external: true
+  hermes_valentyna_memory:
+    name: hermes-home_hermes_valentyna_memory
+    external: true
+  hermes_valentyna_browser:
+    name: hermes-home_hermes_valentyna_browser
+    external: true
+  media_notifier_andrii:
+    name: hermes-home_media_notifier_andrii
+    external: true
+  media_notifier_valentyna:
+    name: hermes-home_media_notifier_valentyna
+    external: true
+  vaultwarden_tools:
+    name: hermes-home_vaultwarden_tools
+    external: true
+
+secrets:
+  andrii_telegram_token:
+    file: ./secrets/andrii.telegram_token
+  andrii_media_api_token:
+    file: ./secrets/andrii.media_api_token
+  andrii_homeassistant_token:
+    file: ./secrets/andrii.homeassistant_token
+  andrii_omniroute_api_key:
+    file: ./secrets/andrii.omniroute_api_key
+  andrii_webhook_hmac:
+    file: ./secrets/andrii.webhook_hmac
+  andrii_vaultwarden_session:
+    file: ./secrets/andrii.vaultwarden_session
+  andrii_rezka_broker_token:
+    file: ./secrets/andrii.rezka_broker_token
+  valentyna_telegram_token:
+    file: ./secrets/valentyna.telegram_token
+  valentyna_media_api_token:
+    file: ./secrets/valentyna.media_api_token
+  valentyna_homeassistant_token:
+    file: ./secrets/valentyna.homeassistant_token
+  valentyna_omniroute_api_key:
+    file: ./secrets/valentyna.omniroute_api_key
+  valentyna_webhook_hmac:
+    file: ./secrets/valentyna.webhook_hmac
+  search_ladder_api_key:
+    file: ./secrets/search_ladder.api_key

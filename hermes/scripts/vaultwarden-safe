@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+
+profile=$(tr -d '\r\n' < /etc/hermes-home/profile-id)
+case "$profile" in
+    andrii) ;;
+    *) echo "Unknown Hermes profile" >&2; exit 1 ;;
+esac
+
+case "${1:-}" in
+    status|sync) [ "$#" -eq 1 ] ;;
+    search|username|uris) [ "$#" -eq 2 ] ;;
+    login-request|login-status|login-approve|login-deny) [ "$#" -eq 2 ] ;;
+    *) echo "Allowed commands: status, sync, search, username, uris, login-request URL, login-status ID, login-approve ID, login-deny ID" >&2; exit 64 ;;
+esac || { echo "Invalid Vaultwarden arguments" >&2; exit 64; }
+
+case "$1" in
+    login-request) broker_command=login_request ;;
+    login-status) broker_command=login_status ;;
+    login-approve) broker_command=login_approve ;;
+    login-deny) broker_command=login_deny ;;
+    *) broker_command=$1 ;;
+esac
+
+if [ "$#" -eq 1 ]; then
+    payload=$(python3 -c 'import json,sys; print(json.dumps({"command":sys.argv[1], "argument":None}))' "$broker_command")
+else
+    payload=$(python3 -c 'import json,sys; print(json.dumps({"command":sys.argv[1], "argument":sys.argv[2]}))' "$broker_command" "$2")
+fi
+exec python3 -c '
+import sys, urllib.request
+token = open("/run/hermes-home-secrets/broker_api_token", encoding="utf-8").read().strip()
+request = urllib.request.Request(
+    sys.argv[1], data=sys.argv[2].encode(),
+    headers={"Content-Type": "application/json", "Authorization": "Bearer " + token}, method="POST")
+try:
+    with urllib.request.urlopen(request, timeout=15) as response:
+        sys.stdout.write(response.read().decode() + "\n")
+except Exception:
+    sys.stderr.write("Vaultwarden operation failed\n")
+    raise SystemExit(1)
+' "http://vaultwarden-broker-${profile}:8787/v1/command" "$payload"

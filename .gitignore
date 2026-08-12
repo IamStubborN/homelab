@@ -171,3 +171,8 @@ zeroclaw/
 movie-tracker/**
 !movie-tracker/docker-compose.yml
 .worktrees/
+# Hermes runtime credentials and local deployment artifacts
+hermes/.env
+hermes/secrets/
+hermes/artifacts/
+hermes/.superpowers/

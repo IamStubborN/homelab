@@ -1,0 +1,1398 @@
+import ast
+import contextlib
+import hashlib
+import io
+import json
+import importlib.machinery
+import importlib.util
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+import yaml
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def read(relative_path: str) -> str:
+    return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+class ImageContractTests(unittest.TestCase):
+    def test_hermes_uses_unmodified_official_latest_image(self):
+        compose = yaml.safe_load(read("compose.yaml"))
+        self.assertFalse((ROOT / "Dockerfile").exists())
+        self.assertFalse((ROOT / "scripts/patch_hermes_telegram.py").exists())
+        for profile in ("andrii", "valentyna"):
+            service = compose["services"][f"hermes-{profile}"]
+            self.assertEqual(service["image"], "nousresearch/hermes-agent:latest")
+            self.assertNotIn("pull_policy", service)
+            self.assertEqual(
+                service["labels"]["com.centurylinklabs.watchtower.enable"], "true"
+            )
+
+    def test_external_tools_update_without_rebuilding_hermes(self):
+        compose = yaml.safe_load(read("compose.yaml"))
+        updater = compose["services"]["agent-browser-updater"]
+        self.assertEqual(updater["image"], "node:latest")
+        self.assertIn("agent-browser@latest", updater["command"][0])
+        installer = read("scripts/install_bitwarden_cli.py")
+        self.assertIn('asset.get("digest"', installer)
+        self.assertIn("hashlib.sha256", installer)
+        self.assertIn("hmac.compare_digest", installer)
+
+
+class ComposeContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.compose_text = read("compose.yaml")
+        cls.compose = yaml.safe_load(cls.compose_text)
+
+    def test_profiles_use_same_image_with_isolated_state(self):
+        services = self.compose["services"]
+        andrii = services["hermes-andrii"]
+        valentyna = services["hermes-valentyna"]
+        self.assertEqual(andrii["image"], valentyna["image"])
+        self.assertTrue(andrii["read_only"])
+        self.assertTrue(valentyna["read_only"])
+        self.assertNotEqual(andrii["volumes"], valentyna["volumes"])
+        for profile, service in (("andrii", andrii), ("valentyna", valentyna)):
+            mounts = "\n".join(service["volumes"])
+            self.assertIn(
+                f"./profiles/{profile}/config/config.yaml:/etc/hermes-home/config.yaml:ro",
+                mounts,
+            )
+            self.assertIn(
+                "./scripts/hermes-home-entrypoint:/usr/local/bin/hermes-home-entrypoint:ro",
+                mounts,
+            )
+            self.assertIn(f"hermes_{profile}_memory:/opt/data/memories", mounts)
+            self.assertIn(f"hermes_{profile}_browser:/opt/data/browser_auth", mounts)
+            self.assertNotIn("/opt/data/vaultwarden", mounts)
+        self.assertNotIn("vaultwarden", "\n".join(valentyna["volumes"]))
+
+    def test_profiles_register_the_owner_scoped_media_admin_mcp(self):
+        for profile in ("andrii", "valentyna"):
+            config = yaml.safe_load(read(f"profiles/{profile}/config/config.yaml"))
+            server = config["mcp_servers"]["media_admin"]
+            self.assertEqual(server["url"], "http://media-service:8080/internal/mcp")
+            self.assertEqual(
+                server["headers"]["Authorization"], "Bearer ${MEDIA_API_TOKEN}"
+            )
+            self.assertTrue(server["lazy"])
+            self.assertNotIn("include", server["tools"])
+            self.assertNotIn("exclude", server["tools"])
+            self.assertFalse(server["tools"]["resources"])
+            self.assertFalse(server["tools"]["prompts"])
+            tool_search = config["tools"]["tool_search"]
+            self.assertEqual(tool_search["enabled"], "auto")
+            self.assertEqual(tool_search["listing"], "auto")
+            self.assertEqual(tool_search["listing_max_tokens"], 1000)
+
+    def test_media_cli_is_operator_only_and_not_mounted_into_hermes(self):
+        for profile in ("andrii", "valentyna"):
+            mounts = "\n".join(
+                self.compose["services"][f"hermes-{profile}"]["volumes"]
+            )
+            self.assertNotIn("/usr/local/bin/media", mounts)
+            self.assertNotIn("/usr/local/bin/hermes-media", mounts)
+
+        readme = read("README.md")
+        self.assertIn("trusted-host operator tool", readme)
+        self.assertIn("not mounted into either Hermes container", readme)
+
+    def test_required_profile_secrets_are_isolated_and_search_key_is_shared(self):
+        services = self.compose["services"]
+        for profile in ("andrii", "valentyna"):
+            names = {
+                entry["source"] if isinstance(entry, dict) else entry
+                for entry in services[f"hermes-{profile}"]["secrets"]
+            }
+            self.assertEqual(
+                names,
+                {
+                    f"{profile}_telegram_token",
+                    f"{profile}_media_api_token",
+                    f"{profile}_webhook_hmac",
+                    "search_ladder_api_key",
+                },
+            )
+            self.assertNotIn("/run/secrets/vaultwarden_session", str(services[f"hermes-{profile}"]))
+
+        broker = services["vaultwarden-broker-andrii"]
+        self.assertEqual(
+            {secret["source"] for secret in broker["secrets"]},
+            {
+                "andrii_vaultwarden_session",
+                "andrii_media_api_token",
+                "andrii_rezka_broker_token",
+            },
+        )
+        secret_targets = {secret["source"]: secret["target"] for secret in broker["secrets"]}
+        self.assertEqual(secret_targets["andrii_media_api_token"], "broker_api_token")
+        self.assertEqual(secret_targets["andrii_rezka_broker_token"], "rezka_broker_token")
+        self.assertNotIn("rezka_broker_token", str(services["hermes-andrii"]))
+        self.assertIn(
+            "agent-browser-plugin-vaultwarden",
+            services["hermes-andrii"]["environment"]["AGENT_BROWSER_PLUGINS"],
+        )
+        self.assertNotIn("valentyna_vaultwarden_session", self.compose_text)
+
+    def test_hermes_controls_only_its_profile_notifier(self):
+        services = self.compose["services"]
+        notifier_names = {
+            name for name in services if name.startswith("media-notifier-")
+        }
+        self.assertEqual(
+            notifier_names,
+            {"media-notifier-andrii", "media-notifier-valentyna"},
+        )
+
+        for profile in ("andrii", "valentyna"):
+            hermes = services[f"hermes-{profile}"]
+            notifier = services[f"media-notifier-{profile}"]
+            other = "valentyna" if profile == "andrii" else "andrii"
+
+            self.assertEqual(
+                hermes["environment"]["MEDIA_NOTIFIER_CONTROL_URL"],
+                f"http://media-notifier-{profile}:8644",
+            )
+            self.assertNotIn(
+                f"media-notifier-{other}",
+                str(hermes["environment"]),
+            )
+            self.assertEqual(
+                hermes["depends_on"][f"media-notifier-{profile}"]["condition"],
+                "service_healthy",
+            )
+            self.assertNotIn("ports", notifier)
+            self.assertEqual(notifier["expose"], ["8644"])
+            self.assertIn(f"media_notifier_{profile}:/data", notifier["volumes"])
+
+            hermes_hmac = next(
+                secret
+                for secret in hermes["secrets"]
+                if secret["target"] == "webhook_hmac"
+            )
+            notifier_hmac = next(
+                secret
+                for secret in notifier["secrets"]
+                if secret["target"] == "webhook_hmac"
+            )
+            self.assertEqual(hermes_hmac["source"], f"{profile}_webhook_hmac")
+            self.assertEqual(notifier_hmac["source"], f"{profile}_webhook_hmac")
+
+    def test_vaultwarden_login_broker_is_andrii_only(self):
+        services = self.compose["services"]
+        self.assertIn("vaultwarden-broker-andrii", services)
+        self.assertNotIn("vaultwarden-broker-valentyna", services)
+
+        andrii_broker = services["vaultwarden-broker-andrii"]
+        broker_mounts = "\n".join(andrii_broker["volumes"])
+        self.assertIn("hermes_andrii_vaultwarden:/opt/data/vaultwarden", broker_mounts)
+        self.assertNotIn("browser-sockets", broker_mounts)
+        self.assertNotIn(".agent-browser", broker_mounts)
+        self.assertNotIn("/opt/data/browser_auth", broker_mounts)
+        self.assertIn(
+            "./config/vaultwarden-login-allowlist.json:"
+            "/etc/hermes-home/vaultwarden-login-allowlist.json:ro",
+            broker_mounts,
+        )
+        self.assertEqual(
+            set(andrii_broker["networks"]), {"andrii-private", "rezka-credentials"}
+        )
+        self.assertTrue(self.compose["networks"]["rezka-credentials"]["external"])
+        self.assertEqual(
+            self.compose["networks"]["rezka-credentials"]["name"],
+            "rezka-credentials",
+        )
+        self.assertIn("vaultwarden-broker-andrii", services["hermes-andrii"]["depends_on"])
+        self.assertNotIn("vaultwarden", str(services["hermes-valentyna"]))
+        self.assertNotIn("vaultwarden-broker-valentyna", self.compose_text)
+        self.assertNotIn("hermes_valentyna_vaultwarden", self.compose_text)
+        self.assertEqual(
+            andrii_broker["entrypoint"],
+            ["/usr/local/bin/vaultwarden-broker-entrypoint"],
+        )
+        self.assertEqual(andrii_broker["user"], "10000:10000")
+        self.assertNotIn("cap_add", andrii_broker)
+        self.assertEqual(andrii_broker["cap_drop"], ["ALL"])
+        init = services["vaultwarden-init-andrii"]
+        self.assertEqual(init["cap_add"], ["CHOWN", "DAC_OVERRIDE", "FOWNER"])
+        self.assertEqual(init["networks"], ["none"])
+
+    def test_browser_output_boundaries_are_enabled(self):
+        for profile in ("andrii", "valentyna"):
+            environment = self.compose["services"][f"hermes-{profile}"]["environment"]
+            self.assertEqual(environment["AGENT_BROWSER_CONTENT_BOUNDARIES"], "1")
+        andrii = self.compose["services"]["hermes-andrii"]["environment"]
+        self.assertEqual(
+            andrii["AGENT_BROWSER_ARGS"],
+            "--disable-blink-features=AutomationControlled",
+        )
+        self.assertEqual(andrii["AGENT_BROWSER_RESTORE"], "andrii")
+        self.assertIn("Chrome/149", andrii["AGENT_BROWSER_USER_AGENT"])
+
+    def test_profiles_share_native_web_backends_on_an_internal_service_network(self):
+        self.assertTrue(self.compose["networks"]["agent-tools"]["external"])
+        for profile in ("andrii", "valentyna"):
+            service = self.compose["services"][f"hermes-{profile}"]
+            self.assertIn("agent-tools", service["networks"])
+            self.assertEqual(
+                service["environment"]["SEARXNG_URL"], "http://searxng:8080"
+            )
+            self.assertEqual(
+                service["environment"]["FIRECRAWL_API_URL"],
+                "http://firecrawl-api:3002",
+            )
+            self.assertIn(
+                "./shared/skills:/etc/hermes-home/skills:ro", service["volumes"]
+            )
+
+    def test_telegram_uses_working_docker_dns_instead_of_fallback_ip_transport(self):
+        common_hosts = self.compose["x-hermes-common"]["extra_hosts"]
+        self.assertEqual(common_hosts, ["api.telegram.org=149.154.167.220"])
+        for profile in ("andrii", "valentyna"):
+            environment = self.compose["services"][f"hermes-{profile}"]["environment"]
+            self.assertEqual(environment["HERMES_TELEGRAM_USE_DEFAULT_HTTP"], "false")
+            self.assertEqual(
+                environment["HERMES_TELEGRAM_DISABLE_FALLBACK_IPS"], "true"
+            )
+
+    def test_no_docker_socket_or_curl_healthcheck(self):
+        self.assertNotIn("/var/run/docker.sock", self.compose_text)
+        self.assertNotIn("curl", self.compose_text)
+        for name, service in self.compose["services"].items():
+            if name != "vaultwarden-init-andrii":
+                self.assertIn("healthcheck", service)
+
+
+class SkillContractTests(unittest.TestCase):
+    @staticmethod
+    def load_capability_checker():
+        path = ROOT / "scripts/check-media-capabilities"
+        spec = importlib.util.spec_from_file_location("check_media_capabilities", path)
+        if spec is None or spec.loader is None:
+            loader = importlib.machinery.SourceFileLoader("check_media_capabilities", str(path))
+            spec = importlib.util.spec_from_loader(loader.name, loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_shared_web_research_skill_prefers_bounded_adaptive_pipeline(self):
+        skill = read("shared/skills/web-research/SKILL.md")
+        self.assertIn("/opt/data/skills/web-research/search.py", skill)
+        self.assertIn("cached Firecrawl extraction", skill)
+        self.assertIn("Spark Low", skill)
+        self.assertIn("`web_search` once", skill)
+        self.assertIn("native `web_extract` only", skill)
+        self.assertIn("untrusted data", skill)
+        self.assertIn("Do not probe services with curl", skill)
+
+    def test_media_web_research_uses_native_tools_not_terminal_or_browser(self):
+        skill = read("shared/skills/media/SKILL.md")
+        self.assertIn("Native `web_search`, then `web_extract`", skill)
+        self.assertIn("use Hermes native `web_search`", skill)
+        self.assertIn("Never use terminal, shell-based HTTP", skill)
+        self.assertIn("Do not treat search-result snippets as verified", skill)
+
+    def test_rezka_login_allowlist_is_bound_to_one_vault_item(self):
+        policy = json.loads(read("config/vaultwarden-login-allowlist.json"))
+        self.assertEqual(len(policy["domains"]), 1)
+        rezka = policy["domains"][0]
+        self.assertEqual(rezka["hostname"], "rezka.ag")
+        self.assertTrue(rezka["credential_item_id"])
+        self.assertEqual(set(rezka), {"hostname", "include_subdomains", "credential_item_id"})
+
+    def test_rezka_runtime_renews_automatically_without_browser_login(self):
+        media_skill = read("shared/skills/media/SKILL.md")
+        vaultwarden_skill = read("profiles/andrii/skills/vaultwarden-login/SKILL.md")
+        readme = read("README.md")
+        self.assertIn("renewed automatically by `media-service`", media_skill)
+        self.assertIn("Never ask\nfor Telegram approval or use the browser", media_skill)
+        self.assertNotIn("media rezka session refresh --credential-request ID", media_skill)
+        for document in (media_skill, vaultwarden_skill, readme):
+            self.assertIn("media_rezka_session_refresh", document)
+            self.assertIn("credential_request_id", document)
+        for document in (media_skill, vaultwarden_skill, readme):
+            self.assertNotIn("vaultwarden-browser-login", document)
+            self.assertNotIn("Anubis", document)
+            self.assertNotIn("DLE", document)
+        self.assertFalse((ROOT / "scripts/vaultwarden_browser_login.py").exists())
+
+    def test_tracking_distinguishes_release_only_and_rezka_download_modes(self):
+        skill = read("shared/skills/media/SKILL.md")
+        self.assertIn("Ordinary tracking is source-independent", skill)
+        self.assertIn(
+            "Never ask whether\nordinary tracking should use Rezka or Prowlarr",
+            skill,
+        )
+        self.assertIn("search Rezka and Prowlarr and show one unified ranked", skill)
+        self.assertIn("Rezka-only download mode", skill)
+        self.assertIn("media_tracking_create", skill)
+        self.assertIn("media_tracking_set_baseline", skill)
+        self.assertIn("media_tracking_check", skill)
+        self.assertIn("media_tracking_enable_download", skill)
+        self.assertIn("a `release_identity`", skill)
+        self.assertIn("positive `source_id`", skill)
+        self.assertIn("Never create ordinary tracking from a title alone", skill)
+        self.assertIn("Ordinary subscriptions are checked once per hour", skill)
+        self.assertIn("do not delete and recreate", skill)
+        self.assertNotIn("tracking add --provider PROVIDER", skill)
+
+    def test_media_skill_uses_the_mcp_search_and_download_contract(self):
+        skill = read("shared/skills/media/SKILL.md")
+        for tool in (
+            "media_search",
+            "media_download",
+            "media_release_schedule",
+            "media_trending",
+        ):
+            self.assertIn(tool, skill)
+        self.assertIn("continuation", skill)
+        self.assertNotIn("hermes-media search", skill)
+        self.assertNotIn("hermes-media download", skill)
+
+    def test_media_skill_routes_weekly_trending_through_media_service(self):
+        skill = read("shared/skills/media/SKILL.md")
+        self.assertIn("media_trending", skill)
+        self.assertIn("popular movies", skill)
+        self.assertIn("show more", skill)
+        self.assertIn("TMDB", skill)
+
+    def test_media_shortcut_skills_use_read_only_mcp_tools(self):
+        expected = {
+            "watching": "mcp_media_admin_plex_now_playing",
+            "movies": "mcp_media_admin_media_trending",
+            "series": "mcp_media_admin_media_trending",
+            "trending": "mcp_media_admin_media_trending",
+        }
+        for name, tool in expected.items():
+            skill = read(f"shared/skills/{name}/SKILL.md")
+            self.assertIn(f"name: {name}", skill)
+            self.assertIn(tool, skill)
+            self.assertIn("read-only", skill)
+            self.assertNotIn("hermes-media", skill)
+
+        self.assertIn("category=movie", read("shared/skills/movies/SKILL.md"))
+        self.assertIn("category=tv", read("shared/skills/series/SKILL.md"))
+        self.assertIn("category=all", read("shared/skills/trending/SKILL.md"))
+
+    def test_media_shortcuts_are_prioritized_in_both_telegram_profiles(self):
+        for profile in ("andrii", "valentyna"):
+            config = read(f"profiles/{profile}/config/config.yaml")
+            self.assertIn("priority_mode: prepend", config)
+            for command in ("watching", "movies", "series", "trending"):
+                self.assertIn(f"- {command}", config)
+
+    def test_media_admin_skill_uses_the_mcp_facade_without_privileged_access(self):
+        skill = read("shared/skills/media-admin/SKILL.md")
+        for required in (
+            "mcp_media_admin_*",
+            "media_jobs_list",
+            "media_job_cancel",
+            "media_job_retry",
+            "media_tracking_check",
+            "plex_search",
+            "qbittorrent_list",
+            "media_file_inspect",
+            "media_destructive_prepare",
+            "media_destructive_confirm",
+            "MCP ownership is enforced by media-service",
+            "quarantine data instead of permanently deleting it",
+            "Never infer confirmation",
+        ):
+            self.assertIn(required, skill)
+        for forbidden in ("Do not use Docker", "arbitrary filesystem access"):
+            self.assertIn(forbidden, skill)
+
+    def test_media_skill_explains_detailed_progress_without_llm_or_status_spam(self):
+        skill = read("shared/skills/media/SKILL.md")
+        normalized = " ".join(skill.split())
+        for required in (
+            "10-cell progress bar",
+            "downloaded_bytes",
+            "total_bytes",
+            "download_speed_bps",
+            "eta_seconds",
+            "seeds",
+            "peers",
+            "updated_at",
+            "Do not invent a percentage or ETA",
+            "updates that card at most every ten seconds",
+            "without an LLM call or model-token usage",
+            "do not answer these edits",
+            "one Telegram status card for its complete lifecycle",
+            "updates that card at most every ten seconds when progress changes",
+            "terminal transition",
+            "existing card is edited into the final result",
+            "one short reply",
+            "details remain in the card",
+            "Direct notifier cards must not be answered or summarized by the agent",
+            "retry-missing",
+            "retries only those missing episodes",
+            "without invoking the conversational agent or consuming model tokens",
+            "technical IDs are shown only after `Подробнее`",
+            "`completed` state alone does not prove upscale or transcode",
+        ):
+            self.assertIn(required, normalized)
+        self.assertNotIn("Terminal notifications remain separate messages", normalized)
+        self.assertIn("media_job_get", normalized)
+        self.assertIn("explicit user status question", normalized)
+
+    def test_media_replies_hide_internal_ids_and_offer_safe_quick_actions(self):
+        skill = read("shared/skills/media/SKILL.md")
+        normalized = " ".join(skill.split())
+        self.assertIn("IDs as private state", normalized)
+        self.assertIn("only after an explicit request for technical details", normalized)
+        self.assertIn("native `clarify`", skill)
+        self.assertNotIn("<telegram-quick-replies>", skill)
+        self.assertIn("destructive action", normalized)
+
+    def test_readme_documents_the_mcp_first_media_contract(self):
+        readme = read("README.md")
+        lowered = readme.lower()
+        self.assertNotIn("current limitation", lowered)
+        self.assertNotIn("search and tracking commands are not implemented", lowered)
+        self.assertIn("owner-scoped `media_admin` MCP server", readme)
+        self.assertIn("search and continuation", readme)
+        self.assertIn("complete tracking lifecycle", readme)
+        self.assertIn("never invokes\n`hermes-media`", readme)
+
+    def test_media_skill_is_bounded_and_never_spoofs_identity(self):
+        skill = read("shared/skills/media/SKILL.md")
+        lowered = skill.lower()
+        for required in (
+            "maximum of five",
+            "rezka",
+            "prowlarr",
+            "show more",
+            "job status",
+            "tracking",
+            "family",
+            "explicit",
+        ):
+            self.assertIn(required, lowered)
+        self.assertNotIn("curl", lowered)
+        self.assertNotIn("docker", lowered)
+        self.assertNotIn("requested_by", skill)
+        self.assertIn("structured results", skill)
+        self.assertNotIn("hermes-media search", skill)
+
+    def test_profile_identity_files_are_fixed(self):
+        self.assertEqual(read("profiles/andrii/identity").strip(), "andrii")
+        self.assertEqual(read("profiles/valentyna/identity").strip(), "valentyna")
+
+    def test_profiles_enforce_adaptive_research_priority_even_without_skill_activation(self):
+        for profile in ("andrii", "valentyna"):
+            soul = read(f"profiles/{profile}/SOUL.md")
+            self.assertIn("adaptive research client first", soul)
+            self.assertIn("native `web_search` as fallback", soul)
+            self.assertIn("`web_extract`", soul)
+            self.assertIn("Never search the public web through a browser", soul)
+
+    def test_hermes_runtime_secrets_are_private_to_the_gateway_user(self):
+        compose = yaml.safe_load(read("compose.yaml"))
+        for profile in ("andrii", "valentyna"):
+            service = compose["services"][f"hermes-{profile}"]
+            self.assertEqual(service["environment"]["HERMES_UID"], "10000")
+            self.assertEqual(service["environment"]["HERMES_GID"], "10000")
+            self.assertNotIn("group_add", service)
+
+        entrypoint = read("scripts/hermes-home-entrypoint")
+        self.assertIn(
+            "read_secret MEDIA_API_TOKEN /run/secrets/media_api_token", entrypoint
+        )
+        self.assertIn("/run/hermes-home-secrets", entrypoint)
+        self.assertIn("install -o 10000 -g 10000 -m 0400", entrypoint)
+        self.assertIn(
+            "for secret in media_api_token broker_api_token webhook_hmac search_ladder_api_key",
+            entrypoint,
+        )
+        self.assertIn('source="/run/secrets/$secret"', entrypoint)
+
+        self.assertIn(
+            "/run/hermes-home-secrets/media_api_token",
+            read("scripts/hermes-media"),
+        )
+        self.assertIn(
+            "/run/hermes-home-secrets/broker_api_token",
+            read("scripts/vaultwarden-safe"),
+        )
+        for profile in ("andrii", "valentyna"):
+            service = compose["services"][f"hermes-{profile}"]
+            self.assertEqual(
+                service["environment"]["WEBHOOK_SECRET_FILE"],
+                "/run/hermes-home-secrets/webhook_hmac",
+            )
+            self.assertIn(
+                {"source": "search_ladder_api_key", "target": "search_ladder_api_key"},
+                service["secrets"],
+            )
+        self.assertEqual(
+            compose["secrets"]["search_ladder_api_key"]["file"],
+            "./secrets/search_ladder.api_key",
+        )
+
+    def test_vaultwarden_login_skill_is_andrii_only_and_requires_explicit_approval(self):
+        skill = read("profiles/andrii/skills/vaultwarden-login/SKILL.md")
+        client = read("scripts/vaultwarden-safe")
+        entrypoint = read("scripts/hermes-home-entrypoint")
+
+        for command in (
+            "login-request URL",
+            "login-status ID",
+            "login-approve ID",
+            "login-deny ID",
+        ):
+            self.assertIn(command, skill)
+            self.assertIn(command, client)
+
+        self.assertIn("available only to Andrii", skill)
+        self.assertIn("native approval prompt", skill)
+        self.assertIn("Telegram approval control", skill)
+        self.assertIn("andrii) ;;", client)
+        self.assertNotIn("valentyna", client.lower())
+        self.assertNotIn("password", client.lower())
+        for client_command, broker_command in (
+            ("login-request", "login_request"),
+            ("login-status", "login_status"),
+            ("login-approve", "login_approve"),
+            ("login-deny", "login_deny"),
+        ):
+            self.assertIn(
+                f"{client_command}) broker_command={broker_command} ;;",
+                client,
+            )
+        self.assertFalse((ROOT / "profiles/valentyna/skills/vaultwarden-login").exists())
+        self.assertIn(
+            "install_skills /etc/hermes-home/personal-skills",
+            entrypoint,
+        )
+        self.assertNotIn("browser-sockets", entrypoint)
+        self.assertIn("install_plugins /etc/hermes-home/personal-plugins", entrypoint)
+        self.assertIn("mkdir -p /opt/data/plugins", entrypoint)
+        self.assertIn("/command/s6-setuidgid hermes", entrypoint)
+        self.assertIn("media_mcp_schema_revision", entrypoint)
+        self.assertIn("hermes-mcp-schema-revision", entrypoint)
+        self.assertIn("rm -f", entrypoint)
+        self.assertIn("/opt/data/cache/mcp_schema_cache.json", entrypoint)
+        self.assertIn("/opt/data/cache/tool_discovery_cache.json", entrypoint)
+        self.assertTrue((ROOT / "shared/skills/media/MCP_SCHEMA.json").is_file())
+        self.assertFalse((ROOT / "shared/skills/media/MCP_SCHEMA_REVISION").exists())
+        self.assertIn("vaultwarden-approval", read("profiles/andrii/config/config.yaml"))
+        self.assertFalse((ROOT / "profiles/valentyna/plugins/vaultwarden-approval").exists())
+
+    def test_entrypoint_initializes_schema_cache_on_a_fresh_volume(self):
+        path = ROOT / "scripts/hermes-home-entrypoint"
+        entrypoint = path.read_text(encoding="utf-8")
+
+        self.assertTrue(os.access(path, os.X_OK))
+        create = "install -d -o 10000 -g 10000 -m 0755 /opt/data/cache"
+        write = '/tmp/media-mcp-schema-revision "$schema_revision_cache"'
+        self.assertIn(create, entrypoint)
+        self.assertLess(entrypoint.index(create), entrypoint.index(write))
+        subprocess.run(["sh", "-n", str(path)], check=True)
+
+    def test_media_mcp_schema_revision_tracks_only_the_tool_schema(self):
+        helper = ROOT / "scripts/hermes-mcp-schema-revision"
+        artifact = json.loads(read("shared/skills/media/MCP_SCHEMA.json"))
+
+        def revision(payload):
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as file:
+                json.dump(payload, file, ensure_ascii=False)
+                file.flush()
+                return subprocess.run(
+                    [sys.executable, str(helper), file.name],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+
+        expected = hashlib.sha256(
+            json.dumps(
+                sorted(artifact["tools"], key=lambda tool: tool["name"]),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(revision(artifact), expected)
+
+        metadata_only = dict(artifact, source_digest="0" * 64)
+        self.assertEqual(revision(metadata_only), expected)
+        reordered = dict(artifact, tools=list(reversed(artifact["tools"])))
+        self.assertEqual(revision(reordered), expected)
+
+        changed = json.loads(json.dumps(artifact))
+        changed["tools"][0]["description"] += " changed"
+        self.assertNotEqual(revision(changed), expected)
+
+    def test_media_mcp_schema_artifact_matches_all_capabilities(self):
+        artifact = json.loads(read("shared/skills/media/MCP_SCHEMA.json"))
+        capabilities = [
+            line.removeprefix("- `").removesuffix("`")
+            for line in read("shared/skills/media/CAPABILITIES.md").splitlines()
+            if line.startswith("- `")
+        ]
+        self.assertEqual(artifact["schema_version"], 1)
+        self.assertRegex(artifact["source_digest"], r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            [tool["name"] for tool in artifact["tools"]],
+            sorted(capabilities),
+        )
+        self.assertEqual(len(artifact["tools"]), 43)
+
+    def test_media_capability_sync_generates_before_any_atomic_replace(self):
+        checker = self.load_capability_checker()
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = pathlib.Path(directory)
+            capability_doc = temporary / "CAPABILITIES.md"
+            schema_artifact = temporary / "MCP_SCHEMA.json"
+            capability_doc.write_text("old capabilities", encoding="utf-8")
+            schema_artifact.write_text("old schema", encoding="utf-8")
+
+            with (
+                mock.patch.object(checker, "CAPABILITY_DOC", capability_doc),
+                mock.patch.object(checker, "SCHEMA_ARTIFACT", schema_artifact),
+                mock.patch.object(checker, "load_manifest", return_value=["media_search"]),
+                mock.patch.object(
+                    checker,
+                    "generate_schema_artifact",
+                    side_effect=subprocess.CalledProcessError(1, ["cargo", "test"]),
+                ),
+                mock.patch.object(sys, "argv", ["check-media-capabilities", "--sync"]),
+            ):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(checker.main(), 1)
+
+            self.assertEqual(capability_doc.read_text(encoding="utf-8"), "old capabilities")
+            self.assertEqual(schema_artifact.read_text(encoding="utf-8"), "old schema")
+
+            runtime_artifact = {
+                "schema_version": 1,
+                "source_digest": "0" * 64,
+                "tools": [{"name": "media_search", "inputSchema": {"type": "object"}}],
+            }
+            with (
+                mock.patch.object(checker, "CAPABILITY_DOC", capability_doc),
+                mock.patch.object(checker, "SCHEMA_ARTIFACT", schema_artifact),
+                mock.patch.object(checker, "load_manifest", return_value=["media_search"]),
+                mock.patch.object(checker, "generate_schema_artifact", return_value=runtime_artifact),
+                mock.patch.object(checker, "discovered_rust_tools", return_value=[]),
+                mock.patch.object(checker, "referenced_tools", return_value={"media_search"}),
+                mock.patch.object(sys, "argv", ["check-media-capabilities", "--sync"]),
+            ):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(checker.main(), 1)
+
+            self.assertEqual(capability_doc.read_text(encoding="utf-8"), "old capabilities")
+            self.assertEqual(schema_artifact.read_text(encoding="utf-8"), "old schema")
+
+    def test_media_capability_sync_rolls_back_when_second_replace_fails(self):
+        checker = self.load_capability_checker()
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = pathlib.Path(directory)
+            schema_artifact = temporary / "MCP_SCHEMA.json"
+            capability_doc = temporary / "CAPABILITIES.md"
+            schema_artifact.write_text("old schema", encoding="utf-8")
+            capability_doc.write_text("old capabilities", encoding="utf-8")
+            schema_artifact.chmod(0o600)
+            capability_doc.chmod(0o640)
+
+            real_replace = os.replace
+            replacements = 0
+
+            def fail_second_replace(source, destination):
+                nonlocal replacements
+                replacements += 1
+                if replacements == 2:
+                    raise OSError("simulated second publication failure")
+                return real_replace(source, destination)
+
+            with mock.patch.object(checker.os, "replace", side_effect=fail_second_replace):
+                with self.assertRaisesRegex(OSError, "simulated second publication failure"):
+                    checker.atomic_write_texts(
+                        (
+                            (schema_artifact, "new schema"),
+                            (capability_doc, "new capabilities"),
+                        )
+                    )
+
+            self.assertEqual(schema_artifact.read_text(encoding="utf-8"), "old schema")
+            self.assertEqual(capability_doc.read_text(encoding="utf-8"), "old capabilities")
+            self.assertEqual(schema_artifact.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(capability_doc.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(
+                sorted(path.name for path in temporary.iterdir()),
+                ["CAPABILITIES.md", "MCP_SCHEMA.json"],
+            )
+
+    def test_media_capability_schema_comparison_is_canonical(self):
+        checker = self.load_capability_checker()
+        artifact = json.loads(read("shared/skills/media/MCP_SCHEMA.json"))
+        reordered = [dict(reversed(list(tool.items()))) for tool in reversed(artifact["tools"])]
+        self.assertEqual(
+            checker.canonical_tools(artifact["tools"]),
+            checker.canonical_tools(reordered),
+        )
+
+    def test_media_capability_check_rejects_runtime_schema_drift(self):
+        checker = self.load_capability_checker()
+        artifact = json.loads(read("shared/skills/media/MCP_SCHEMA.json"))
+        runtime_artifact = json.loads(json.dumps(artifact))
+        runtime_artifact["tools"][0]["description"] += " changed at runtime"
+
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = pathlib.Path(directory)
+            schema_artifact = temporary / "MCP_SCHEMA.json"
+            capability_doc = temporary / "CAPABILITIES.md"
+            profiles = (temporary / "andrii.yaml", temporary / "valentyna.yaml")
+            schema_artifact.write_text(json.dumps(artifact), encoding="utf-8")
+            capability_doc.write_text(
+                checker.expected_document([tool["name"] for tool in artifact["tools"]]),
+                encoding="utf-8",
+            )
+            for profile in profiles:
+                profile.write_text("media_admin:\n  tools: {}\n", encoding="utf-8")
+
+            with (
+                mock.patch.object(checker, "SCHEMA_ARTIFACT", schema_artifact),
+                mock.patch.object(checker, "CAPABILITY_DOC", capability_doc),
+                mock.patch.object(checker, "PROFILES", profiles),
+                mock.patch.object(
+                    checker,
+                    "load_manifest",
+                    return_value=[tool["name"] for tool in artifact["tools"]],
+                ),
+                mock.patch.object(checker, "generate_schema_artifact", return_value=runtime_artifact),
+                mock.patch.object(
+                    checker,
+                    "discovered_rust_tools",
+                    return_value=[tool["name"] for tool in artifact["tools"]],
+                ),
+                mock.patch.object(
+                    checker,
+                    "referenced_tools",
+                    return_value={tool["name"] for tool in artifact["tools"]},
+                ),
+                mock.patch.object(sys, "argv", ["check-media-capabilities"]),
+            ):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(checker.main(), 1)
+
+    def test_media_capability_check_rejects_stale_source_digest(self):
+        checker = self.load_capability_checker()
+        artifact = json.loads(read("shared/skills/media/MCP_SCHEMA.json"))
+        runtime_artifact = json.loads(json.dumps(artifact))
+        runtime_artifact["source_digest"] = "f" * 64
+        if runtime_artifact["source_digest"] == artifact["source_digest"]:
+            runtime_artifact["source_digest"] = "e" * 64
+
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = pathlib.Path(directory)
+            schema_artifact = temporary / "MCP_SCHEMA.json"
+            capability_doc = temporary / "CAPABILITIES.md"
+            profiles = (temporary / "andrii.yaml", temporary / "valentyna.yaml")
+            schema_artifact.write_text(json.dumps(artifact), encoding="utf-8")
+            capability_doc.write_text(
+                checker.expected_document([tool["name"] for tool in artifact["tools"]]),
+                encoding="utf-8",
+            )
+            for profile in profiles:
+                profile.write_text("media_admin:\n  tools: {}\n", encoding="utf-8")
+
+            with (
+                mock.patch.object(checker, "SCHEMA_ARTIFACT", schema_artifact),
+                mock.patch.object(checker, "CAPABILITY_DOC", capability_doc),
+                mock.patch.object(checker, "PROFILES", profiles),
+                mock.patch.object(
+                    checker,
+                    "load_manifest",
+                    return_value=[tool["name"] for tool in artifact["tools"]],
+                ),
+                mock.patch.object(checker, "generate_schema_artifact", return_value=runtime_artifact),
+                mock.patch.object(
+                    checker,
+                    "discovered_rust_tools",
+                    return_value=[tool["name"] for tool in artifact["tools"]],
+                ),
+                mock.patch.object(
+                    checker,
+                    "referenced_tools",
+                    return_value={tool["name"] for tool in artifact["tools"]},
+                ),
+                mock.patch.object(sys, "argv", ["check-media-capabilities"]),
+            ):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    self.assertEqual(checker.main(), 1)
+                self.assertIn("source digest is stale", stderr.getvalue())
+
+    def test_media_deploy_preflight_is_fail_closed(self):
+        preflight = ROOT / "scripts/deploy-preflight"
+        source = preflight.read_text(encoding="utf-8")
+
+        self.assertTrue(os.access(preflight, os.X_OK))
+        self.assertIn("set -eu", source)
+        self.assertIn("MEDIA_ORCHESTRATOR_DIR", source)
+        self.assertIn("check-media-capabilities", source)
+        self.assertIn("--live-tools", source)
+        self.assertIn("./scripts/deploy-preflight", read("scripts/check"))
+        subprocess.run(["sh", "-n", str(preflight)], check=True)
+
+    def test_media_deploy_preflight_compares_live_tools_canonically(self):
+        artifact = json.loads(read("shared/skills/media/MCP_SCHEMA.json"))
+        with tempfile.TemporaryDirectory() as directory:
+            checker = pathlib.Path(directory) / "checker.py"
+            checker.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+            live_tools = pathlib.Path(directory) / "live-tools.json"
+            live_tools.write_text(
+                json.dumps(list(reversed(artifact["tools"]))), encoding="utf-8"
+            )
+            env = os.environ.copy()
+            env["HERMES_CAPABILITY_CHECKER"] = str(checker)
+            matching = subprocess.run(
+                [str(ROOT / "scripts/deploy-preflight"), "--live-tools", str(live_tools)],
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(matching.returncode, 0, matching.stderr)
+
+            artifact["tools"][0]["description"] += " drift"
+            live_tools.write_text(json.dumps(artifact["tools"]), encoding="utf-8")
+            drifted = subprocess.run(
+                [str(ROOT / "scripts/deploy-preflight"), "--live-tools", str(live_tools)],
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+            self.assertNotEqual(drifted.returncode, 0)
+            self.assertIn("live media MCP tools/list differs", drifted.stderr)
+
+    def test_media_deploy_preflight_attests_dirty_backend_independently(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            orchestrator = root / "media-orchestrator"
+            orchestrator.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=orchestrator, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "deploy-test@example.invalid"],
+                cwd=orchestrator,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Deploy Test"],
+                cwd=orchestrator,
+                check=True,
+            )
+            (orchestrator / "crates" / "media" / "src").mkdir(parents=True)
+            (orchestrator / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+            (orchestrator / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
+            (orchestrator / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+            (orchestrator / ".dockerignore").write_text(
+                ".git\ndocs\ntarget\nscripts\n", encoding="utf-8"
+            )
+            (orchestrator / "rust-toolchain.toml").write_text(
+                "[toolchain]\nchannel = \"stable\"\n", encoding="utf-8"
+            )
+            (orchestrator / ".cargo").mkdir()
+            cargo_config = orchestrator / ".cargo" / "config.toml"
+            cargo_config.write_text("[build]\nincremental = false\n", encoding="utf-8")
+            (orchestrator / "config").mkdir()
+            (orchestrator / "config" / "runtime.json").write_text("{}\n", encoding="utf-8")
+            source = orchestrator / "crates" / "media" / "src" / "lib.rs"
+            source.write_text("pub fn version() -> u8 { 1 }\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=orchestrator, check=True)
+            subprocess.run(["git", "commit", "-qm", "initial"], cwd=orchestrator, check=True)
+
+            checker = root / "checker.py"
+            checker.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+            revision = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=orchestrator, text=True
+            ).strip()
+            build_script = orchestrator / "scripts" / "docker-build.sh"
+            build_script.parent.mkdir()
+            build_script.write_bytes((ROOT.parent / "media-orchestrator" / "scripts" / "docker-build.sh").read_bytes())
+            build_script.chmod(0o755)
+            digest_env = os.environ.copy()
+            digest_env["MEDIA_BUILD_TARGETS"] = "preflight-test"
+            digest = subprocess.check_output(
+                [str(build_script), "--print-source-tree-digest"], cwd=orchestrator, text=True, env=digest_env
+            ).strip()
+            runner_digest = subprocess.check_output(
+                [str(build_script), "--print-runner-build-digest"], cwd=orchestrator, text=True, env=digest_env
+            ).strip()
+            self.assertEqual(runner_digest, digest)
+            version = subprocess.check_output(
+                [str(build_script), "--print-source-version"], cwd=orchestrator, text=True, env=digest_env
+            ).strip()
+            self.assertTrue(version.endswith("-dirty"), version)
+            live = root / "live-attestation.json"
+            live.write_text(
+                json.dumps({"revision": revision, "version": version, "source_tree_digest": digest}),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["HERMES_CAPABILITY_CHECKER"] = str(checker)
+            env["MEDIA_ORCHESTRATOR_DIR"] = str(orchestrator)
+
+            command = [str(ROOT / "scripts/deploy-preflight"), "--live-attestation", str(live)]
+            matching = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
+            self.assertEqual(matching.returncode, 0, matching.stderr)
+
+            source.write_text("pub fn version() -> u8 { 2 }\n", encoding="utf-8")
+            dirty = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
+            self.assertNotEqual(dirty.returncode, 0)
+            self.assertIn("backend source attestation differs", dirty.stderr)
+
+            source.write_text("pub fn version() -> u8 { 1 }\n", encoding="utf-8")
+            (orchestrator / "crates" / "media" / "src" / "new.rs").write_text(
+                "pub fn new() {}\n", encoding="utf-8"
+            )
+            untracked = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
+            self.assertNotEqual(untracked.returncode, 0)
+            self.assertIn("backend source attestation differs", untracked.stderr)
+
+            (orchestrator / "crates" / "media" / "src" / "new.rs").unlink()
+            (orchestrator / "docs").mkdir()
+            (orchestrator / "docs" / "ignored.md").write_text("ignored\n", encoding="utf-8")
+            ignored = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
+            self.assertEqual(ignored.returncode, 0, ignored.stderr)
+
+            root_target = orchestrator / "target"
+            root_target.mkdir()
+            (root_target / "ignored.bin").write_bytes(b"ignored")
+            ignored_root_target = subprocess.run(
+                command, text=True, capture_output=True, env=env, check=False
+            )
+            self.assertEqual(ignored_root_target.returncode, 0, ignored_root_target.stderr)
+
+            nested_target = orchestrator / "crates" / "media" / "target"
+            nested_target.mkdir()
+            (nested_target / "context.bin").write_bytes(b"sent-to-docker")
+            nested_context = subprocess.run(
+                command, text=True, capture_output=True, env=env, check=False
+            )
+            self.assertNotEqual(nested_context.returncode, 0)
+            self.assertIn("backend source attestation differs", nested_context.stderr)
+            shutil.rmtree(nested_target)
+
+            toolchain = orchestrator / "rust-toolchain.toml"
+            original_toolchain = toolchain.read_text(encoding="utf-8")
+            toolchain.write_text("[toolchain]\nchannel = \"beta\"\n", encoding="utf-8")
+            changed_runner_digest = subprocess.check_output(
+                [str(build_script), "--print-runner-build-digest"], cwd=orchestrator, text=True, env=digest_env
+            ).strip()
+            self.assertNotEqual(changed_runner_digest, runner_digest)
+            toolchain_drift = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
+            self.assertNotEqual(toolchain_drift.returncode, 0)
+            toolchain.write_text(original_toolchain, encoding="utf-8")
+
+            original_cargo_config = cargo_config.read_text(encoding="utf-8")
+            cargo_config.write_text("[build]\nincremental = true\n", encoding="utf-8")
+            changed_runner_digest = subprocess.check_output(
+                [str(build_script), "--print-runner-build-digest"], cwd=orchestrator, text=True, env=digest_env
+            ).strip()
+            self.assertNotEqual(changed_runner_digest, runner_digest)
+            cargo_config.write_text(original_cargo_config, encoding="utf-8")
+
+            dockerignore = orchestrator / ".dockerignore"
+            original_ignore = dockerignore.read_text(encoding="utf-8")
+            dockerignore.write_text(original_ignore + "dist\n", encoding="utf-8")
+            changed_runner_digest = subprocess.check_output(
+                [str(build_script), "--print-runner-build-digest"], cwd=orchestrator, text=True, env=digest_env
+            ).strip()
+            self.assertNotEqual(changed_runner_digest, runner_digest)
+            ignore_drift = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
+            self.assertNotEqual(ignore_drift.returncode, 0)
+            dockerignore.write_text(original_ignore, encoding="utf-8")
+
+            (orchestrator / "config" / "new-tool.json").write_text("{}\n", encoding="utf-8")
+            changed_runner_digest = subprocess.check_output(
+                [str(build_script), "--print-runner-build-digest"], cwd=orchestrator, text=True, env=digest_env
+            ).strip()
+            self.assertNotEqual(changed_runner_digest, runner_digest)
+            context_untracked = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
+            self.assertNotEqual(context_untracked.returncode, 0)
+            self.assertIn("backend source attestation differs", context_untracked.stderr)
+
+
+class WrapperContractTests(unittest.TestCase):
+    def run_script(self, script: str, fake_name: str, fake_body: str, *args: str):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = pathlib.Path(temp_dir)
+            fake = temp / fake_name
+            fake.write_text(fake_body, encoding="utf-8")
+            fake.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{temp}:{env['PATH']}"
+            env["HERMES_HOME_TESTING"] = "1"
+            return subprocess.run(
+                [str(ROOT / script), *args],
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+    def test_media_wrapper_forces_json_and_rejects_identity_flags(self):
+        fake = "#!/bin/sh\nprintf '%s\\n' \"$*\"\n"
+        result = self.run_script(
+            "scripts/hermes-media", "media", fake, "queue", "status"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "queue status --json")
+
+        rejected = self.run_script(
+            "scripts/hermes-media",
+            "media",
+            fake,
+            "jobs",
+            "create",
+            "--requested-by",
+            "valentyna",
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("identity-controlled option", rejected.stderr)
+
+        for forbidden_flag in (
+            "--requested-by=valentyna",
+            "--requested_by=valentyna",
+            "--token=abc",
+            "--token-file=/etc/passwd",
+            "--service-url=http://attacker.test",
+        ):
+            rejected_equals = self.run_script(
+                "scripts/hermes-media", "media", fake, "jobs", "create", forbidden_flag
+            )
+            self.assertNotEqual(
+                rejected_equals.returncode, 0, f"{forbidden_flag} should be rejected"
+            )
+            self.assertIn("identity-controlled option", rejected_equals.stderr)
+
+        selected = self.run_script(
+            "scripts/hermes-media",
+            "media",
+            fake,
+            "download",
+            "--session",
+            "session-1",
+            "--result",
+            "result-1",
+        )
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        self.assertEqual(
+            selected.stdout.strip(),
+            "download --session session-1 --result result-1 --json",
+        )
+
+        refreshed = self.run_script(
+            "scripts/hermes-media",
+            "media",
+            fake,
+            "rezka",
+            "session",
+            "refresh",
+            "--credential-request",
+            "request-1",
+        )
+        self.assertEqual(refreshed.returncode, 0, refreshed.stderr)
+        self.assertEqual(
+            refreshed.stdout.strip(),
+            "rezka session refresh --credential-request request-1 --json",
+        )
+
+        released = self.run_script(
+            "scripts/hermes-media",
+            "media",
+            fake,
+            "release",
+            "--title",
+            "One Piece",
+        )
+        self.assertEqual(released.returncode, 0, released.stderr)
+        self.assertEqual(
+            released.stdout.strip(),
+            "release --title One Piece --json",
+        )
+
+        trending = self.run_script(
+            "scripts/hermes-media",
+            "media",
+            fake,
+            "trending",
+            "--category",
+            "tv",
+            "--page",
+            "2",
+        )
+        self.assertEqual(trending.returncode, 0, trending.stderr)
+        self.assertEqual(
+            trending.stdout.strip(),
+            "trending --category tv --page 2 --json",
+        )
+
+    def test_media_wrapper_marks_only_conversational_telegram_downloads(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = pathlib.Path(temp_dir)
+            fake = temp / "media"
+            fake.write_text("#!/bin/sh\nprintf '{\"status\":\"queued\"}\\n'\n", encoding="utf-8")
+            fake.chmod(0o755)
+            marker = temp / "download-succeeded"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{temp}:{env['PATH']}",
+                    "HERMES_HOME_TESTING": "1",
+                    "HERMES_SESSION_PLATFORM": "telegram",
+                    "HERMES_MEDIA_SILENCE_MARKER": str(marker),
+                }
+            )
+
+            result = subprocess.run(
+                [str(ROOT / "scripts/hermes-media"), "download", "--session", "one"],
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(marker.is_file())
+            marker.unlink()
+            env["HERMES_MEDIA_CALLBACK"] = "1"
+            callback = subprocess.run(
+                [str(ROOT / "scripts/hermes-media"), "download", "--session", "two"],
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(callback.returncode, 0, callback.stderr)
+            self.assertFalse(marker.exists())
+
+    def test_vaultwarden_broker_redacts_item_secrets(self):
+        item = json.dumps(
+            {
+                "id": "item-1",
+                "name": "Plex",
+                "login": {
+                    "username": "family@example.test",
+                    "password": "never-visible",
+                    "uris": [{"uri": "https://plex.example.test"}],
+                },
+                "notes": "also-secret",
+            }
+        )
+        path = ROOT / "scripts/vaultwarden_broker.py"
+        spec = importlib.util.spec_from_file_location("vaultwarden_broker", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(path.parent))
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.path.pop(0)
+        sanitized = module.sanitize_item(json.loads(item))
+        rendered = json.dumps(sanitized)
+        self.assertEqual(sanitized["username"], "family@example.test")
+        self.assertNotIn("never-visible", rendered)
+        self.assertNotIn("also-secret", rendered)
+
+
+class ProfileConfigTests(unittest.TestCase):
+    def test_telegram_media_plugin_uses_focused_modules(self):
+        plugin_root = ROOT / "shared/plugins/telegram-home"
+        module_names = (
+            "media_models.py",
+            "media_action_store.py",
+            "media_search.py",
+            "media_callbacks.py",
+            "media_commands.py",
+            "media_panel.py",
+        )
+
+        for module_name in module_names:
+            self.assertTrue((plugin_root / module_name).is_file())
+
+        plugin = read("shared/plugins/telegram-home/__init__.py")
+        module = ast.parse(plugin)
+        top_level_classes = {
+            node.name for node in module.body if isinstance(node, ast.ClassDef)
+        }
+        top_level_functions = {
+            node.name
+            for node in module.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+        self.assertEqual(top_level_classes, {"HomeTelegramAdapter"})
+        self.assertEqual(
+            top_level_functions,
+            {
+                "_action_markup",
+                "_dispatch_media_mcp",
+                "_run_media",
+                "_search_media_mcp",
+                "_strip_internal_ids",
+                "_suppress_download_confirmation",
+                "_build_adapter",
+                "register",
+            },
+        )
+        self.assertIn("from .media_models import", plugin)
+        self.assertIn("from .media_commands import", plugin)
+        self.assertIn("from .media_panel import", plugin)
+        self.assertIn("from .media_action_store import", plugin)
+        self.assertIn("from .media_search import", plugin)
+        self.assertIn("from .media_callbacks import", plugin)
+        self.assertIn("class HomeTelegramAdapter(TelegramAdapter)", plugin)
+        self.assertIn('ctx.register_platform(\n        name="telegram"', plugin)
+        self.assertNotIn("create_subprocess_exec", plugin)
+        self.assertNotIn("/usr/local/bin/hermes-media", plugin)
+
+    def test_media_notifications_are_external_to_hermes(self):
+        compose = yaml.safe_load(read("compose.yaml"))
+        notifier = read("scripts/media-notifier")
+        plugin = read("shared/plugins/telegram-home/__init__.py")
+        self.assertIn("editMessageText", notifier)
+        self.assertIn("sendMessage", notifier)
+        self.assertIn("sendPhoto", notifier)
+        self.assertIn("X-Webhook-Signature-V2", notifier)
+        self.assertIn("class HomeTelegramAdapter(TelegramAdapter)", plugin)
+        self.assertIn('ctx.register_platform(\n        name="telegram"', plugin)
+        self.assertNotIn("handle_message", plugin)
+        for profile in ("andrii", "valentyna"):
+            service = compose["services"][f"media-notifier-{profile}"]
+            self.assertEqual(service["image"], "python:latest")
+            self.assertIn(f"media_notifier_{profile}:/data", service["volumes"])
+            self.assertIn(
+                "./shared/plugins/telegram-home/assets/media-menu.jpg:"
+                "/usr/local/share/hermes-home/media-menu.jpg:ro",
+                service["volumes"],
+            )
+
+    def test_profiles_use_native_clarify_and_no_webhook_adapter(self):
+        for profile in ("andrii", "valentyna"):
+            config = yaml.safe_load(read(f"profiles/{profile}/config/config.yaml"))
+            self.assertEqual(config["terminal"]["home_mode"], "profile")
+            self.assertIsNone(config["platforms"]["webhook"])
+            self.assertIn("telegram-home", config["plugins"]["enabled"])
+            self.assertIn("native `clarify`", read(f"profiles/{profile}/SOUL.md"))
+            self.assertEqual(config["browser"]["inactivity_timeout"], 120)
+            self.assertFalse(config["browser"]["camofox"]["managed_persistence"])
+            self.assertEqual(config["web"]["search_backend"], "searxng")
+            self.assertEqual(config["web"]["extract_backend"], "firecrawl")
+            self.assertEqual(config["display"]["tool_progress"], "new")
+            self.assertEqual(
+                config["display"]["platforms"]["telegram"]["tool_progress"], "off"
+            )
+            self.assertEqual(config["display"]["memory_notifications"], "off")
+            self.assertTrue(config["compression"]["codex_responses_native"])
+            self.assertEqual(config["skills"]["creation_nudge_interval"], 10)
+            self.assertEqual(config["model"]["provider"], "openai-codex")
+            self.assertEqual(config["model"]["default"], "gpt-5.6-luna")
+            self.assertEqual(
+                config["fallback_providers"],
+                [
+                    {"provider": "openai-codex", "model": "gpt-5.6-terra"},
+                    {"provider": "openai-codex", "model": "gpt-5.6-sol"},
+                ],
+            )
+            self.assertEqual(config["agent"]["reasoning_effort"], "low")
+            self.assertEqual(
+                config["agent"]["reasoning_overrides"],
+                {
+                    "gpt-5.6-terra": "high",
+                    "gpt-5.6-luna": "high",
+                    "gpt-5.6-sol": "low",
+                },
+            )
+
+    def test_managed_shared_skills_are_pinned_at_startup(self):
+        entrypoint = read("scripts/hermes-home-entrypoint")
+        self.assertIn("for skill in /etc/hermes-home/skills/*", entrypoint)
+        self.assertIn('curator pin "$(basename "$skill")"', entrypoint)
+
+
+class ManagedConfigMergeTests(unittest.TestCase):
+    def test_managed_mcp_tools_remove_stale_discovery_filters(self):
+        path = ROOT / "scripts/merge_hermes_config.py"
+        spec = importlib.util.spec_from_file_location("merge_hermes_config", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        merged = module.merge(
+            {
+                "mcp_servers": {
+                    "media_admin": {
+                        "tools": {
+                            "include": ["old_tool"],
+                            "exclude": ["other_tool"],
+                            "resources": True,
+                        }
+                    }
+                }
+            },
+            {
+                "mcp_servers": {
+                    "media_admin": {
+                        "tools": {"resources": False, "prompts": False}
+                    }
+                }
+            },
+        )
+
+        tools = merged["mcp_servers"]["media_admin"]["tools"]
+        self.assertNotIn("include", tools)
+        self.assertNotIn("exclude", tools)
+        self.assertFalse(tools["resources"])
+        self.assertFalse(tools["prompts"])
+
+    def test_managed_null_removes_a_retired_config_key(self):
+        path = ROOT / "scripts/merge_hermes_config.py"
+        spec = importlib.util.spec_from_file_location("merge_hermes_config", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        merged = module.merge(
+            {"platforms": {"telegram": {}, "webhook": {"enabled": True}}},
+            {"platforms": {"webhook": None}},
+        )
+
+        self.assertNotIn("webhook", merged["platforms"])
+
+    def test_managed_config_updates_web_without_losing_oauth_model_settings(self):
+        path = ROOT / "scripts/merge_hermes_config.py"
+        spec = importlib.util.spec_from_file_location("merge_hermes_config", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        current = {
+            "model": {"provider": "openai-codex", "default": "gpt-5.6-luna"},
+            "agent": {"verify_on_stop": True, "reasoning_effort": "high"},
+        }
+        managed = {
+            "agent": {"verify_on_stop": False},
+            "web": {"search_backend": "searxng", "extract_backend": "firecrawl"},
+        }
+
+        merged = module.merge(current, managed)
+
+        self.assertEqual(merged["model"], current["model"])
+        self.assertEqual(merged["agent"]["reasoning_effort"], "high")
+        self.assertFalse(merged["agent"]["verify_on_stop"])
+        self.assertEqual(merged["web"], managed["web"])
+
+
+if __name__ == "__main__":
+    unittest.main()

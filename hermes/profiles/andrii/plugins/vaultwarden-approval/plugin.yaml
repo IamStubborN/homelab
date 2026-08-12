@@ -1,0 +1,5 @@
+name: vaultwarden-approval
+version: "1.0.0"
+description: Require native Hermes approval for an Andrii Vaultwarden login.
+hooks:
+  - pre_tool_call

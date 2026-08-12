@@ -1,0 +1,85 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+orchestrator=${MEDIA_ORCHESTRATOR_DIR:-"$root/../media-orchestrator"}
+checker=${HERMES_CAPABILITY_CHECKER:-"$root/scripts/check-media-capabilities"}
+schema=${MEDIA_MCP_SCHEMA_FILE:-"$root/shared/skills/media/MCP_SCHEMA.json"}
+
+live_tools=
+live_attestation=
+while test "$#" -gt 0; do
+    case $1 in
+        --live-tools)
+            test "$#" -ge 2 || { echo "usage: $0 [--live-tools FILE] [--live-attestation FILE]" >&2; exit 2; }
+            live_tools=$2
+            shift 2
+            ;;
+        --live-attestation)
+            test "$#" -ge 2 || { echo "usage: $0 [--live-tools FILE] [--live-attestation FILE]" >&2; exit 2; }
+            live_attestation=$2
+            shift 2
+            ;;
+        *)
+            echo "usage: $0 [--live-tools FILE] [--live-attestation FILE]" >&2
+            exit 2
+            ;;
+    esac
+done
+
+python3 "$checker" --orchestrator "$orchestrator"
+
+if test -n "$live_tools"; then
+    python3 - "$schema" "$live_tools" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    expected = json.load(source)["tools"]
+with open(sys.argv[2], encoding="utf-8") as source:
+    actual = json.load(source)
+
+canonical = lambda tools: json.dumps(
+    sorted(tools, key=lambda tool: tool["name"]),
+    ensure_ascii=False,
+    sort_keys=True,
+    separators=(",", ":"),
+)
+if canonical(expected) != canonical(actual):
+    raise SystemExit("live media MCP tools/list differs from local schema artifact")
+PY
+fi
+
+if test -n "$live_attestation"; then
+    python3 - "$orchestrator" "$live_attestation" <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+
+root = pathlib.Path(sys.argv[1])
+raw = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+if isinstance(raw, list):
+    labels = raw[0]["Config"]["Labels"]
+    actual = {
+        "revision": labels.get("org.opencontainers.image.revision"),
+        "version": labels.get("org.opencontainers.image.version"),
+        "source_tree_digest": labels.get("dev.iamstubborn.media.source-tree-digest"),
+    }
+else:
+    actual = raw
+
+build_script = root / "scripts" / "docker-build.sh"
+expected = {
+    "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
+    "version": subprocess.check_output(
+        [str(build_script), "--print-source-version"], cwd=root, text=True
+    ).strip(),
+    "source_tree_digest": subprocess.check_output(
+        [str(build_script), "--print-source-tree-digest"], cwd=root, text=True
+    ).strip(),
+}
+if actual != expected:
+    raise SystemExit("backend source attestation differs from local source/version")
+PY
+fi

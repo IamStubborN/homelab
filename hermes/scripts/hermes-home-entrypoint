@@ -1,0 +1,99 @@
+#!/bin/sh
+set -eu
+
+read_secret() {
+    variable=$1
+    path=$2
+    if [ ! -s "$path" ]; then
+        echo "Required secret is missing: $path" >&2
+        exit 1
+    fi
+    value=$(cat "$path")
+    export "$variable=$value"
+}
+
+read_secret TELEGRAM_BOT_TOKEN /run/secrets/telegram_bot_token
+read_secret API_SERVER_KEY /run/secrets/webhook_hmac
+read_secret MEDIA_API_TOKEN /run/secrets/media_api_token
+read_secret HOMEASSISTANT_API_TOKEN /run/secrets/homeassistant_api_token
+read_secret OPENAI_API_KEY /run/secrets/omniroute_api_key
+export OPENAI_BASE_URL=http://omniroute:20129/v1
+
+runtime_secret_dir=/run/hermes-home-secrets
+install -d -o 10000 -g 10000 -m 0700 "$runtime_secret_dir"
+for secret in media_api_token broker_api_token webhook_hmac search_ladder_api_key; do
+    source="/run/secrets/$secret"
+    [ -f "$source" ] || continue
+    install -o 10000 -g 10000 -m 0400 "$source" "$runtime_secret_dir/$secret"
+done
+
+/opt/hermes/.venv/bin/python /usr/local/bin/merge-hermes-config \
+    /etc/hermes-home/config.yaml /opt/data/config.yaml /tmp/hermes-config.yaml
+install -o 10000 -g 10000 -m 0640 /tmp/hermes-config.yaml /opt/data/config.yaml
+rm -f /tmp/hermes-config.yaml
+install -o 10000 -g 10000 -m 0644 /etc/hermes-home/SOUL.md /opt/data/SOUL.md
+
+install_skills() {
+    source=$1
+    for skill in "$source"/*; do
+        [ -d "$skill" ] || continue
+        destination="/opt/data/skills/$(basename "$skill")"
+        mkdir -p "$destination"
+        cp -R "$skill"/. "$destination"/
+    done
+}
+
+install_skills /etc/hermes-home/skills
+install_skills /etc/hermes-home/personal-skills
+chown -R 10000:10000 /opt/data/skills
+
+# Shared skills are managed by this repository, not by background reviews.
+for skill in /etc/hermes-home/skills/*; do
+    [ -d "$skill" ] || continue
+    /command/s6-setuidgid hermes /opt/hermes/.venv/bin/hermes \
+        curator pin "$(basename "$skill")" >/dev/null 2>&1 || true
+done
+
+install_plugins() {
+    source=$1
+    mkdir -p /opt/data/plugins
+    for plugin in "$source"/*; do
+        [ -d "$plugin" ] || continue
+        destination="/opt/data/plugins/$(basename "$plugin")"
+        mkdir -p "$destination"
+        cp -R "$plugin"/. "$destination"/
+    done
+}
+
+install_plugins /etc/hermes-home/personal-plugins
+install_plugins /etc/hermes-home/shared-plugins
+chown -R 10000:10000 /opt/data/plugins
+# Keep the derived schema cache across ordinary restarts. The checked-in schema
+# artifact is available during offline startup; its canonical tool array changes
+# exactly when the deployed media MCP contract changes.
+schema_artifact=/etc/hermes-home/skills/media/MCP_SCHEMA.json
+schema_revision_cache=/opt/data/cache/media_mcp_schema_revision
+install -d -o 10000 -g 10000 -m 0755 /opt/data/cache
+if [ ! -s "$schema_artifact" ]; then
+    echo "Required media MCP schema artifact is missing: $schema_artifact" >&2
+    exit 1
+fi
+schema_revision=$(
+    /opt/hermes/.venv/bin/python /usr/local/bin/hermes-mcp-schema-revision \
+        "$schema_artifact"
+)
+if [ ! -s "$schema_revision_cache" ] || \
+   [ "$(cat "$schema_revision_cache")" != "$schema_revision" ]; then
+    rm -f \
+        /opt/data/cache/mcp_schema_cache.json \
+        /opt/data/cache/tool_discovery_cache.json
+    printf '%s\n' "$schema_revision" >/tmp/media-mcp-schema-revision
+    install -o 10000 -g 10000 -m 0644 \
+        /tmp/media-mcp-schema-revision "$schema_revision_cache"
+    rm -f /tmp/media-mcp-schema-revision
+fi
+if [ -d /opt/data/plugins/vaultwarden-approval ]; then
+    /command/s6-setuidgid hermes /opt/hermes/.venv/bin/hermes plugins enable vaultwarden-approval >/dev/null
+fi
+
+exec /init /opt/hermes/docker/main-wrapper.sh "$@"

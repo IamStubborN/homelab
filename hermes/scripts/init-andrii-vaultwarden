@@ -1,0 +1,45 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+
+volume=${VAULTWARDEN_VOLUME:-hermes-home_hermes_andrii_vaultwarden}
+tools_volume=${VAULTWARDEN_TOOLS_VOLUME:-hermes-home_vaultwarden_tools}
+
+docker run --rm -it \
+    --pull always \
+    -v "$volume:/opt/data/vaultwarden" \
+    -v "$tools_volume:/opt/tools" \
+    -v "$PWD/scripts/install_bitwarden_cli.py:/usr/local/bin/install-bitwarden-cli:ro" \
+    -v "$PWD/config/vaultwarden-server:/etc/hermes-home/vaultwarden-server:ro" \
+    -v "$PWD/secrets:/run/hermes-home-secrets" \
+    --entrypoint sh \
+    python:latest -c '
+        set -eu
+        export HOME=/opt/data/vaultwarden
+        export BITWARDENCLI_APPDATA_DIR=/opt/data/vaultwarden
+        python3 /usr/local/bin/install-bitwarden-cli /opt/tools/bw
+        export PATH=/opt/tools:$PATH
+        server=$(cat /etc/hermes-home/vaultwarden-server)
+        bw config server "$server" >/dev/null
+        status=$(bw status)
+        umask 077
+        case "$status" in
+            *"\"status\":\"unlocked\""*)
+                echo "Vaultwarden is already unlocked; locking before issuing a fresh session."
+                bw lock >/dev/null
+                bw unlock --raw > /run/hermes-home-secrets/andrii.vaultwarden_session
+                ;;
+            *"\"status\":\"locked\""*)
+                bw unlock --raw > /run/hermes-home-secrets/andrii.vaultwarden_session
+                ;;
+            *)
+                bw login --raw > /run/hermes-home-secrets/andrii.vaultwarden_session
+                ;;
+        esac
+        test -s /run/hermes-home-secrets/andrii.vaultwarden_session
+        chown 1000:1000 /run/hermes-home-secrets/andrii.vaultwarden_session
+        chmod 0640 /run/hermes-home-secrets/andrii.vaultwarden_session
+    '
+
+echo "Andrii Vaultwarden session initialized."

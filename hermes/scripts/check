@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+python3 -m unittest discover -v tests
+./scripts/deploy-preflight
+shellcheck scripts/hermes-home-entrypoint scripts/hermes-media scripts/vaultwarden-safe \
+    scripts/agent-browser scripts/vaultwarden-broker-entrypoint \
+    scripts/init-andrii-vaultwarden scripts/deploy-preflight scripts/check
+yamllint -d '{extends: default, rules: {line-length: disable, document-start: disable, truthy: disable}}' \
+    compose.yaml profiles/andrii/config/config.yaml profiles/valentyna/config/config.yaml
+
+ANDRII_TELEGRAM_USER_ID=1 \
+ANDRII_TELEGRAM_CHAT_ID=1 \
+VALENTYNA_TELEGRAM_USER_ID=2 \
+VALENTYNA_TELEGRAM_CHAT_ID=2 \
+docker compose -f compose.yaml config --quiet

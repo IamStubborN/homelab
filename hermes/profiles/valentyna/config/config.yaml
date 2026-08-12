@@ -139,7 +139,6 @@ skills:
       - test-driven-development
       - touchdesigner-mcp
       - weights-and-biases
-      - xurl
       - yuanbao
 agent:
   verify_on_stop: false

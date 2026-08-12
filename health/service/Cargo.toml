@@ -27,11 +27,12 @@ sha2 = "=0.11.0"
 tempfile = "=3.23.0"
 thiserror = "=2.0.18"
 time = { version = "=0.3.53", default-features = false, features = ["std", "serde", "formatting", "parsing", "macros"] }
+time-tz = { version = "=2.0.0", default-features = false, features = ["db"] }
 tokio = { version = "=1.52.3", features = ["macros", "net", "rt-multi-thread"] }
 tower = { version = "=0.5.3", features = ["util"] }
 tracing = "=0.1.44"
 tracing-subscriber = "=0.3.20"
 uuid = { version = "=1.23.4", features = ["v4", "serde"] }
 
-health-core = { path = "crates/health-core" }
-health-migration = { path = "crates/health-migration" }
+health-core = { version = "=0.1.0", path = "crates/health-core" }
+health-migration = { version = "=0.1.0", path = "crates/health-migration" }

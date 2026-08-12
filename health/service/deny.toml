@@ -2,10 +2,10 @@
 all-features = true
 
 [advisories]
-# SeaORM 2.0.0-rc.42 macros require sea-bae -> proc-macro-error2. The
-# advisory is informational (unmaintained), has no safe upgrade, and is
-# revisited whenever SeaORM is upgraded.
-ignore = ["RUSTSEC-2026-0173"]
+# RUSTSEC-2026-0192 is reachable only while parsing the compile-time vendored
+# chart font through plotters -> ab_glyph. It is unmaintained, has no safe
+# upgrade, and must be revisited with the chart renderer dependency.
+ignore = ["RUSTSEC-2026-0192"]
 
 [licenses]
 allow = [

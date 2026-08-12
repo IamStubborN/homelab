@@ -107,7 +107,6 @@ struct EventInsert<'a> {
     action: &'a str,
     person: Person,
     status: FactStatus,
-    event_time: OffsetDateTime,
     dedup: Option<[u8; 32]>,
     columns: Vec<(&'a str, Value)>,
     audit_new_value: serde_json::Value,
@@ -139,15 +138,6 @@ async fn insert_event(
     column_names.push("via");
     values.push(ctx.via.as_str().into());
     placeholders.push(format!("${}::via_channel", values.len()));
-
-    if matches!(
-        ins.table,
-        "measurements" | "meals" | "symptoms" | "sleep_records"
-    ) {
-        column_names.push("event_time");
-        values.push(ins.event_time.into());
-        placeholders.push(format!("${}", values.len()));
-    }
 
     if let Some(dedup) = ins.dedup {
         column_names.push("dedup_hash");
@@ -252,12 +242,12 @@ pub async fn add_measurement(
             action: "add_measurement",
             person: args.person,
             status: args.status,
-            event_time: args.event_time,
             dedup: Some(dedup),
             columns: vec![
                 ("kind", args.kind.as_str().into()),
                 ("values_json", args.values.into()),
                 ("source", args.source.into()),
+                ("event_time", args.event_time.into()),
             ],
             audit_new_value: new_value,
         },
@@ -289,12 +279,12 @@ pub async fn add_meal(
             action: "add_meal",
             person: args.person,
             status: args.status,
-            event_time: args.event_time,
             dedup: Some(dedup),
             columns: vec![
                 ("description", args.description.into()),
                 ("items_json", args.items.into()),
                 ("calories", args.calories.into()),
+                ("event_time", args.event_time.into()),
             ],
             audit_new_value: new_value,
         },
@@ -322,11 +312,11 @@ pub async fn add_symptom(
             action: "add_symptom",
             person: args.person,
             status: args.status,
-            event_time: args.event_time,
             dedup: Some(dedup),
             columns: vec![
                 ("description", args.description.into()),
                 ("severity", args.severity.into()),
+                ("event_time", args.event_time.into()),
             ],
             audit_new_value: new_value,
         },
@@ -365,13 +355,13 @@ pub async fn add_sleep_record(
             action: "add_sleep_record",
             person: args.person,
             status: args.status,
-            event_time: args.start_time,
             dedup: Some(dedup),
             columns: vec![
                 ("start_time", args.start_time.into()),
                 ("end_time", args.end_time.into()),
                 ("quality", args.quality.into()),
                 ("notes", args.notes.into()),
+                ("event_time", args.start_time.into()),
             ],
             audit_new_value: new_value,
         },
@@ -399,7 +389,6 @@ pub async fn add_medication(
             action: "add_medication",
             person: args.person,
             status: args.status,
-            event_time: args.started_at,
             dedup: None,
             columns: vec![
                 ("name", args.name.into()),
@@ -419,28 +408,45 @@ pub async fn stop_medication(
     args: StopMedication,
 ) -> Result<WriteOutcome, StorageError> {
     let txn = db.begin().await?;
-    let updated = txn
+    let medication = txn
         .query_one_raw(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
-            "UPDATE medications
-             SET stopped_at = $1, stop_reason = $2
-             WHERE id = $3 AND person_id = $4::person
-               AND stopped_at IS NULL AND deleted_at IS NULL
-             RETURNING id",
+            "SELECT started_at, stopped_at
+             FROM medications
+             WHERE id = $1 AND person_id = $2::person AND deleted_at IS NULL
+             FOR UPDATE",
+            [args.medication_id.into(), args.person.as_str().into()],
+        ))
+        .await?;
+
+    let rejection = match medication.as_ref() {
+        None => Some(StorageError::NotFound),
+        Some(row)
+            if row
+                .try_get::<Option<OffsetDateTime>>("", "stopped_at")?
+                .is_some() =>
+        {
+            Some(StorageError::NotFound)
+        }
+        Some(row) if args.stopped_at < row.try_get::<OffsetDateTime>("", "started_at")? => Some(
+            StorageError::Rejected("stopped_at must not be before started_at".to_owned()),
+        ),
+        Some(_) => None,
+    };
+
+    if rejection.is_none() {
+        txn.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            "UPDATE medications SET stopped_at = $1, stop_reason = $2 WHERE id = $3",
             [
                 args.stopped_at.into(),
                 args.reason.clone().into(),
                 args.medication_id.into(),
-                args.person.as_str().into(),
             ],
         ))
         .await?;
-    let result = if updated.is_some() {
-        "success"
-    } else {
-        "rejected"
-    };
-    let new_value = updated.as_ref().map(|_| {
+    }
+    let new_value = rejection.is_none().then(|| {
         serde_json::json!({
             "stopped_at": args.stopped_at,
             "reason": args.reason,
@@ -460,19 +466,23 @@ pub async fn stop_medication(
             ctx.via.as_str().into(),
             args.person.as_str().into(),
             args.medication_id.into(),
-            result.into(),
+            if rejection.is_none() {
+                "success"
+            } else {
+                "rejected"
+            }
+            .into(),
             new_value.into(),
         ],
     ))
     .await?;
     txn.commit().await?;
 
-    if updated.is_some() {
-        Ok(WriteOutcome::Created {
+    match rejection {
+        None => Ok(WriteOutcome::Created {
             id: args.medication_id,
-        })
-    } else {
-        Err(StorageError::NotFound)
+        }),
+        Some(error) => Err(error),
     }
 }
 
@@ -486,11 +496,6 @@ pub async fn add_condition(
         "notes": args.notes,
         "diagnosed_at": args.diagnosed_at,
     });
-    let event_time = args
-        .diagnosed_at
-        .map(|date| date.midnight().assume_utc())
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-
     insert_event(
         db,
         ctx,
@@ -499,7 +504,6 @@ pub async fn add_condition(
             action: "add_condition",
             person: args.person,
             status: args.status,
-            event_time,
             dedup: None,
             columns: vec![
                 ("name", args.name.into()),
@@ -531,7 +535,6 @@ pub async fn add_allergy(
             action: "add_allergy",
             person: args.person,
             status: args.status,
-            event_time: OffsetDateTime::UNIX_EPOCH,
             dedup: None,
             columns: vec![
                 ("allergen", args.allergen.into()),
@@ -576,7 +579,6 @@ pub async fn add_lab_result(
             action: "add_lab_result",
             person: args.person,
             status: args.status,
-            event_time,
             dedup: Some(dedup),
             columns: vec![
                 ("test_date", args.test_date.into()),

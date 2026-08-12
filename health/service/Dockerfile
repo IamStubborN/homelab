@@ -30,7 +30,6 @@ FROM ${RUNTIME_IMAGE} AS runtime
 RUN groupadd --gid 10001 health && \
     useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin health
 COPY --from=builder --chown=10001:10001 /out/health-service /usr/local/bin/health-service
-COPY --chown=10001:10001 assets/DejaVuSans.ttf /usr/local/bin/DejaVuSans.ttf
 USER 10001:10001
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/health-service"]

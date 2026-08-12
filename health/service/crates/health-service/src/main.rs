@@ -1,12 +1,14 @@
+use health_migration::MigratorTrait;
 use health_service::{auth::TokenMap, config::Config, mcp};
-use sea_orm_migration::MigratorTrait;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     match (args.next().as_deref(), args.next()) {
         (Some("healthcheck"), None) => {
-            health_service::healthcheck::check("127.0.0.1:8080")?;
+            let listen_addr = health_service::config::listen_addr_from_env()?;
+            let address = health_service::config::healthcheck_address(listen_addr);
+            health_service::healthcheck::check(&address.to_string())?;
             return Ok(());
         }
         (None, None) => {}
@@ -29,6 +31,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;
     tracing::info!(listen_addr = %config.listen_addr, "health service listening");
-    axum::serve(listener, mcp::router(db, tokens)).await?;
+    axum::serve(listener, mcp::router(db, tokens, config.listen_addr)).await?;
     Ok(())
 }

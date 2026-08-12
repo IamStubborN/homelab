@@ -11,6 +11,8 @@ use crate::{charts, storage};
 const CONFIRMATION_REQUIRED: &str = "confirmation_required: ask the user to confirm with the ✅ card, then retry with confirmed=true";
 pub const MAX_QUERY_LIMIT: u32 = 200;
 pub const MAX_CHART_DAYS: u32 = 3650;
+const DEFAULT_EVENT_BUCKET_MINUTES: i64 = 5;
+const DEFAULT_EVENT_BUCKET_ROLLOVER_GRACE_SECONDS: i64 = 30;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OpsError {
@@ -100,6 +102,7 @@ pub struct AddConditionParams {
     pub notes: Option<String>,
     pub diagnosed_at: Option<Date>,
     pub status: Option<FactStatus>,
+    pub confirmed: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -158,7 +161,7 @@ pub async fn add_measurement(
             values: params.values,
             source: params.source,
             status: status(params.status),
-            event_time: params.event_time.unwrap_or_else(OffsetDateTime::now_utc),
+            event_time: event_time_or_retry_bucket(params.event_time),
         },
     )
     .await?)
@@ -200,7 +203,7 @@ pub async fn add_meal(
             items: params.items,
             calories: params.calories,
             status: status(params.status),
-            event_time: params.event_time.unwrap_or_else(OffsetDateTime::now_utc),
+            event_time: event_time_or_retry_bucket(params.event_time),
         },
     )
     .await?)
@@ -219,7 +222,7 @@ pub async fn add_symptom(
             description: params.description,
             severity: params.severity,
             status: status(params.status),
-            event_time: params.event_time.unwrap_or_else(OffsetDateTime::now_utc),
+            event_time: event_time_or_retry_bucket(params.event_time),
         },
     )
     .await?)
@@ -230,6 +233,12 @@ pub async fn add_sleep_record(
     ctx: &RequestCtx,
     params: AddSleepRecordParams,
 ) -> Result<storage::WriteOutcome, OpsError> {
+    if params.end_time <= params.start_time {
+        return Err(OpsError::InvalidParameter {
+            field: "end_time",
+            value: "must be after start_time".to_owned(),
+        });
+    }
     Ok(storage::add_sleep_record(
         db,
         ctx,
@@ -290,6 +299,7 @@ pub async fn add_condition(
     ctx: &RequestCtx,
     params: AddConditionParams,
 ) -> Result<storage::WriteOutcome, OpsError> {
+    require_confirmation(params.confirmed)?;
     Ok(storage::add_condition(
         db,
         ctx,
@@ -435,6 +445,17 @@ fn status(status: Option<FactStatus>) -> FactStatus {
     status.unwrap_or(FactStatus::UserReported)
 }
 
+fn event_time_or_retry_bucket(event_time: Option<OffsetDateTime>) -> OffsetDateTime {
+    event_time.unwrap_or_else(|| retry_bucket(OffsetDateTime::now_utc()))
+}
+
+fn retry_bucket(now: OffsetDateTime) -> OffsetDateTime {
+    let bucket_seconds = DEFAULT_EVENT_BUCKET_MINUTES * 60;
+    let unix_timestamp = now.unix_timestamp() - DEFAULT_EVENT_BUCKET_ROLLOVER_GRACE_SECONDS;
+    OffsetDateTime::from_unix_timestamp(unix_timestamp - unix_timestamp.rem_euclid(bucket_seconds))
+        .expect("a valid OffsetDateTime remains valid after sub-five-minute truncation")
+}
+
 fn require_confirmation(confirmed: Option<bool>) -> Result<(), OpsError> {
     if confirmed == Some(true) {
         Ok(())
@@ -465,4 +486,17 @@ async fn measurement_kind(
         })
     })
     .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_bucket;
+
+    #[test]
+    fn retry_bucket_is_stable_across_a_second_and_five_minute_boundary() {
+        let before = time::macros::datetime!(2026-08-13 10:04:59 UTC);
+        let after = time::macros::datetime!(2026-08-13 10:05:01 UTC);
+
+        assert_eq!(retry_bucket(before), retry_bucket(after));
+    }
 }

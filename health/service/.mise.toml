@@ -27,7 +27,9 @@ run = "cargo nextest run --workspace --locked --no-tests=pass"
 run = "./scripts/test-integration.sh"
 
 [tasks.audit]
-run = "cargo deny check && cargo audit"
+# rkyv is lock-only through SeaORM's disabled migration CLI feature; cargo-deny
+# verifies the reachable graph, while cargo-audit scans every lock entry.
+run = "cargo deny check && cargo audit --ignore RUSTSEC-2026-0235"
 
 [tasks.build]
 run = "cargo build --workspace --all-targets --all-features --locked"

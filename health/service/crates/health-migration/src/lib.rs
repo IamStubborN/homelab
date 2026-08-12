@@ -1,5 +1,6 @@
 //! Family health service database migrations.
 
+pub use sea_orm_migration::MigratorTrait;
 use sea_orm_migration::prelude::*;
 
 mod m20260804_000001_initial;

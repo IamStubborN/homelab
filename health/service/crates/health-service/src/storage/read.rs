@@ -5,6 +5,10 @@ use uuid::Uuid;
 
 use super::StorageError;
 
+/// Hard safety bound for chart rendering. Phase 1 intentionally does not
+/// downsample; it renders the latest 2,000 matching measurements.
+pub const MAX_CHART_POINTS: u32 = 2_000;
+
 #[derive(Debug, PartialEq)]
 pub struct SeriesPoint {
     pub event_time: OffsetDateTime,
@@ -22,16 +26,22 @@ pub async fn measurement_series(
         .query_all_raw(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
             "SELECT event_time, values_json
-             FROM measurements
-             WHERE person_id = $1::person AND kind = $2
-               AND event_time >= $3 AND event_time <= $4
-               AND deleted_at IS NULL
+             FROM (
+                 SELECT id, event_time, values_json
+                 FROM measurements
+                 WHERE person_id = $1::person AND kind = $2
+                   AND event_time >= $3 AND event_time <= $4
+                   AND deleted_at IS NULL
+                 ORDER BY event_time DESC, id DESC
+                 LIMIT $5
+             ) AS bounded
              ORDER BY event_time ASC, id ASC",
             [
                 person.as_str().into(),
                 kind.as_str().into(),
                 from.into(),
                 to.into(),
+                i64::from(MAX_CHART_POINTS).into(),
             ],
         ))
         .await?;

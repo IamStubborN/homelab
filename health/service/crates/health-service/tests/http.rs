@@ -20,7 +20,11 @@ fn app() -> axum::Router {
         secondary_token_file: secondary,
     })
     .unwrap();
-    mcp::router(sea_orm::DatabaseConnection::default(), tokens)
+    mcp::router(
+        sea_orm::DatabaseConnection::default(),
+        tokens,
+        "127.0.0.1:8080".parse().unwrap(),
+    )
 }
 
 fn mcp_request(token: Option<&str>, body: &'static str) -> Request<Body> {
@@ -101,4 +105,48 @@ async fn mcp_lists_exactly_the_phase_one_tools() {
             "stop_medication",
         ]
     );
+
+    for tool in body["result"]["tools"].as_array().unwrap() {
+        assert_eq!(
+            tool["inputSchema"]["additionalProperties"], false,
+            "{} must reject unknown input fields",
+            tool["name"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_accepts_the_configured_host_port() {
+    let dir = tempfile::tempdir().unwrap();
+    let primary = dir.path().join("primary-token");
+    let secondary = dir.path().join("secondary-token");
+    fs::write(&primary, PRIMARY_TOKEN).unwrap();
+    fs::write(&secondary, "secondary-secret").unwrap();
+    let tokens = TokenMap::load(&Config {
+        database_url: "postgres://unused/health".to_owned(),
+        listen_addr: "127.0.0.1:9090".parse().unwrap(),
+        primary_token_file: primary,
+        secondary_token_file: secondary,
+    })
+    .unwrap();
+    let response = mcp::router(
+        sea_orm::DatabaseConnection::default(),
+        tokens,
+        "127.0.0.1:9090".parse().unwrap(),
+    )
+    .oneshot(
+        Request::post("/internal/mcp")
+            .header("host", "localhost:9090")
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .header("authorization", format!("Bearer {PRIMARY_TOKEN}"))
+            .body(Body::from(
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+            ))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), 200);
 }

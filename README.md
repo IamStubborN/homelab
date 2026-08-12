@@ -54,7 +54,7 @@ Fill real values only in ignored local files:
 - `homeassistant/config/secrets.yaml`
 
 Generate independent random values for `SEARXNG_SECRET`,
-`FIRECRAWL_POSTGRES_PASSWORD`, `FIRECRAWL_BULL_AUTH_KEY`, and the Hindsight
+The Hindsight
 secrets documented in `hindsight/README.md` in the root `.env`. The
 web-research services publish no host ports; authenticated routes are exposed
 through Traefik where configured.

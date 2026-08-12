@@ -1,26 +1,3 @@
-x-firecrawl-environment: &firecrawl-environment
-  REDIS_URL: redis://firecrawl-redis:6379
-  REDIS_RATE_LIMIT_URL: redis://firecrawl-redis:6379
-  PLAYWRIGHT_MICROSERVICE_URL: http://firecrawl-playwright:3000/scrape
-  POSTGRES_USER: firecrawl
-  POSTGRES_PASSWORD: ${FIRECRAWL_POSTGRES_PASSWORD:?set FIRECRAWL_POSTGRES_PASSWORD}
-  POSTGRES_DB: postgres
-  POSTGRES_HOST: firecrawl-postgres
-  POSTGRES_PORT: "5432"
-  USE_DB_AUTHENTICATION: "false"
-  NUM_WORKERS_PER_QUEUE: "2"
-  CRAWL_CONCURRENT_REQUESTS: "2"
-  MAX_CONCURRENT_JOBS: "2"
-  BROWSER_POOL_SIZE: "2"
-  NUQ_RABBITMQ_URL: amqp://firecrawl-rabbitmq:5672
-  BULL_AUTH_KEY: ${FIRECRAWL_BULL_AUTH_KEY:?set FIRECRAWL_BULL_AUTH_KEY}
-  LOGGING_LEVEL: info
-  ENV: local
-  SEARXNG_ENDPOINT: http://searxng:8080
-  OPENAI_BASE_URL: http://cli-proxy-api:8317/v1
-  OPENAI_API_KEY: ${CLIPROXY_FIRECRAWL_KEY:?set CLIPROXY_FIRECRAWL_KEY}
-  MODEL_NAME: gpt-5.3-codex-spark(low)
-
 services:
   omniroute-redis:
     image: redis:8-alpine
@@ -102,13 +79,10 @@ services:
         condition: service_healthy
       cli-proxy-api:
         condition: service_started
-      firecrawl-api:
-        condition: service_healthy
     environment:
       OMNIROUTE_URL: http://omniroute:20129
       OMNIROUTE_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
       BROKER_API_KEY: ${SEARCH_LADDER_API_KEY:?set SEARCH_LADDER_API_KEY}
-      FIRECRAWL_URL: http://firecrawl-api:3002
       SPARK_URL: http://cli-proxy-api:8317/v1
       SPARK_API_KEY: ${CLIPROXY_FIRECRAWL_KEY:?set CLIPROXY_FIRECRAWL_KEY}
       SPARK_MODEL: gpt-5.3-codex-spark
@@ -199,134 +173,6 @@ services:
       - agent-tools
       - proxy
 
-  firecrawl-api:
-    image: ghcr.io/firecrawl/firecrawl@sha256:ad3049ae703d6c6438211ee084e20fcf5eaa0f1cfef54351393df1ca6faff190
-    container_name: firecrawl-api
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    environment:
-      <<: *firecrawl-environment
-      HOST: 0.0.0.0
-      PORT: "3002"
-      EXTRACT_WORKER_PORT: "3004"
-      WORKER_PORT: "3005"
-      # ponytail: cold starts share two CPUs across all bundled workers; allow slow initialization.
-      HARNESS_STARTUP_TIMEOUT_MS: "600000"
-    command: node dist/src/harness.js --start-docker
-    depends_on:
-      firecrawl-postgres:
-        condition: service_healthy
-      firecrawl-redis:
-        condition: service_healthy
-      firecrawl-rabbitmq:
-        condition: service_healthy
-      firecrawl-playwright:
-        condition: service_started
-      cli-proxy-api:
-        condition: service_started
-    mem_limit: 2g
-    cpus: 2.0
-    healthcheck:
-      test: [CMD, node, -e, "fetch('http://127.0.0.1:3002/').then(r=>{if(!r.ok)process.exit(1)})"]
-      interval: 20s
-      timeout: 5s
-      retries: 10
-      start_period: 60s
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=proxy"
-      - "traefik.http.routers.firecrawl.tls=true"
-      - "traefik.http.routers.firecrawl.entrypoints=http,https"
-      - "traefik.http.routers.firecrawl.rule=Host(`crawl.${DOCKER_DOMAIN}`)"
-      - "traefik.http.services.firecrawl.loadbalancer.server.port=3002"
-    networks:
-      - agent-tools
-      - web-research-backend
-      - proxy
-
-  firecrawl-playwright:
-    image: ghcr.io/firecrawl/playwright-service@sha256:6359b0d9070f27400b4a9b615509be06919e40121fc1fdc42d4efeddf02653d2
-    container_name: firecrawl-playwright
-    restart: unless-stopped
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    environment:
-      PORT: "3000"
-      MAX_CONCURRENT_PAGES: "2"
-      BLOCK_MEDIA: "true"
-    tmpfs:
-      - /tmp:rw,nosuid,nodev,size=512m
-    shm_size: 512m
-    mem_limit: 2g
-    cpus: 1.5
-    networks:
-      - agent-tools
-      - web-research-backend
-
-  firecrawl-redis:
-    image: redis:8-alpine
-    container_name: firecrawl-redis
-    restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    command: redis-server --save "" --appendonly no --maxmemory 256mb --maxmemory-policy noeviction
-    tmpfs:
-      - /data:rw,nosuid,nodev,noexec,size=256m
-    mem_limit: 320m
-    healthcheck:
-      test: [CMD, redis-cli, ping]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - web-research-backend
-
-  firecrawl-rabbitmq:
-    image: rabbitmq:3-alpine
-    container_name: firecrawl-rabbitmq
-    restart: unless-stopped
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    tmpfs:
-      - /var/lib/rabbitmq:rw,nosuid,nodev,noexec,size=256m
-      - /tmp:rw,nosuid,nodev,noexec,size=32m
-    mem_limit: 384m
-    healthcheck:
-      test: [CMD, rabbitmq-diagnostics, -q, check_running]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    networks:
-      - web-research-backend
-
-  firecrawl-postgres:
-    image: ghcr.io/firecrawl/nuq-postgres@sha256:aed86f62858f29bd971abddcdeb301c12888098d2cf5d33c1ba42b053bc460f6
-    container_name: firecrawl-postgres
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    environment:
-      POSTGRES_USER: firecrawl
-      POSTGRES_PASSWORD: ${FIRECRAWL_POSTGRES_PASSWORD:?set FIRECRAWL_POSTGRES_PASSWORD}
-      POSTGRES_DB: postgres
-    volumes:
-      - firecrawl_postgres:/var/lib/postgresql/data
-    mem_limit: 768m
-    healthcheck:
-      test: [CMD-SHELL, "pg_isready -U firecrawl -d postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-    networks:
-      - web-research-backend
-
 networks:
   agent-tools:
     name: agent-tools
@@ -336,7 +182,6 @@ networks:
     external: true
 
 volumes:
-  firecrawl_postgres:
   omniroute_data:
   omniroute_redis:
   search_ladder_data:

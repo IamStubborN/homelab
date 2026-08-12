@@ -30,7 +30,21 @@ keeps upgrades non-destructive and avoids silently starting with empty state.
 
 `compose.media-orchestrator.yml` is included by the root `compose.yml` and is
 managed as part of the `homelab` Compose project. Application images must be
-built before running a root deployment.
+published before running a root deployment.
+
+The private application repository exports a four-file release contract. Copy
+one real export to the ignored `media/release/` directory, validate it with
+`MEDIA_RELEASE_DIR=/absolute/path/to/media/release
+hermes/scripts/deploy-preflight`, and set `MEDIA_SERVICE_IMAGE` and
+`DOWNLOAD_RUNNER_IMAGE` to the exact immutable references in its `release.json`.
+The tracked `media/release.example/` directory is deliberately non-production
+and exists only for tests. Registry authentication and image publication remain
+explicit operator steps; this repository does not log in, publish, or deploy.
+
+The private guarded deploy must be invoked with explicit paths, for example
+`HOMELAB_ROOT=/absolute/path/to/homelab` and
+`MEDIA_RELEASE_DIR=/absolute/path/to/homelab/media/release`. It never requires a
+private source checkout on the Docker host and does not infer sibling paths.
 
 ## Prerequisites
 

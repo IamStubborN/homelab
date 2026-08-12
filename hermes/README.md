@@ -112,11 +112,20 @@ one successful connection, an ordinary Hermes restart can therefore retain the
 tool catalog while media-service is temporarily unavailable. A new profile
 volume has no cache: its first boot requires media-service to be reachable.
 
-Before recreating Hermes, run `./scripts/deploy-preflight`. It regenerates the
-runtime `tools/list` snapshot from the sibling media-orchestrator checkout and
+Before recreating Hermes, copy a real private export to the ignored
+`media/release/` directory and run `MEDIA_RELEASE_DIR=/absolute/path/to/media/release
+./scripts/deploy-preflight`. The preflight validates all four release files and
 fails closed when the checked-in schema artifact differs. Use
-`python3 scripts/check-media-capabilities --sync` intentionally when the MCP
-contract changes, review both generated artifacts, and rerun the preflight.
+`MEDIA_RELEASE_DIR=/absolute/path/to/media/release python3
+scripts/check-media-capabilities --sync` intentionally when the MCP contract
+changes, review both generated artifacts, and rerun the preflight. The tracked
+`media/release.example/` bundle is sanitized test data and cannot be deployed.
+
+Private guarded deployment requires explicit `HOMELAB_ROOT` and
+`MEDIA_RELEASE_DIR` paths; it does not discover sibling checkouts. Promotion is
+still blocked until the operator logs in to the private registry and supplies
+real published image digests. Export, preflight, and this repository perform no
+registry login, publishing, or deployment.
 
 The preflight verifies this mounted artifact before containers are recreated.
 No Hermes image build is required.

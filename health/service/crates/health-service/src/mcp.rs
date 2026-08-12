@@ -39,6 +39,7 @@ struct AddMeasurementInput {
     source: Option<String>,
     status: Option<String>,
     event_time: Option<String>,
+    source_event_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -59,6 +60,7 @@ struct AddMealInput {
     calories: Option<i32>,
     status: Option<String>,
     event_time: Option<String>,
+    source_event_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -69,6 +71,7 @@ struct AddSymptomInput {
     severity: Option<i32>,
     status: Option<String>,
     event_time: Option<String>,
+    source_event_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -80,6 +83,7 @@ struct AddSleepRecordInput {
     quality: Option<i32>,
     notes: Option<String>,
     status: Option<String>,
+    source_event_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -179,6 +183,7 @@ impl HealthMcp {
             source: input.source,
             status: parse_optional(&input.status, "status")?,
             event_time: parse_optional_time(&input.event_time, "event_time")?,
+            source_event_id: input.source_event_id,
         };
         tool_outcome(ops::add_measurement(&self.db, request_ctx(&parts)?, params).await)
     }
@@ -222,6 +227,7 @@ impl HealthMcp {
             calories: input.calories,
             status: parse_optional(&input.status, "status")?,
             event_time: parse_optional_time(&input.event_time, "event_time")?,
+            source_event_id: input.source_event_id,
         };
         tool_outcome(ops::add_meal(&self.db, request_ctx(&parts)?, params).await)
     }
@@ -238,6 +244,7 @@ impl HealthMcp {
             severity: input.severity,
             status: parse_optional(&input.status, "status")?,
             event_time: parse_optional_time(&input.event_time, "event_time")?,
+            source_event_id: input.source_event_id,
         };
         tool_outcome(ops::add_symptom(&self.db, request_ctx(&parts)?, params).await)
     }
@@ -255,6 +262,7 @@ impl HealthMcp {
             quality: input.quality,
             notes: input.notes,
             status: parse_optional(&input.status, "status")?,
+            source_event_id: input.source_event_id,
         };
         tool_outcome(ops::add_sleep_record(&self.db, request_ctx(&parts)?, params).await)
     }

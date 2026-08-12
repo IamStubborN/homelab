@@ -11,8 +11,7 @@ use crate::{charts, storage};
 const CONFIRMATION_REQUIRED: &str = "confirmation_required: ask the user to confirm with the ✅ card, then retry with confirmed=true";
 pub const MAX_QUERY_LIMIT: u32 = 200;
 pub const MAX_CHART_DAYS: u32 = 3650;
-const DEFAULT_EVENT_BUCKET_MINUTES: i64 = 5;
-const DEFAULT_EVENT_BUCKET_ROLLOVER_GRACE_SECONDS: i64 = 30;
+const MAX_SOURCE_EVENT_ID_BYTES: usize = 200;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OpsError {
@@ -36,6 +35,7 @@ pub struct AddMeasurementParams {
     pub source: Option<String>,
     pub status: Option<FactStatus>,
     pub event_time: Option<OffsetDateTime>,
+    pub source_event_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -54,6 +54,7 @@ pub struct AddMealParams {
     pub calories: Option<i32>,
     pub status: Option<FactStatus>,
     pub event_time: Option<OffsetDateTime>,
+    pub source_event_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -63,6 +64,7 @@ pub struct AddSymptomParams {
     pub severity: Option<i32>,
     pub status: Option<FactStatus>,
     pub event_time: Option<OffsetDateTime>,
+    pub source_event_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -73,6 +75,7 @@ pub struct AddSleepRecordParams {
     pub quality: Option<i32>,
     pub notes: Option<String>,
     pub status: Option<FactStatus>,
+    pub source_event_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -161,7 +164,8 @@ pub async fn add_measurement(
             values: params.values,
             source: params.source,
             status: status(params.status),
-            event_time: event_time_or_retry_bucket(params.event_time),
+            event_time: params.event_time.unwrap_or_else(OffsetDateTime::now_utc),
+            source_event_id: validate_source_event_id(params.source_event_id)?,
         },
     )
     .await?)
@@ -203,7 +207,8 @@ pub async fn add_meal(
             items: params.items,
             calories: params.calories,
             status: status(params.status),
-            event_time: event_time_or_retry_bucket(params.event_time),
+            event_time: params.event_time.unwrap_or_else(OffsetDateTime::now_utc),
+            source_event_id: validate_source_event_id(params.source_event_id)?,
         },
     )
     .await?)
@@ -222,7 +227,8 @@ pub async fn add_symptom(
             description: params.description,
             severity: params.severity,
             status: status(params.status),
-            event_time: event_time_or_retry_bucket(params.event_time),
+            event_time: params.event_time.unwrap_or_else(OffsetDateTime::now_utc),
+            source_event_id: validate_source_event_id(params.source_event_id)?,
         },
     )
     .await?)
@@ -249,6 +255,7 @@ pub async fn add_sleep_record(
             quality: params.quality,
             notes: params.notes,
             status: status(params.status),
+            source_event_id: validate_source_event_id(params.source_event_id)?,
         },
     )
     .await?)
@@ -445,15 +452,20 @@ fn status(status: Option<FactStatus>) -> FactStatus {
     status.unwrap_or(FactStatus::UserReported)
 }
 
-fn event_time_or_retry_bucket(event_time: Option<OffsetDateTime>) -> OffsetDateTime {
-    event_time.unwrap_or_else(|| retry_bucket(OffsetDateTime::now_utc()))
-}
-
-fn retry_bucket(now: OffsetDateTime) -> OffsetDateTime {
-    let bucket_seconds = DEFAULT_EVENT_BUCKET_MINUTES * 60;
-    let unix_timestamp = now.unix_timestamp() - DEFAULT_EVENT_BUCKET_ROLLOVER_GRACE_SECONDS;
-    OffsetDateTime::from_unix_timestamp(unix_timestamp - unix_timestamp.rem_euclid(bucket_seconds))
-        .expect("a valid OffsetDateTime remains valid after sub-five-minute truncation")
+fn validate_source_event_id(value: Option<String>) -> Result<Option<String>, OpsError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_empty()
+        || value.len() > MAX_SOURCE_EVENT_ID_BYTES
+        || !value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+    {
+        return Err(OpsError::InvalidParameter {
+            field: "source_event_id",
+            value: "must be 1-200 printable ASCII bytes without spaces".to_owned(),
+        });
+    }
+    Ok(Some(value))
 }
 
 fn require_confirmation(confirmed: Option<bool>) -> Result<(), OpsError> {
@@ -490,13 +502,16 @@ async fn measurement_kind(
 
 #[cfg(test)]
 mod tests {
-    use super::retry_bucket;
+    use super::validate_source_event_id;
 
     #[test]
-    fn retry_bucket_is_stable_across_a_second_and_five_minute_boundary() {
-        let before = time::macros::datetime!(2026-08-13 10:04:59 UTC);
-        let after = time::macros::datetime!(2026-08-13 10:05:01 UTC);
-
-        assert_eq!(retry_bucket(before), retry_bucket(after));
+    fn source_event_id_is_bounded_and_transport_safe() {
+        assert_eq!(
+            validate_source_event_id(Some("telegram:42:100".to_owned())).unwrap(),
+            Some("telegram:42:100".to_owned())
+        );
+        for invalid in ["".to_owned(), "contains space".to_owned(), "x".repeat(201)] {
+            assert!(validate_source_event_id(Some(invalid)).is_err());
+        }
     }
 }

@@ -1,4 +1,6 @@
-use health_core::{FactStatus, MeasurementKind, Person, RequestCtx, event_dedup_hash};
+use health_core::{
+    FactStatus, MeasurementKind, Person, RequestCtx, event_dedup_hash, source_event_dedup_hash,
+};
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait, Value,
 };
@@ -18,6 +20,7 @@ pub struct AddMeasurement {
     pub source: Option<String>,
     pub status: FactStatus,
     pub event_time: OffsetDateTime,
+    pub source_event_id: Option<String>,
 }
 
 pub struct AddMeal {
@@ -27,6 +30,7 @@ pub struct AddMeal {
     pub calories: Option<i32>,
     pub status: FactStatus,
     pub event_time: OffsetDateTime,
+    pub source_event_id: Option<String>,
 }
 
 pub struct AddSymptom {
@@ -35,6 +39,7 @@ pub struct AddSymptom {
     pub severity: Option<i32>,
     pub status: FactStatus,
     pub event_time: OffsetDateTime,
+    pub source_event_id: Option<String>,
 }
 
 pub struct AddSleepRecord {
@@ -44,6 +49,7 @@ pub struct AddSleepRecord {
     pub quality: Option<i32>,
     pub notes: Option<String>,
     pub status: FactStatus,
+    pub source_event_id: Option<String>,
 }
 
 pub struct AddMedication {
@@ -220,17 +226,30 @@ async fn insert_event(
     Ok(outcome)
 }
 
+fn routine_event_dedup(
+    person: Person,
+    event_type: &str,
+    event_time: OffsetDateTime,
+    normalized_values: &serde_json::Value,
+    source_event_id: Option<&str>,
+) -> [u8; 32] {
+    match source_event_id {
+        Some(source_event_id) => source_event_dedup_hash(person, event_type, source_event_id),
+        None => event_dedup_hash(person, event_type, event_time, normalized_values, None),
+    }
+}
+
 pub async fn add_measurement(
     db: &DatabaseConnection,
     ctx: &RequestCtx,
     args: AddMeasurement,
 ) -> Result<WriteOutcome, StorageError> {
-    let dedup = event_dedup_hash(
+    let dedup = routine_event_dedup(
         args.person,
         args.kind.as_str(),
         args.event_time,
         &args.values,
-        None,
+        args.source_event_id.as_deref(),
     );
     let new_value = args.values.clone();
 
@@ -264,7 +283,13 @@ pub async fn add_meal(
         "description": args.description,
         "calories": args.calories,
     });
-    let dedup = event_dedup_hash(args.person, "meal", args.event_time, &normalized, None);
+    let dedup = routine_event_dedup(
+        args.person,
+        "meal",
+        args.event_time,
+        &normalized,
+        args.source_event_id.as_deref(),
+    );
     let new_value = serde_json::json!({
         "description": args.description,
         "items": args.items,
@@ -301,7 +326,13 @@ pub async fn add_symptom(
         "description": args.description,
         "severity": args.severity,
     });
-    let dedup = event_dedup_hash(args.person, "symptom", args.event_time, &normalized, None);
+    let dedup = routine_event_dedup(
+        args.person,
+        "symptom",
+        args.event_time,
+        &normalized,
+        args.source_event_id.as_deref(),
+    );
     let new_value = normalized.clone();
 
     insert_event(
@@ -333,12 +364,12 @@ pub async fn add_sleep_record(
         "start": args.start_time.to_utc().format(&Rfc3339).expect("valid RFC 3339 time"),
         "end": args.end_time.to_utc().format(&Rfc3339).expect("valid RFC 3339 time"),
     });
-    let dedup = event_dedup_hash(
+    let dedup = routine_event_dedup(
         args.person,
         "sleep_record",
         args.start_time,
         &normalized,
-        None,
+        args.source_event_id.as_deref(),
     );
     let new_value = serde_json::json!({
         "start_time": args.start_time,

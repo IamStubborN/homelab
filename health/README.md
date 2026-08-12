@@ -11,9 +11,14 @@ Create the external network and database volume once on a new Docker host,
 before the first `up`:
 
 ```bash
+set -eu
 if docker network inspect health-internal >/dev/null 2>&1; then
-  test "$(docker network inspect -f '{{.Internal}}' health-internal)" = true
-  test "$(docker network inspect -f '{{.Attachable}}' health-internal)" = true
+  internal=$(docker network inspect -f '{{.Internal}}' health-internal)
+  attachable=$(docker network inspect -f '{{.Attachable}}' health-internal)
+  if [ "$internal" != true ] || [ "$attachable" != true ]; then
+    echo "health-internal must have Internal=true and Attachable=true" >&2
+    exit 1
+  fi
 else
   docker network create --internal --attachable health-internal
 fi
@@ -72,16 +77,31 @@ restores. The ignored `health/backups/` directory is local staging only; the
 automated Drive backup remains a future phase.
 
 ```bash
-mkdir -p health/backups
-backup="health/backups/health-$(date -u +%Y%m%dT%H%M%SZ).dump"
+set -eu
+umask 077
+install -d -m 0700 health/backups
+docker compose up -d health-postgres
+docker compose up --wait health-postgres
+backup=$(mktemp "health/backups/health-$(date -u +%Y%m%dT%H%M%SZ).dump.XXXXXX")
+verify_db="health_restore_verify_$(date -u +%Y%m%d%H%M%S)_$$"
+verify_db_created=false
+cleanup_restore_verify() {
+  if [ "$verify_db_created" = true ]; then
+    docker compose exec -T health-postgres dropdb -U health "$verify_db"
+  fi
+}
+trap cleanup_restore_verify EXIT HUP INT TERM
 docker compose exec -T health-postgres pg_dump -U health -d health --format=custom > "$backup"
+chmod 0600 "$backup"
 test -s "$backup"
-docker compose exec -T health-postgres createdb -U health health_restore_verify
-docker compose exec -T health-postgres pg_restore -U health -d health_restore_verify --exit-on-error < "$backup"
-docker compose exec -T health-postgres psql -U health -d health_restore_verify -v ON_ERROR_STOP=1 \
-  -c "SELECT count(*) = 2 AS people_seeded FROM people;" \
-  -c "SELECT to_regclass('public.audit_log') IS NOT NULL AS audit_log_restored;"
-docker compose exec -T health-postgres dropdb -U health health_restore_verify
+docker compose exec -T health-postgres createdb -U health "$verify_db"
+verify_db_created=true
+docker compose exec -T health-postgres pg_restore -U health -d "$verify_db" --exit-on-error < "$backup"
+test "$(docker compose exec -T health-postgres psql -U health -d "$verify_db" -v ON_ERROR_STOP=1 -tAc "SELECT count(*) = 2 FROM people")" = t
+test "$(docker compose exec -T health-postgres psql -U health -d "$verify_db" -v ON_ERROR_STOP=1 -tAc "SELECT to_regclass('public.audit_log') IS NOT NULL")" = t
+docker compose exec -T health-postgres dropdb -U health "$verify_db"
+verify_db_created=false
+trap - EXIT HUP INT TERM
 ```
 
 Deploy from the repository root so the health and embedded Hermes services use
@@ -131,8 +151,8 @@ mise run audit
 
 Phase 1 core is implemented locally: the Rust service includes the PostgreSQL
 schema, token-to-profile authentication, typed MCP write/read operations,
-deduplication (explicit source timestamps, with a five-minute fallback bucket
-and 30-second rollover grace for immediate retries when metadata is unavailable),
+deduplication (explicit stable source event IDs when the transport exposes
+them, otherwise exact clinical event timestamps only),
 append-only measurement corrections, audit records, validation, and PNG
 measurement charts. Remote homelab deployment and Telegram acceptance
 remain operational verification steps; later document/Drive sync, reminders,

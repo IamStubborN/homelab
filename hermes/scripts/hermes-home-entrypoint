@@ -19,6 +19,13 @@ read_secret HOMEASSISTANT_API_TOKEN /run/secrets/homeassistant_api_token
 read_secret OPENAI_API_KEY /run/secrets/omniroute_api_key
 export OPENAI_BASE_URL=http://omniroute:20129/v1
 
+python_packages=/opt/data/python-packages
+if [ ! -d "$python_packages/youtube_transcript_api" ]; then
+    uv pip install --target "$python_packages" youtube-transcript-api==1.2.4
+    chown -R 10000:10000 "$python_packages"
+fi
+export PYTHONPATH="$python_packages${PYTHONPATH:+:$PYTHONPATH}"
+
 runtime_secret_dir=/run/hermes-home-secrets
 install -d -o 10000 -g 10000 -m 0700 "$runtime_secret_dir"
 for secret in media_api_token broker_api_token webhook_hmac search_ladder_api_key; do

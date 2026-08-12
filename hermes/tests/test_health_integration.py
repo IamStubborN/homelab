@@ -121,6 +121,15 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
                 HOMELAB_ROOT / f"health/secrets/{profile}.health_api_token",
             )
 
+    def test_managed_profiles_use_the_runtime_supported_config_schema(self):
+        for profile in PROFILES:
+            config = yaml.safe_load(
+                (HERMES_ROOT / f"profiles/{profile}/config/config.yaml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(config["_config_version"], 34)
+
     def test_entrypoint_copies_health_without_exporting_it(self):
         entrypoint = read("scripts/hermes-home-entrypoint")
         self.assertNotIn("read_secret HEALTH_API_TOKEN", entrypoint)
@@ -178,8 +187,10 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
                 "set -eu\n"
                 '[ "$1" = -o ] && [ "$2" = 10000 ]\n'
                 '[ "$3" = -g ] && [ "$4" = 10000 ]\n'
-                '[ "$5" = -m ] && [ "$6" = 0640 ]\n'
+                '[ "$5" = -m ]\n'
                 '[ -s "$7" ]\n'
+                'if [ "$6" = 0640 ]; then cp "$7" "$8"; exit 0; fi\n'
+                '[ "$6" = 0600 ]\n'
                 ': > "$INSTALL_ATTEMPTED"\n'
                 "exit 73\n",
                 encoding="utf-8",
@@ -191,7 +202,7 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
                 "#!/bin/sh\nset -eu\n"
                 + function.group(0)
                 + '\nmaterialize_hermes_config "$1" "$2" "$3" "$4" '
-                '"$5" "$6" "$7"\n',
+                '"$5" "$6" "$7" "$8"\n',
                 encoding="utf-8",
             )
             environment = os.environ.copy()
@@ -204,8 +215,9 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
                     os.fspath(pathlib.Path(os.sys.executable)),
                     str(HERMES_ROOT / "scripts/merge_hermes_config.py"),
                     str(HERMES_ROOT / "profiles/andrii/config/config.yaml"),
-                    str(current),
                     str(root / "persisted-config.yaml"),
+                    str(current),
+                    str(root / "runtime-config.yaml"),
                     str(secret_path),
                     str(temp_dir),
                 ],
@@ -218,7 +230,78 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
             self.assertTrue(install_attempted.is_file())
             self.assertEqual(list(temp_dir.iterdir()), [])
             self.assertNotIn(secret, result.stdout + result.stderr)
-            self.assertFalse((root / "persisted-config.yaml").exists())
+            self.assertNotIn(
+                secret,
+                (root / "persisted-config.yaml").read_text(encoding="utf-8"),
+            )
+            self.assertFalse((root / "runtime-config.yaml").exists())
+
+    def test_entrypoint_keeps_health_bearer_only_in_runtime_config_across_restart(self):
+        entrypoint = read("scripts/hermes-home-entrypoint")
+        function = re.search(
+            r"materialize_hermes_config\(\) \{\n.*?\n\}",
+            entrypoint,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(function)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            persistent = root / "persistent"
+            runtime = root / "run"
+            temporary = root / "tmp"
+            bin_dir = root / "bin"
+            for path in (persistent, runtime, temporary, bin_dir):
+                path.mkdir()
+            active = persistent / "config.yaml"
+            active.write_text("model:\n  default: kept/model\n", encoding="utf-8")
+            secret_path = runtime / "health-token"
+            secret = "runtime-only-health-token"
+            secret_path.write_text(f"{secret}\n", encoding="utf-8")
+
+            install = bin_dir / "install"
+            install.write_text(
+                "#!/bin/sh\nset -eu\n"
+                "while [ $# -gt 2 ]; do shift 2; done\n"
+                'cp "$1" "$2"\n',
+                encoding="utf-8",
+            )
+            install.chmod(0o755)
+            probe = root / "probe.sh"
+            probe.write_text(
+                "#!/bin/sh\nset -eu\n"
+                + function.group(0)
+                + '\nmaterialize_hermes_config "$1" "$2" "$3" "$4" '
+                '"$5" "$6" "$7" "$8"\n',
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
+            command = [
+                "sh",
+                str(probe),
+                os.fspath(pathlib.Path(os.sys.executable)),
+                str(HERMES_ROOT / "scripts/merge_hermes_config.py"),
+                str(HERMES_ROOT / "profiles/andrii/config/config.yaml"),
+                str(persistent / "config.base.yaml"),
+                str(active),
+                str(runtime / "config.yaml"),
+                str(secret_path),
+                str(temporary),
+            ]
+
+            for _ in range(2):
+                subprocess.run(command, env=environment, check=True)
+                self.assertTrue(active.is_symlink())
+                self.assertIn(secret, (runtime / "config.yaml").read_text())
+                self.assertNotIn(
+                    secret, (persistent / "config.base.yaml").read_text()
+                )
+                base = yaml.safe_load(
+                    (persistent / "config.base.yaml").read_text(encoding="utf-8")
+                )
+                self.assertNotIn("headers", base["mcp_servers"]["health"])
+                (runtime / "config.yaml").unlink()
 
     def test_install_skills_executes_current_catalog_and_legacy_tombstones(self):
         entrypoint = read("scripts/hermes-home-entrypoint")
@@ -288,6 +371,48 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
 
 
 class EmbeddedHealthConfigTests(unittest.TestCase):
+    def test_sanitized_persistent_base_removes_health_bearer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            current = root / "current.yaml"
+            output = root / "base.yaml"
+            bearer = "legacy-persistent-health-bearer"
+            current.write_text(
+                yaml.safe_dump(
+                    {
+                        "custom_keep": {"value": "kept"},
+                        "mcp_servers": {
+                            "health": {
+                                "url": "http://old.invalid/mcp",
+                                "headers": {"Authorization": f"Bearer {bearer}"},
+                            }
+                        },
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    os.fspath(pathlib.Path(os.sys.executable)),
+                    str(HERMES_ROOT / "scripts/merge_hermes_config.py"),
+                    str(HERMES_ROOT / "profiles/andrii/config/config.yaml"),
+                    str(current),
+                    str(output),
+                    "--sanitize-health",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            persisted = output.read_text(encoding="utf-8")
+            self.assertNotIn(bearer, persisted)
+            persisted_yaml = yaml.safe_load(persisted)
+            self.assertNotIn("headers", persisted_yaml["mcp_servers"]["health"])
+            self.assertEqual(persisted_yaml["custom_keep"]["value"], "kept")
+
     def test_generated_profile_exactly_replaces_health_from_private_file(self):
         for profile in PROFILES:
             with tempfile.TemporaryDirectory() as directory:
@@ -500,6 +625,18 @@ class EmbeddedHealthSkillContractTests(unittest.TestCase):
             "«покажи вес за месяц» | `generate_chart(kind=weight, days=30)`; send the returned PNG to the chat",
             self.skill,
         )
+        self.assertIn(
+            "query the current measurement first and reuse its complete `systolic`, `diastolic`, and `pulse` values",
+            self.compact,
+        )
+        self.assertIn(
+            'new_values={systolic:<current>,diastolic:<current>,pulse:83}',
+            self.skill,
+        )
+        self.assertNotIn("new_values={value:83}", self.skill)
+        self.assertIn("`add_condition`", self.skill)
+        self.assertIn("confirmed=true", self.skill)
+        self.assertIn("Telegram source message timestamp", self.compact)
 
 
 if __name__ == "__main__":

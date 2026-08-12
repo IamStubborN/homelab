@@ -123,4 +123,16 @@ mod charts_tests {
 
         assert!(matches!(error, charts::ChartError::Render(_)));
     }
+
+    #[test]
+    fn chart_date_labels_use_europe_kyiv_across_utc_midnight_and_dst() {
+        assert_eq!(
+            charts::kyiv_date_label(time::macros::datetime!(2026-03-28 22:30 UTC)),
+            "29.03"
+        );
+        assert_eq!(
+            charts::kyiv_date_label(time::macros::datetime!(2026-10-24 22:30 UTC)),
+            "25.10"
+        );
+    }
 }

@@ -37,7 +37,7 @@ Times use RFC 3339; dates use `YYYY-MM-DD`.
 | `add_sleep_record` | `person?`, `start_time`, `end_time`, `quality?`, `notes?`, `status?` |
 | `add_medication` | `person?`, `name`, `dose?`, `schedule?`, `started_at?`, `status?`, `confirmed?` |
 | `stop_medication` | `person?`, `medication_id`, `stopped_at?`, `reason?`, `confirmed?` |
-| `add_condition` | `person?`, `name`, `notes?`, `diagnosed_at?`, `status?` |
+| `add_condition` | `person?`, `name`, `notes?`, `diagnosed_at?`, `status?`, `confirmed?` |
 | `add_allergy` | `person?`, `allergen`, `reaction?`, `severity?`, `status?` |
 | `add_lab_result` | `person?`, `test_date`, `test_name`, `value`, `unit?`, `reference_min?`, `reference_max?`, `flag?`, `laboratory?`, `source_document?`, `status?` |
 | `query_health_data` | `person?`, `section`, `limit?`, `from?`, `to?` |
@@ -52,9 +52,18 @@ For medication, condition, and correction operations, first use native
 `clarify` with exactly three buttons:
 `✅ Записать / ✏️ Исправить / 🚫 Отмена`. Call no write tool before the choice.
 Only after `✅ Записать`, call the tool. Pass `confirmed=true` to
-`add_medication`, `stop_medication`, and `correct_measurement`. `add_condition`
-has no `confirmed` parameter, so enforce its confirmation before the call and
-send only catalogued fields. Edit returns to correction; cancel writes nothing.
+`add_medication`, `stop_medication`, `add_condition`, and
+`correct_measurement`. Edit returns to correction; cancel writes nothing.
+
+For routine event writes, pass `event_time` from the Telegram source message
+timestamp. Reuse that stable timestamp when retrying the same source message.
+If source metadata is unavailable, omit `event_time`; the service uses a short
+deterministic retry bucket, so this fallback is for immediate retries only.
+
+Before correcting a blood-pressure pulse, query the current measurement first
+and reuse its complete `systolic`, `diastolic`, and `pulse` values. The
+`correct_measurement.new_values` object always replaces the full typed value;
+never send a partial `{value:83}` object for blood pressure.
 
 Repeat allergies and laboratory fields before writing when interpretation is
 unclear. Never invent missing values.
@@ -91,5 +100,6 @@ unclear. Never invent missing values.
 | «Спал с 23:10 до 07:00, качество 4» | `add_sleep_record(start_time=<resolved RFC3339>, end_time=<resolved RFC3339>, quality=4)` |
 | «У Валентины болит голова, сила 6 из 10» | `add_symptom(person=valentyna, description="головная боль", severity=6)` |
 | «Начал принимать магний 200 мг вечером» | show the confirmation card; after ✅ call `add_medication(name="магний", dose="200 mg", schedule="вечером", confirmed=true)` |
-| «Исправь тот пульс на 83» | resolve the record, show the confirmation card, then call `correct_measurement(measurement_id=<private id>, new_values={value:83}, reason="user correction", confirmed=true)` after ✅ |
+| «Исправь тот пульс на 83» | query and resolve the current blood-pressure record, show the confirmation card, then after ✅ call `correct_measurement(measurement_id=<private id>, new_values={systolic:<current>,diastolic:<current>,pulse:83}, reason="user correction", confirmed=true)` |
+| «У меня диагностировали гипертонию» | show the confirmation card; after ✅ call `add_condition(name="гипертония", status=confirmed_by_doctor, confirmed=true)` |
 | «Какие лекарства сейчас принимает Andrii?» | `query_health_data(person=andrii, section="medications")` |

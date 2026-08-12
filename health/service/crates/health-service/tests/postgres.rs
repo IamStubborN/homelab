@@ -1,7 +1,7 @@
 #![cfg(feature = "integration-tests")]
 
+use health_migration::MigratorTrait;
 use health_service::{auth::TokenMap, config::Config, mcp, ops, storage};
-use sea_orm_migration::MigratorTrait;
 use tower::ServiceExt;
 
 pub async fn fresh_db() -> sea_orm::DatabaseConnection {
@@ -79,7 +79,11 @@ async fn ops_defaults_person_status_and_event_time() {
     let event_time = row
         .try_get::<time::OffsetDateTime>("", "event_time")
         .unwrap();
-    assert!(event_time >= before && event_time <= after);
+    assert!(event_time <= after);
+    assert!(event_time >= before - time::Duration::minutes(6));
+    assert_eq!(event_time.minute() % 5, 0);
+    assert_eq!(event_time.second(), 0);
+    assert_eq!(event_time.nanosecond(), 0);
 }
 
 #[tokio::test]
@@ -216,6 +220,86 @@ async fn ops_stop_and_correction_require_confirmation_before_storage() {
             .to_string()
             .starts_with("confirmation_required")
     );
+}
+
+#[tokio::test]
+async fn ops_condition_requires_confirmation_before_storage() {
+    for confirmed in [None, Some(false)] {
+        let db = fresh_db().await;
+        let error = ops::add_condition(
+            &db,
+            &ctx_valentyna(),
+            ops::AddConditionParams {
+                person: None,
+                name: "Hypertension".into(),
+                notes: None,
+                diagnosed_at: None,
+                status: None,
+                confirmed,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().starts_with("confirmation_required"));
+
+        use sea_orm::ConnectionTrait;
+        let row = db
+            .query_one_raw(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Postgres,
+                "SELECT count(*)::bigint AS count FROM conditions".to_owned(),
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.try_get::<i64>("", "count").unwrap(), 0);
+    }
+}
+
+#[tokio::test]
+async fn ops_rejects_non_positive_sleep_interval_before_storage() {
+    for end_time in [
+        time::macros::datetime!(2026-08-05 23:00 +03:00),
+        time::macros::datetime!(2026-08-05 22:59 +03:00),
+    ] {
+        let db = fresh_db().await;
+        let error = ops::add_sleep_record(
+            &db,
+            &ctx_valentyna(),
+            ops::AddSleepRecordParams {
+                person: None,
+                start_time: time::macros::datetime!(2026-08-05 23:00 +03:00),
+                end_time,
+                quality: None,
+                notes: None,
+                status: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid end_time: must be after start_time"
+        );
+    }
+}
+
+#[tokio::test]
+async fn database_rejects_non_positive_sleep_interval() {
+    let db = fresh_db().await;
+    use sea_orm::ConnectionTrait;
+    let result = db
+        .execute_unprepared(
+            "INSERT INTO sleep_records (
+                id, person_id, start_time, end_time, status, actor, via, event_time, dedup_hash
+             ) VALUES (
+                gen_random_uuid(), 'andrii', '2026-08-05 20:00:00Z',
+                '2026-08-05 20:00:00Z', 'user_reported', 'andrii',
+                'hermes_andrii', '2026-08-05 20:00:00Z', decode(repeat('00', 32), 'hex')
+             )",
+        )
+        .await;
+
+    assert!(result.is_err());
 }
 
 #[tokio::test]
@@ -587,6 +671,42 @@ async fn latest_measurement_series_applies_limit_in_sql_and_returns_chronologica
 }
 
 #[tokio::test]
+async fn chart_measurement_series_is_bounded_in_sql_to_latest_rows() {
+    let db = fresh_db().await;
+    use sea_orm::ConnectionTrait;
+    db.execute_unprepared(&format!(
+        "INSERT INTO measurements (
+            id, person_id, kind, values_json, status, actor, via, event_time, dedup_hash
+         )
+         SELECT gen_random_uuid(), 'andrii', 'pulse', jsonb_build_object('value', value),
+                'user_reported', 'andrii', 'hermes_andrii',
+                '2026-01-01 00:00:00Z'::timestamptz + value * interval '1 second',
+                decode(md5(value::text) || md5(('x' || value)::text), 'hex')
+         FROM generate_series(0, {}) AS value",
+        storage::MAX_CHART_POINTS
+    ))
+    .await
+    .unwrap();
+
+    let rows = storage::measurement_series(
+        &db,
+        health_core::Person::Andrii,
+        health_core::MeasurementKind::Pulse,
+        time::macros::datetime!(2026-01-01 00:00 UTC),
+        time::macros::datetime!(2026-01-02 00:00 UTC),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(rows.len(), storage::MAX_CHART_POINTS as usize);
+    assert_eq!(rows.first().unwrap().values["value"], 1);
+    assert_eq!(
+        rows.last().unwrap().values["value"],
+        storage::MAX_CHART_POINTS
+    );
+}
+
+#[tokio::test]
 async fn ops_rejects_excessive_query_limit_and_chart_days_before_database_access() {
     let db = sea_orm::DatabaseConnection::default();
     let query_error = ops::query_health_data(
@@ -733,7 +853,7 @@ fn mcp_app(db: sea_orm::DatabaseConnection) -> axum::Router {
         valentyna_token_file: valentyna,
     })
     .unwrap();
-    mcp::router(db, tokens)
+    mcp::router(db, tokens, "127.0.0.1:8080".parse().unwrap())
 }
 
 fn mcp_call(
@@ -828,6 +948,87 @@ async fn concurrent_mcp_requests_keep_authenticated_profiles_isolated() {
             .try_get::<serde_json::Value>("", "values_json")
             .unwrap(),
         serde_json::json!({"value": 78.2})
+    );
+}
+
+#[tokio::test]
+async fn valentyna_mcp_rejects_mistaken_person_id_without_writing() {
+    let db = fresh_db().await;
+    let response = mcp_json(
+        mcp_app(db.clone())
+            .oneshot(mcp_call(
+                "valentyna-secret",
+                3,
+                "add_measurement",
+                serde_json::json!({
+                    "person_id": "andrii",
+                    "kind": "weight",
+                    "values": {"value": 78.2},
+                    "event_time": "2026-08-12T10:00:00Z"
+                }),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    assert!(
+        response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("unknown field `person_id`")
+    );
+    use sea_orm::ConnectionTrait;
+    let row = db
+        .query_one_raw(sea_orm::Statement::from_string(
+            sea_orm::DatabaseBackend::Postgres,
+            "SELECT count(*)::bigint AS count FROM measurements".to_owned(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.try_get::<i64>("", "count").unwrap(), 0);
+}
+
+#[tokio::test]
+async fn omitted_event_time_verbatim_repeat_is_duplicate() {
+    let db = fresh_db().await;
+    let first = ops::add_measurement(
+        &db,
+        &ctx_valentyna(),
+        ops::AddMeasurementParams {
+            person: None,
+            kind: health_core::MeasurementKind::Weight,
+            values: serde_json::json!({"value": 78.2}),
+            source: None,
+            status: None,
+            event_time: None,
+        },
+    )
+    .await
+    .unwrap();
+    let repeated = ops::add_measurement(
+        &db,
+        &ctx_valentyna(),
+        ops::AddMeasurementParams {
+            person: None,
+            kind: health_core::MeasurementKind::Weight,
+            values: serde_json::json!({"value": 78.2}),
+            source: None,
+            status: None,
+            event_time: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let storage::WriteOutcome::Created { id } = first else {
+        panic!("first write must create")
+    };
+    assert_eq!(
+        repeated,
+        storage::WriteOutcome::Duplicate { existing_id: id }
     );
 }
 
@@ -1476,6 +1677,66 @@ async fn stop_medication_rejects_already_stopped_id_without_overwrite() {
     );
     assert_eq!(row.try_get::<i64>("", "successes").unwrap(), 1);
     assert_eq!(row.try_get::<i64>("", "rejected").unwrap(), 1);
+}
+
+#[tokio::test]
+async fn stop_medication_rejects_time_before_start_without_mutation() {
+    let db = fresh_db().await;
+    let started_at = time::macros::datetime!(2026-08-08 09:00 +03:00);
+    let storage::WriteOutcome::Created { id } = storage::add_medication(
+        &db,
+        &ctx_valentyna(),
+        storage::AddMedication {
+            person: health_core::Person::Andrii,
+            name: "Course".into(),
+            dose: None,
+            schedule: None,
+            started_at,
+            status: health_core::FactStatus::ConfirmedByDoctor,
+        },
+    )
+    .await
+    .unwrap() else {
+        panic!("expected Created")
+    };
+
+    let error = storage::stop_medication(
+        &db,
+        &ctx_valentyna(),
+        storage::StopMedication {
+            person: health_core::Person::Andrii,
+            medication_id: id,
+            stopped_at: started_at - time::Duration::seconds(1),
+            reason: Some("invalid".into()),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, storage::StorageError::Rejected(_)));
+
+    use sea_orm::ConnectionTrait;
+    let row = db
+        .query_one_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Postgres,
+            "SELECT m.stopped_at, m.stop_reason, a.result
+             FROM medications m
+             JOIN audit_log a ON a.entity_id = m.id AND a.action = 'stop_medication'
+             WHERE m.id = $1",
+            [id.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.try_get::<Option<time::OffsetDateTime>>("", "stopped_at")
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        row.try_get::<Option<String>>("", "stop_reason").unwrap(),
+        None
+    );
+    assert_eq!(row.try_get::<String>("", "result").unwrap(), "rejected");
 }
 
 #[tokio::test]

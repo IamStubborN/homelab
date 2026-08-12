@@ -11,15 +11,7 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
-        let listen_addr = match std::env::var("HEALTH_LISTEN_ADDR") {
-            Ok(value) => value,
-            Err(std::env::VarError::NotPresent) => DEFAULT_LISTEN_ADDR.to_owned(),
-            Err(std::env::VarError::NotUnicode(_)) => {
-                return Err(ConfigError::InvalidEnvEncoding("HEALTH_LISTEN_ADDR"));
-            }
-        }
-        .parse()
-        .map_err(ConfigError::InvalidListenAddr)?;
+        let listen_addr = listen_addr_from_env()?;
 
         Ok(Self {
             database_url: database_url()?,
@@ -27,6 +19,29 @@ impl Config {
             andrii_token_file: required_env("HEALTH_TOKEN_FILE_ANDRII")?.into(),
             valentyna_token_file: required_env("HEALTH_TOKEN_FILE_VALENTYNA")?.into(),
         })
+    }
+}
+
+pub fn listen_addr_from_env() -> Result<SocketAddr, ConfigError> {
+    match std::env::var("HEALTH_LISTEN_ADDR") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => DEFAULT_LISTEN_ADDR.to_owned(),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(ConfigError::InvalidEnvEncoding("HEALTH_LISTEN_ADDR"));
+        }
+    }
+    .parse()
+    .map_err(ConfigError::InvalidListenAddr)
+}
+
+pub fn healthcheck_address(listen_addr: SocketAddr) -> SocketAddr {
+    match listen_addr {
+        SocketAddr::V4(address) => {
+            SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), address.port())
+        }
+        SocketAddr::V6(address) => {
+            SocketAddr::new(std::net::Ipv6Addr::LOCALHOST.into(), address.port())
+        }
     }
 }
 
@@ -118,6 +133,18 @@ mod tests {
     use std::{fs, process::Command};
 
     use super::Config;
+
+    #[test]
+    fn healthcheck_uses_configured_port_on_loopback() {
+        assert_eq!(
+            super::healthcheck_address("0.0.0.0:9090".parse().unwrap()),
+            "127.0.0.1:9090".parse().unwrap()
+        );
+        assert_eq!(
+            super::healthcheck_address("[::]:9090".parse().unwrap()),
+            "[::1]:9090".parse().unwrap()
+        );
+    }
 
     const CASE_ENV: &str = "HEALTH_CONFIG_TEST_CASE";
 

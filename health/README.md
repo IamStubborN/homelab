@@ -11,9 +11,18 @@ Create the external network and database volume once on a new Docker host,
 before the first `up`:
 
 ```bash
-docker network create --attachable health-internal
+if docker network inspect health-internal >/dev/null 2>&1; then
+  test "$(docker network inspect -f '{{.Internal}}' health-internal)" = true
+  test "$(docker network inspect -f '{{.Attachable}}' health-internal)" = true
+else
+  docker network create --internal --attachable health-internal
+fi
 docker volume create health-pg-data
 ```
+
+An existing network with either check set to `false` is an operator blocker.
+Do not recreate it automatically: first inspect attached containers and plan a
+maintenance window.
 
 On the Linux Docker host, generate each value once in a private temporary file,
 then install copies with the ownership required by each consumer. The two
@@ -58,14 +67,46 @@ docker run --rm \
   -eu -c 'test -r /probe/health_service_db_password; test -r /probe/andrii.health_api_token; test -r /probe/valentyna.health_api_token; ! test -r /probe/health_pg_bootstrap_password'
 ```
 
-Start from the repository root. This preserves the same Compose project
-identity as the rest of the homelab:
+Before the first real medical record, create a manual dump and prove that it
+restores. The ignored `health/backups/` directory is local staging only; the
+automated Drive backup remains a future phase.
 
 ```bash
-docker compose up -d health-postgres health-service
-docker compose ps health-postgres health-service
-docker compose logs health-service
+mkdir -p health/backups
+backup="health/backups/health-$(date -u +%Y%m%dT%H%M%SZ).dump"
+docker compose exec -T health-postgres pg_dump -U health -d health --format=custom > "$backup"
+test -s "$backup"
+docker compose exec -T health-postgres createdb -U health health_restore_verify
+docker compose exec -T health-postgres pg_restore -U health -d health_restore_verify --exit-on-error < "$backup"
+docker compose exec -T health-postgres psql -U health -d health_restore_verify -v ON_ERROR_STOP=1 \
+  -c "SELECT count(*) = 2 AS people_seeded FROM people;" \
+  -c "SELECT to_regclass('public.audit_log') IS NOT NULL AS audit_log_restored;"
+docker compose exec -T health-postgres dropdb -U health health_restore_verify
 ```
+
+Deploy from the repository root so the health and embedded Hermes services use
+one Compose project. Capture a rollback tag before replacing an existing local
+image, start health first, wait for both health checks, then recreate both
+Hermes services so their entrypoint installs the current config and skill:
+
+```bash
+previous_health_image=$(docker image inspect family-health-service:local --format '{{.Id}}' 2>/dev/null || true)
+if [ -n "$previous_health_image" ]; then
+  docker tag "$previous_health_image" family-health-service:rollback
+fi
+docker compose build health-service
+docker compose up -d health-postgres health-service
+docker compose up --wait health-postgres health-service
+docker compose up -d --force-recreate hermes-andrii hermes-valentyna
+docker compose ps health-postgres health-service hermes-andrii hermes-valentyna
+docker compose logs --since=5m health-service hermes-andrii hermes-valentyna
+```
+
+The logs must show applied migrations and no `health` MCP discovery/auth error.
+From each Telegram bot, run one read-only health query and confirm that the
+`health` tools are discovered before writing real data. If rollback is needed,
+retag `family-health-service:rollback` as `family-health-service:local`, recreate
+`health-service`, wait for health, and then recreate both Hermes services again.
 
 For isolated maintenance, retain the root project name explicitly:
 
@@ -90,10 +131,18 @@ mise run audit
 
 Phase 1 core is implemented locally: the Rust service includes the PostgreSQL
 schema, token-to-profile authentication, typed MCP write/read operations,
-deduplication, append-only measurement corrections, audit records, validation,
-and PNG measurement charts. Remote homelab deployment and Telegram acceptance
+deduplication (explicit source timestamps, with a five-minute fallback bucket
+and 30-second rollover grace for immediate retries when metadata is unavailable),
+append-only measurement corrections, audit records, validation, and PNG
+measurement charts. Remote homelab deployment and Telegram acceptance
 remain operational verification steps; later document/Drive sync, reminders,
 NotebookLM, reporting, and diet phases are not implemented here.
+
+Known deferred design discrepancy: the umbrella design describes additional
+audit provenance fields for source, event date, and entry date, while the Phase
+1 schema records actor, transport, target, action, entity, result, and old/new
+values. Adding that provenance requires a later schema and contract decision;
+this final-fix round intentionally does not invent or migrate those fields.
 
 The `health-pg-data` volume is external and has the explicit engine name
 `health-pg-data`, so both root and child workflows resolve the same persistent

@@ -20,7 +20,11 @@ fn app() -> axum::Router {
         valentyna_token_file: valentyna,
     })
     .unwrap();
-    mcp::router(sea_orm::DatabaseConnection::default(), tokens)
+    mcp::router(
+        sea_orm::DatabaseConnection::default(),
+        tokens,
+        "127.0.0.1:8080".parse().unwrap(),
+    )
 }
 
 fn mcp_request(token: Option<&str>, body: &'static str) -> Request<Body> {
@@ -101,4 +105,48 @@ async fn mcp_lists_exactly_the_phase_one_tools() {
             "stop_medication",
         ]
     );
+
+    for tool in body["result"]["tools"].as_array().unwrap() {
+        assert_eq!(
+            tool["inputSchema"]["additionalProperties"], false,
+            "{} must reject unknown input fields",
+            tool["name"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_accepts_the_configured_host_port() {
+    let dir = tempfile::tempdir().unwrap();
+    let andrii = dir.path().join("andrii-token");
+    let valentyna = dir.path().join("valentyna-token");
+    fs::write(&andrii, ANDRII_TOKEN).unwrap();
+    fs::write(&valentyna, "valentyna-secret").unwrap();
+    let tokens = TokenMap::load(&Config {
+        database_url: "postgres://unused/health".to_owned(),
+        listen_addr: "127.0.0.1:9090".parse().unwrap(),
+        andrii_token_file: andrii,
+        valentyna_token_file: valentyna,
+    })
+    .unwrap();
+    let response = mcp::router(
+        sea_orm::DatabaseConnection::default(),
+        tokens,
+        "127.0.0.1:9090".parse().unwrap(),
+    )
+    .oneshot(
+        Request::post("/internal/mcp")
+            .header("host", "localhost:9090")
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .header("authorization", format!("Bearer {ANDRII_TOKEN}"))
+            .body(Body::from(
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+            ))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), 200);
 }

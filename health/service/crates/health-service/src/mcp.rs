@@ -31,6 +31,7 @@ pub struct HealthMcp {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AddMeasurementInput {
     person: Option<String>,
     kind: String,
@@ -41,6 +42,7 @@ struct AddMeasurementInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct CorrectMeasurementInput {
     measurement_id: String,
     new_values: serde_json::Value,
@@ -49,6 +51,7 @@ struct CorrectMeasurementInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AddMealInput {
     person: Option<String>,
     description: String,
@@ -59,6 +62,7 @@ struct AddMealInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AddSymptomInput {
     person: Option<String>,
     description: String,
@@ -68,6 +72,7 @@ struct AddSymptomInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AddSleepRecordInput {
     person: Option<String>,
     start_time: String,
@@ -78,6 +83,7 @@ struct AddSleepRecordInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AddMedicationInput {
     person: Option<String>,
     name: String,
@@ -89,6 +95,7 @@ struct AddMedicationInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct StopMedicationInput {
     person: Option<String>,
     medication_id: String,
@@ -98,15 +105,18 @@ struct StopMedicationInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AddConditionInput {
     person: Option<String>,
     name: String,
     notes: Option<String>,
     diagnosed_at: Option<String>,
     status: Option<String>,
+    confirmed: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AddAllergyInput {
     person: Option<String>,
     allergen: String,
@@ -116,6 +126,7 @@ struct AddAllergyInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AddLabResultInput {
     person: Option<String>,
     test_date: String,
@@ -131,6 +142,7 @@ struct AddLabResultInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct QueryHealthDataInput {
     person: Option<String>,
     section: String,
@@ -140,6 +152,7 @@ struct QueryHealthDataInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct GenerateChartInput {
     person: Option<String>,
     kind: String,
@@ -292,6 +305,7 @@ impl HealthMcp {
             notes: input.notes,
             diagnosed_at: parse_optional_date(&input.diagnosed_at, "diagnosed_at")?,
             status: parse_optional(&input.status, "status")?,
+            confirmed: input.confirmed,
         };
         tool_outcome(ops::add_condition(&self.db, request_ctx(&parts)?, params).await)
     }
@@ -390,28 +404,33 @@ impl HealthMcp {
 #[tool_handler(router = Self::tool_router())]
 impl ServerHandler for HealthMcp {}
 
-pub fn router(db: DatabaseConnection, tokens: TokenMap) -> Router {
+pub fn router(
+    db: DatabaseConnection,
+    tokens: TokenMap,
+    listen_addr: std::net::SocketAddr,
+) -> Router {
     let state = HealthMcp::new(db, Arc::new(tokens));
-    let protected = mcp_routes(state.clone())
+    let protected = mcp_routes(state.clone(), listen_addr)
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .merge(protected)
 }
 
-fn mcp_routes(state: HealthMcp) -> Router {
+fn mcp_routes(state: HealthMcp, listen_addr: std::net::SocketAddr) -> Router {
     let session_manager = Arc::new(
         rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
     );
+    let port = listen_addr.port();
     let config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)
         .with_allowed_hosts([
-            "health-service",
-            "health-service:8080",
-            "localhost",
-            "localhost:8080",
-            "127.0.0.1",
-            "127.0.0.1:8080",
+            "health-service".to_owned(),
+            format!("health-service:{port}"),
+            "localhost".to_owned(),
+            format!("localhost:{port}"),
+            "127.0.0.1".to_owned(),
+            format!("127.0.0.1:{port}"),
         ])
         .with_json_response(true);
     let factory = state.clone();

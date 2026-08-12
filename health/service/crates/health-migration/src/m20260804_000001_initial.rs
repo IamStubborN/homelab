@@ -79,7 +79,7 @@ CREATE TABLE sleep_records (
   id uuid PRIMARY KEY,
   person_id person NOT NULL REFERENCES people(id),
   start_time timestamptz NOT NULL,
-  end_time timestamptz NOT NULL,
+  end_time timestamptz NOT NULL CHECK (end_time > start_time),
   quality integer CHECK (quality BETWEEN 1 AND 10),
   notes text,
   status fact_status NOT NULL DEFAULT 'user_reported',

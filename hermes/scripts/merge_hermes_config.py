@@ -62,6 +62,18 @@ def materialize_health_token(managed: dict, secret_path: Path | None) -> dict:
     return result
 
 
+def sanitize_health(managed: dict) -> dict:
+    result = deepcopy(managed)
+    health = result.get("mcp_servers", {}).get("health")
+    if isinstance(health, dict):
+        headers = health.get("headers")
+        if isinstance(headers, dict):
+            headers.pop("Authorization", None)
+            if not headers:
+                health.pop("headers", None)
+    return result
+
+
 def write_private_atomic(path: Path, content: str) -> None:
     descriptor = -1
     temporary_path = None
@@ -95,7 +107,12 @@ def main() -> int:
     managed_path, current_path, output_path = map(Path, sys.argv[1:4])
     secret_path = Path(sys.argv[4]) if len(sys.argv) == 5 else None
     try:
-        managed = materialize_health_token(load(managed_path), secret_path)
+        managed = load(managed_path)
+        if len(sys.argv) == 5 and sys.argv[4] == "--sanitize-health":
+            managed = sanitize_health(managed)
+            secret_path = None
+        else:
+            managed = materialize_health_token(managed, secret_path)
         if not managed:
             return 2
         content = yaml.safe_dump(

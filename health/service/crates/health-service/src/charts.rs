@@ -3,6 +3,8 @@ use std::sync::OnceLock;
 use health_core::MeasurementKind;
 use image::{ImageEncoder, RgbImage, codecs::png::PngEncoder};
 use plotters::prelude::*;
+use time::OffsetDateTime;
+use time_tz::OffsetDateTimeExt;
 
 use crate::storage::SeriesPoint;
 
@@ -43,10 +45,7 @@ pub fn render_measurement_chart(req: &ChartRequest<'_>) -> Result<Vec<u8>, Chart
     let labels: Vec<String> = req
         .points
         .iter()
-        .map(|point| {
-            let date = point.event_time.date();
-            format!("{:02}.{:02}", date.day(), u8::from(date.month()))
-        })
+        .map(|point| kyiv_date_label(point.event_time))
         .collect();
 
     let mut rgb = vec![255; (WIDTH * HEIGHT * 3) as usize];
@@ -122,6 +121,13 @@ pub fn render_measurement_chart(req: &ChartRequest<'_>) -> Result<Vec<u8>, Chart
         )
         .map_err(render_error)?;
     Ok(png)
+}
+
+pub fn kyiv_date_label(event_time: OffsetDateTime) -> String {
+    let timezone = time_tz::timezones::get_by_name("Europe/Kyiv")
+        .expect("the vendored IANA database includes Europe/Kyiv");
+    let date = event_time.to_timezone(timezone).date();
+    format!("{:02}.{:02}", date.day(), u8::from(date.month()))
 }
 
 type NamedSeries = (&'static str, Vec<(f64, f64)>);

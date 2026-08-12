@@ -40,17 +40,28 @@ materialize_hermes_config() {
     python=$1
     merger=$2
     managed=$3
-    current=$4
-    destination=$5
-    health_secret=$6
-    temporary_directory=${7:-/tmp}
+    persistent_base=$4
+    active_link=$5
+    runtime_config=$6
+    health_secret=$7
+    temporary_directory=${8:-/tmp}
+    current=$persistent_base
+    if [ ! -f "$current" ] && [ -f "$active_link" ] && [ ! -L "$active_link" ]; then
+        current=$active_link
+    fi
+    generated_base=$(mktemp "$temporary_directory/hermes-base.XXXXXX")
     generated_config=$(mktemp "$temporary_directory/hermes-config.XXXXXX")
-    trap 'rm -f "$generated_config" || :' EXIT
+    trap 'rm -f "$generated_base" "$generated_config" "$runtime_config" || :' EXIT
     trap 'exit 1' HUP INT TERM
     "$python" "$merger" \
-        "$managed" "$current" "$generated_config" "$health_secret"
-    install -o 10000 -g 10000 -m 0640 "$generated_config" "$destination"
-    rm -f "$generated_config"
+        "$managed" "$current" "$generated_base" --sanitize-health
+    install -o 10000 -g 10000 -m 0640 "$generated_base" "$persistent_base"
+    "$python" "$merger" \
+        "$managed" "$persistent_base" "$generated_config" "$health_secret"
+    install -o 10000 -g 10000 -m 0600 "$generated_config" "$runtime_config"
+    rm -f "$active_link"
+    ln -s "$runtime_config" "$active_link"
+    rm -f "$generated_base" "$generated_config"
     trap - EXIT HUP INT TERM
 }
 
@@ -58,9 +69,11 @@ materialize_hermes_config \
     /opt/hermes/.venv/bin/python \
     /usr/local/bin/merge-hermes-config \
     /etc/hermes-home/config.yaml \
+    /opt/data/config.base.yaml \
     /opt/data/config.yaml \
-    /opt/data/config.yaml \
-    "$runtime_secret_dir/health_api_token"
+    /run/hermes-config.yaml \
+    "$runtime_secret_dir/health_api_token" \
+    /tmp
 install -o 10000 -g 10000 -m 0644 /etc/hermes-home/SOUL.md /opt/data/SOUL.md
 
 install_skills() {

@@ -36,11 +36,31 @@ for secret in media_api_token health_api_token broker_api_token webhook_hmac sea
     install -o 10000 -g 10000 -m 0400 "$source" "$runtime_secret_dir/$secret"
 done
 
-/opt/hermes/.venv/bin/python /usr/local/bin/merge-hermes-config \
-    /etc/hermes-home/config.yaml /opt/data/config.yaml /tmp/hermes-config.yaml \
+materialize_hermes_config() {
+    python=$1
+    merger=$2
+    managed=$3
+    current=$4
+    destination=$5
+    health_secret=$6
+    temporary_directory=${7:-/tmp}
+    generated_config=$(mktemp "$temporary_directory/hermes-config.XXXXXX")
+    trap 'rm -f "$generated_config" || :' EXIT
+    trap 'exit 1' HUP INT TERM
+    "$python" "$merger" \
+        "$managed" "$current" "$generated_config" "$health_secret"
+    install -o 10000 -g 10000 -m 0640 "$generated_config" "$destination"
+    rm -f "$generated_config"
+    trap - EXIT HUP INT TERM
+}
+
+materialize_hermes_config \
+    /opt/hermes/.venv/bin/python \
+    /usr/local/bin/merge-hermes-config \
+    /etc/hermes-home/config.yaml \
+    /opt/data/config.yaml \
+    /opt/data/config.yaml \
     "$runtime_secret_dir/health_api_token"
-install -o 10000 -g 10000 -m 0640 /tmp/hermes-config.yaml /opt/data/config.yaml
-rm -f /tmp/hermes-config.yaml
 install -o 10000 -g 10000 -m 0644 /etc/hermes-home/SOUL.md /opt/data/SOUL.md
 
 install_skills() {

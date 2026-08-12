@@ -20,7 +20,7 @@ with the documented Docker Compose or guarded media deployment commands.
 - Inactive media-orchestrator Compose scaffold with a dedicated Rezka VPN
 - KaraKeep, Freedium, Movie Tracker, Glance, Speedtest Tracker
 - Bitwarden (Vaultwarden), Mosquitto, RustDesk
-- OmniRoute, Search Ladder, and internal SearXNG shared by household agents
+- OmniRoute and Search Ladder shared by household agents
 - Hindsight shared memory server for Pi clients
 - Home Assistant with public-safe example config only
 
@@ -53,9 +53,7 @@ Fill real values only in ignored local files:
 - `media/secrets/plex_token`
 - `homeassistant/config/secrets.yaml`
 
-Generate independent random values for `SEARXNG_SECRET`,
-The Hindsight
-secrets documented in `hindsight/README.md` in the root `.env`. The
+Generate the Hindsight secrets documented in `hindsight/README.md` in the root `.env`. The
 web-research services publish no host ports; authenticated routes are exposed
 through Traefik where configured.
 

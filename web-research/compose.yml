@@ -113,38 +113,6 @@ services:
       - agent-tools
       - proxy
 
-  searxng:
-    image: ghcr.io/searxng/searxng@sha256:f433294b46a93564993c4371005341e013d94aa8ea4662d8ee521cd2cccb08e8
-    container_name: searxng
-    restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    environment:
-      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET}
-    volumes:
-      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
-    tmpfs:
-      - /tmp:rw,nosuid,nodev,noexec,size=64m
-    mem_limit: 512m
-    healthcheck:
-      test: [CMD-SHELL, "wget -qO- http://127.0.0.1:8080/healthz >/dev/null"]
-      interval: 20s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=proxy"
-      - "traefik.http.routers.searxng.tls=true"
-      - "traefik.http.routers.searxng.entrypoints=http,https"
-      - "traefik.http.routers.searxng.rule=Host(`search.${DOCKER_DOMAIN}`)"
-      - "traefik.http.services.searxng.loadbalancer.server.port=8080"
-    networks:
-      - agent-tools
-      - proxy
-
   cli-proxy-api:
     image: eceasy/cli-proxy-api:latest
     pull_policy: always

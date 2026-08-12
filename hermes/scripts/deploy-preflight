@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-orchestrator=${MEDIA_ORCHESTRATOR_DIR:-"$root/../media-orchestrator"}
+orchestrator=${MEDIA_ORCHESTRATOR_DIR:-"$root/../../media-orchestrator"}
 checker=${HERMES_CAPABILITY_CHECKER:-"$root/scripts/check-media-capabilities"}
 schema=${MEDIA_MCP_SCHEMA_FILE:-"$root/shared/skills/media/MCP_SCHEMA.json"}
 

@@ -119,6 +119,8 @@ class ComposeContractTests(unittest.TestCase):
                 {
                     f"{profile}_telegram_token",
                     f"{profile}_media_api_token",
+                    f"{profile}_homeassistant_token",
+                    f"{profile}_omniroute_api_key",
                     f"{profile}_webhook_hmac",
                     "search_ladder_api_key",
                 },
@@ -240,13 +242,11 @@ class ComposeContractTests(unittest.TestCase):
         self.assertIn("Chrome/149", andrii["AGENT_BROWSER_USER_AGENT"])
 
     def test_profiles_share_native_web_backends_on_an_internal_service_network(self):
-        self.assertTrue(self.compose["networks"]["agent-tools"]["external"])
+        self.assertEqual(self.compose["networks"]["agent-tools"]["name"], "agent-tools")
         for profile in ("andrii", "valentyna"):
             service = self.compose["services"][f"hermes-{profile}"]
             self.assertIn("agent-tools", service["networks"])
-            self.assertEqual(
-                service["environment"]["SEARXNG_URL"], "http://searxng:8080"
-            )
+            self.assertNotIn("SEARXNG_URL", service["environment"])
             self.assertEqual(
                 service["environment"]["FIRECRAWL_API_URL"],
                 "http://firecrawl-api:3002",
@@ -288,18 +288,18 @@ class SkillContractTests(unittest.TestCase):
     def test_shared_web_research_skill_prefers_bounded_adaptive_pipeline(self):
         skill = read("shared/skills/web-research/SKILL.md")
         self.assertIn("/opt/data/skills/web-research/search.py", skill)
-        self.assertIn("cached Firecrawl extraction", skill)
-        self.assertIn("Spark Low", skill)
+        self.assertIn("bounded evidence", skill)
+        self.assertIn("Spark Medium", skill)
         self.assertIn("`web_search` once", skill)
-        self.assertIn("native `web_extract` only", skill)
+        self.assertIn("then `web_extract` only", skill)
         self.assertIn("untrusted data", skill)
         self.assertIn("Do not probe services with curl", skill)
 
     def test_media_web_research_uses_native_tools_not_terminal_or_browser(self):
         skill = read("shared/skills/media/SKILL.md")
-        self.assertIn("Native `web_search`, then `web_extract`", skill)
-        self.assertIn("use Hermes native `web_search`", skill)
-        self.assertIn("Never use terminal, shell-based HTTP", skill)
+        self.assertIn("client searches and fetches bounded source evidence", skill)
+        self.assertIn("Use native `web_search`", skill)
+        self.assertIn("Never use\nterminal HTTP or browser search", skill)
         self.assertIn("Do not treat search-result snippets as verified", skill)
 
     def test_rezka_login_allowlist_is_bound_to_one_vault_item(self):
@@ -922,7 +922,7 @@ class SkillContractTests(unittest.TestCase):
             ).strip()
             build_script = orchestrator / "scripts" / "docker-build.sh"
             build_script.parent.mkdir()
-            build_script.write_bytes((ROOT.parent / "media-orchestrator" / "scripts" / "docker-build.sh").read_bytes())
+            build_script.write_bytes((ROOT.parents[1] / "media-orchestrator" / "scripts" / "docker-build.sh").read_bytes())
             build_script.chmod(0o755)
             digest_env = os.environ.copy()
             digest_env["MEDIA_BUILD_TARGETS"] = "preflight-test"
@@ -1290,7 +1290,7 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertIn("native `clarify`", read(f"profiles/{profile}/SOUL.md"))
             self.assertEqual(config["browser"]["inactivity_timeout"], 120)
             self.assertFalse(config["browser"]["camofox"]["managed_persistence"])
-            self.assertEqual(config["web"]["search_backend"], "searxng")
+            self.assertIsNone(config["web"]["search_backend"])
             self.assertEqual(config["web"]["extract_backend"], "firecrawl")
             self.assertEqual(config["display"]["tool_progress"], "new")
             self.assertEqual(
@@ -1299,13 +1299,21 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertEqual(config["display"]["memory_notifications"], "off")
             self.assertTrue(config["compression"]["codex_responses_native"])
             self.assertEqual(config["skills"]["creation_nudge_interval"], 10)
-            self.assertEqual(config["model"]["provider"], "openai-codex")
+            self.assertEqual(config["model"]["provider"], "openai-api")
             self.assertEqual(config["model"]["default"], "gpt-5.6-luna")
             self.assertEqual(
                 config["fallback_providers"],
                 [
-                    {"provider": "openai-codex", "model": "gpt-5.6-terra"},
-                    {"provider": "openai-codex", "model": "gpt-5.6-sol"},
+                    {
+                        "provider": "openai-api",
+                        "base_url": "http://omniroute:20129/v1",
+                        "model": "gpt-5.6-terra",
+                    },
+                    {
+                        "provider": "openai-api",
+                        "base_url": "http://omniroute:20129/v1",
+                        "model": "gpt-5.6-sol",
+                    },
                 ],
             )
             self.assertEqual(config["agent"]["reasoning_effort"], "low")

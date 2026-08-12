@@ -117,7 +117,7 @@ services:
       BROKER_API_KEY: ${SEARCH_LADDER_API_KEY:?set SEARCH_LADDER_API_KEY}
       SPARK_URL: http://omniroute:20129/v1
       SPARK_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
-      SPARK_MODEL: gpt-5.3-codex-spark
+      SPARK_MODEL: gpt-5.6-luna
       FALLBACK_MODEL: auto/best-free
       SEARCH_PROVIDERS: exa-search,tavily-search,firecrawl,ollama-search
       DB_PATH: /data/search-ladder.db

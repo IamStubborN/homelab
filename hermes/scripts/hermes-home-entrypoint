@@ -42,16 +42,27 @@ install -o 10000 -g 10000 -m 0644 /etc/hermes-home/SOUL.md /opt/data/SOUL.md
 
 install_skills() {
     source=$1
+    managed=$2
+    current=
     for skill in "$source"/*; do
         [ -d "$skill" ] || continue
-        destination="/opt/data/skills/$(basename "$skill")"
+        name=$(basename "$skill")
+        current="$current $name"
+        destination="/opt/data/skills/$name"
         mkdir -p "$destination"
         cp -R "$skill"/. "$destination"/
     done
+    for skill in /opt/data/skills/*; do
+        [ -d "$skill" ] || continue
+        name=$(basename "$skill")
+        case " $managed " in
+            *" $name "*) case " $current " in *" $name "*) ;; *) rm -rf "$skill" ;; esac ;;
+        esac
+    done
 }
 
-install_skills /etc/hermes-home/skills
-install_skills /etc/hermes-home/personal-skills
+install_skills /etc/hermes-home/skills "home-assistant media media-admin movies series trending watching web-research"
+install_skills /etc/hermes-home/personal-skills "vaultwarden-login"
 chown -R 10000:10000 /opt/data/skills
 
 # Shared skills are managed by this repository, not by background reviews.

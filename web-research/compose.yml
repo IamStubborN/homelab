@@ -48,6 +48,8 @@ services:
     volumes:
       - omniroute_data:/app/data
       - ./omniroute/start.sh:/app/patches/start.sh:ro
+    ports:
+      - "127.0.0.1:20129:20129"
     mem_limit: 2g
     healthcheck:
       test: [CMD, node, healthcheck.mjs]

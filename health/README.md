@@ -4,10 +4,12 @@ The `health` stack runs the local `family-health-service:local` image with a
 dedicated PostgreSQL database. Both containers join the external attachable
 `health-internal` network so the Hermes stack can join it independently.
 
-Create the network once on a new Docker host:
+Create the external network and database volume once on a new Docker host,
+before the first `up`:
 
 ```bash
 docker network create --attachable health-internal
+docker volume create health-pg-data
 ```
 
 On the Linux Docker host, generate each value once in a private temporary file,
@@ -63,9 +65,20 @@ docker compose -p homelab -f health/compose.yml config --quiet
 docker compose -p homelab -f health/compose.yml up -d
 ```
 
-The `health-pg-data` volume has the explicit engine name `health-pg-data`, so
-both root and child workflows resolve the same persistent state even if an
-operator accidentally omits `-p homelab`.
+The `health-pg-data` volume is external and has the explicit engine name
+`health-pg-data`, so both root and child workflows resolve the same persistent
+state even if an operator accidentally omits `-p homelab`. Routine
+`docker compose down` and `docker compose down -v` do not delete an external
+volume.
+
+Deleting the database is a separate, destructive operator action. Take and
+verify a backup, stop the stack, and only then run the explicit command below
+if permanent data loss is intended:
+
+```bash
+# DANGER: permanently deletes the Family Health PostgreSQL database.
+docker volume rm health-pg-data
+```
 
 The application receives only secret file paths. No database password or API
 token is interpolated into Compose environment values.

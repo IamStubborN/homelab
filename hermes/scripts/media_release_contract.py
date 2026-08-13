@@ -89,7 +89,7 @@ def _valid_immutable_image(value: object) -> bool:
         if TAG.fullmatch(tag) is None:
             return False
         repository = repository_path
-    if not repository or len(repository) > 255:
+    if not repository:
         return False
     components = repository.split("/")
     if any(not component for component in components):
@@ -102,6 +102,7 @@ def _valid_immutable_image(value: object) -> bool:
     return (
         (not has_registry or _valid_registry(first))
         and bool(path)
+        and len("/".join(path)) <= 255
         and all(PATH_COMPONENT.fullmatch(component) for component in path)
     )
 

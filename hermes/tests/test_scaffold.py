@@ -192,6 +192,54 @@ class ReleaseContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(contract.ContractError, "immutable"):
                     contract.load_release_contract(bundle)
 
+    def test_release_contract_image_repository_path_length_matches_producer(self):
+        contract = self.load_contract_module()
+        digest = f"@sha256:{'3' * 64}"
+        registry = "registry.example"
+        valid_repositories = [
+            f"{registry}/{'r' * 255}",
+            f"{registry}:5000/{'r' * 255}",
+        ]
+        for field in ("service_image", "runner_image"):
+            for repository in valid_repositories:
+                for tag in ("", ":release-tag"):
+                    with self.subTest(field=field, repository=repository, tag=tag), tempfile.TemporaryDirectory() as directory:
+                        bundle = pathlib.Path(directory) / "release"
+                        self.write_bundle(bundle)
+                        self.mutate_release(
+                            bundle,
+                            lambda value: value.__setitem__(field, f"{repository}{tag}{digest}"),
+                        )
+                        contract.load_release_contract(bundle)
+            with self.subTest(field=field, length=256), tempfile.TemporaryDirectory() as directory:
+                bundle = pathlib.Path(directory) / "release"
+                self.write_bundle(bundle)
+                self.mutate_release(
+                    bundle,
+                    lambda value: value.__setitem__(field, f"{registry}/{'r' * 256}{digest}"),
+                )
+                with self.assertRaisesRegex(contract.ContractError, "immutable"):
+                    contract.load_release_contract(bundle)
+
+    def test_release_contract_rejects_malicious_image_references(self):
+        contract = self.load_contract_module()
+        malicious = (
+            f"https://registry.example/media@sha256:{'3' * 64}",
+            f"registry.example/Media@sha256:{'3' * 64}",
+            f"registry.example/media;touch@sha256:{'3' * 64}",
+            f"registry.example/media value@sha256:{'3' * 64}",
+            f"registry.example:0/media@sha256:{'3' * 64}",
+            f"registry.example:65536/media@sha256:{'3' * 64}",
+        )
+        for field in ("service_image", "runner_image"):
+            for reference in malicious:
+                with self.subTest(field=field, reference=reference), tempfile.TemporaryDirectory() as directory:
+                    bundle = pathlib.Path(directory) / "release"
+                    self.write_bundle(bundle)
+                    self.mutate_release(bundle, lambda value: value.__setitem__(field, reference))
+                    with self.assertRaisesRegex(contract.ContractError, "immutable"):
+                        contract.load_release_contract(bundle)
+
     def test_release_contract_rejects_checksum_drift(self):
         contract = self.load_contract_module()
         with tempfile.TemporaryDirectory() as directory:

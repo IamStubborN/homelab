@@ -7,6 +7,7 @@ checker=${HERMES_CAPABILITY_CHECKER:-"$root/scripts/check-media-capabilities"}
 
 live_tools=
 live_attestation=
+staged_cli=
 while test "$#" -gt 0; do
     case $1 in
         --live-tools)
@@ -19,14 +20,32 @@ while test "$#" -gt 0; do
             live_attestation=$2
             shift 2
             ;;
+        --staged-cli)
+            test "$#" -ge 2 || { echo "usage: $0 [--live-tools FILE] [--live-attestation FILE] [--staged-cli FILE]" >&2; exit 2; }
+            staged_cli=$2
+            shift 2
+            ;;
         *)
-            echo "usage: $0 [--live-tools FILE] [--live-attestation FILE]" >&2
+            echo "usage: $0 [--live-tools FILE] [--live-attestation FILE] [--staged-cli FILE]" >&2
             exit 2
             ;;
     esac
 done
 
 python3 "$checker" --release-dir "$MEDIA_RELEASE_DIR"
+
+if test -n "$staged_cli"; then
+    python3 - "$root/scripts" "$MEDIA_RELEASE_DIR" "$staged_cli" <<'PY'
+import pathlib
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from media_release_contract import load_release_contract, validate_staged_cli
+
+release = load_release_contract(pathlib.Path(sys.argv[2]))
+validate_staged_cli(pathlib.Path(sys.argv[3]), release["cli_sha256"])
+PY
+fi
 
 if test -n "$live_tools"; then
     python3 - "$root/scripts" "$MEDIA_RELEASE_DIR" "$live_tools" <<'PY'

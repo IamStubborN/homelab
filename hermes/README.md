@@ -120,6 +120,10 @@ fails closed when the checked-in schema artifact differs. Use
 scripts/check-media-capabilities --sync` intentionally when the MCP contract
 changes, review both generated artifacts, and rerun the preflight. The tracked
 `media/release.example/` bundle is sanitized test data and cannot be deployed.
+When a private guarded rollout stages the CLI, it passes
+`--staged-cli /absolute/path/to/media`; preflight then hashes that regular file
+and compares it with the digest in the bundle's authenticated
+`media-linux-amd64.sha256` file before activation.
 
 Private guarded deployment requires explicit `HOMELAB_ROOT` and
 `MEDIA_RELEASE_DIR` paths; it does not discover sibling checkouts. Promotion is

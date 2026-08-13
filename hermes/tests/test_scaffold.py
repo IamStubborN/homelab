@@ -147,6 +147,18 @@ class ReleaseContractTests(unittest.TestCase):
         mutation(release)
         release_path.write_text(json.dumps(release), encoding="utf-8")
 
+    def mutate_artifact(self, path: pathlib.Path, name: str, mutation) -> None:
+        artifact_path = path / name
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        mutation(artifact)
+        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+        self.mutate_release(
+            path,
+            lambda release: release["files"][name].__setitem__(
+                "sha256", hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+            ),
+        )
+
     def test_valid_example_release_bundle_loads(self):
         contract = self.load_contract_module()
         release = contract.load_release_contract(ROOT.parent / "media/release.example")
@@ -226,6 +238,30 @@ class ReleaseContractTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(contract.ContractError, "unique"):
                 contract.load_release_contract(bundle)
+
+    def test_release_contract_requires_exact_capability_manifest_shape(self):
+        contract = self.load_contract_module()
+        mutations = {
+            "boolean schema version": lambda value: value.__setitem__("schema_version", True),
+            "missing description": lambda value: value.pop("description"),
+            "extra field": lambda value: value.__setitem__("private_source", "forbidden"),
+            "duplicate tools": lambda value: value["tools"].append(value["tools"][0]),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                bundle = pathlib.Path(directory) / "release"
+                self.write_bundle(bundle)
+                self.mutate_artifact(bundle, "media-capabilities.json", mutation)
+                with self.assertRaises(contract.ContractError):
+                    contract.load_release_contract(bundle)
+
+    def test_release_contract_exposes_validated_cli_sha256(self):
+        contract = self.load_contract_module()
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory) / "release"
+            self.write_bundle(bundle)
+            release = contract.load_release_contract(bundle)
+            self.assertEqual(release["cli_sha256"], "c" * 64)
 
 
 class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
@@ -431,6 +467,7 @@ class SkillContractTests(unittest.TestCase):
     @staticmethod
     def load_capability_checker():
         path = ROOT / "scripts/check-media-capabilities"
+        sys.path.insert(0, str(path.parent))
         spec = importlib.util.spec_from_file_location("check_media_capabilities", path)
         if spec is None or spec.loader is None:
             loader = importlib.machinery.SourceFileLoader("check_media_capabilities", str(path))
@@ -756,6 +793,40 @@ class SkillContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("43 dynamically discovered tools", result.stdout)
 
+    def test_media_capability_sync_rolls_back_on_second_publication_failure(self):
+        checker = self.load_capability_checker()
+        release_dir = ROOT.parent / "media/release.example"
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = pathlib.Path(directory)
+            schema = temporary / "MCP_SCHEMA.json"
+            capabilities = temporary / "CAPABILITIES.md"
+            schema.write_text("old schema\n", encoding="utf-8")
+            capabilities.write_text("old capabilities\n", encoding="utf-8")
+            real_replace = os.replace
+            calls = 0
+
+            def fail_second(source, destination):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("second publication failed")
+                return real_replace(source, destination)
+
+            with (
+                mock.patch.object(checker, "SCHEMA_ARTIFACT", schema),
+                mock.patch.object(checker, "CAPABILITY_DOC", capabilities),
+                mock.patch.object(checker, "PROFILES", ()),
+                mock.patch.object(checker, "referenced_tools", return_value=set(
+                    json.loads((release_dir / "media-capabilities.json").read_text())["tools"]
+                )),
+                mock.patch.object(checker.os, "replace", side_effect=fail_second),
+                mock.patch.object(sys, "argv", ["check-media-capabilities", "--release-dir", str(release_dir), "--sync"]),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(checker.main(), 1)
+            self.assertEqual(schema.read_text(encoding="utf-8"), "old schema\n")
+            self.assertEqual(capabilities.read_text(encoding="utf-8"), "old capabilities\n")
+
 
     def test_media_deploy_preflight_uses_only_the_release_directory(self):
         preflight = ROOT / "scripts/deploy-preflight"
@@ -809,6 +880,36 @@ class SkillContractTests(unittest.TestCase):
             drifted = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
             self.assertNotEqual(drifted.returncode, 0)
             self.assertIn("OCI attestation differs from the release bundle", drifted.stderr)
+
+    def test_media_deploy_preflight_validates_staged_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            release_dir = pathlib.Path(directory) / "release"
+            ReleaseContractTests.write_bundle(release_dir)
+            cli = pathlib.Path(directory) / "media"
+            cli.write_bytes(b"staged cli\n")
+            digest = hashlib.sha256(cli.read_bytes()).hexdigest()
+            checksum = release_dir / "media-linux-amd64.sha256"
+            checksum.write_text(f"{digest}  media-linux-amd64\n", encoding="ascii")
+            release_path = release_dir / "release.json"
+            release = json.loads(release_path.read_text(encoding="utf-8"))
+            release["files"][checksum.name]["sha256"] = hashlib.sha256(checksum.read_bytes()).hexdigest()
+            release_path.write_text(json.dumps(release), encoding="utf-8")
+            checker = pathlib.Path(directory) / "checker.py"
+            checker.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+            env = os.environ.copy()
+            env["MEDIA_RELEASE_DIR"] = str(release_dir)
+            env["HERMES_CAPABILITY_CHECKER"] = str(checker)
+            command = [str(ROOT / "scripts/deploy-preflight"), "--staged-cli", str(cli)]
+            matching = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
+            self.assertEqual(matching.returncode, 0, matching.stderr)
+            cli.write_bytes(b"drifted cli\n")
+            drifted = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
+            self.assertNotEqual(drifted.returncode, 0)
+            self.assertIn("staged media CLI checksum differs", drifted.stderr)
+            cli.unlink()
+            missing = subprocess.run(command, text=True, capture_output=True, env=env, check=False)
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn("staged media CLI", missing.stderr)
 
 
 

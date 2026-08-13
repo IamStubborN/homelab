@@ -21,6 +21,7 @@ ARTIFACTS = (
     "media-capabilities.json",
     "media-linux-amd64.sha256",
 )
+CAPABILITY_FIELDS = {"description", "mcp_server", "schema_version", "tools"}
 RELEASE_FIELDS = {
     "application_version",
     "files",
@@ -119,10 +120,14 @@ def _tool_names(schema: object, capabilities: object) -> tuple[list[str], list[s
     if not all(isinstance(name, str) and name for name in schema_names):
         raise ContractError("MCP schema contains an invalid tool name")
 
-    if not isinstance(capabilities, dict) or capabilities.get("schema_version") != 1:
+    if not isinstance(capabilities, dict) or set(capabilities) != CAPABILITY_FIELDS:
+        raise ContractError("media capability manifest must use the exact schema-version-1 object shape")
+    if capabilities["schema_version"] != 1 or isinstance(capabilities["schema_version"], bool):
         raise ContractError("media capability manifest must use schema version 1")
-    if capabilities.get("mcp_server") != "media_admin":
+    if capabilities["mcp_server"] != "media_admin":
         raise ContractError("media capability manifest must target media_admin")
+    if not isinstance(capabilities["description"], str) or not capabilities["description"]:
+        raise ContractError("media capability manifest description is missing or invalid")
     capability_names = capabilities.get("tools")
     if not isinstance(capability_names, list) or not capability_names or not all(
         isinstance(name, str) and name for name in capability_names
@@ -184,4 +189,14 @@ def load_release_contract(path: pathlib.Path) -> dict:
     if len(parts) != 2 or SHA256.fullmatch(parts[0]) is None or parts[1].lstrip("*") != "media-linux-amd64":
         raise ContractError("CLI checksum is missing or invalid")
 
+    release["cli_sha256"] = parts[0]
     return release
+
+
+def validate_staged_cli(path: pathlib.Path, expected_sha256: str) -> None:
+    """Fail unless a staged CLI regular file matches the authenticated checksum."""
+    candidate = pathlib.Path(path)
+    if not candidate.is_file():
+        raise ContractError(f"staged media CLI is missing or is not a regular file: {candidate}")
+    if _sha256(candidate) != expected_sha256:
+        raise ContractError("staged media CLI checksum differs from the release bundle")

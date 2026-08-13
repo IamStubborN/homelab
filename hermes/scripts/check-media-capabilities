@@ -9,6 +9,7 @@ import os
 import pathlib
 import re
 import sys
+import tempfile
 
 from media_release_contract import ContractError, load_release_contract
 
@@ -48,6 +49,61 @@ def referenced_tools() -> set[str]:
         references.update(re.findall(r"mcp__media_admin__([a-z][a-z0-9_]*)", source))
     references.discard("plex_delete")
     return references
+
+
+def _stage_text(path: pathlib.Path, value: str) -> pathlib.Path:
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = pathlib.Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(value)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.chmod(path.stat().st_mode & 0o777 if path.exists() else 0o644)
+        return temporary
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _restore(path: pathlib.Path, original: tuple[bytes, int] | None) -> None:
+    if original is None:
+        path.unlink(missing_ok=True)
+        return
+    content, mode = original
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.rollback.", dir=path.parent)
+    temporary = pathlib.Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.chmod(mode)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def atomic_write_texts(updates: tuple[tuple[pathlib.Path, str], ...]) -> None:
+    originals = {
+        path: (path.read_bytes(), path.stat().st_mode & 0o777) if path.exists() else None
+        for path, _ in updates
+    }
+    staged: dict[pathlib.Path, pathlib.Path] = {}
+    published: list[pathlib.Path] = []
+    try:
+        for path, value in updates:
+            staged[path] = _stage_text(path, value)
+        for path, _ in updates:
+            os.replace(staged.pop(path), path)
+            published.append(path)
+    except OSError as publication_error:
+        for path in reversed(published):
+            _restore(path, originals[path])
+        raise publication_error
+    finally:
+        for temporary in staged.values():
+            temporary.unlink(missing_ok=True)
 
 
 def main() -> int:
@@ -93,8 +149,11 @@ def main() -> int:
 
     expected = expected_document(names)
     if args.sync:
-        SCHEMA_ARTIFACT.write_text(schema_text, encoding="utf-8")
-        CAPABILITY_DOC.write_text(expected, encoding="utf-8")
+        try:
+            atomic_write_texts(((SCHEMA_ARTIFACT, schema_text), (CAPABILITY_DOC, expected)))
+        except OSError as error:
+            print(f"media capability sync failed: {error}", file=sys.stderr)
+            return 1
     errors = []
     if not CAPABILITY_DOC.exists() or CAPABILITY_DOC.read_text(encoding="utf-8") != expected:
         errors.append("shared/skills/media/CAPABILITIES.md is stale; run with --sync")

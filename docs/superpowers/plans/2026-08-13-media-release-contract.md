@@ -23,11 +23,11 @@
 ### Task 1: Private release-bundle producer
 
 **Files:**
-- Create: `/Users/iamstubborn/Projects/media-orchestrator/.worktrees/media-release-contract/scripts/export-release-contract.py`
-- Create: `/Users/iamstubborn/Projects/media-orchestrator/.worktrees/media-release-contract/scripts/test-release-contract.py`
-- Modify: `/Users/iamstubborn/Projects/media-orchestrator/.worktrees/media-release-contract/scripts/homelab.sh`
-- Modify: `/Users/iamstubborn/Projects/media-orchestrator/.worktrees/media-release-contract/scripts/test-packaging.rb`
-- Modify: `/Users/iamstubborn/Projects/media-orchestrator/.worktrees/media-release-contract/docs/RUNBOOK.md`
+- Private repo, create: `scripts/export-release-contract.py`
+- Private repo, create: `scripts/test-release-contract.py`
+- Private repo, modify: `scripts/homelab.sh`
+- Private repo, modify: `scripts/test-packaging.rb`
+- Private repo, modify: `docs/RUNBOOK.md`
 
 **Interfaces:**
 - Consumes: `scripts/docker-build.sh --print-source-tree-digest`, `--print-source-version`, and `--print-runner-build-digest`; `config/media-capabilities.json`; `MCP_SCHEMA_SNAPSHOT` support in `crates/media-api/tests/mcp.rs`.

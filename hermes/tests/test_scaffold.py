@@ -485,9 +485,12 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
             service = self.compose["services"][f"hermes-{profile}"]
             self.assertIn("agent-tools", service["networks"])
             self.assertNotIn("SEARXNG_URL", service["environment"])
-            self.assertEqual(
-                service["environment"]["FIRECRAWL_API_URL"],
-                "http://firecrawl-api:3002",
+            # Firecrawl was retired from the deployment; native web tools now
+            # run through the search-ladder plugin (key from OPENAI_API_KEY).
+            self.assertNotIn("FIRECRAWL_API_URL", service["environment"])
+            self.assertIn(
+                "./shared/plugins:/etc/hermes-home/shared-plugins:ro",
+                service["volumes"],
             )
             self.assertIn(
                 "./shared/skills:/etc/hermes-home/skills:ro", service["volumes"]
@@ -525,10 +528,10 @@ class SkillContractTests(unittest.TestCase):
         return module
 
     def test_shared_web_research_skill_prefers_bounded_adaptive_pipeline(self):
-        skill = read("shared/skills/web-research/SKILL.md")
-        self.assertIn("/opt/data/skills/web-research/search.py", skill)
+        skill = read("shared/skills/search-ladder/SKILL.md")
+        self.assertIn("/opt/data/skills/search-ladder/search.py", skill)
         self.assertIn("bounded evidence", skill)
-        self.assertIn("Spark Medium", skill)
+        self.assertIn("finalizer summaries", skill)
         self.assertIn("`web_search` once", skill)
         self.assertIn("then `web_extract` only", skill)
         self.assertIn("untrusted data", skill)
@@ -537,7 +540,7 @@ class SkillContractTests(unittest.TestCase):
 
     def test_media_routes_public_evidence_to_web_research(self):
         skill = read("shared/skills/media/SKILL.md")
-        self.assertIn("`web-research`", skill)
+        self.assertIn("`search-ladder`", skill)
         self.assertNotIn("curl", skill.lower())
 
     def test_rezka_login_allowlist_is_bound_to_one_vault_item(self):
@@ -1224,39 +1227,24 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertIn("native `clarify`", read(f"profiles/{profile}/SOUL.md"))
             self.assertEqual(config["browser"]["inactivity_timeout"], 120)
             self.assertFalse(config["browser"]["camofox"]["managed_persistence"])
-            self.assertIsNone(config["web"]["search_backend"])
-            self.assertEqual(config["web"]["extract_backend"], "firecrawl")
+            self.assertEqual(config["web"]["search_backend"], "search-ladder")
+            self.assertEqual(config["web"]["extract_backend"], "search-ladder")
+            self.assertIn("search-ladder", config["plugins"]["enabled"])
             self.assertEqual(config["display"]["tool_progress"], "new")
             self.assertEqual(
                 config["display"]["platforms"]["telegram"]["tool_progress"], "off"
             )
             self.assertEqual(config["display"]["memory_notifications"], "off")
-            self.assertTrue(config["compression"]["codex_responses_native"])
+            self.assertFalse(config["compression"]["codex_responses_native"])
             self.assertEqual(config["skills"]["creation_nudge_interval"], 10)
             self.assertEqual(config["model"]["provider"], "openai-api")
-            self.assertEqual(config["model"]["default"], "gpt-5.6-luna")
-            self.assertEqual(
-                config["fallback_providers"],
-                [
-                    {
-                        "provider": "openai-api",
-                        "base_url": "http://omniroute:20129/v1",
-                        "model": "gpt-5.6-terra",
-                    },
-                    {
-                        "provider": "openai-api",
-                        "base_url": "http://omniroute:20129/v1",
-                        "model": "gpt-5.6-sol",
-                    },
-                ],
-            )
+            self.assertEqual(config["model"]["default"], "opencode-go/deepseek-v4-flash-high")
+            self.assertNotIn("fallback_providers", config)  # optional; defaults to [] in Hermes
             self.assertEqual(config["agent"]["reasoning_effort"], "low")
             self.assertEqual(
                 config["agent"]["reasoning_overrides"],
                 {
-                    "gpt-5.6-terra": "high",
-                    "gpt-5.6-luna": "high",
-                    "gpt-5.6-sol": "low",
+                    "opencode-go/deepseek-v4-flash-high": "high",
                 },
             )
 

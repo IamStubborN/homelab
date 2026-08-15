@@ -8,7 +8,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
-    "search_ladder_skill", ROOT / "shared/skills/web-research/search.py"
+    "search_ladder_skill", ROOT / "shared/skills/search-ladder/search.py"
 )
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)

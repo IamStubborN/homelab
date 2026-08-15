@@ -7,15 +7,14 @@ terminal:
 model:
   provider: openai-api
   base_url: http://omniroute:20129/v1
-  default: gpt-5.6-luna
+  default: opencode-go/deepseek-v4-flash-high
 
-fallback_providers:
-  - provider: openai-api
+auxiliary:
+  vision:
+    provider: custom
     base_url: http://omniroute:20129/v1
-    model: gpt-5.6-terra
-  - provider: openai-api
-    base_url: http://omniroute:20129/v1
-    model: gpt-5.6-sol
+    model: opencode-go/mimo-v2.5
+    key_env: OPENAI_API_KEY
 
 browser:
   inactivity_timeout: 120
@@ -25,8 +24,8 @@ browser:
     managed_persistence: false
 
 web:
-  search_backend: null
-  extract_backend: firecrawl
+  search_backend: search-ladder
+  extract_backend: search-ladder
 
 tools:
   tool_search:
@@ -84,7 +83,7 @@ display:
     telegram:
       tool_progress: "off"
 compression:
-  codex_responses_native: true
+  codex_responses_native: false
 skills:
   creation_nudge_interval: 10
   platform_disabled:
@@ -154,9 +153,7 @@ agent:
   service_tier: fast
   reasoning_effort: low
   reasoning_overrides:
-    gpt-5.6-terra: high
-    gpt-5.6-luna: high
-    gpt-5.6-sol: low
+    opencode-go/deepseek-v4-flash-high: high
 plugins:
-  enabled: [telegram-home, vaultwarden-approval]
+  enabled: [telegram-home, vaultwarden-approval, search-ladder]
 _config_version: 34

@@ -52,7 +52,7 @@ def render(payload):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run the shared adaptive web-research pipeline")
+    parser = argparse.ArgumentParser(description="Run the shared adaptive search-ladder pipeline")
     parser.add_argument("query", nargs="?")
     parser.add_argument("--url")
     parser.add_argument("--focus")

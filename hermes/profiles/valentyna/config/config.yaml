@@ -155,10 +155,5 @@ agent:
   reasoning_overrides:
     opencode-go/deepseek-v4-flash-high: high
 plugins:
-<<<<<<< HEAD
-  enabled: [telegram-home]
-_config_version: 34
-=======
   enabled: [telegram-home, search-ladder]
-_config_version: 33
->>>>>>> d1948b4 (hermes: unify web research as search-ladder (skill + plugin))
+_config_version: 34

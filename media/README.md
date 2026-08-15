@@ -14,12 +14,12 @@ Before the first start, create the ignored runtime files with permissions that
 allow the unprivileged sync container to read the non-secret forwarded port:
 
 ```bash
-install -d -m 0755 media/gluetun/data
-install -m 0644 /dev/null media/gluetun/data/forwarded_port
-install -d -m 0700 media/secrets
-install -m 0600 /dev/null media/secrets/protonvpn_wireguard_private_key
-install -m 0600 /dev/null media/secrets/gluetun_control_auth_config
-install -m 0600 /dev/null media/secrets/gluetun_control_api_key
+install -d -m 0755 download/gluetun/data
+install -m 0644 /dev/null download/gluetun/data/forwarded_port
+install -d -m 0700 download/secrets
+install -m 0600 /dev/null download/secrets/protonvpn_wireguard_private_key
+install -m 0600 /dev/null download/secrets/gluetun_control_auth_config
+install -m 0600 /dev/null download/secrets/gluetun_control_api_key
 ```
 
 The forwarded-port file is not a credential. The WireGuard private key and

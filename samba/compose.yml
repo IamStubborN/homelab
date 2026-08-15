@@ -31,6 +31,11 @@ services:
 
     environment:
       - 'HOSTNAME=docker'
+    healthcheck:
+      test: [CMD, pgrep, -f, wsdd.py]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   avahi:
     container_name: samba-avahi
@@ -42,6 +47,11 @@ services:
     network_mode: host
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+    healthcheck:
+      test: [CMD, pgrep, -f, avahi-daemon]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
     volumes:
       - ./config/avahi-daemon.conf:/etc/avahi/avahi-daemon.conf:ro

@@ -26,6 +26,10 @@ if [ ! -d "$python_packages/youtube_transcript_api" ]; then
     UV_CACHE_DIR=/tmp/uv-cache uv pip install --target "$python_packages" youtube-transcript-api==1.2.4
     chown -R 10000:10000 "$python_packages"
 fi
+if [ ! -d "$python_packages/ddgs" ]; then
+    UV_CACHE_DIR=/tmp/uv-cache uv pip install --target "$python_packages" ddgs
+    chown -R 10000:10000 "$python_packages"
+fi
 export PYTHONPATH="$python_packages${PYTHONPATH:+:$PYTHONPATH}"
 
 runtime_secret_dir=/run/hermes-home-secrets
@@ -102,7 +106,7 @@ install_skills() {
     done
 }
 
-shared_skills="health home-assistant media web-research"
+shared_skills="health home-assistant media search-ladder"
 shared_skill_cleanup="$shared_skills media-admin movies series trending watching"
 install_skills /etc/hermes-home/skills "$shared_skills" "$shared_skill_cleanup"
 install_skills /etc/hermes-home/personal-skills "vaultwarden-login" "vaultwarden-login"

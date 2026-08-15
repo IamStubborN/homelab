@@ -145,9 +145,9 @@ No provider API key or real Telegram/Vaultwarden/media secret is committed. Herm
 
 ## Web research skill
 
-The shared `web-research` skill uses the authenticated homelab adaptive research
-pipeline first: `Tavily → Exa → SearXNG`, cached Firecrawl extraction, bounded
-exact excerpts, and Spark Low escalation only when needed. Both profiles receive
+The shared `search-ladder` skill uses the authenticated homelab adaptive research
+pipeline first: `Exa → Tavily → Firecrawl → Ollama`, cached extraction, bounded
+exact excerpts, and model finalization only when needed. Both profiles receive
 the same broker credential as a read-only Docker secret copied to their private
 ephemeral runtime directory. The client has a fixed internal endpoint and emits
 no credential. Hermes falls back once to native `web_search`; native

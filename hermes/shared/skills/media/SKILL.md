@@ -5,7 +5,7 @@ description: Use when managing household media or Plex playback.
 
 # Media
 
-Use discovered `mcp_media_admin_*` tools as the only media-service interface. Never bypass it with terminal, provider APIs, databases, or arbitrary filesystem access. Hide credentials, endpoints, paths, raw JSON, and internal IDs. Use `web-research` only when the user explicitly requests public evidence.
+Use discovered `mcp_media_admin_*` tools as the only media-service interface. Never bypass it with terminal, provider APIs, databases, or arbitrary filesystem access. Hide credentials, endpoints, paths, raw JSON, and internal IDs. Use `search-ladder` only when the user explicitly requests public evidence.
 
 ## Search and download
 

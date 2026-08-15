@@ -213,6 +213,11 @@ services:
       - ./gluetun-watcher/watch.sh:/watch.sh:ro
       - ${HOMELAB_ROOT:-/opt/homelab}:${HOMELAB_ROOT:-/opt/homelab}:ro
     entrypoint: ["sh", "/watch.sh"]
+    healthcheck:
+      test: [CMD, pgrep, -f, "docker events.*container=gluetun"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 secrets:
   protonvpn_wireguard_private_key:

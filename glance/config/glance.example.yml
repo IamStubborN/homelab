@@ -394,6 +394,15 @@ pages:
                 check-url: https://status.openai.com/api/v2/status.json
                 icon: si:openai
                 timeout: 5s
+              - title: Cursor
+                url: https://status.cursor.com/
+                check-url: https://status.cursor.com/api/v2/status.json
+                icon: si:cursor
+                timeout: 5s
+              - title: xAI
+                url: https://status.x.ai/
+                icon: si:xai
+                timeout: 5s
               - title: Claude Code
                 url: https://status.claude.com/
                 check-url: https://status.claude.com/api/v2/status.json

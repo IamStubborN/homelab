@@ -65,7 +65,13 @@ media/readarr/
 media/recyclarr/
 media/sonarr/config/
 media/gluetun/data/
+download/gluetun/data/
+download/prowlarr/
+download/qbittorrent/config/
+plex/config/
+plex/media-preview-generator/
 media/release/
+
 miniflux/postgres/
 mosquitto/data/
 mosquitto/log/
@@ -132,6 +138,7 @@ wproxy/pritunl/profiles/
 
 # Embedded repositories / vendored source trees: track via submodules or their own repos.
 media/qbittorrent/ui/VueTorrent/
+download/qbittorrent/ui/VueTorrent/
 
 # VPN/exported bundles and mutable app state
 wproxy/backup.ovpn

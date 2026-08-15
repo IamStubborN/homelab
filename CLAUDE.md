@@ -63,6 +63,7 @@ make check-codecs VIDEO_DIR=/path/to/dir  # Custom directory
 7. **Monitoring**: Watchtower (auto-updates), DeUnhealth (health checks)
 8. **Other Services**: Bitwarden (Vaultwarden), Hindsight (shared Pi memory), Mosquitto (MQTT broker), RustDesk (remote desktop relay)
 
+
 ### VPN Routing (Gluetun)
 Media services route through Gluetun container:
 - qBittorrent uses `network_mode: service:gluetun`; Prowlarr connects directly
@@ -83,6 +84,7 @@ Use this file and the tracked `*.example.*` files for clean-host recovery. The r
 
 Clean-host restore requires more than the root `.env`: create service-local env files for services with `env_file` (`glance/.env`, `speedtest-tracker/.env`), restore Docker secret files under `traefik/secrets/` and `media/secrets/` (`MEDIA_SECRETS_DIR`), restore ignored runtime data directories, and verify host prerequisites such as storage mounts, `/dev/net/tun`, `/dev/dri`, `/run/dbus`, Docker socket access, ports `80/443`, and the external `proxy` network. The Plex and download Compose definitions are split into `plex/` and `download/`, but their mutable state deliberately remains under `media/` for upgrade compatibility.
 
+
 ### Gluetun control-server API key
 
 The main Gluetun control server (`download/compose.yml`) binds on `:8000` so the
@@ -94,10 +96,11 @@ three spots:
 KEY=$(docker run --rm qmcgaw/gluetun:<pinned-version> genkey)
 # 1. Gluetun auth config (copy the tracked example, then set apikey = "$KEY"):
 cp download/gluetun/control-auth-config.example.toml media/secrets/gluetun_control_auth_config
+
 # 2. Raw key for the qBittorrent healthcheck:
-printf '%s' "$KEY" > media/secrets/gluetun_control_api_key
+printf '%s' "$KEY" > download/secrets/gluetun_control_api_key
 # 3. glance/.env: GLUETUN_CONTROL_API_KEY=$KEY
-chmod 0600 media/secrets/gluetun_control_auth_config media/secrets/gluetun_control_api_key
+chmod 0600 download/secrets/gluetun_control_auth_config download/secrets/gluetun_control_api_key
 ```
 
 The only route exposed is `GET /v1/publicip/ip` (used by both the Glance widget
@@ -171,6 +174,7 @@ freedium/backup-db.sh
 **Search Ladder** (`/search-ladder/`): Authenticated research broker for the Hermes `web-research` skill. See `search-ladder/README.md`.
 
 **Hindsight** (`/hindsight/`): Shared authenticated memory API for Pi clients. It uses PostgreSQL/pgvector and OmniRoute for Codex OAuth LLM calls, local BGE-M3 embeddings, and NVIDIA reranking. See `hindsight/README.md` for secrets, deployment, and backup/restore.
+
 
 **Cursorpipe** (`/cursorpipe/`): Internal OpenAI-compatible proxy for the official Cursor API key. OmniRoute registers it as a custom chat provider. See `cursorpipe/README.md`.
 

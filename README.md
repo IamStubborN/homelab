@@ -51,13 +51,14 @@ Fill real values only in ignored local files:
 - `glance/.env`
 - `speedtest-tracker/.env`
 - `traefik/secrets/cf_dns_api_token`
-- `media/secrets/protonvpn_wireguard_private_key`
-- `media/secrets/plex_token`
+- `download/secrets/protonvpn_wireguard_private_key`
+- `plex/secrets/plex_token`
 - `homeassistant/config/secrets.yaml`
 
 Generate the Hindsight secrets documented in `hindsight/README.md` in the root `.env`.
 Cursorpipe and Ollama IPEX publish no host ports. OmniRoute exposes its API only
 on host loopback (`127.0.0.1:20129`); authenticated public routes use Traefik.
+
 
 Initialize the Freedium submodule:
 

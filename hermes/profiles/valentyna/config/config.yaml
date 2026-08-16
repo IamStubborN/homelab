@@ -151,7 +151,7 @@ skills:
 agent:
   verify_on_stop: false
   service_tier: fast
-  reasoning_effort: low
+  reasoning_effort: high
   reasoning_overrides:
     opencode-go/gpt-5.6-luna: high
 plugins:

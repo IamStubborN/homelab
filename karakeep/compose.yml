@@ -22,6 +22,7 @@ services:
       INFERENCE_ENABLE_AUTO_SUMMARIZATION: true
       INFERENCE_JOB_TIMEOUT_SEC: 600
       INFERENCE_CONTEXT_LENGTH: 32768
+      OPENAI_REASONING_EFFORT: high
 
       # Embeddings via local Ollama bge-m3. Do not set OLLAMA_BASE_URL:
       # that would steal tagging/summaries from Omniroute. IPEX ignores

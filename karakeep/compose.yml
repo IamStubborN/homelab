@@ -24,10 +24,10 @@ services:
       INFERENCE_CONTEXT_LENGTH: 32768
 
       # Embeddings via local Ollama bge-m3. Do not set OLLAMA_BASE_URL:
-      # OPENAI_API_KEY would still win for inference, but embeddings would
-      # keep falling back to Omniroute. Use the embedding-specific OpenAI-compat
-      # client against ollama-ipex /v1 on agent-tools instead.
-      EMBEDDING_OPENAI_BASE_URL: http://ollama-ipex:11434/v1
+      # that would steal tagging/summaries from Omniroute. IPEX ignores
+      # encoding_format=base64, so the OpenAI SDK would store 256 garbage
+      # dims; karakeep-embed-proxy packs native /api/embed as base64 f32.
+      EMBEDDING_OPENAI_BASE_URL: http://karakeep-embed-proxy:8080/v1
       EMBEDDING_OPENAI_API_KEY: ollama
       EMBEDDING_TEXT_MODEL: bge-m3
       EMBEDDING_DIMENSIONS: 1024
@@ -42,6 +42,8 @@ services:
         condition: service_healthy
       meilisearch:
         condition: service_healthy
+      karakeep-embed-proxy:
+        condition: service_healthy
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
@@ -52,6 +54,33 @@ services:
       - "traefik.docker.network=proxy"
     networks:
       - proxy
+      - karakeep-internal
+      - agent-tools
+
+  karakeep-embed-proxy:
+    container_name: karakeep-embed-proxy
+    image: python:3.12-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: ["python", "/app/embed-proxy.py"]
+    volumes:
+      - ./embed-proxy.py:/app/embed-proxy.py:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    networks:
       - karakeep-internal
       - agent-tools
 

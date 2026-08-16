@@ -378,7 +378,7 @@ class ExtendedOpenAIAgentEntity(
             top_p=top_p,
             temperature=temperature,
             user=user_input.conversation_id,
-            reasoning_effort="high",
+            reasoning_effort="low",
             **token_kwargs,
             **tool_kwargs,
         )

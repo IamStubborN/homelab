@@ -175,64 +175,64 @@ services:
 #       - media-internal
 #       - proxy
 #
-  gluetun-rezka:
-    <<: *locked-down
-    image: ${GLUETUN_REZKA_IMAGE:?set GLUETUN_REZKA_IMAGE to an immutable Gluetun tag or digest}
-    container_name: gluetun-rezka
-    restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
-      - DAC_READ_SEARCH
-      # Gluetun persists the detected public IP after dropping to PUID/PGID.
-      - CHOWN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    environment:
-      TZ: ${TIMEZONE:-UTC}
-      VPN_SERVICE_PROVIDER: protonvpn
-      VPN_TYPE: wireguard
-      WIREGUARD_PRIVATE_KEY_SECRETFILE: /run/secrets/gluetun_rezka_wireguard_private_key
-      SERVER_COUNTRIES: ${GLUETUN_REZKA_SERVER_COUNTRIES:?set dedicated Rezka VPN countries}
-      VPN_PORT_FORWARDING: "off"
-      HEALTH_RESTART_VPN: "off"
-      DNS_SERVER: "on"
-      DNS_UPSTREAM_RESOLVERS: cloudflare,google
-      BLOCK_MALICIOUS: "off"
-      DNS_UPSTREAM_IPV6: "off"
-      HTTP_CONTROL_SERVER_ADDRESS: 127.0.0.1:8000
-      HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH: /run/secrets/gluetun_rezka_control_auth_config
-      HTTPPROXY: "on"
-      HTTPPROXY_LISTENING_ADDRESS: :8888
-      HTTPPROXY_STEALTH: "on"
-      FIREWALL_OUTBOUND_SUBNETS: ${GLUETUN_REZKA_OUTBOUND_SUBNETS:?set the Docker subnets reachable outside the VPN}
-    secrets:
-      - gluetun_rezka_wireguard_private_key
-      - gluetun_rezka_control_auth_config
-    volumes:
-      - type: volume
-        source: gluetun_rezka_state
-        target: /gluetun
-        volume:
-          nocopy: true
-    tmpfs:
-      - /tmp/gluetun:rw,nosuid,nodev,noexec,size=16m,mode=0755
-    healthcheck:
-      test:
-        - CMD
-        - /gluetun-entrypoint
-        - healthcheck
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    labels:
-      traefik.enable: "false"
-    networks:
-      - media-private
-      - rezka-egress
-      - rezka-credentials
-      - proxy
-
+#   gluetun-rezka:
+#     <<: *locked-down
+#     image: ${GLUETUN_REZKA_IMAGE:?set GLUETUN_REZKA_IMAGE to an immutable Gluetun tag or digest}
+#     container_name: gluetun-rezka
+#     restart: unless-stopped
+#     cap_add:
+#       - NET_ADMIN
+#       - DAC_READ_SEARCH
+#       # Gluetun persists the detected public IP after dropping to PUID/PGID.
+#       - CHOWN
+#     devices:
+#       - /dev/net/tun:/dev/net/tun
+#     environment:
+#       TZ: ${TIMEZONE:-UTC}
+#       VPN_SERVICE_PROVIDER: protonvpn
+#       VPN_TYPE: wireguard
+#       WIREGUARD_PRIVATE_KEY_SECRETFILE: /run/secrets/gluetun_rezka_wireguard_private_key
+#       SERVER_COUNTRIES: ${GLUETUN_REZKA_SERVER_COUNTRIES:?set dedicated Rezka VPN countries}
+#       VPN_PORT_FORWARDING: "off"
+#       HEALTH_RESTART_VPN: "off"
+#       DNS_SERVER: "on"
+#       DNS_UPSTREAM_RESOLVERS: cloudflare,google
+#       BLOCK_MALICIOUS: "off"
+#       DNS_UPSTREAM_IPV6: "off"
+#       HTTP_CONTROL_SERVER_ADDRESS: 127.0.0.1:8000
+#       HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH: /run/secrets/gluetun_rezka_control_auth_config
+#       HTTPPROXY: "on"
+#       HTTPPROXY_LISTENING_ADDRESS: :8888
+#       HTTPPROXY_STEALTH: "on"
+#       FIREWALL_OUTBOUND_SUBNETS: ${GLUETUN_REZKA_OUTBOUND_SUBNETS:?set the Docker subnets reachable outside the VPN}
+#     secrets:
+#       - gluetun_rezka_wireguard_private_key
+#       - gluetun_rezka_control_auth_config
+#     volumes:
+#       - type: volume
+#         source: gluetun_rezka_state
+#         target: /gluetun
+#         volume:
+#           nocopy: true
+#     tmpfs:
+#       - /tmp/gluetun:rw,nosuid,nodev,noexec,size=16m,mode=0755
+#     healthcheck:
+#       test:
+#         - CMD
+#         - /gluetun-entrypoint
+#         - healthcheck
+#       interval: 10s
+#       timeout: 5s
+#       retries: 5
+#       start_period: 30s
+#     labels:
+#       traefik.enable: "false"
+#     networks:
+#       - media-private
+#       - rezka-egress
+#       - rezka-credentials
+#       - proxy
+#
 #   download-runner:
 #     <<: *locked-down
 #     image: ${DOWNLOAD_RUNNER_IMAGE:?set DOWNLOAD_RUNNER_IMAGE to an immutable media-orchestrator runner tag or digest}

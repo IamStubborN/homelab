@@ -43,84 +43,84 @@ x-service-environment: &service-environment
   TZ: ${TIMEZONE:-UTC}
 
 services:
-  media-postgres:
-    <<: *locked-down
-    image: ${MEDIA_POSTGRES_IMAGE:?set MEDIA_POSTGRES_IMAGE to an immutable PostgreSQL tag or digest}
-    container_name: media-postgres
-    restart: unless-stopped
-    read_only: true
-    cap_add:
-      # Required by the official entrypoint to initialize and drop to postgres.
-      - CHOWN
-      - DAC_OVERRIDE
-      - FOWNER
-      - SETGID
-      - SETUID
-    environment:
-      POSTGRES_DB: ${MEDIA_POSTGRES_DB:-media_orchestrator}
-      POSTGRES_USER: ${MEDIA_POSTGRES_USER:-media}
-      POSTGRES_PASSWORD: ${MEDIA_POSTGRES_PASSWORD:?set media PostgreSQL password}
-      PGDATA: /var/lib/postgresql/data/pgdata
-      TZ: ${TIMEZONE:-UTC}
-    volumes:
-      - type: volume
-        source: media_postgres_data
-        target: /var/lib/postgresql/data
-        volume:
-          nocopy: true
-    tmpfs:
-      - /run/postgresql:size=16m,mode=0770
-      - /tmp:size=64m,mode=1777
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    networks:
-      - media-db
-
-  media-migrate:
-    <<: *locked-down
-    image: ${MEDIA_SERVICE_IMAGE:?set MEDIA_SERVICE_IMAGE to an immutable media-orchestrator tag or digest}
-    container_name: media-migrate
-    user: ${PUID:-1000}:${PGID:-1000}
-    command:
-      - migrate
-    restart: "no"
-    read_only: true
-    environment:
-      MEDIA_DATABASE_URL: ${MEDIA_DATABASE_URL:?set media database URL}
-      RUST_LOG: ${MEDIA_RUST_LOG:-info}
-      TZ: ${TIMEZONE:-UTC}
-    tmpfs:
-      - /tmp:size=32m,mode=1777
-    depends_on:
-      media-postgres:
-        condition: service_healthy
-    networks:
-      - media-db
-
-  media-session-init:
-    <<: *locked-down
-    image: ${MEDIA_SERVICE_IMAGE:?set MEDIA_SERVICE_IMAGE to an immutable media-orchestrator tag or digest}
-    container_name: media-session-init
-    user: "0:0"
-    cap_add:
-      - CHOWN
-    entrypoint:
-      - /bin/chown
-    command:
-      - -R
-      - ${PUID:-1000}:${PGID:-1000}
-      - /var/lib/media-orchestrator/session
-    restart: "no"
-    read_only: true
-    volumes:
-      - rezka_session_encrypted:/var/lib/media-orchestrator/session
-
+#   media-postgres:
+#     <<: *locked-down
+#     image: ${MEDIA_POSTGRES_IMAGE:?set MEDIA_POSTGRES_IMAGE to an immutable PostgreSQL tag or digest}
+#     container_name: media-postgres
+#     restart: unless-stopped
+#     read_only: true
+#     cap_add:
+#       # Required by the official entrypoint to initialize and drop to postgres.
+#       - CHOWN
+#       - DAC_OVERRIDE
+#       - FOWNER
+#       - SETGID
+#       - SETUID
+#     environment:
+#       POSTGRES_DB: ${MEDIA_POSTGRES_DB:-media_orchestrator}
+#       POSTGRES_USER: ${MEDIA_POSTGRES_USER:-media}
+#       POSTGRES_PASSWORD: ${MEDIA_POSTGRES_PASSWORD:?set media PostgreSQL password}
+#       PGDATA: /var/lib/postgresql/data/pgdata
+#       TZ: ${TIMEZONE:-UTC}
+#     volumes:
+#       - type: volume
+#         source: media_postgres_data
+#         target: /var/lib/postgresql/data
+#         volume:
+#           nocopy: true
+#     tmpfs:
+#       - /run/postgresql:size=16m,mode=0770
+#       - /tmp:size=64m,mode=1777
+#     healthcheck:
+#       test:
+#         - CMD-SHELL
+#         - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+#       interval: 10s
+#       timeout: 5s
+#       retries: 10
+#       start_period: 30s
+#     networks:
+#       - media-db
+#
+#   media-migrate:
+#     <<: *locked-down
+#     image: ${MEDIA_SERVICE_IMAGE:?set MEDIA_SERVICE_IMAGE to an immutable media-orchestrator tag or digest}
+#     container_name: media-migrate
+#     user: ${PUID:-1000}:${PGID:-1000}
+#     command:
+#       - migrate
+#     restart: "no"
+#     read_only: true
+#     environment:
+#       MEDIA_DATABASE_URL: ${MEDIA_DATABASE_URL:?set media database URL}
+#       RUST_LOG: ${MEDIA_RUST_LOG:-info}
+#       TZ: ${TIMEZONE:-UTC}
+#     tmpfs:
+#       - /tmp:size=32m,mode=1777
+#     depends_on:
+#       media-postgres:
+#         condition: service_healthy
+#     networks:
+#       - media-db
+#
+#   media-session-init:
+#     <<: *locked-down
+#     image: ${MEDIA_SERVICE_IMAGE:?set MEDIA_SERVICE_IMAGE to an immutable media-orchestrator tag or digest}
+#     container_name: media-session-init
+#     user: "0:0"
+#     cap_add:
+#       - CHOWN
+#     entrypoint:
+#       - /bin/chown
+#     command:
+#       - -R
+#       - ${PUID:-1000}:${PGID:-1000}
+#       - /var/lib/media-orchestrator/session
+#     restart: "no"
+#     read_only: true
+#     volumes:
+#       - rezka_session_encrypted:/var/lib/media-orchestrator/session
+#
 #   media-service:
 #     <<: *locked-down
 #     image: ${MEDIA_SERVICE_IMAGE:?set MEDIA_SERVICE_IMAGE to an immutable media-orchestrator tag or digest}

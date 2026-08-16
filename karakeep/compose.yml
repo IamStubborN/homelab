@@ -23,6 +23,16 @@ services:
       INFERENCE_JOB_TIMEOUT_SEC: 600
       INFERENCE_CONTEXT_LENGTH: 32768
 
+      # Embeddings via local Ollama bge-m3. Do not set OLLAMA_BASE_URL:
+      # OPENAI_API_KEY would still win for inference, but embeddings would
+      # keep falling back to Omniroute. Use the embedding-specific OpenAI-compat
+      # client against ollama-ipex /v1 on agent-tools instead.
+      EMBEDDING_OPENAI_BASE_URL: http://ollama-ipex:11434/v1
+      EMBEDDING_OPENAI_API_KEY: ollama
+      EMBEDDING_TEXT_MODEL: bge-m3
+      EMBEDDING_DIMENSIONS: 1024
+      EMBEDDING_ENABLE_AUTO_INDEXING: true
+
       # Allow crawler to access internal hostnames
       CRAWLER_ALLOWED_INTERNAL_HOSTNAMES: ${KARAKEEP_CRAWLER_ALLOWED_INTERNAL_HOSTNAMES}
 
@@ -43,6 +53,7 @@ services:
     networks:
       - proxy
       - karakeep-internal
+      - agent-tools
 
   chrome:
     container_name: karakeep-chrome
@@ -97,3 +108,5 @@ networks:
     internal: true
   proxy:
     external: true
+  agent-tools:
+    name: agent-tools

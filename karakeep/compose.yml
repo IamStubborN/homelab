@@ -39,6 +39,7 @@ services:
       - "traefik.http.routers.karakeep.entrypoints=http,https"
       - "traefik.http.routers.karakeep.rule=Host(`karakeep.${DOCKER_DOMAIN}`)"
       - "traefik.http.services.karakeep.loadbalancer.server.port=3000"
+      - "traefik.docker.network=proxy"
     networks:
       - proxy
       - karakeep-internal

@@ -26,7 +26,8 @@ include:
     - search-ladder/compose.yml
     - hindsight/compose.yml
     - hermes/compose.yaml
-    - media/compose.media-orchestrator.yml
+    # parked: Rezka/media-orchestrator stack
+    # - media/compose.media-orchestrator.yml
     - health/compose.yml
 
 networks:

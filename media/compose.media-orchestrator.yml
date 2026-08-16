@@ -121,60 +121,60 @@ services:
     volumes:
       - rezka_session_encrypted:/var/lib/media-orchestrator/session
 
-  media-service:
-    <<: *locked-down
-    image: ${MEDIA_SERVICE_IMAGE:?set MEDIA_SERVICE_IMAGE to an immutable media-orchestrator tag or digest}
-    container_name: media-service
-    user: ${PUID:-1000}:${PGID:-1000}
-    command:
-      - serve
-    restart: "no"
-    read_only: true
-    environment: *service-environment
-    secrets:
-      - media_rezka_username
-      - media_rezka_password
-    volumes:
-      - type: volume
-        source: rezka_session_encrypted
-        target: /var/lib/media-orchestrator/session
-        volume:
-          nocopy: true
-      - type: bind
-        source: ${INTERNAL_STORAGE:?set INTERNAL_STORAGE to the storage root}
-        target: /data/internal
-        bind:
-          create_host_path: false
-    expose:
-      - "8080"
-    tmpfs:
-      - /tmp:size=64m,mode=1777
-    healthcheck:
-      test:
-        - CMD
-        - media
-        - healthcheck
-        - --url
-        - http://127.0.0.1:8080/v1/ready
-      interval: 20s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    depends_on:
-      media-postgres:
-        condition: service_healthy
-      media-migrate:
-        condition: service_completed_successfully
-      media-session-init:
-        condition: service_completed_successfully
-    labels:
-      traefik.enable: "false"
-    networks:
-      - media-db
-      - media-private
-      - media-internal
-      - proxy
-
+#   media-service:
+#     <<: *locked-down
+#     image: ${MEDIA_SERVICE_IMAGE:?set MEDIA_SERVICE_IMAGE to an immutable media-orchestrator tag or digest}
+#     container_name: media-service
+#     user: ${PUID:-1000}:${PGID:-1000}
+#     command:
+#       - serve
+#     restart: unless-stopped
+#     read_only: true
+#     environment: *service-environment
+#     secrets:
+#       - media_rezka_username
+#       - media_rezka_password
+#     volumes:
+#       - type: volume
+#         source: rezka_session_encrypted
+#         target: /var/lib/media-orchestrator/session
+#         volume:
+#           nocopy: true
+#       - type: bind
+#         source: ${INTERNAL_STORAGE:?set INTERNAL_STORAGE to the storage root}
+#         target: /data/internal
+#         bind:
+#           create_host_path: false
+#     expose:
+#       - "8080"
+#     tmpfs:
+#       - /tmp:size=64m,mode=1777
+#     healthcheck:
+#       test:
+#         - CMD
+#         - media
+#         - healthcheck
+#         - --url
+#         - http://127.0.0.1:8080/v1/ready
+#       interval: 20s
+#       timeout: 5s
+#       retries: 5
+#       start_period: 20s
+#     depends_on:
+#       media-postgres:
+#         condition: service_healthy
+#       media-migrate:
+#         condition: service_completed_successfully
+#       media-session-init:
+#         condition: service_completed_successfully
+#     labels:
+#       traefik.enable: "false"
+#     networks:
+#       - media-db
+#       - media-private
+#       - media-internal
+#       - proxy
+#
   gluetun-rezka:
     <<: *locked-down
     image: ${GLUETUN_REZKA_IMAGE:?set GLUETUN_REZKA_IMAGE to an immutable Gluetun tag or digest}
@@ -233,121 +233,121 @@ services:
       - rezka-credentials
       - proxy
 
-  download-runner:
-    <<: *locked-down
-    image: ${DOWNLOAD_RUNNER_IMAGE:?set DOWNLOAD_RUNNER_IMAGE to an immutable media-orchestrator runner tag or digest}
-    container_name: download-runner
-    user: ${PUID:-1000}:${PGID:-1000}
-    command:
-      - runner
-    restart: "no"
-    read_only: true
-    network_mode: service:gluetun-rezka
-    group_add:
-      - ${RENDER_GID:-109}
-      - ${VIDEO_GID:-44}
-    devices:
-      - /dev/dri:/dev/dri
-    environment:
-      MEDIA_SERVICE_URL: http://media-service:8080
-      MEDIA_TOKEN: ${MEDIA_RUNNER_TOKEN:?set runner API token}
-      MEDIA_REZKA_MIRRORS: ${MEDIA_REZKA_MIRRORS:?set comma-separated HTTPS Rezka mirrors}
-      MEDIA_REZKA_SESSION_PROBE_URL: ${MEDIA_REZKA_SESSION_PROBE_URL:?set the HTTPS session probe URL}
-      MEDIA_REZKA_SESSION_VALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_VALID_MARKERS_JSON:?set valid session markers JSON}
-      MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON:?set invalid session markers JSON}
-      MEDIA_REZKA_CREDENTIAL_BROKER_URL: http://vaultwarden-broker-andrii:8787
-      MEDIA_REZKA_CREDENTIAL_BROKER_TOKEN: ${ANDRII_REZKA_BROKER_TOKEN:?set Andrii Rezka credential broker token}
-      MEDIA_REZKA_CREDENTIAL_BROKER_PRIVATE_HTTP_HOSTS: vaultwarden-broker-andrii
-      MEDIA_REZKA_COOKIE_KEY: ${MEDIA_REZKA_COOKIE_KEY:?set Rezka cookie key}
-      MEDIA_REZKA_SESSION_STORE_FILE: /var/lib/media-orchestrator/session/session.bin
-      MEDIA_RUNNER_EXIT_AFTER_JOB: "true"
-      MEDIA_QBITTORRENT_URL: http://gluetun:8400
-      MEDIA_QBITTORRENT_TV_CATEGORY: ${MEDIA_QBITTORRENT_TV_CATEGORY:?set existing TV category}
-      MEDIA_QBITTORRENT_MOVIES_CATEGORY: ${MEDIA_QBITTORRENT_MOVIES_CATEGORY:?set existing movies category}
-      MEDIA_QBITTORRENT_USERNAME: ${MEDIA_QBITTORRENT_USERNAME:?set qBittorrent username}
-      MEDIA_QBITTORRENT_PASSWORD: ${MEDIA_QBITTORRENT_PASSWORD:?set qBittorrent password}
-      MEDIA_STAGING_ROOT: /data/internal/media-orchestrator/staging/rezka
-      MEDIA_TV_ROOT: /data/internal/media/rezka/tv
-      MEDIA_MOVIES_ROOT: /data/internal/media/rezka/movies
-      MEDIA_STORAGE_RESERVE_BYTES: "0"
-      TMPDIR: /run/yt-dlp
-      RUST_LOG: ${MEDIA_RUST_LOG:-info}
-      TZ: ${TIMEZONE:-UTC}
-    volumes:
-      # One bind mount preserves atomic rename between staging and Plex roots.
-      - type: bind
-        source: ${INTERNAL_STORAGE:?set INTERNAL_STORAGE to the storage root}
-        target: /data/internal
-        bind:
-          create_host_path: false
-      - type: volume
-        source: rezka_session_encrypted
-        target: /var/lib/media-orchestrator/session
-        volume:
-          nocopy: true
-    tmpfs:
-      - /tmp:size=1g,mode=1777
-      - /run/media-orchestrator:size=16m,mode=0700
-      - /run/yt-dlp:rw,nosuid,nodev,exec,size=256m,mode=1777
-    healthcheck:
-      test:
-        - CMD
-        - media
-        - healthcheck
-        - --url
-        - http://media-service:8080/v1/health
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    depends_on:
-      gluetun-rezka:
-        condition: service_healthy
-      media-service:
-        condition: service_healthy
-      media-session-init:
-        condition: service_completed_successfully
-
-  gluetun-rezka-watcher:
-    <<: *locked-down
-    image: ${GLUETUN_REZKA_WATCHER_IMAGE:?set GLUETUN_REZKA_WATCHER_IMAGE to an immutable Docker CLI tag or digest}
-    container_name: gluetun-rezka-watcher
-    restart: unless-stopped
-    read_only: true
-    environment:
-      MEDIA_LIFECYCLE_TOKEN: ${MEDIA_LIFECYCLE_TOKEN:?set lifecycle API token}
-      PARENT_CONTAINER: gluetun-rezka
-      DEPENDENT_CONTAINER: download-runner
-      HEALTH_TIMEOUT: "120"
-      SETTLE_DELAY: "10"
-      ROTATION_ATTEMPTS: "3"
-      REZKA_PROBE_URL: ${MEDIA_REZKA_SESSION_PROBE_URL:?set the HTTPS Rezka probe URL}
-      REZKA_PROBE_TIMEOUT: "20"
-      STATE_DIR: /state
-    networks:
-      - media-internal
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./gluetun-rezka-watcher/watch.sh:/watch.sh:ro
-      - gluetun_rezka_lifecycle:/state
-    tmpfs:
-      - /tmp:size=16m,mode=1777
-    entrypoint:
-      - /bin/sh
-      - /watch.sh
-    healthcheck:
-      test:
-        - CMD
-        - docker
-        - info
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-    depends_on:
-      gluetun-rezka:
-        condition: service_healthy
-
+#   download-runner:
+#     <<: *locked-down
+#     image: ${DOWNLOAD_RUNNER_IMAGE:?set DOWNLOAD_RUNNER_IMAGE to an immutable media-orchestrator runner tag or digest}
+#     container_name: download-runner
+#     user: ${PUID:-1000}:${PGID:-1000}
+#     command:
+#       - runner
+#     restart: "no"
+#     read_only: true
+#     network_mode: service:gluetun-rezka
+#     group_add:
+#       - ${RENDER_GID:-109}
+#       - ${VIDEO_GID:-44}
+#     devices:
+#       - /dev/dri:/dev/dri
+#     environment:
+#       MEDIA_SERVICE_URL: http://media-service:8080
+#       MEDIA_TOKEN: ${MEDIA_RUNNER_TOKEN:?set runner API token}
+#       MEDIA_REZKA_MIRRORS: ${MEDIA_REZKA_MIRRORS:?set comma-separated HTTPS Rezka mirrors}
+#       MEDIA_REZKA_SESSION_PROBE_URL: ${MEDIA_REZKA_SESSION_PROBE_URL:?set the HTTPS session probe URL}
+#       MEDIA_REZKA_SESSION_VALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_VALID_MARKERS_JSON:?set valid session markers JSON}
+#       MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON:?set invalid session markers JSON}
+#       MEDIA_REZKA_CREDENTIAL_BROKER_URL: http://vaultwarden-broker-andrii:8787
+#       MEDIA_REZKA_CREDENTIAL_BROKER_TOKEN: ${ANDRII_REZKA_BROKER_TOKEN:?set Andrii Rezka credential broker token}
+#       MEDIA_REZKA_CREDENTIAL_BROKER_PRIVATE_HTTP_HOSTS: vaultwarden-broker-andrii
+#       MEDIA_REZKA_COOKIE_KEY: ${MEDIA_REZKA_COOKIE_KEY:?set Rezka cookie key}
+#       MEDIA_REZKA_SESSION_STORE_FILE: /var/lib/media-orchestrator/session/session.bin
+#       MEDIA_RUNNER_EXIT_AFTER_JOB: "true"
+#       MEDIA_QBITTORRENT_URL: http://gluetun:8400
+#       MEDIA_QBITTORRENT_TV_CATEGORY: ${MEDIA_QBITTORRENT_TV_CATEGORY:?set existing TV category}
+#       MEDIA_QBITTORRENT_MOVIES_CATEGORY: ${MEDIA_QBITTORRENT_MOVIES_CATEGORY:?set existing movies category}
+#       MEDIA_QBITTORRENT_USERNAME: ${MEDIA_QBITTORRENT_USERNAME:?set qBittorrent username}
+#       MEDIA_QBITTORRENT_PASSWORD: ${MEDIA_QBITTORRENT_PASSWORD:?set qBittorrent password}
+#       MEDIA_STAGING_ROOT: /data/internal/media-orchestrator/staging/rezka
+#       MEDIA_TV_ROOT: /data/internal/media/rezka/tv
+#       MEDIA_MOVIES_ROOT: /data/internal/media/rezka/movies
+#       MEDIA_STORAGE_RESERVE_BYTES: "0"
+#       TMPDIR: /run/yt-dlp
+#       RUST_LOG: ${MEDIA_RUST_LOG:-info}
+#       TZ: ${TIMEZONE:-UTC}
+#     volumes:
+#       # One bind mount preserves atomic rename between staging and Plex roots.
+#       - type: bind
+#         source: ${INTERNAL_STORAGE:?set INTERNAL_STORAGE to the storage root}
+#         target: /data/internal
+#         bind:
+#           create_host_path: false
+#       - type: volume
+#         source: rezka_session_encrypted
+#         target: /var/lib/media-orchestrator/session
+#         volume:
+#           nocopy: true
+#     tmpfs:
+#       - /tmp:size=1g,mode=1777
+#       - /run/media-orchestrator:size=16m,mode=0700
+#       - /run/yt-dlp:rw,nosuid,nodev,exec,size=256m,mode=1777
+#     healthcheck:
+#       test:
+#         - CMD
+#         - media
+#         - healthcheck
+#         - --url
+#         - http://media-service:8080/v1/health
+#       interval: 30s
+#       timeout: 5s
+#       retries: 3
+#       start_period: 30s
+#     depends_on:
+#       gluetun-rezka:
+#         condition: service_healthy
+#       media-service:
+#         condition: service_healthy
+#       media-session-init:
+#         condition: service_completed_successfully
+#
+#   gluetun-rezka-watcher:
+#     <<: *locked-down
+#     image: ${GLUETUN_REZKA_WATCHER_IMAGE:?set GLUETUN_REZKA_WATCHER_IMAGE to an immutable Docker CLI tag or digest}
+#     container_name: gluetun-rezka-watcher
+#     restart: unless-stopped
+#     read_only: true
+#     environment:
+#       MEDIA_LIFECYCLE_TOKEN: ${MEDIA_LIFECYCLE_TOKEN:?set lifecycle API token}
+#       PARENT_CONTAINER: gluetun-rezka
+#       DEPENDENT_CONTAINER: download-runner
+#       HEALTH_TIMEOUT: "120"
+#       SETTLE_DELAY: "10"
+#       ROTATION_ATTEMPTS: "3"
+#       REZKA_PROBE_URL: ${MEDIA_REZKA_SESSION_PROBE_URL:?set the HTTPS Rezka probe URL}
+#       REZKA_PROBE_TIMEOUT: "20"
+#       STATE_DIR: /state
+#     networks:
+#       - media-internal
+#     volumes:
+#       - /var/run/docker.sock:/var/run/docker.sock
+#       - ./gluetun-rezka-watcher/watch.sh:/watch.sh:ro
+#       - gluetun_rezka_lifecycle:/state
+#     tmpfs:
+#       - /tmp:size=16m,mode=1777
+#     entrypoint:
+#       - /bin/sh
+#       - /watch.sh
+#     healthcheck:
+#       test:
+#         - CMD
+#         - docker
+#         - info
+#       interval: 30s
+#       timeout: 10s
+#       retries: 3
+#       start_period: 15s
+#     depends_on:
+#       gluetun-rezka:
+#         condition: service_healthy
+#
 secrets:
   media_rezka_username:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_rezka_username

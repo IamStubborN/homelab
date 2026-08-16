@@ -128,7 +128,7 @@ services:
     user: ${PUID:-1000}:${PGID:-1000}
     command:
       - serve
-    restart: unless-stopped
+    restart: "no"
     read_only: true
     environment: *service-environment
     secrets:

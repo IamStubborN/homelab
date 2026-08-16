@@ -108,6 +108,7 @@ services:
 
     networks:
       - karakeep-internal
+      - agent-tools
 
   meilisearch:
     container_name: karakeep-meilisearch

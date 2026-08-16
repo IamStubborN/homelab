@@ -4,7 +4,7 @@ Shared memory server for Pi clients.
 
 - Control Plane UI: `https://hindsight.${DOCKER_DOMAIN}`
 - API and built-in MCP: internal port `8888` (proxied by the Control Plane)
-- LLM: `opencode-go/deepseek-v4-flash` through OmniRoute
+- LLM: `opencode-go/gpt-5.6-luna` through OmniRoute
 - Embeddings: local Ollama `bge-m3` at 1024 dimensions through OmniRoute
 - Reranking: NVIDIA `nv-rerank-qa-mistral-4b:1` through OmniRoute
 - Storage: PostgreSQL 17 with pgvector

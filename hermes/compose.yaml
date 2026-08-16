@@ -170,52 +170,52 @@ services:
       start_period: 30s
     networks: [primary-private, rezka-credentials]
 
-  media-notifier-primary:
-    <<: *notifier-common
-    container_name: media-notifier-primary
-    environment:
-      LISTEN_ADDR: 0.0.0.0:8644
-      PYTHONPATH: /usr/local/lib/hermes-home
-      STATE_DIR: /data
-      TELEGRAM_CHAT_ID: ${PRIMARY_TELEGRAM_CHAT_ID:?set PRIMARY_TELEGRAM_CHAT_ID}
-    volumes:
-      - ./scripts/media-notifier:/usr/local/bin/media-notifier:ro
-      - ./scripts/hermes_media_notifications.py:/usr/local/lib/hermes-home/hermes_media_notifications.py:ro
-      - ./shared/plugins/telegram-home/assets/media-menu.jpg:/usr/local/share/hermes-home/media-menu.jpg:ro
-      - media_notifier_primary:/data
-    secrets:
-      - source: primary_telegram_token
-        target: telegram_bot_token
-      - source: primary_webhook_hmac
-        target: webhook_hmac
-
-  media-notifier-secondary:
-    <<: *notifier-common
-    container_name: media-notifier-secondary
-    environment:
-      LISTEN_ADDR: 0.0.0.0:8644
-      PYTHONPATH: /usr/local/lib/hermes-home
-      STATE_DIR: /data
-      TELEGRAM_CHAT_ID: ${SECONDARY_TELEGRAM_CHAT_ID:?set SECONDARY_TELEGRAM_CHAT_ID}
-    volumes:
-      - ./scripts/media-notifier:/usr/local/bin/media-notifier:ro
-      - ./scripts/hermes_media_notifications.py:/usr/local/lib/hermes-home/hermes_media_notifications.py:ro
-      - ./shared/plugins/telegram-home/assets/media-menu.jpg:/usr/local/share/hermes-home/media-menu.jpg:ro
-      - media_notifier_secondary:/data
-    secrets:
-      - source: secondary_telegram_token
-        target: telegram_bot_token
-      - source: secondary_webhook_hmac
-        target: webhook_hmac
-
+#   media-notifier-primary:
+#     <<: *notifier-common
+#     container_name: media-notifier-primary
+#     environment:
+#       LISTEN_ADDR: 0.0.0.0:8644
+#       PYTHONPATH: /usr/local/lib/hermes-home
+#       STATE_DIR: /data
+#       TELEGRAM_CHAT_ID: ${PRIMARY_TELEGRAM_CHAT_ID:?set PRIMARY_TELEGRAM_CHAT_ID}
+#     volumes:
+#       - ./scripts/media-notifier:/usr/local/bin/media-notifier:ro
+#       - ./scripts/hermes_media_notifications.py:/usr/local/lib/hermes-home/hermes_media_notifications.py:ro
+#       - ./shared/plugins/telegram-home/assets/media-menu.jpg:/usr/local/share/hermes-home/media-menu.jpg:ro
+#       - media_notifier_primary:/data
+#     secrets:
+#       - source: primary_telegram_token
+#         target: telegram_bot_token
+#       - source: primary_webhook_hmac
+#         target: webhook_hmac
+#
+#   media-notifier-secondary:
+#     <<: *notifier-common
+#     container_name: media-notifier-secondary
+#     environment:
+#       LISTEN_ADDR: 0.0.0.0:8644
+#       PYTHONPATH: /usr/local/lib/hermes-home
+#       STATE_DIR: /data
+#       TELEGRAM_CHAT_ID: ${SECONDARY_TELEGRAM_CHAT_ID:?set SECONDARY_TELEGRAM_CHAT_ID}
+#     volumes:
+#       - ./scripts/media-notifier:/usr/local/bin/media-notifier:ro
+#       - ./scripts/hermes_media_notifications.py:/usr/local/lib/hermes-home/hermes_media_notifications.py:ro
+#       - ./shared/plugins/telegram-home/assets/media-menu.jpg:/usr/local/share/hermes-home/media-menu.jpg:ro
+#       - media_notifier_secondary:/data
+#     secrets:
+#       - source: secondary_telegram_token
+#         target: telegram_bot_token
+#       - source: secondary_webhook_hmac
+#         target: webhook_hmac
+#
   hermes-primary:
     <<: *hermes-common
     container_name: hermes-primary
     depends_on:
       agent-browser-updater:
         condition: service_healthy
-      media-notifier-primary:
-        condition: service_healthy
+      # media-notifier-primary:
+      #   condition: service_healthy
       vaultwarden-broker-primary:
         condition: service_healthy
     environment:
@@ -285,8 +285,8 @@ services:
     depends_on:
       agent-browser-updater:
         condition: service_healthy
-      media-notifier-secondary:
-        condition: service_healthy
+      # media-notifier-secondary:
+      #   condition: service_healthy
     environment:
       AGENT_BROWSER_CONTENT_BOUNDARIES: "1"
       API_SERVER_ENABLED: "true"

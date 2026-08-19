@@ -27,7 +27,6 @@ documentation, not an allowlist or an authorization policy.
 - `media_premieres`
 - `media_queue_status`
 - `media_release_schedule`
-- `media_rezka_session_refresh`
 - `media_search`
 - `media_similar`
 - `media_storage_status`

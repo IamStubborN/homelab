@@ -551,16 +551,16 @@ class SkillContractTests(unittest.TestCase):
         self.assertTrue(rezka["credential_item_id"])
         self.assertEqual(set(rezka), {"hostname", "include_subdomains", "credential_item_id"})
 
-    def test_rezka_runtime_renews_automatically_without_browser_login(self):
+    def test_rezka_runtime_uses_anonymous_sessions_without_browser_login(self):
         media_skill = read("shared/skills/media/SKILL.md")
         vaultwarden_skill = read("profiles/andrii/skills/vaultwarden-login/SKILL.md")
         readme = read("README.md")
-        self.assertIn("renewed automatically by `media-service`", media_skill)
-        self.assertIn("Never ask\nfor Telegram approval or use the browser", media_skill)
+        self.assertIn("anonymous cookie jars", media_skill)
+        self.assertIn("Never ask for Telegram approval, Vaultwarden credentials, or a browser login.", media_skill)
         self.assertNotIn("media rezka session refresh --credential-request ID", media_skill)
         for document in (media_skill, vaultwarden_skill, readme):
-            self.assertIn("media_rezka_session_refresh", document)
-            self.assertIn("credential_request_id", document)
+            self.assertNotIn("media_rezka_session_refresh", document)
+            self.assertNotIn("credential_request_id", document)
         for document in (media_skill, vaultwarden_skill, readme):
             self.assertNotIn("vaultwarden-browser-login", document)
             self.assertNotIn("Anubis", document)

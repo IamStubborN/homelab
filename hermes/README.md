@@ -205,18 +205,14 @@ vaultwarden-safe login-deny ID
 `login-request` accepts only an HTTPS URL from the reviewed allowlist. `login-approve` is escalated by the Andrii-only Hermes plugin to the native Telegram approval control and is bound to the exact request ID. Every request needs a fresh approval and expires after two minutes. A denial, expiration, MFA, CAPTCHA, passkey, redirect, or cross-origin form action fails closed. Terminal status retains the redacted outcome, and the broker writes redacted JSONL audit events to its private Vaultwarden volume.
 
 Every non-empty allowlist entry requires `hostname` and `credential_item_id`.
-After Telegram approval, Hermes invokes the `media_rezka_session_refresh` MCP
-tool with the one-time request ID as `credential_request_id`. The media runner calls the existing broker
-`POST /v1/command` endpoint with
-`{command:"credential_resolve",argument:request_id}` and its dedicated broker
-token. The credential remains inside the broker-runner boundary and is never
-returned through MCP, Telegram, the model, or logs. The generic agent-browser
-Vaultwarden provider instead calls `browser_credential_resolve` with
-`/run/secrets/media_api_token`. Both commands consume the same approved request
-permanently, and neither token can authorize the other command.
+Rezka media sessions are anonymous cookie jars and do not consume Vaultwarden
+credentials. The media runner never receives a broker credential request ID
+through MCP. The generic agent-browser Vaultwarden provider still calls
+`browser_credential_resolve` with `/run/secrets/media_api_token` for other
+allowlisted hosts. Approved requests are consumed permanently.
 
 Routine Rezka downloader authentication does not use this approval flow.
-`media-service` renews its cookie session automatically from private credential
+`media-service` establishes an anonymous cookie session automatically from
 files mounted only into that service. The approval flow remains available for
 explicit browser login and operator recovery, not normal media searches or
 downloads.

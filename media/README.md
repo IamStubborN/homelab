@@ -51,12 +51,12 @@ private source checkout on the Docker host and does not infer sibling paths.
 Copy the media-orchestrator placeholders from the root `.env.example` into the
 real ignored `.env`, replacing every image digest and provider placeholder.
 The application images provide their own `media healthcheck` command; no
-additional HTTP client is required in the runtime images. Create the shared
-Hermes media network once (Hermes still owns `rezka-credentials` for its
-Vaultwarden broker):
+additional HTTP client is required in the runtime images. Create the external
+networks used by Media Orchestrator once:
 
 ```bash
 docker network create media-internal
+docker network create rezka-credentials
 ```
 
 Create the host paths before starting. Staging remains outside Plex roots, but
@@ -73,9 +73,10 @@ install -d -m 0700 "${MEDIA_SECRETS_DIR}"
 Set the application credentials in the real ignored root `.env`; never commit
 their values. This includes the PostgreSQL password and database URL, all three
 API tokens, both webhook HMAC values, the Prowlarr API key, Plex token, Rezka
-cookie key, qBittorrent password, and Gluetun control API key. Rezka sessions
-are anonymous cookie jars: do not set a Rezka username, password, or
-Vaultwarden broker token.
+cookie key, qBittorrent password, Gluetun control API key, and the Vaultwarden
+broker token. Search and download stay anonymous. Session refresh still
+resolves one-time Rezka credentials through `vaultwarden-broker-andrii`. Set
+`ANDRII_REZKA_BROKER_TOKEN` to the token configured for that broker.
 
 Create these local secret files with mode `0600`:
 
@@ -106,9 +107,11 @@ The control server binds to `127.0.0.1` inside the namespace shared only by
 `gluetun-rezka` and `download-runner`; it has no published port or Traefik
 route. `HEALTH_RESTART_VPN=off` prevents Gluetun health recovery from changing
 the job IP. The runner owns explicit rotation only after a terminal job state.
-The runner uses `network_mode: service:gluetun-rezka` and does not join the
-Hermes Vaultwarden broker network. Session setup solves Anubis and persists
-the encrypted cookie jar; it does not log in through Vaultwarden.
+Because the runner uses `network_mode: service:gluetun-rezka`, the
+`gluetun-rezka` service joins the external `rezka-credentials` network on its
+behalf. Session refresh reaches `http://vaultwarden-broker-andrii:8787` over
+that shared namespace. Routine search and download keep the anonymous cookie
+jar.
 
 ## Validate
 

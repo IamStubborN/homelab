@@ -31,9 +31,10 @@ Ordinary tracking is source-independent: obtain a `release_identity` with a posi
 
 Automatic download is a Rezka-only mode requiring an exact result, translation, and season. Prefer `media_tracking_enable_download` on an existing subscription; do not delete and recreate it. Use `media_tracking_set_baseline` for corrections and `media_tracking_check` only for an explicit immediate check. Ordinary subscriptions run hourly; automatic downloads every 15 minutes.
 
-## Rezka session
+## Rezka authentication
 
-Rezka sessions are anonymous cookie jars. `media-service` and the download runner establish them automatically (Anubis plus cookies). Never ask for Telegram approval, Vaultwarden credentials, or a browser login.
+The session is renewed automatically by `media-service`. Never ask
+for Telegram approval or use the browser for routine renewal. After an operator explicitly approves a fresh Vaultwarden request, call `media_rezka_session_refresh` with that exact `credential_request_id`; never handle the credential itself.
 
 ## Verification
 

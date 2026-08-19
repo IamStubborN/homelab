@@ -9,8 +9,6 @@ trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
 mkdir -p "$TMP_DIR/secrets"
 for secret in \
-    media_rezka_username \
-    media_rezka_password \
     gluetun_rezka_wireguard_private_key \
     gluetun_rezka_control_auth_config
 do
@@ -48,7 +46,6 @@ export MEDIA_QBITTORRENT_TV_CATEGORY=tv
 export MEDIA_QBITTORRENT_MOVIES_CATEGORY=movies
 export MEDIA_QBITTORRENT_USERNAME=admin
 export MEDIA_QBITTORRENT_PASSWORD=dummy-qbittorrent-password
-export ANDRII_REZKA_BROKER_TOKEN=dummy-rezka-broker-token
 export MEDIA_REZKA_COOKIE_KEY=ZHVtbXktMzItYnl0ZS1yZXprYS1jb29raWUta2V5ISE=
 export MT_TMDB_API_KEY=dummy-tmdb-api-key
 export MT_TMDB_LANGUAGE=ru
@@ -104,10 +101,10 @@ assert_yq '(.services.download-runner.environment | has("MEDIA_TMDB_API_KEY") | 
     'runner must not receive TMDB configuration'
 assert_yq '.services.media-postgres.environment.POSTGRES_PASSWORD == "dummy-postgres-password" and (.services.media-postgres.environment | has("POSTGRES_PASSWORD_FILE") | not)' \
     'PostgreSQL must receive its password directly from the root environment'
-assert_yq '.services.media-service.environment as $env | ($env.MEDIA_DATABASE_URL != null and $env.MEDIA_ANDRII_TOKEN != null and $env.MEDIA_VALENTYNA_TOKEN != null and $env.MEDIA_RUNNER_TOKEN != null and $env.MEDIA_LIFECYCLE_TOKEN == "dummy-lifecycle-token" and $env.MEDIA_PROWLARR_API_KEY != null and $env.MEDIA_PLEX_TOKEN != null and $env.MEDIA_REZKA_USERNAME_FILE == "/run/secrets/media_rezka_username" and $env.MEDIA_REZKA_PASSWORD_FILE == "/run/secrets/media_rezka_password" and $env.MEDIA_REZKA_COOKIE_KEY != null and ($env | has("MEDIA_DATABASE_URL_FILE") | not) and ($env | has("MEDIA_ANDRII_TOKEN_FILE") | not) and ($env | has("MEDIA_VALENTYNA_TOKEN_FILE") | not) and ($env | has("MEDIA_RUNNER_TOKEN_FILE") | not) and ($env | has("MEDIA_PROWLARR_API_KEY_FILE") | not) and ($env | has("MEDIA_PLEX_TOKEN_FILE") | not) and ($env | has("MEDIA_REZKA_USERNAME") | not) and ($env | has("MEDIA_REZKA_PASSWORD") | not) and ($env | has("MEDIA_REZKA_COOKIE_KEY_FILE") | not))' \
-    'media-service must read Rezka credentials from scoped files'
-assert_yq '.services.media-service.secrets as $secrets | (($secrets | length) == 2 and ($secrets | map(.source) | contains(["media_rezka_username", "media_rezka_password"])))' \
-    'media-service must receive only its two Rezka credential secrets'
+assert_yq '.services.media-service.environment as $env | ($env.MEDIA_DATABASE_URL != null and $env.MEDIA_ANDRII_TOKEN != null and $env.MEDIA_VALENTYNA_TOKEN != null and $env.MEDIA_RUNNER_TOKEN != null and $env.MEDIA_LIFECYCLE_TOKEN == "dummy-lifecycle-token" and $env.MEDIA_PROWLARR_API_KEY != null and $env.MEDIA_PLEX_TOKEN != null and $env.MEDIA_REZKA_COOKIE_KEY != null and ($env | has("MEDIA_DATABASE_URL_FILE") | not) and ($env | has("MEDIA_ANDRII_TOKEN_FILE") | not) and ($env | has("MEDIA_VALENTYNA_TOKEN_FILE") | not) and ($env | has("MEDIA_RUNNER_TOKEN_FILE") | not) and ($env | has("MEDIA_PROWLARR_API_KEY_FILE") | not) and ($env | has("MEDIA_PLEX_TOKEN_FILE") | not) and ($env | has("MEDIA_REZKA_USERNAME") | not) and ($env | has("MEDIA_REZKA_PASSWORD") | not) and ($env | has("MEDIA_REZKA_USERNAME_FILE") | not) and ($env | has("MEDIA_REZKA_PASSWORD_FILE") | not) and ($env | has("MEDIA_REZKA_COOKIE_KEY_FILE") | not))' \
+    'media-service must not receive Rezka login credentials'
+assert_yq '.services.media-service | has("secrets") | not' \
+    'media-service must not mount unused Rezka login secrets'
 assert_yq '.services.media-service.environment.MEDIA_REZKA_SESSION_STORE_FILE == "/var/lib/media-orchestrator/session/session.bin" and (.services.media-service.volumes | any_c(.source == "rezka_session_encrypted" and .target == "/var/lib/media-orchestrator/session"))' \
     'media-service must consume the shared encrypted Rezka session snapshot'
 assert_yq '.services.media-session-init.restart == "no" and (.services.media-session-init.cap_add | contains(["CHOWN"]))' \
@@ -130,10 +127,10 @@ assert_yq '.services.gluetun-rezka.environment.HTTPPROXY == "on" and .services.g
     'Gluetun must expose only its internal stealth HTTP proxy for Rezka service requests'
 assert_yq '.services.gluetun-rezka.environment.FIREWALL_OUTBOUND_SUBNETS == "172.18.0.0/16,172.22.0.0/16,172.29.0.0/16"' \
     'Gluetun must allow only the configured local service subnets outside the VPN tunnel'
-assert_yq '.services.gluetun-rezka.networks | has("rezka-credentials")' \
-    'Gluetun namespace must join the Rezka credential broker network'
-assert_yq '.networks."rezka-credentials".external == true and .networks."rezka-credentials".name == "rezka-credentials"' \
-    'Rezka credential broker network must use the fixed external network name'
+assert_yq '.services.gluetun-rezka.networks | has("rezka-credentials") | not' \
+    'Gluetun namespace must not join the unused Rezka credential broker network'
+assert_yq '.networks | has("rezka-credentials") | not' \
+    'media compose must not declare the Hermes-only credential broker network'
 assert_yq '.services.gluetun-rezka-watcher.environment.PARENT_CONTAINER == "gluetun-rezka" and .services.gluetun-rezka-watcher.environment.DEPENDENT_CONTAINER == "download-runner"' \
     'dedicated watcher must only pair the Rezka VPN and runner'
 assert_yq '.services.gluetun-rezka-watcher.environment.MEDIA_LIFECYCLE_TOKEN == "dummy-lifecycle-token" and (.services.gluetun-rezka-watcher.environment | has("MEDIA_RUNNER_TOKEN") | not) and (.services.gluetun-rezka-watcher.networks | has("media-internal"))' \
@@ -162,10 +159,10 @@ assert_yq '.services.download-runner.environment.MEDIA_STAGING_ROOT == "/data/in
     'staging must remain outside the Plex roots on the shared storage mount'
 assert_yq '.services.download-runner.environment.MEDIA_QBITTORRENT_URL == "http://gluetun:8400" and .services.download-runner.environment.MEDIA_QBITTORRENT_TV_CATEGORY == "tv" and .services.download-runner.environment.MEDIA_QBITTORRENT_MOVIES_CATEGORY == "movies" and .services.download-runner.environment.MEDIA_QBITTORRENT_USERNAME != null' \
     'runner must receive qBittorrent connection and category configuration'
-assert_yq '.services.download-runner.environment as $env | ($env.MEDIA_TOKEN == "dummy-runner-token" and $env.MEDIA_QBITTORRENT_PASSWORD == "dummy-qbittorrent-password" and $env.MEDIA_REZKA_CREDENTIAL_BROKER_URL == "http://vaultwarden-broker-andrii:8787" and $env.MEDIA_REZKA_CREDENTIAL_BROKER_TOKEN == "dummy-rezka-broker-token" and $env.MEDIA_REZKA_CREDENTIAL_BROKER_PRIVATE_HTTP_HOSTS == "vaultwarden-broker-andrii" and $env.MEDIA_REZKA_COOKIE_KEY != null and ($env | has("MEDIA_TOKEN_FILE") | not) and ($env | has("MEDIA_QBITTORRENT_PASSWORD_FILE") | not) and ($env | has("MEDIA_REZKA_USERNAME") | not) and ($env | has("MEDIA_REZKA_PASSWORD") | not) and ($env | has("MEDIA_REZKA_USERNAME_FILE") | not) and ($env | has("MEDIA_REZKA_PASSWORD_FILE") | not) and ($env | has("MEDIA_REZKA_COOKIE_KEY_FILE") | not) and ($env | has("MEDIA_GLUETUN_URL") | not) and ($env | has("MEDIA_GLUETUN_API_KEY") | not) and ($env | has("MEDIA_GLUETUN_API_KEY_FILE") | not))' \
-    'runner must receive application secrets directly from the root environment'
-assert_yq '.secrets as $secrets | (($secrets | length) == 4 and ($secrets | has("media_rezka_username")) and ($secrets | has("media_rezka_password")) and ($secrets | has("gluetun_rezka_control_auth_config")) and ($secrets | has("gluetun_rezka_wireguard_private_key")))' \
-    'only Rezka credentials and Gluetun-required top-level file secrets may remain'
+assert_yq '.services.download-runner.environment as $env | ($env.MEDIA_TOKEN == "dummy-runner-token" and $env.MEDIA_QBITTORRENT_PASSWORD == "dummy-qbittorrent-password" and $env.MEDIA_REZKA_COOKIE_KEY != null and ($env | has("MEDIA_TOKEN_FILE") | not) and ($env | has("MEDIA_QBITTORRENT_PASSWORD_FILE") | not) and ($env | has("MEDIA_REZKA_USERNAME") | not) and ($env | has("MEDIA_REZKA_PASSWORD") | not) and ($env | has("MEDIA_REZKA_USERNAME_FILE") | not) and ($env | has("MEDIA_REZKA_PASSWORD_FILE") | not) and ($env | has("MEDIA_REZKA_CREDENTIAL_BROKER_URL") | not) and ($env | has("MEDIA_REZKA_CREDENTIAL_BROKER_TOKEN") | not) and ($env | has("MEDIA_REZKA_CREDENTIAL_BROKER_PRIVATE_HTTP_HOSTS") | not) and ($env | has("MEDIA_REZKA_COOKIE_KEY_FILE") | not) and ($env | has("MEDIA_GLUETUN_URL") | not) and ($env | has("MEDIA_GLUETUN_API_KEY") | not) and ($env | has("MEDIA_GLUETUN_API_KEY_FILE") | not))' \
+    'runner must receive application secrets directly from the root environment without Rezka login or broker credentials'
+assert_yq '.secrets as $secrets | (($secrets | length) == 2 and ($secrets | has("gluetun_rezka_control_auth_config")) and ($secrets | has("gluetun_rezka_wireguard_private_key")) and ($secrets | has("media_rezka_username") | not) and ($secrets | has("media_rezka_password") | not))' \
+    'only Gluetun-required top-level file secrets may remain'
 assert_yq '.services.gluetun-rezka.secrets as $secrets | (($secrets | length) == 2 and ($secrets | map(.source) | contains(["gluetun_rezka_control_auth_config", "gluetun_rezka_wireguard_private_key"])))' \
     'only Gluetun-required secret mounts may remain'
 assert_yq '.services.download-runner.healthcheck.test | join(" ") == "CMD media healthcheck --url http://media-service:8080/v1/health"' \

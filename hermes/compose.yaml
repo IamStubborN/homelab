@@ -170,52 +170,52 @@ services:
       start_period: 30s
     networks: [andrii-private, rezka-credentials]
 
-#   media-notifier-andrii:
-#     <<: *notifier-common
-#     container_name: media-notifier-andrii
-#     environment:
-#       LISTEN_ADDR: 0.0.0.0:8644
-#       PYTHONPATH: /usr/local/lib/hermes-home
-#       STATE_DIR: /data
-#       TELEGRAM_CHAT_ID: ${ANDRII_TELEGRAM_CHAT_ID:?set ANDRII_TELEGRAM_CHAT_ID}
-#     volumes:
-#       - ./scripts/media-notifier:/usr/local/bin/media-notifier:ro
-#       - ./scripts/hermes_media_notifications.py:/usr/local/lib/hermes-home/hermes_media_notifications.py:ro
-#       - ./shared/plugins/telegram-home/assets/media-menu.jpg:/usr/local/share/hermes-home/media-menu.jpg:ro
-#       - media_notifier_andrii:/data
-#     secrets:
-#       - source: andrii_telegram_token
-#         target: telegram_bot_token
-#       - source: andrii_webhook_hmac
-#         target: webhook_hmac
-#
-#   media-notifier-valentyna:
-#     <<: *notifier-common
-#     container_name: media-notifier-valentyna
-#     environment:
-#       LISTEN_ADDR: 0.0.0.0:8644
-#       PYTHONPATH: /usr/local/lib/hermes-home
-#       STATE_DIR: /data
-#       TELEGRAM_CHAT_ID: ${VALENTYNA_TELEGRAM_CHAT_ID:?set VALENTYNA_TELEGRAM_CHAT_ID}
-#     volumes:
-#       - ./scripts/media-notifier:/usr/local/bin/media-notifier:ro
-#       - ./scripts/hermes_media_notifications.py:/usr/local/lib/hermes-home/hermes_media_notifications.py:ro
-#       - ./shared/plugins/telegram-home/assets/media-menu.jpg:/usr/local/share/hermes-home/media-menu.jpg:ro
-#       - media_notifier_valentyna:/data
-#     secrets:
-#       - source: valentyna_telegram_token
-#         target: telegram_bot_token
-#       - source: valentyna_webhook_hmac
-#         target: webhook_hmac
-#
+  media-notifier-andrii:
+    <<: *notifier-common
+    container_name: media-notifier-andrii
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8644
+      PYTHONPATH: /usr/local/lib/hermes-home
+      STATE_DIR: /data
+      TELEGRAM_CHAT_ID: ${ANDRII_TELEGRAM_CHAT_ID:?set ANDRII_TELEGRAM_CHAT_ID}
+    volumes:
+      - ./scripts/media-notifier:/usr/local/bin/media-notifier:ro
+      - ./scripts/hermes_media_notifications.py:/usr/local/lib/hermes-home/hermes_media_notifications.py:ro
+      - ./shared/plugins/telegram-home/assets/media-menu.jpg:/usr/local/share/hermes-home/media-menu.jpg:ro
+      - media_notifier_andrii:/data
+    secrets:
+      - source: andrii_telegram_token
+        target: telegram_bot_token
+      - source: andrii_webhook_hmac
+        target: webhook_hmac
+
+  media-notifier-valentyna:
+    <<: *notifier-common
+    container_name: media-notifier-valentyna
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8644
+      PYTHONPATH: /usr/local/lib/hermes-home
+      STATE_DIR: /data
+      TELEGRAM_CHAT_ID: ${VALENTYNA_TELEGRAM_CHAT_ID:?set VALENTYNA_TELEGRAM_CHAT_ID}
+    volumes:
+      - ./scripts/media-notifier:/usr/local/bin/media-notifier:ro
+      - ./scripts/hermes_media_notifications.py:/usr/local/lib/hermes-home/hermes_media_notifications.py:ro
+      - ./shared/plugins/telegram-home/assets/media-menu.jpg:/usr/local/share/hermes-home/media-menu.jpg:ro
+      - media_notifier_valentyna:/data
+    secrets:
+      - source: valentyna_telegram_token
+        target: telegram_bot_token
+      - source: valentyna_webhook_hmac
+        target: webhook_hmac
+
   hermes-andrii:
     <<: *hermes-common
     container_name: hermes-andrii
     depends_on:
       agent-browser-updater:
         condition: service_healthy
-      # media-notifier-andrii:
-      #   condition: service_healthy
+      media-notifier-andrii:
+        condition: service_healthy
       vaultwarden-broker-andrii:
         condition: service_healthy
     environment:
@@ -285,8 +285,8 @@ services:
     depends_on:
       agent-browser-updater:
         condition: service_healthy
-      # media-notifier-valentyna:
-      #   condition: service_healthy
+      media-notifier-valentyna:
+        condition: service_healthy
     environment:
       AGENT_BROWSER_CONTENT_BOUNDARIES: "1"
       API_SERVER_ENABLED: "true"

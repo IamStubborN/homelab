@@ -30,6 +30,11 @@ services:
     depends_on:
       omniroute-redis:
         condition: service_healthy
+    secrets:
+      - omniroute_jwt_secret
+      - omniroute_api_key_secret
+      - omniroute_storage_encryption_key
+      - omniroute_initial_password
     environment:
       NODE_ENV: production
       PORT: "20128"
@@ -38,16 +43,11 @@ services:
       API_HOST: 0.0.0.0
       DATA_DIR: /app/data
       REDIS_URL: redis://omniroute-redis:6379
-      JWT_SECRET: ${OMNIROUTE_JWT_SECRET:?set OMNIROUTE_JWT_SECRET}
-      API_KEY_SECRET: ${OMNIROUTE_API_KEY_SECRET:?set OMNIROUTE_API_KEY_SECRET}
-      STORAGE_ENCRYPTION_KEY: ${OMNIROUTE_STORAGE_ENCRYPTION_KEY:?set OMNIROUTE_STORAGE_ENCRYPTION_KEY}
-      INITIAL_PASSWORD: ${OMNIROUTE_INITIAL_PASSWORD:?set OMNIROUTE_INITIAL_PASSWORD}
       REQUIRE_API_KEY: "true"
       AUTH_COOKIE_SECURE: "true"
       NEXT_PUBLIC_BASE_URL: https://omniroute.${DOCKER_DOMAIN}
       BASE_URL: http://127.0.0.1:20128
       OMNIROUTE_ALLOW_PRIVATE_PROVIDER_URLS: "true"
-      CURSORPIPE_BEARER_TOKEN: ${CURSORPIPE_BEARER_TOKEN:?set CURSORPIPE_BEARER_TOKEN}
     command: [/bin/sh, /app/patches/start.sh]
     volumes:
       - omniroute_data:/app/data
@@ -73,6 +73,16 @@ services:
       - agent-tools
       - omniroute-backend
       - proxy
+
+secrets:
+  omniroute_jwt_secret:
+    file: ./secrets/jwt_secret
+  omniroute_api_key_secret:
+    file: ./secrets/api_key_secret
+  omniroute_storage_encryption_key:
+    file: ./secrets/storage_encryption_key
+  omniroute_initial_password:
+    file: ./secrets/initial_password
 
 networks:
   agent-tools:

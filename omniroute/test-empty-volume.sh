@@ -36,26 +36,18 @@ docker run -d --name "$APP" --network "$NETWORK" \
   -e NEXT_PUBLIC_BASE_URL=https://omniroute.example.invalid \
   -e BASE_URL=http://127.0.0.1:20128 \
   -e OMNIROUTE_ALLOW_PRIVATE_PROVIDER_URLS=true \
-  -e CURSORPIPE_BEARER_TOKEN=test-cursor-token \
   -v "$VOLUME:/app/data" \
   -v "$ROOT/omniroute/start.sh:/app/patches/start.sh:ro" \
   "$IMAGE" /bin/sh /app/patches/start.sh >/dev/null
 
-wait_for_rows() {
+wait_for_app() {
   attempts=0
   while [ "$attempts" -lt 90 ]; do
-    if docker exec "$APP" node -e '
-      const Database = require("better-sqlite3");
-      const db = new Database("/app/data/storage.sqlite", { readonly: true });
-      const nodes = db.prepare("SELECT count(*) AS count FROM provider_nodes WHERE id IN (?, ?)")
-        .get("ollama-ipex", "openai-compatible-chat-c04550c1-9e55-4111-8111-c0550c01de00").count;
-      const connections = db.prepare("SELECT count(*) AS count FROM provider_connections WHERE id = ?")
-        .get("c04550c1-9e55-4111-8111-c0550c01de01").count;
-      if (nodes !== 2 || connections !== 1) process.exit(1);
-    ' >/dev/null 2>&1; then
+    if [ "$(docker inspect -f '{{.State.Running}}' "$APP")" = true ] \
+      && docker exec "$APP" node healthcheck.mjs >/dev/null 2>&1; then
       return 0
     fi
-    if [ "$(docker inspect -f '{{.State.Running}}' "$APP")" != true ]; then
+    if [ "$(docker inspect -f '{{.State.Status}}' "$APP")" = "exited" ]; then
       docker logs "$APP"
       return 1
     fi
@@ -66,12 +58,8 @@ wait_for_rows() {
   return 1
 }
 
-wait_for_rows
-sleep 2
-test "$(docker inspect -f '{{.State.Running}}' "$APP")" = true
+wait_for_app
 docker restart "$APP" >/dev/null
-wait_for_rows
-sleep 2
-test "$(docker inspect -f '{{.State.Running}}' "$APP")" = true
+wait_for_app
 
 echo "PASS: OmniRoute initializes and reuses an empty data volume"

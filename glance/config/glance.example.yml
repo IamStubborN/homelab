@@ -72,9 +72,6 @@ pages:
                   - title: OmniRoute
                     url: https://omniroute.${DOCKER_DOMAIN}/
                     icon: si:openrouter
-                  - title: Hindsight
-                    url: https://hindsight.${DOCKER_DOMAIN}/
-                    icon: si:postgresql
 
           - type: rss
             title: Self-hosted
@@ -502,11 +499,6 @@ pages:
                 url: https://search-ladder.${DOCKER_DOMAIN}/healthz
                 icon: /assets/search-ladder.svg
                 timeout: 5s
-              - title: Hindsight
-                url: https://hindsight.${DOCKER_DOMAIN}/
-                check-url: https://hindsight.${DOCKER_DOMAIN}/api/health
-                icon: si:postgresql
-                timeout: 5s
               - title: Proxmox
                 url: https://proxmox.${LAN_DOMAIN}/
                 icon: si:proxmox
@@ -546,6 +538,3 @@ pages:
                   - title: OmniRoute
                     url: https://omniroute.${DOCKER_DOMAIN}/
                     icon: si:openrouter
-                  - title: Hindsight
-                    url: https://hindsight.${DOCKER_DOMAIN}/
-                    icon: si:postgresql

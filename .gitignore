@@ -184,3 +184,6 @@ hermes/.env
 hermes/secrets/
 hermes/artifacts/
 hermes/.superpowers/
+
+# Wiki Syncthing runtime state (not source)
+wiki/syncthing/home/

@@ -61,7 +61,7 @@ make check-codecs VIDEO_DIR=/path/to/dir  # Custom directory
 5. **Custom Apps**: KaraKeep (web scraper with AI/MeiliSearch), Freedium (Medium proxy), Movie-Tracker (Telegram bot)
 6. **File Management**: Samba shares, Kavita (ebook reader), FileBrowser (disabled)
 7. **Monitoring**: Watchtower (auto-updates), DeUnhealth (health checks)
-8. **Other Services**: Bitwarden (Vaultwarden), Hindsight (shared Pi memory), Mosquitto (MQTT broker), RustDesk (remote desktop relay)
+8. **Other Services**: Bitwarden (Vaultwarden), Mosquitto (MQTT broker), RustDesk (remote desktop relay)
 
 
 ### VPN Routing (Gluetun)
@@ -169,14 +169,8 @@ freedium/backup-db.sh
 
 **OmniRoute** (`/omniroute/`): Household LLM gateway plus its private Redis. Startup patches and provider registration live in `omniroute/start.sh`. See `omniroute/README.md`.
 
-**Ollama IPEX** (`/ollama-ipex/`): Local Intel GPU embeddings (`bge-m3`) consumed through OmniRoute. See `ollama-ipex/README.md`.
-
 **Search Ladder** (`/search-ladder/`): Authenticated research broker for the Hermes `web-research` skill. See `search-ladder/README.md`.
 
-**Hindsight** (`/hindsight/`): Shared authenticated memory API for Pi clients. It uses PostgreSQL/pgvector and OmniRoute for Codex OAuth LLM calls, local BGE-M3 embeddings, and NVIDIA reranking. See `hindsight/README.md` for secrets, deployment, and backup/restore.
-
-
-**Cursorpipe** (`/cursorpipe/`): Internal OpenAI-compatible proxy for the official Cursor API key. OmniRoute registers it as a custom chat provider. See `cursorpipe/README.md`.
 
 **Movie-Tracker** (`/movie-tracker/`): Python Telegram bot deployed from the private image `ghcr.io/example/movie-tracker:latest`. The homelab repository intentionally tracks only the compose wrapper. A clean host must be logged in to GHCR before pulling:
 ```bash

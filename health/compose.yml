@@ -3,76 +3,43 @@ x-locked-down: &locked-down
   security_opt: [no-new-privileges:true]
 
 services:
-  health-postgres:
-    <<: *locked-down
-    image: postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
-    container_name: health-postgres
-    restart: unless-stopped
-    read_only: true
-    cap_add:
-      # Required by the official entrypoint to initialize and drop to postgres.
-      - CHOWN
-      - DAC_OVERRIDE
-      - FOWNER
-      - SETGID
-      - SETUID
-    environment:
-      POSTGRES_DB: health
-      POSTGRES_USER: health
-      POSTGRES_PASSWORD_FILE: /run/secrets/health_pg_bootstrap_password
-      PGDATA: /var/lib/postgresql/data/pgdata
-    secrets: [health_pg_bootstrap_password]
-    volumes:
-      - type: volume
-        source: health-pg-data
-        target: /var/lib/postgresql/data
-        volume:
-          nocopy: true
-    tmpfs:
-      - /run/postgresql:size=16m,mode=0770
-      - /tmp:size=64m,mode=1777
-    networks: [health-internal]
-    healthcheck:
-      test: [CMD-SHELL, "pg_isready -U health -d health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    labels:
-      com.centurylinklabs.watchtower.enable: "false"
-
   health-service:
     <<: *locked-down
     build:
-      context: ./service
-    image: family-health-service:local
+      context: ./mcp
+    # Python cashier. Do not reuse a leftover Rust family-health-service:local.
+    image: family-health-mcp:local
     container_name: health-service
+    # Wiki writes + token files: UID 10000. Host API tokens must be
+    # `10000:10000 0400` (`install -o 10000 -g 10000 -m 0400`).
+    user: "10000:10000"
     restart: unless-stopped
     read_only: true
     pids_limit: 128
-    depends_on:
-      health-postgres:
-        condition: service_healthy
     environment:
-      HEALTH_DB_HOST: health-postgres
-      HEALTH_DB_PORT: "5432"
-      HEALTH_DB_NAME: health
-      HEALTH_DB_USER: health
-      HEALTH_DB_PASSWORD_FILE: /run/secrets/health_service_db_password
       HEALTH_TOKEN_FILE_ANDRII: /run/secrets/andrii_health_api_token
       HEALTH_TOKEN_FILE_VALENTYNA: /run/secrets/valentyna_health_api_token
       HEALTH_LISTEN_ADDR: 0.0.0.0:8080
-      RUST_LOG: info
+      WIKI_HEALTH_ROOT: /wiki/shared/health
+      MPLCONFIGDIR: /tmp/matplotlib
+      XDG_CACHE_HOME: /tmp
+      HOME: /tmp
+      TZ: ${TIMEZONE:-UTC}
     secrets:
-      - health_service_db_password
       - andrii_health_api_token
       - valentyna_health_api_token
+    volumes:
+      - ${WIKI_ROOT:-/mnt/internal/wiki}/shared/health:/wiki/shared/health
     tmpfs:
-      - /tmp:size=32m,mode=1777
+      - /tmp:rw,nosuid,nodev,size=64m
     expose: ["8080"]
     networks: [health-internal]
     healthcheck:
-      test: [CMD, /usr/local/bin/health-service, healthcheck]
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3).read()"
       interval: 30s
       timeout: 5s
       retries: 3
@@ -85,16 +52,7 @@ networks:
     name: health-internal
     external: true
 
-volumes:
-  health-pg-data:
-    name: health-pg-data
-    external: true
-
 secrets:
-  health_pg_bootstrap_password:
-    file: ./secrets/health_pg_bootstrap_password
-  health_service_db_password:
-    file: ./secrets/health_service_db_password
   andrii_health_api_token:
     file: ./secrets/andrii.health_api_token
   valentyna_health_api_token:

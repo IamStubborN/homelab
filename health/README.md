@@ -1,14 +1,96 @@
 # Family Health stack
 
-The `health` stack builds `family-health-service:local` from the Rust workspace
-in `health/service` and runs it with a dedicated PostgreSQL database. Both
-containers join the external attachable `health-internal` network so the Hermes
-stack can join it independently. The homelab repository is the canonical source
-for both the service and its deployment; no separate `family-health` checkout is
-required.
+The live stack is a Python MCP cashier. It writes append-only jsonl under
+`${WIKI_ROOT}/shared/health` and serves the same streamable-HTTP endpoint
+Hermes already uses:
 
-Create the external network and database volume once on a new Docker host,
-before the first `up`:
+```text
+http://health-service:8080/internal/mcp
+```
+
+- Image: `family-health-mcp:local` (build context `health/mcp`)
+- Container name: `health-service` (unchanged on purpose)
+- Process UID:GID: `10000:10000`
+- Host vault: `${WIKI_ROOT}` = `/mnt/internal/wiki` on docker.local (not in git)
+- Cashier mount: `${WIKI_ROOT}/shared/health` → `/wiki/shared/health`
+- No Postgres. No SQLite. No Rust health binary in Compose.
+
+`/opt/data/wiki` is wrong on this host. Do not create or mount it.
+
+Obsidian Sync (`obsidian-sync`) and the one-way Drive mirror (`health-drive`)
+live in [`wiki/compose.yml`](../wiki/compose.yml). Human gates **G1** (Obsidian
+login) and **G2** (server rclone OAuth, destination `drive:HealthWiki/` only)
+are documented in [`wiki/README.md`](../wiki/README.md). Do not reuse the
+laptop `healthdrive` remote. Do not target `Здоровье/`.
+
+The unused Phase 1 Rust crate remains on disk at [`service/`](service/) as
+leftover source only. Compose does not build it. Do not treat
+`family-health-service:local` or `health/service` mise/cargo as the live path.
+
+Design and task DAG:
+[docs/plans/2026-08-19-family-health-wiki.md](docs/plans/2026-08-19-family-health-wiki.md).
+Host path decision (T3):
+[docs/plans/t3-sync-and-host.md](docs/plans/t3-sync-and-host.md).
+
+## Topology
+
+```text
+Telegram Andrii     → hermes-andrii      ─┐
+Telegram Valentyna  → hermes-valentyna   ─┼─ health-internal ─ health-service
+                                          │
+                                          └─ writes only:
+                                               ${WIKI_ROOT}/shared/health/data/**/*.jsonl
+                                               ${WIKI_ROOT}/shared/health/generated/*.md
+
+obsidian-sync  mounts ${WIKI_ROOT} rw → /vault     (does not join health-internal)
+health-drive   mounts ${WIKI_ROOT} ro → /data      (does not join health-internal)
+```
+
+`health-internal` is still required. Only `health-service` and the two Hermes
+profiles join it. Create it as an external attachable internal network.
+
+The cashier fails closed if the wiki path is missing (`WikiStore` exits with
+`missing health wiki directory`). Complete **G3** and
+[`wiki/bootstrap-vault.sh`](../wiki/bootstrap-vault.sh) before the first
+`health-service` up. Do not start the cashier against an empty or absent vault.
+
+## Human gates (operator; do not automate)
+
+These are not Worker tasks and are not GitHub Actions. Watchtower is off for
+`health-service`, `obsidian-sync`, and `health-drive`.
+
+| Gate | When | What the operator does |
+| --- | --- | --- |
+| **G1** Obsidian Sync | before `obsidian-sync` up | Confirm a paid [Obsidian Sync](https://obsidian.md/sync) subscription. Interactive `ob login` / `sync-setup` / `sync-config` in the container. Full commands: [`wiki/README.md`](../wiki/README.md). |
+| **G2** Server rclone OAuth | before `health-drive` up | Create a personal Drive OAuth client (rclone’s shared id retires in 2026). Authorize on/via `docker.local`. Remote `drive`, dest `HealthWiki/` only. Full commands: [`wiki/README.md`](../wiki/README.md). |
+| **G3** Host directory | before first deploy | Create `${WIKI_ROOT}` as `10000:10000` mode `2770`, plus secret dirs. Then bootstrap the vault. Commands below and in [`wiki/README.md`](../wiki/README.md). |
+| **G4** Keep Google archive | after T8 ingest sample | Confirm the ingest sample before anyone deletes Google Docs/Sheet `Здоровье/`. Leave the archive in place until that confirmation. |
+| **G5** Recreate Hermes | after G3 + bootstrap (and G1/G2 before those wiki services) | Manual `docker compose up` / `--force-recreate` of Hermes from this runbook. No Watchtower. No GitHub Actions. |
+
+## G3 + bootstrap (before first `health-service` up)
+
+On docker.local. Do **not** run this from a Worker or from this laptop against
+the live host unless you are the operator at **G3**.
+
+```bash
+sudo mkdir -p /mnt/internal/wiki
+sudo chown -R 10000:10000 /mnt/internal/wiki
+sudo chmod 2770 /mnt/internal/wiki
+sudo install -d -o 10000 -g 10000 -m 0700 health/secrets
+sudo install -d -o 10000 -g 10000 -m 0700 health/secrets/obsidian
+sudo install -d -o 10000 -g 10000 -m 0700 health/secrets/rclone
+sudo -u '#10000' wiki/bootstrap-vault.sh /mnt/internal/wiki
+```
+
+SSH check after G3 (path must exist only after this gate):
+
+```bash
+ssh docker.local.iamstubborn.dev 'ls -la /mnt/internal/wiki'
+```
+
+## External network (before the first `up`)
+
+Create the external network once on a new Docker host, before the first `up`:
 
 ```bash
 set -eu
@@ -22,180 +104,174 @@ if docker network inspect health-internal >/dev/null 2>&1; then
 else
   docker network create --internal --attachable health-internal
 fi
-docker volume create health-pg-data
 ```
 
 An existing network with either check set to `false` is an operator blocker.
 Do not recreate it automatically: first inspect attached containers and plan a
 maintenance window.
 
+Do **not** `docker volume create health-pg-data`. That volume is unused by
+the live stack.
+
+## API tokens
+
 On the Linux Docker host, generate each value once in a private temporary file,
-then install copies with the ownership required by each consumer. The two
-database files intentionally contain the same value: PostgreSQL reads its
-root-owned bootstrap copy, while `health-service` reads the UID 10001 copy.
-Neither copy is group- or world-readable.
+then install copies owned by the cashier UID. There are no Postgres passwords
+and no UID `10001` files.
 
 ```bash
+set -eu
+umask 077
 mkdir -p health/secrets
 secret_tmp=$(mktemp -d)
 chmod 0700 "$secret_tmp"
-openssl rand -hex 32 > "$secret_tmp/database-password"
 openssl rand -hex 32 > "$secret_tmp/andrii-token"
 openssl rand -hex 32 > "$secret_tmp/valentyna-token"
-sudo install -o root -g root -m 0400 "$secret_tmp/database-password" health/secrets/health_pg_bootstrap_password
-sudo install -o 10001 -g 10001 -m 0400 "$secret_tmp/database-password" health/secrets/health_service_db_password
-sudo install -o 10001 -g 10001 -m 0400 "$secret_tmp/andrii-token" health/secrets/andrii.health_api_token
-sudo install -o 10001 -g 10001 -m 0400 "$secret_tmp/valentyna-token" health/secrets/valentyna.health_api_token
-rm -f "$secret_tmp/database-password" "$secret_tmp/andrii-token" "$secret_tmp/valentyna-token"
+sudo install -o 10000 -g 10000 -m 0400 "$secret_tmp/andrii-token" health/secrets/andrii.health_api_token
+sudo install -o 10000 -g 10000 -m 0400 "$secret_tmp/valentyna-token" health/secrets/valentyna.health_api_token
+rm -f "$secret_tmp/andrii-token" "$secret_tmp/valentyna-token"
 rmdir "$secret_tmp"
-stat -c '%u:%g %a %n' health/secrets/*
+stat -c '%u:%g %a %n' health/secrets/*.health_api_token
 ```
 
-The expected modes are `0:0 400` for `health_pg_bootstrap_password` and
-`10001:10001 400` for the service database copy and both API tokens. On macOS,
-Docker Desktop does not reproduce Linux bind-mount ownership faithfully; use
-the Linux ownership probe below before deploying to the homelab host.
+The expected modes are `10000:10000 400` for both API tokens. Leftover
+`health_pg_bootstrap_password` / `health_service_db_password` files (UID
+`0` / `10001`) are unused; do not create new ones.
 
-From the repository root, validate the canonical Compose project and build the
-image before running the ownership probe:
+On macOS, Docker Desktop does not reproduce Linux bind-mount ownership
+faithfully; use the Linux ownership probe below before deploying to the
+homelab host.
+
+From the repository root, validate Compose and build the image before running
+the ownership probe:
 
 ```bash
-docker compose config --quiet
+docker compose -f health/compose.yml config --quiet
+docker compose -f wiki/compose.yml config --quiet
 docker compose build health-service
 ```
+
+Root `docker compose config --quiet` needs a filled `.env` next to
+`compose.yml`. On a laptop without that file it fails on required variables
+such as `KARAKEEP_OMNIROUTE_KEY`. Do not invent secrets. On docker.local,
+after `.env` is present, `docker compose config --quiet` from the repo root
+is the canonical whole-project check.
 
 ```bash
 docker run --rm \
   -v "$PWD/health/secrets:/probe:ro" \
   --entrypoint /bin/sh \
-  family-health-service:local \
-  -eu -c 'test -r /probe/health_service_db_password; test -r /probe/andrii.health_api_token; test -r /probe/valentyna.health_api_token; ! test -r /probe/health_pg_bootstrap_password'
+  family-health-mcp:local \
+  -eu -c 'test -r /probe/andrii.health_api_token; test -r /probe/valentyna.health_api_token'
 ```
 
-Before the first real medical record, create a manual dump and prove that it
-restores. The ignored `health/backups/` directory is local staging only; the
-automated Drive backup remains a future phase.
+The application receives only secret file paths. No API token is interpolated
+into Compose environment values.
 
-```bash
-set -eu
-umask 077
-install -d -m 0700 health/backups
-docker compose up -d health-postgres
-docker compose up --wait health-postgres
-backup=$(mktemp "health/backups/health-$(date -u +%Y%m%dT%H%M%SZ).dump.XXXXXX")
-verify_db="health_restore_verify_$(date -u +%Y%m%d%H%M%S)_$$"
-verify_db_created=false
-cleanup_restore_verify() {
-  if [ "$verify_db_created" = true ]; then
-    docker compose exec -T health-postgres dropdb -U health "$verify_db"
-  fi
-}
-trap cleanup_restore_verify EXIT HUP INT TERM
-docker compose exec -T health-postgres pg_dump -U health -d health --format=custom > "$backup"
-chmod 0600 "$backup"
-test -s "$backup"
-docker compose exec -T health-postgres createdb -U health "$verify_db"
-verify_db_created=true
-docker compose exec -T health-postgres pg_restore -U health -d "$verify_db" --exit-on-error < "$backup"
-test "$(docker compose exec -T health-postgres psql -U health -d "$verify_db" -v ON_ERROR_STOP=1 -tAc "SELECT count(*) = 2 FROM people")" = t
-test "$(docker compose exec -T health-postgres psql -U health -d "$verify_db" -v ON_ERROR_STOP=1 -tAc "SELECT to_regclass('public.audit_log') IS NOT NULL")" = t
-docker compose exec -T health-postgres dropdb -U health "$verify_db"
-verify_db_created=false
-trap - EXIT HUP INT TERM
-```
+## G5 — Deploy (human; no Watchtower; no GitHub Actions)
 
-Deploy from the repository root so the health and embedded Hermes services use
-one Compose project. Start health first, wait for both health checks, then
-recreate both Hermes services so their entrypoint installs the current config
-and skill:
+G5 is a **manual** operator step on docker.local after G3 + bootstrap. Do not
+run these `up` commands from a Worker. Do not enable Watchtower. Do not add
+GitHub Actions.
+
+Start health first, wait for the healthcheck, start wiki host services only
+after their gates, then recreate both Hermes services so their entrypoint
+installs the current config and skill:
 
 ```bash
 docker compose build health-service
-docker compose up -d health-postgres health-service
-docker compose up --wait health-postgres health-service
+docker compose up -d health-service
+docker compose up --wait health-service
+# After G1 + G3:
+docker compose up -d obsidian-sync
+# After G2 + G3:
+docker compose up -d health-drive
 docker compose up -d --force-recreate hermes-andrii hermes-valentyna
-docker compose ps health-postgres health-service hermes-andrii hermes-valentyna
+docker compose ps health-service health-drive obsidian-sync hermes-andrii hermes-valentyna
 docker compose logs --since=5m health-service hermes-andrii hermes-valentyna
 ```
 
-The logs must show applied migrations and no `health` MCP discovery/auth error.
-From each Telegram bot, run one read-only health query and confirm that the
-`health` tools are discovered before writing real data.
+The logs must show the cashier listening and no `health` MCP discovery/auth
+error. From each Telegram bot, run one read-only health query and confirm that
+the `health` tools are discovered before writing real data. User-facing
+Telegram text stays Russian; identifiers stay English.
 
-Image-only rollback and in-place downgrade are unsupported after database
-migrations or MCP tool-schema changes. On a failed deployment, stop
-`health-service` and both Hermes services so they cannot write, but keep
-PostgreSQL available for inspection:
+Image-only rollback and in-place downgrade are unsupported after MCP
+tool-schema changes. On a failed deployment, stop `health-service` and both
+Hermes services so they cannot write:
 
 ```bash
 docker compose stop health-service hermes-andrii hermes-valentyna
 ```
 
-Preserve the current external `health-pg-data` volume; do not remove or replace
-it. If PostgreSQL is healthy, take a new private dump using the protected dump
-procedure above before making any recovery decision. The recommended default
-is to roll forward with the current schema and a corrected compatible service,
-Hermes config, and skill.
-
-Do not switch directly to `6c2b8b3`: that revision's Hermes deployment uses
-`latest` and Watchtower, and its service/tool contract does not match the
-current migrated state. Restoring the verified pre-deploy dump is an
-operator-selected destructive fallback. It must use the matching repository
-revision, images, and config and WILL discard all post-deploy writes. This
-runbook intentionally provides no auto-executing restore or downgrade recipe;
-recovery and data-retention remain an explicit operator decision for the live
-incident.
+The recommended default is to roll forward with a corrected Python cashier,
+wiki mount, Hermes config, and skill. Do **not** switch Compose back to the
+leftover Rust crate or reintroduce `health-postgres` as a recovery path.
 
 For isolated maintenance, retain the root project name explicitly:
 
 ```bash
 docker compose -p homelab -f health/compose.yml config --quiet
 docker compose -p homelab -f health/compose.yml build health-service
-docker compose -p homelab -f health/compose.yml up -d
 ```
 
-Run service-local checks from the embedded workspace:
+`docker compose -p homelab -f health/compose.yml up -d` is the same G5
+decision as the root project; do not run it from a Worker.
+
+## Local cashier checks
+
+Run service-local checks from the Python package, not from `health/service`:
 
 ```bash
-cd health/service
-mise install
-mise run format
-mise run check
-mise run lint
-mise run test
-mise run test-integration
-mise run audit
+cd health/mcp
+python3 -m pytest
 ```
 
-Phase 1 core is implemented locally: the Rust service includes the PostgreSQL
-schema, token-to-profile authentication, typed MCP write/read operations,
-deduplication (explicit stable source event IDs when the transport exposes
-them, otherwise exact clinical event timestamps only),
-append-only measurement corrections, audit records, validation, and PNG
-measurement charts. Remote homelab deployment and Telegram acceptance
-remain operational verification steps; later document/Drive sync, reminders,
-NotebookLM, reporting, and diet phases are not implemented here.
+## T8 — one-shot Здоровье ingest
 
-Known deferred design discrepancy: the umbrella design describes additional
-audit provenance fields for source, event date, and entry date, while the Phase
-1 schema records actor, transport, target, action, entity, result, and old/new
-values. Adding that provenance requires a later schema and contract decision;
-this final-fix round intentionally does not invent or migrate those fields.
+Ingest uses `WikiStore` (`via=system`). It is not HTTP MCP. Do not
+`docker compose up`. Do not delete Google Docs/Sheet (`G4` is a human
+gate after the sample). Do not ingest `valentyna-teeth/Data.zip`.
 
-The `health-pg-data` volume is external and has the explicit engine name
-`health-pg-data`, so both root and child workflows resolve the same persistent
-state even if an operator accidentally omits `-p homelab`. Routine
-`docker compose down` and `docker compose down -v` do not delete an external
-volume.
+Column map: [`docs/plans/t8-ingest-map.md`](docs/plans/t8-ingest-map.md).
+Counts-only report: [`docs/plans/t8-ingest-report.md`](docs/plans/t8-ingest-report.md).
 
-Deleting the database is a separate, destructive operator action. Take and
-verify a backup, stop the stack, and only then run the explicit command below
-if permanent data loss is intended:
+G3 is not done. Run against a **temp vault**, not `/mnt/internal/wiki`:
 
 ```bash
-# DANGER: permanently deletes the Family Health PostgreSQL database.
+VAULT=$(mktemp -d /tmp/t8-wiki-XXXX)
+wiki/bootstrap-vault.sh "$VAULT"
+# binaries already copied off Drive (read-only). Do not write to Здоровье/.
+cd health/mcp
+python3 -m health_mcp.ingest \
+  --wiki-root "$VAULT/shared/health" \
+  --export-dir /tmp/zdorovie-export \
+  --xlsx "/tmp/zdorovie-xlsx/Дневник показателей здоровья.xlsx" \
+  --raw-src /tmp/t8-zdorovie-raw
+```
+
+After G3, the same command with `--wiki-root "$WIKI_ROOT/shared/health"`
+re-runs against the host vault. Medications/conditions/allergies have no
+`source_event_id`; the command refuses a nonempty medications jsonl unless
+`--force`. Chronology/journal sections are not facts. Weight sheet uses
+columns C/D only.
+
+## Leftover Rust source and unused Postgres volume
+
+`health/service` is leftover Phase 1 Rust source. It is not shipped from
+Compose. Do not make a Rust rebuild the default rollback.
+
+The external volume `health-pg-data` is no longer in Compose. It is empty of
+medical rows (only the old `people` seed, if the volume still exists on the
+host). Routine `docker compose down` does not delete it.
+
+Deleting that unused volume is a **later manual** operator step, after the
+Python cashier is the accepted live path and the operator no longer wants the
+empty Postgres volume around. It is not part of deploy, not part of G5, and
+not part of routine rollback:
+
+```bash
+# Later manual only. Not a deploy or rollback command.
+# DANGER: permanently deletes the unused Family Health PostgreSQL volume.
 docker volume rm health-pg-data
 ```
-
-The application receives only secret file paths. No database password or API
-token is interpolated into Compose environment values.

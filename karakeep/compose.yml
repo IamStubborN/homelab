@@ -17,20 +17,18 @@ services:
       OPENAI_BASE_URL: http://omniroute:20129/v1
       OPENAI_API_KEY: ${KARAKEEP_OMNIROUTE_KEY:?set KARAKEEP_OMNIROUTE_KEY}
 
-      INFERENCE_TEXT_MODEL: opencode-go/gpt-5.6-luna
-      INFERENCE_IMAGE_MODEL: opencode-go/gpt-5.6-luna
+      INFERENCE_TEXT_MODEL: xai-oauth/grok-4.6
+      INFERENCE_IMAGE_MODEL: xai-oauth/grok-4.6
       INFERENCE_ENABLE_AUTO_SUMMARIZATION: true
       INFERENCE_JOB_TIMEOUT_SEC: 600
       INFERENCE_CONTEXT_LENGTH: 32768
       OPENAI_REASONING_EFFORT: medium
 
-      # Embeddings via local Ollama bge-m3. Do not set OLLAMA_BASE_URL:
-      # that would steal tagging/summaries from Omniroute. IPEX ignores
-      # encoding_format=base64, so the OpenAI SDK would store 256 garbage
-      # dims; karakeep-embed-proxy packs native /api/embed as base64 f32.
-      EMBEDDING_OPENAI_BASE_URL: http://karakeep-embed-proxy:8080/v1
-      EMBEDDING_OPENAI_API_KEY: ollama
-      EMBEDDING_TEXT_MODEL: bge-m3
+      # NVIDIA NV-EmbedQA E5 via OmniRoute. Do not set dimensions override:
+      # this model rejects the OpenAI `dimensions` field.
+      EMBEDDING_OPENAI_BASE_URL: http://omniroute:20129/v1
+      EMBEDDING_OPENAI_API_KEY: ${KARAKEEP_OMNIROUTE_KEY:?set KARAKEEP_OMNIROUTE_KEY}
+      EMBEDDING_TEXT_MODEL: nvidia/nvidia/nv-embedqa-e5-v5
       EMBEDDING_DIMENSIONS: 1024
       EMBEDDING_ENABLE_AUTO_INDEXING: true
 
@@ -43,8 +41,6 @@ services:
         condition: service_healthy
       meilisearch:
         condition: service_healthy
-      karakeep-embed-proxy:
-        condition: service_healthy
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
@@ -55,33 +51,6 @@ services:
       - "traefik.docker.network=proxy"
     networks:
       - proxy
-      - karakeep-internal
-      - agent-tools
-
-  karakeep-embed-proxy:
-    container_name: karakeep-embed-proxy
-    image: python:3.12-alpine
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    command: ["python", "/app/embed-proxy.py"]
-    volumes:
-      - ./embed-proxy.py:/app/embed-proxy.py:ro
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')",
-        ]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
-    networks:
       - karakeep-internal
       - agent-tools
 

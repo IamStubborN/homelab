@@ -10,16 +10,16 @@ services:
     depends_on:
       omniroute:
         condition: service_healthy
+    entrypoint: [/bin/sh, /entrypoint.sh]
+    secrets:
+      - search_ladder_omniroute_key
+      - search_ladder_broker_key
     environment:
       OMNIROUTE_URL: http://omniroute:20129
-      OMNIROUTE_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
-      BROKER_API_KEY: ${SEARCH_LADDER_API_KEY:?set SEARCH_LADDER_API_KEY}
       FINALIZER_URL: http://omniroute:20129/v1
-      FINALIZER_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
-      FINALIZER_MODEL: opencode-go/gpt-5.6-luna
+      FINALIZER_MODEL: xai-oauth/grok-4.6
       FINALIZER_REASONING_EFFORT: high
       RERANKER_URL: http://omniroute:20129/v1
-      RERANKER_API_KEY: ${SEARCH_LADDER_OMNIROUTE_KEY:?set SEARCH_LADDER_OMNIROUTE_KEY}
       RERANKER_MODEL: nvidia/nv-rerank-qa-mistral-4b:1
       FALLBACK_MODEL: auto/best-free
       SEARCH_PROVIDERS: exa-search,tavily-search,firecrawl,ollama-search
@@ -28,6 +28,7 @@ services:
       QUOTA_COOLDOWN: 12h
     volumes:
       - search_ladder_data:/data
+      - ./entrypoint.sh:/entrypoint.sh:ro
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=16m
     mem_limit: 128m
@@ -48,6 +49,12 @@ services:
     networks:
       - agent-tools
       - proxy
+
+secrets:
+  search_ladder_omniroute_key:
+    file: ./secrets/omniroute_api_key
+  search_ladder_broker_key:
+    file: ./secrets/broker_api_key
 
 networks:
   agent-tools:

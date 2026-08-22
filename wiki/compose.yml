@@ -1,0 +1,66 @@
+# Wiki host-side services. The live vault is ${WIKI_ROOT} on docker.local, not git.
+# T6: health-drive — one-way rclone copy vault → drive:HealthWiki/. Never bisync.
+# T7 (revised): syncthing — self-hosted device sync of the vault. SoT stays the
+# files in ${WIKI_ROOT}; devices sync copies, Hermes/cashier keep writing directly.
+
+x-locked-down: &locked-down
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  health-drive:
+    <<: *locked-down
+    image: rclone/rclone:1.75.0@sha256:b06aed988cf5967de7c25be5925240983981c757f4ed1ac9d2fa659d51d60548
+    container_name: health-drive
+    user: "10000:10000"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    pids_limit: 32
+    environment:
+      TZ: ${TIMEZONE:-UTC}
+      RCLONE_CONFIG: /config/rclone/rclone.conf
+      RCLONE_CACHE_DIR: /tmp
+    volumes:
+      - ${WIKI_ROOT:-/mnt/internal/wiki}:/data:ro
+      - ../health/secrets/rclone:/config/rclone
+      - ./rclone/exclude.txt:/etc/rclone/exclude.txt:ro
+      - ./rclone/copy-loop.sh:/usr/local/bin/copy-loop:ro
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=32m
+    entrypoint: ["/bin/sh", "/usr/local/bin/copy-loop"]
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+    # Outbound HTTPS to Google Drive uses the default project network.
+    # Do not join health-internal.
+
+  # Self-hosted vault sync for Mac/iPhone/Android clients.
+  # GUI on :8384 (LAN/Tailscale only, set an admin password at first login).
+  # Runs as uid 10000 so synced files match the cashier/Hermes ownership.
+  syncthing:
+    image: syncthing/syncthing:latest
+    container_name: syncthing
+    hostname: homelab-wiki
+    user: "10000:10000"
+    restart: unless-stopped
+    init: true
+    pids_limit: 128
+    environment:
+      TZ: ${TIMEZONE:-UTC}
+      PUID: "10000"
+      PGID: "10000"
+      STGUIADDRESS: 0.0.0.0:8384
+      HOME: /var/syncthing
+    volumes:
+      - ./syncthing/home:/var/syncthing
+      - ${WIKI_ROOT:-/mnt/internal/wiki}:/var/syncthing/wiki
+    networks:
+      - proxy
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.syncthing.rule=Host(`syncthing.${DOCKER_DOMAIN}`)"
+      - "traefik.http.routers.syncthing.entrypoints=https"
+      - "traefik.http.routers.syncthing.tls=true"
+      - "traefik.http.services.syncthing.loadbalancer.server.port=8384"
+

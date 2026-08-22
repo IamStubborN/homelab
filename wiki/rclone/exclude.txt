@@ -1,0 +1,17 @@
+# Obsidian runtime (keep the rest of .obsidian)
+.obsidian/cache/**
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+
+# OS junk
+.DS_Store
+**/.DS_Store
+._*
+**/._*
+Thumbs.db
+**/Thumbs.db
+desktop.ini
+**/desktop.ini
+.Spotlight-V100/**
+.Trashes/**
+lost+found/**

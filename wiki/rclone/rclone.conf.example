@@ -1,0 +1,15 @@
+# Server-side Google Drive remote for health-drive.
+# Copy to gitignored health/secrets/rclone/rclone.conf and fill values.
+#
+# Remote name MUST be `drive`. Do not copy a laptop rclone.conf
+# (that machine uses a different remote name, healthdrive).
+# Scope is drive.file so rclone only sees files it created.
+# Create drive:HealthWiki/ with `rclone mkdir` after authorize (G2).
+# Never commit the filled file. Never target Здоровье/.
+
+[drive]
+type = drive
+scope = drive.file
+# client_id =
+# client_secret =
+# token =   # written by `rclone config` / authorize

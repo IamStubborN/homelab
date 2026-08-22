@@ -5,13 +5,39 @@ description: Use when managing family health records and charts.
 
 # Family health
 
-Use only discovered `mcp_health_*` tools. Either spouse may read or write either
-person's data. Never use terminal, direct HTTP, files, or SQL for health data.
-Hide tokens, endpoints, raw JSON, and internal record IDs unless explicitly
-requested for technical details.
+Use only discovered `mcp_health_*` tools for facts. Either spouse may read or
+write either person's data. Medical facts go through MCP. Never use terminal,
+direct HTTP, SQL, or jsonl as a health ledger. Never edit `data/` or
+`generated/`. Read current medical state with `llm-wiki` on
+`shared/health/generated/*.md` and SCHEMA. Hide tokens, endpoints, raw JSON,
+and internal record IDs unless explicitly requested for technical details.
 
 All user-facing health text and buttons are in Russian. Internal identifiers
 and tool arguments stay in English.
+
+## Facts vs synthesis
+
+MCP-only for facts. Do not treat the wiki as a ledger and do not read jsonl.
+
+- Writes (measurements, meals, symptoms, sleep, medications, conditions,
+  allergies, labs, corrections, charts, structured queries) go through MCP.
+- Current-state reading for those facts: use `llm-wiki` on
+  `shared/health/generated/*.md` and `shared/health/SCHEMA.md`, not jsonl.
+  Typical generated pages include `ANDRII_CURRENT_PROFILE.md`,
+  `VALENTYNA_CURRENT_MEDICATIONS.md`, `ANDRII_RECENT_MEASUREMENTS.md`,
+  `ANDRII_RECENT_LABS.md`, `VALENTYNA_ALLERGIES.md`, and
+  `FAMILY_DIET_SNAPSHOTS.md` under `/wiki/shared/health/generated/`.
+- Wiki is for synthesis only: people pages, family notes, and narrative
+  summaries that cite generated facts. Put `person` on every health page. Do
+  not mix Andrii and Valentyna on one synthesis page. Do not store blood
+  pressure, labs, meals, or other medical facts as personal journal pages.
+- Never edit `data/` or `generated/`. The cashier owns those paths.
+- If a required tool is absent or a write fails, say health-service is not
+  deployed or the write failed. No silent wiki-as-ledger fallback. Do not
+  substitute another transport or invent a tool name.
+
+`WIKI_PATH` is `/wiki` (this person's tree). Family health is nested at
+`/wiki/shared/health`.
 
 ## Resolve the person
 
@@ -117,3 +143,4 @@ unclear. Never invent missing values.
 | «Исправь тот пульс на 83» | query and resolve the current blood-pressure record, show the confirmation card, then after ✅ call `correct_measurement(measurement_id=<private id>, new_values={systolic:<current>,diastolic:<current>,pulse:83}, reason="user correction", confirmed=true)` |
 | «У меня диагностировали гипертонию» | show the confirmation card; after ✅ call `add_condition(name="гипертония", status=confirmed_by_doctor, confirmed=true)` |
 | «Какие лекарства сейчас принимает Andrii?» | `query_health_data(person=andrii, section="medications")` |
+| «Какой сейчас профиль давления у Andrii?» | read `/wiki/shared/health/generated/ANDRII_CURRENT_PROFILE.md` via llm-wiki; do not open jsonl |

@@ -32,6 +32,9 @@ x-hermes-common: &hermes-common
     HERMES_UID: "10000"
     HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
     HERMES_TELEGRAM_USE_DEFAULT_HTTP: "false"
+    TMPDIR: /opt/data/tmp
+    TMP: /opt/data/tmp
+    TEMP: /opt/data/tmp
   healthcheck:
     test:
       - CMD
@@ -234,8 +237,12 @@ services:
       HERMES_UID: "10000"
       HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
       HERMES_TELEGRAM_USE_DEFAULT_HTTP: "false"
+      TMPDIR: /opt/data/tmp
+      TMP: /opt/data/tmp
+      TEMP: /opt/data/tmp
       HEALTH_DEFAULT_PERSON: andrii
       HEALTH_MCP_URL: http://health-service:8080/internal/mcp
+      WIKI_PATH: /wiki
       MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-andrii:8644
       TELEGRAM_ALLOWED_USERS: ${ANDRII_TELEGRAM_USER_ID:?set ANDRII_TELEGRAM_USER_ID}
       TELEGRAM_HOME_CHANNEL: ${ANDRII_TELEGRAM_CHAT_ID:?set ANDRII_TELEGRAM_CHAT_ID}
@@ -260,6 +267,8 @@ services:
       - ./shared/plugins:/etc/hermes-home/shared-plugins:ro
       - ./profiles/andrii/skills:/etc/hermes-home/personal-skills:ro
       - ./profiles/andrii/plugins:/etc/hermes-home/personal-plugins:ro
+      - ${WIKI_ROOT:-/mnt/internal/wiki}/andrii:/wiki
+      - ${WIKI_ROOT:-/mnt/internal/wiki}/shared:/wiki/shared
     secrets:
       - source: andrii_telegram_token
         target: telegram_bot_token
@@ -271,6 +280,8 @@ services:
         target: homeassistant_api_token
       - source: andrii_omniroute_api_key
         target: omniroute_api_key
+      - source: andrii_groq_api_key
+        target: groq_api_key
       - source: andrii_media_api_token
         target: broker_api_token
       - source: andrii_webhook_hmac
@@ -298,8 +309,12 @@ services:
       HERMES_UID: "10000"
       HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
       HERMES_TELEGRAM_USE_DEFAULT_HTTP: "false"
+      TMPDIR: /opt/data/tmp
+      TMP: /opt/data/tmp
+      TEMP: /opt/data/tmp
       HEALTH_DEFAULT_PERSON: valentyna
       HEALTH_MCP_URL: http://health-service:8080/internal/mcp
+      WIKI_PATH: /wiki
       MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-valentyna:8644
       TELEGRAM_ALLOWED_USERS: ${VALENTYNA_TELEGRAM_USER_ID:?set VALENTYNA_TELEGRAM_USER_ID}
       TELEGRAM_HOME_CHANNEL: ${VALENTYNA_TELEGRAM_CHAT_ID:?set VALENTYNA_TELEGRAM_CHAT_ID}
@@ -321,6 +336,8 @@ services:
       - ./shared/plugins:/etc/hermes-home/shared-plugins:ro
       - ./profiles/valentyna/skills:/etc/hermes-home/personal-skills:ro
       - ./profiles/valentyna/plugins:/etc/hermes-home/personal-plugins:ro
+      - ${WIKI_ROOT:-/mnt/internal/wiki}/valentyna:/wiki
+      - ${WIKI_ROOT:-/mnt/internal/wiki}/shared:/wiki/shared
     secrets:
       - source: valentyna_telegram_token
         target: telegram_bot_token
@@ -332,6 +349,8 @@ services:
         target: homeassistant_api_token
       - source: valentyna_omniroute_api_key
         target: omniroute_api_key
+      - source: valentyna_groq_api_key
+        target: groq_api_key
       - source: valentyna_webhook_hmac
         target: webhook_hmac
       - source: search_ladder_api_key
@@ -407,6 +426,8 @@ secrets:
     file: ./secrets/andrii.homeassistant_token
   andrii_omniroute_api_key:
     file: ./secrets/andrii.omniroute_api_key
+  andrii_groq_api_key:
+    file: ./secrets/andrii.groq_api_key
   andrii_webhook_hmac:
     file: ./secrets/andrii.webhook_hmac
   andrii_vaultwarden_session:
@@ -423,6 +444,8 @@ secrets:
     file: ./secrets/valentyna.homeassistant_token
   valentyna_omniroute_api_key:
     file: ./secrets/valentyna.omniroute_api_key
+  valentyna_groq_api_key:
+    file: ./secrets/valentyna.groq_api_key
   valentyna_webhook_hmac:
     file: ./secrets/valentyna.webhook_hmac
   search_ladder_api_key:

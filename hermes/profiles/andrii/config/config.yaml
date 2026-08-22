@@ -7,14 +7,7 @@ terminal:
 model:
   provider: openai-api
   base_url: http://omniroute:20129/v1
-  default: opencode-go/gpt-5.6-luna
-
-auxiliary:
-  vision:
-    provider: custom
-    base_url: http://omniroute:20129/v1
-    model: opencode-go/mimo-v2.5
-    key_env: OPENAI_API_KEY
+  default: xai-oauth/grok-4.3
 
 browser:
   inactivity_timeout: 120
@@ -59,8 +52,28 @@ mcp_servers:
       resources: false
       prompts: false
 
+image_gen:
+  provider: xai
+video_gen:
+  provider: xai
+
+stt:
+  provider: groq
+  language: "ru"
+  groq:
+    language: "ru"
+
+tts:
+  provider: edge
+  edge:
+    voice: "ru-RU-SvetlanaNeural"
+    speed: 1.2
+
+voice:
+  auto_tts: false
+
 platform_toolsets:
-  telegram: [terminal, web, browser, skills]
+  telegram: [terminal, image_gen, video_gen, web, browser, skills, tts]
 
 platforms:
   telegram:
@@ -118,7 +131,6 @@ skills:
       - humanizer
       - jupyter-live-kernel
       - llama-cpp
-      - llm-wiki
       - manim-video
       - nano-pdf
       - node-inspect-debugger
@@ -153,7 +165,8 @@ agent:
   service_tier: fast
   reasoning_effort: high
   reasoning_overrides:
-    opencode-go/gpt-5.6-luna: high
+    xai-oauth/grok-4.3: high
+    xai-oauth/grok-4.6: high
 plugins:
   enabled: [telegram-home, vaultwarden-approval, search-ladder]
 _config_version: 34

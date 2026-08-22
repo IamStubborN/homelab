@@ -32,6 +32,9 @@ x-hermes-common: &hermes-common
     HERMES_UID: "10000"
     HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
     HERMES_TELEGRAM_USE_DEFAULT_HTTP: "false"
+    TMPDIR: /opt/data/tmp
+    TMP: /opt/data/tmp
+    TEMP: /opt/data/tmp
   healthcheck:
     test:
       - CMD
@@ -234,8 +237,12 @@ services:
       HERMES_UID: "10000"
       HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
       HERMES_TELEGRAM_USE_DEFAULT_HTTP: "false"
+      TMPDIR: /opt/data/tmp
+      TMP: /opt/data/tmp
+      TEMP: /opt/data/tmp
       HEALTH_DEFAULT_PERSON: primary
       HEALTH_MCP_URL: http://health-service:8080/internal/mcp
+      WIKI_PATH: /wiki
       MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-primary:8644
       TELEGRAM_ALLOWED_USERS: ${PRIMARY_TELEGRAM_USER_ID:?set PRIMARY_TELEGRAM_USER_ID}
       TELEGRAM_HOME_CHANNEL: ${PRIMARY_TELEGRAM_CHAT_ID:?set PRIMARY_TELEGRAM_CHAT_ID}
@@ -260,6 +267,8 @@ services:
       - ./shared/plugins:/etc/hermes-home/shared-plugins:ro
       - ./profiles/primary/skills:/etc/hermes-home/personal-skills:ro
       - ./profiles/primary/plugins:/etc/hermes-home/personal-plugins:ro
+      - ${WIKI_ROOT:-/mnt/internal/wiki}/primary:/wiki
+      - ${WIKI_ROOT:-/mnt/internal/wiki}/shared:/wiki/shared
     secrets:
       - source: primary_telegram_token
         target: telegram_bot_token
@@ -271,6 +280,8 @@ services:
         target: homeassistant_api_token
       - source: primary_omniroute_api_key
         target: omniroute_api_key
+      - source: primary_groq_api_key
+        target: groq_api_key
       - source: primary_media_api_token
         target: broker_api_token
       - source: primary_webhook_hmac
@@ -298,8 +309,12 @@ services:
       HERMES_UID: "10000"
       HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
       HERMES_TELEGRAM_USE_DEFAULT_HTTP: "false"
+      TMPDIR: /opt/data/tmp
+      TMP: /opt/data/tmp
+      TEMP: /opt/data/tmp
       HEALTH_DEFAULT_PERSON: secondary
       HEALTH_MCP_URL: http://health-service:8080/internal/mcp
+      WIKI_PATH: /wiki
       MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-secondary:8644
       TELEGRAM_ALLOWED_USERS: ${SECONDARY_TELEGRAM_USER_ID:?set SECONDARY_TELEGRAM_USER_ID}
       TELEGRAM_HOME_CHANNEL: ${SECONDARY_TELEGRAM_CHAT_ID:?set SECONDARY_TELEGRAM_CHAT_ID}
@@ -321,6 +336,8 @@ services:
       - ./shared/plugins:/etc/hermes-home/shared-plugins:ro
       - ./profiles/secondary/skills:/etc/hermes-home/personal-skills:ro
       - ./profiles/secondary/plugins:/etc/hermes-home/personal-plugins:ro
+      - ${WIKI_ROOT:-/mnt/internal/wiki}/secondary:/wiki
+      - ${WIKI_ROOT:-/mnt/internal/wiki}/shared:/wiki/shared
     secrets:
       - source: secondary_telegram_token
         target: telegram_bot_token
@@ -332,6 +349,8 @@ services:
         target: homeassistant_api_token
       - source: secondary_omniroute_api_key
         target: omniroute_api_key
+      - source: secondary_groq_api_key
+        target: groq_api_key
       - source: secondary_webhook_hmac
         target: webhook_hmac
       - source: search_ladder_api_key
@@ -407,6 +426,8 @@ secrets:
     file: ./secrets/primary.homeassistant_token
   primary_omniroute_api_key:
     file: ./secrets/primary.omniroute_api_key
+  primary_groq_api_key:
+    file: ./secrets/primary.groq_api_key
   primary_webhook_hmac:
     file: ./secrets/primary.webhook_hmac
   primary_vaultwarden_session:
@@ -423,6 +444,8 @@ secrets:
     file: ./secrets/secondary.homeassistant_token
   secondary_omniroute_api_key:
     file: ./secrets/secondary.omniroute_api_key
+  secondary_groq_api_key:
+    file: ./secrets/secondary.groq_api_key
   secondary_webhook_hmac:
     file: ./secrets/secondary.webhook_hmac
   search_ladder_api_key:

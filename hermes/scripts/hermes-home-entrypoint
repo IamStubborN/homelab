@@ -20,6 +20,7 @@ read_secret MEDIA_API_TOKEN /run/secrets/media_api_token
 read_secret HOMEASSISTANT_API_TOKEN /run/secrets/homeassistant_api_token
 read_secret OPENAI_API_KEY /run/secrets/omniroute_api_key
 export OPENAI_BASE_URL=http://omniroute:20129/v1
+read_secret GROQ_API_KEY /run/secrets/groq_api_key
 
 python_packages=/opt/data/python-packages
 if [ ! -d "$python_packages/youtube_transcript_api" ]; then
@@ -31,6 +32,12 @@ if [ ! -d "$python_packages/ddgs" ]; then
     chown -R 10000:10000 "$python_packages"
 fi
 export PYTHONPATH="$python_packages${PYTHONPATH:+:$PYTHONPATH}"
+
+# Durable temp for TTS/auto-TTS (Hermes blocks /tmp as protected)
+install -d -o 10000 -g 10000 -m 1777 /opt/data/tmp
+export TMPDIR=/opt/data/tmp
+export TMP=/opt/data/tmp
+export TEMP=/opt/data/tmp
 
 runtime_secret_dir=/run/hermes-home-secrets
 install -d -o 10000 -g 10000 -m 0700 "$runtime_secret_dir"

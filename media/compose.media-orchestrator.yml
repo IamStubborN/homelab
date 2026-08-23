@@ -112,16 +112,18 @@ services:
     user: "0:0"
     cap_add:
       - CHOWN
+    environment:
+      SESSION_UID: ${PUID:-1000}
+      SESSION_GID: ${PGID:-1000}
     entrypoint:
-      - /bin/chown
+      - /bin/sh
     command:
-      - -R
-      - ${PUID:-1000}:${PGID:-1000}
-      - /var/lib/media-orchestrator/session
+      - /prepare-session.sh
     restart: "no"
     read_only: true
     volumes:
       - rezka_session_encrypted:/var/lib/media-orchestrator/session
+      - ./session-init/prepare.sh:/prepare-session.sh:ro
 
   media-service:
     <<: *locked-down

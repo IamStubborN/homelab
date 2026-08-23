@@ -71,6 +71,10 @@ assert_yq '.services.media-service.environment.MEDIA_TMDB_API_KEY_FILE == "/run/
     'media-service must load TMDB key from a secret file'
 assert_yq '.services.media-service.environment.MEDIA_REZKA_COOKIE_KEY_FILE == "/run/secrets/rezka_cookie_key"' \
     'media-service must load Rezka cookie key from a secret file'
+assert_yq '(.services.media-session-init.entrypoint | join(" ") == "/bin/sh") and (.services.media-session-init.command | join(" ") == "/prepare-session.sh") and .services.media-session-init.environment.SESSION_UID == "1000" and .services.media-session-init.environment.SESSION_GID == "1000"' \
+    'session init must run the targeted ownership preparation script with the application UID/GID'
+assert_yq '.services.media-session-init.volumes | any_c(.target == "/prepare-session.sh" and .read_only == true)' \
+    'session init must mount its preparation script read-only'
 assert_yq '(.services.media-service.environment | has("MEDIA_REZKA_USERNAME") | not) and (.services.media-service.environment | has("MEDIA_REZKA_PASSWORD") | not) and (.services.media-service.environment | has("MEDIA_REZKA_USERNAME_FILE") | not) and (.services.media-service.environment | has("MEDIA_REZKA_PASSWORD_FILE") | not)' \
     'media-service must not receive static Rezka login credentials'
 assert_yq '.services.gluetun-rezka-watcher.environment.MEDIA_LIFECYCLE_TOKEN_FILE == "/run/secrets/media_lifecycle_token"' \
@@ -96,5 +100,11 @@ if ! grep -Fq 'MEDIA_LIFECYCLE_TOKEN_FILE' "$MEDIA_DIR/gluetun-rezka-watcher/wat
     printf 'FAIL: lifecycle watcher must support MEDIA_LIFECYCLE_TOKEN_FILE\n' >&2
     exit 1
 fi
+
+if ! command -v shellcheck >/dev/null 2>&1; then
+    printf 'FAIL: shellcheck is required to validate session init\n' >&2
+    exit 1
+fi
+shellcheck "$MEDIA_DIR/session-init/prepare.sh"
 
 printf 'OK: media orchestrator compose validation passed\n'

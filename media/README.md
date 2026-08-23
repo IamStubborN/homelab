@@ -46,6 +46,11 @@ The private guarded deploy must be invoked with explicit paths, for example
 `MEDIA_RELEASE_DIR=/absolute/path/to/homelab/media/release`. It never requires a
 private source checkout on the Docker host and does not infer sibling paths.
 
+`media-session-init` is a one-shot permissions bootstrap for the shared
+`rezka_session_encrypted` volume. It runs as root only long enough to assign the
+application UID/GID to the session directory and existing `session.bin`; it
+does not rotate cookies, reset the session, or participate in VPN lifecycle.
+
 ## Prerequisites
 
 Copy the media-orchestrator placeholders from the root `.env.example` into the

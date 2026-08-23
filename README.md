@@ -22,7 +22,8 @@ with the documented Docker Compose or guarded media deployment commands.
 - Bitwarden (Vaultwarden), Mosquitto, RustDesk
 - OmniRoute LLM gateway, Ollama IPEX embeddings, and Search Ladder
 - Cursorpipe OpenAI-compatible proxy for the official Cursor API key
-- Family Health Rust MCP service with dedicated PostgreSQL
+- Hindsight shared memory server for Pi clients
+- Family Health Python MCP cashier (jsonl under `/mnt/internal/wiki/shared/health`)
 - Home Assistant with public-safe example config only
 
 ## Setup
@@ -54,8 +55,8 @@ Fill real values only in ignored local files:
 - `plex/secrets/plex_token`
 - `homeassistant/config/secrets.yaml`
 
-Generate the Hindsight secrets documented in `hindsight/README.md` in the root `.env`.
-OmniRoute exposes its API only on host loopback (`127.0.0.1:20129`); authenticated public routes use Traefik.
+Cursorpipe and Ollama IPEX publish no host ports. OmniRoute exposes its API only
+on host loopback (`127.0.0.1:20129`); authenticated public routes use Traefik.
 
 
 Initialize the Freedium submodule:
@@ -78,9 +79,11 @@ The tracked Compose definitions for Plex and the torrent stack are split into
 under `media/` so an existing installation can upgrade without moving state or
 briefly starting against empty directories.
 
-Family Health is also built by the root Compose project directly from
-`health/service`; no separate service repository checkout is needed. See
-`health/README.md` for secrets, local checks, build, and startup instructions.
+Family Health is built by the root Compose project from `health/mcp`
+(`family-health-mcp:local`). The host vault lives at `${WIKI_ROOT}`
+(`/mnt/internal/wiki` on host-5.example.invalid) and is not in git. See
+`health/README.md` for the deploy runbook and `wiki/README.md` for
+Obsidian Sync and rclone.
 
 Start services:
 

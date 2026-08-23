@@ -8,6 +8,10 @@ secrets.yaml
 **/secrets.yaml.bak*
 **/secrets/
 **/*secret*
+
+# health-drive rclone OAuth (T6). Live wiki vault ignore is T7.
+**/rclone.conf
+!**/rclone.conf.example
 **/*token*
 **/*credential*
 **/*credentials*
@@ -187,6 +191,33 @@ hermes/.superpowers/
 
 # Wiki Syncthing runtime state (not source)
 wiki/syncthing/home/
+
+# Live family wiki vault is on the Docker host, not in this clone.
+# Canonical path (T3): /mnt/internal/wiki. The old plan default
+# /opt/data/wiki is wrong on this host; ignore both as a safety net if
+# those trees ever appear under the clone.
+# Do NOT ignore the tracked wiki/ module (compose.yml, rclone/, README,
+# Dockerfile, bootstrap script). health/secrets/obsidian/ is already
+# covered by **/secrets/.
+/mnt/internal/wiki/
+/opt/data/wiki/
+/wiki-vault/
+# Accidental bootstrap into the tracked module
+/wiki/primary/
+/wiki/secondary/
+/wiki/shared/
+/wiki/.obsidian/
+# Obsidian runtime if someone opens the clone as a vault. Keep the rest
+# of .obsidian (app.json / community plugins) if it is ever tracked.
+.obsidian/cache/
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+**/.obsidian/cache/
+**/.obsidian/workspace.json
+**/.obsidian/workspace-mobile.json
+
+# T8 ingest scratch if someone writes a vault or jsonl under the clone
+health/docs/plans/t8-artifacts/
 
 # Local network inventory (contains private host addresses and roles)
 instances/

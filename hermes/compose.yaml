@@ -267,6 +267,9 @@ services:
       - ./shared/plugins:/etc/hermes-home/shared-plugins:ro
       - ./profiles/primary/skills:/etc/hermes-home/personal-skills:ro
       - ./profiles/primary/plugins:/etc/hermes-home/personal-plugins:ro
+      # Personal llm-wiki root. Host shared/ is an explicit nested bind (not a
+      # copy) so /wiki/shared is the family tree. Bundled obsidian skill stays
+      # disabled; official Sync is a separate host service — no OBSIDIAN_VAULT_PATH.
       - ${WIKI_ROOT:-/mnt/internal/wiki}/primary:/wiki
       - ${WIKI_ROOT:-/mnt/internal/wiki}/shared:/wiki/shared
     secrets:
@@ -336,6 +339,7 @@ services:
       - ./shared/plugins:/etc/hermes-home/shared-plugins:ro
       - ./profiles/secondary/skills:/etc/hermes-home/personal-skills:ro
       - ./profiles/secondary/plugins:/etc/hermes-home/personal-plugins:ro
+      # Personal llm-wiki root + nested family shared bind (same layout as Primary).
       - ${WIKI_ROOT:-/mnt/internal/wiki}/secondary:/wiki
       - ${WIKI_ROOT:-/mnt/internal/wiki}/shared:/wiki/shared
     secrets:

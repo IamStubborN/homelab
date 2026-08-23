@@ -1247,6 +1247,7 @@ class ProfileConfigTests(unittest.TestCase):
                     "cx/gpt-5.6-luna-medium": "medium",
                 },
             )
+            self.assertFalse(config["approvals"]["destructive_slash_confirm"])
 
     def test_managed_shared_skills_are_pinned_at_startup(self):
         entrypoint = read("scripts/hermes-home-entrypoint")

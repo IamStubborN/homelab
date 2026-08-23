@@ -187,3 +187,6 @@ hermes/.superpowers/
 
 # Wiki Syncthing runtime state (not source)
 wiki/syncthing/home/
+
+# Local network inventory (contains private host addresses and roles)
+instances/

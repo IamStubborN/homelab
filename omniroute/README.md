@@ -11,6 +11,14 @@ API binds on `127.0.0.1:20129` and on the shared `agent-tools` network.
 
 Hermes, KaraKeep, Search Ladder, and Home Assistant call this service.
 
+## Codex OAuth
+
+Codex OAuth is stored in OmniRoute's persistent data volume, not in Git. Import
+the full Codex CLI auth file (`~/.codex/auth.json`) from the OmniRoute dashboard
+under the Codex OAuth provider. The import preserves the refresh token so the
+connection can renew itself; never commit or copy the auth file into the
+repository.
+
 ## Runtime secrets
 
 Set these in the ignored root `.env`:

@@ -1238,13 +1238,13 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertFalse(config["compression"]["codex_responses_native"])
             self.assertEqual(config["skills"]["creation_nudge_interval"], 10)
             self.assertEqual(config["model"]["provider"], "openai-api")
-            self.assertEqual(config["model"]["default"], "xai-oauth/grok-4.6")
+            self.assertEqual(config["model"]["default"], "cx/gpt-5.6-luna-medium")
             self.assertNotIn("fallback_providers", config)  # optional; defaults to [] in Hermes
-            self.assertEqual(config["agent"]["reasoning_effort"], "low")
+            self.assertEqual(config["agent"]["reasoning_effort"], "medium")
             self.assertEqual(
                 config["agent"]["reasoning_overrides"],
                 {
-                    "xai-oauth/grok-4.6": "high",
+                    "cx/gpt-5.6-luna-medium": "medium",
                 },
             )
 

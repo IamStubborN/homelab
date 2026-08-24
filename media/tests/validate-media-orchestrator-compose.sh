@@ -152,6 +152,51 @@ if ! WATCHER_PROBE_CONTRACT_TEST=1 \
     printf 'FAIL: watcher must accept only the typed reachable outcome\n' >&2
     exit 1
 fi
+if ! WATCHER_SKIP_PROBE_CONTRACT_TEST=1 \
+    WATCHER_LIFECYCLE_STATE=ready \
+    WATCHER_LIFECYCLE_IP=203.0.113.10 \
+    WATCHER_PUBLIC_IP=203.0.113.10 \
+    sh "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh"; then
+    printf 'FAIL: watcher must skip the Rezka probe when ready on the same public IP\n' >&2
+    exit 1
+fi
+if WATCHER_SKIP_PROBE_CONTRACT_TEST=1 \
+    WATCHER_LIFECYCLE_STATE=ready \
+    WATCHER_LIFECYCLE_IP=203.0.113.10 \
+    WATCHER_PUBLIC_IP=198.51.100.20 \
+    sh "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh"; then
+    printf 'FAIL: watcher must probe Rezka when the public IP changed\n' >&2
+    exit 1
+fi
+if WATCHER_SKIP_PROBE_CONTRACT_TEST=1 \
+    WATCHER_LIFECYCLE_STATE=rotating \
+    WATCHER_LIFECYCLE_IP=203.0.113.10 \
+    WATCHER_PUBLIC_IP=203.0.113.10 \
+    sh "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh"; then
+    printf 'FAIL: watcher must probe Rezka when lifecycle is not ready\n' >&2
+    exit 1
+fi
+if WATCHER_SKIP_PROBE_CONTRACT_TEST=1 \
+    WATCHER_LIFECYCLE_STATE=ready \
+    WATCHER_LIFECYCLE_IP= \
+    WATCHER_PUBLIC_IP=203.0.113.10 \
+    sh "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh"; then
+    printf 'FAIL: watcher must probe Rezka when the lifecycle IP is missing\n' >&2
+    exit 1
+fi
+if WATCHER_STARTUP_IP_CONTRACT_TEST=1 \
+    WATCHER_LIFECYCLE_STATE=ready \
+    WATCHER_LIFECYCLE_IP=203.0.113.10 \
+    WATCHER_POST_HEALTHY_IP=198.51.100.20 \
+    sh "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh"; then
+    printf 'FAIL: watcher must probe when the post-healthy IP differs even if the captured IP matched lifecycle\n' >&2
+    exit 1
+fi
+if grep -Fq 'should_skip_rezka_probe "$lifecycle_state" "$lifecycle_ip" "$ROTATION_PREVIOUS_IP"' \
+    "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh"; then
+    printf 'FAIL: watcher must not skip a Rezka probe using the pre-wait captured IP\n' >&2
+    exit 1
+fi
 for malformed_probe in \
     '{"category":"RezkaReachable","extra":true}' \
     'prefix {"category":"RezkaReachable"}' \

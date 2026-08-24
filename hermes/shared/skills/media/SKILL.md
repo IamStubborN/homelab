@@ -27,9 +27,9 @@ For a destructive action, call `media_destructive_prepare`, show its complete pr
 
 ## Tracking
 
-Ordinary tracking is source-independent: obtain a `release_identity` with a positive `source_id`, then call `media_tracking_create` with `translation=release-calendar`. Never create ordinary tracking from a title alone or ask whether it should use Rezka or Prowlarr; later checks search both providers.
+Ordinary tracking is source-independent: obtain a `release_identity` with a positive `source_id`, then call `media_tracking_create` with `translation=release-calendar`. Never create ordinary tracking from a title alone or ask whether it should use Rezka or Prowlarr. Notify-only checks use the calendar only; they do not scrape Rezka or Prowlarr until a choice-set refresh or explicit search.
 
-Automatic download is a Rezka-only mode requiring an exact result, translation, and season. Prefer `media_tracking_enable_download` on an existing subscription; do not delete and recreate it. Use `media_tracking_set_baseline` for corrections and `media_tracking_check` only for an explicit immediate check. Ordinary subscriptions run hourly; automatic downloads every 15 minutes.
+Automatic download is a Rezka-only mode requiring an exact result, translation, and season. Prefer `media_tracking_enable_download` on an existing subscription; do not delete and recreate it. Use `media_tracking_set_baseline` for corrections and `media_tracking_check` only for an explicit immediate check. Ordinary subscriptions run every 3 hours; automatic downloads every 30 minutes.
 
 ## Rezka session
 

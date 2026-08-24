@@ -5,8 +5,35 @@ probe_output_is_ready() {
     [ "$1" = '{"category":"RezkaReachable"}' ]
 }
 
+should_skip_rezka_probe() {
+    lifecycle_state=${1:-}
+    lifecycle_ip=${2:-}
+    public_ip=${3:-}
+    [ "$lifecycle_state" = ready ] \
+        && [ -n "$lifecycle_ip" ] \
+        && [ -n "$public_ip" ] \
+        && [ "$lifecycle_ip" = "$public_ip" ]
+}
+
 if [ "${WATCHER_PROBE_CONTRACT_TEST:-0}" = 1 ]; then
     probe_output_is_ready "${WATCHER_PROBE_OUTPUT:-}"
+    exit
+fi
+
+if [ "${WATCHER_SKIP_PROBE_CONTRACT_TEST:-0}" = 1 ]; then
+    should_skip_rezka_probe \
+        "${WATCHER_LIFECYCLE_STATE:-}" \
+        "${WATCHER_LIFECYCLE_IP:-}" \
+        "${WATCHER_PUBLIC_IP:-}"
+    exit
+fi
+
+if [ "${WATCHER_STARTUP_IP_CONTRACT_TEST:-0}" = 1 ]; then
+    # Startup skip must use the post-healthy IP, never the pre-wait captured address.
+    should_skip_rezka_probe \
+        "${WATCHER_LIFECYCLE_STATE:-}" \
+        "${WATCHER_LIFECYCLE_IP:-}" \
+        "${WATCHER_POST_HEALTHY_IP:-}"
     exit
 fi
 
@@ -159,7 +186,7 @@ put_lifecycle() {
     return 1
 }
 
-get_lifecycle_state() {
+get_lifecycle() {
     response_file="$STATE_DIR/lifecycle-state.$$"
     attempt=1
     while [ "$attempt" -le "$LIFECYCLE_WRITE_ATTEMPTS" ]; do
@@ -167,10 +194,11 @@ get_lifecycle_state() {
             --header "Authorization: Bearer $MEDIA_LIFECYCLE_TOKEN" \
             http://media-service:8080/v1/runner/lifecycle; then
             state=$(sed -n 's/.*"state":"\([^"]*\)".*/\1/p' "$response_file")
+            current_ip=$(sed -n 's/.*"current_ip":"\([^"]*\)".*/\1/p' "$response_file")
             case $state in
                 ready | rotating | blocked)
                     rm -f "$response_file"
-                    printf '%s' "$state"
+                    printf '%s\t%s' "$state" "$current_ip"
                     return 0
                     ;;
             esac
@@ -183,6 +211,11 @@ get_lifecycle_state() {
     done
     rm -f "$response_file"
     return 1
+}
+
+get_lifecycle_state() {
+    lifecycle=$(get_lifecycle) || return 1
+    printf '%s' "${lifecycle%%	*}"
 }
 
 rotate_parent() {
@@ -252,7 +285,12 @@ check_stale_namespace || true
 dependent_state=$(docker inspect "$DEPENDENT" --format '{{.State.Status}}' 2>/dev/null || true)
 if [ "$dependent_state" = running ] && wait_healthy; then
     current_ip=$(public_ip)
-    if ! rezka_egress_healthy; then
+    lifecycle=$(get_lifecycle || true)
+    lifecycle_state=${lifecycle%%	*}
+    lifecycle_ip=${lifecycle#*	}
+    if should_skip_rezka_probe "$lifecycle_state" "$lifecycle_ip" "$current_ip"; then
+        log "lifecycle already ready for the current public IP; skipping Rezka probe"
+    elif ! rezka_egress_healthy; then
         log "$PARENT egress is healthy but Rezka rejected it; gating new work until $DEPENDENT exits"
         if ! put_lifecycle rotating null "$current_ip" ''; then
             log "cannot gate new work; leaving the running attempt untouched"
@@ -264,8 +302,18 @@ if [ "$dependent_state" = running ] && wait_healthy; then
     fi
 elif [ "$dependent_state" != running ]; then
     ROTATION_PREVIOUS_IP=$(public_ip)
-    if wait_healthy && rezka_egress_healthy; then
-        if put_lifecycle ready null "$ROTATION_PREVIOUS_IP" "$ROTATION_PREVIOUS_IP"; then
+    lifecycle=$(get_lifecycle || true)
+    lifecycle_state=${lifecycle%%	*}
+    lifecycle_ip=${lifecycle#*	}
+    parent_healthy=0
+    current_ip=
+    if wait_healthy; then
+        parent_healthy=1
+        current_ip=$(public_ip)
+    fi
+    if [ "$parent_healthy" -eq 1 ] && { should_skip_rezka_probe "$lifecycle_state" "$lifecycle_ip" "$current_ip" \
+        || rezka_egress_healthy; }; then
+        if put_lifecycle ready null "$ROTATION_PREVIOUS_IP" "$current_ip"; then
             log "existing VPN session is Rezka-ready; reusing it"
             start_dependent
         else

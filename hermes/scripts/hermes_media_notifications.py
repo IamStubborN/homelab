@@ -25,9 +25,9 @@ _CALLBACK_RE = re.compile(
     r"(?::([0-9a-f]{8}))?\Z"
 )
 _SOURCE_CHOICE_CALLBACK_RE = re.compile(
-    r"ms:(a|r|p):"
+    r"ms:(a|r|p|s):"
     r"([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}):"
-    r"(0|[1-9][0-9]{0,9}):([1-9][0-9]{0,9})\Z"
+    r"(0|[1-9][0-9]{0,9}):(0|[1-9][0-9]{0,9})\Z"
 )
 _SOURCE_CHOICE_FALLBACK_PHOTO = os.environ.get(
     "MEDIA_SOURCE_CHOICE_FALLBACK_PHOTO",
@@ -1293,7 +1293,7 @@ def parse_presentation_callback_data(value: object) -> tuple[str, str] | None:
 def source_choice_callback_data(
     action: str, tracking_id: str, season: int, episode: int
 ) -> str:
-    action_code = {"all": "a", "rezka": "r", "prowlarr": "p"}.get(action)
+    action_code = {"all": "a", "rezka": "r", "prowlarr": "p", "season": "s"}.get(action)
     if action_code is None:
         raise ValueError("unsupported source choice action")
     try:
@@ -1321,7 +1321,7 @@ def parse_source_choice_callback_data(
         return None
     action_code, tracking_id, season, episode = match.groups()
     return (
-        {"a": "all", "r": "rezka", "p": "prowlarr"}[action_code],
+        {"a": "all", "r": "rezka", "p": "prowlarr", "s": "season"}[action_code],
         tracking_id,
         int(season),
         int(episode),
@@ -1369,9 +1369,26 @@ def render_source_choice(notification: SourceChoiceNotification) -> RenderedCard
         lines.append("📦 Сезон полностью вышел — можно скачать")
     lines.append("")
     lines.extend(availability)
+    button_rows: list[tuple[RenderedAction, ...]] = []
+    if actions:
+        button_rows.append(actions)
+    if notification.season_complete:
+        button_rows.append(
+            (
+                RenderedAction(
+                    "📦 Скачать сезон",
+                    source_choice_callback_data(
+                        "season",
+                        notification.tracking_id,
+                        notification.season,
+                        notification.episode,
+                    ),
+                ),
+            )
+        )
     return RenderedCard(
         "\n".join(lines),
-        (actions,),
+        tuple(button_rows) if button_rows else (actions,),
         notification.poster_url or _SOURCE_CHOICE_FALLBACK_PHOTO,
     )
 

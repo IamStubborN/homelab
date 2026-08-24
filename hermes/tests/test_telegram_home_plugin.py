@@ -2669,6 +2669,183 @@ class TelegramHomePluginTests(unittest.IsolatedAsyncioTestCase):
             ["⬅️ Назад"],
         )
 
+    async def test_season_complete_button_reuses_download_source_choice_screen(self):
+        update, query = callback_update(f"ms:s:{TRACKING_ID}:3:24")
+        query.message.photo = (object(),)
+        self.adapter._is_callback_user_authorized = lambda *_args, **_kwargs: True
+        tracking = json.dumps(
+            {
+                "tracking": [
+                    {"id": TRACKING_ID, "title": "Реинкарнация безработного"}
+                ]
+            }
+        ).encode()
+        run_media = mock.AsyncMock(return_value=(0, tracking))
+
+        with mock.patch.object(self.plugin, "_run_media", run_media):
+            await self.adapter._handle_callback_query(update, None)
+
+        query.answer.assert_awaited_once_with()
+        run_media.assert_awaited_once()
+        self.assertEqual(
+            run_media.await_args.args[0][0],
+            "mcp__media_admin__media_tracking_list",
+        )
+        caption = query.message.edit_caption.await_args.kwargs["caption"]
+        self.assertEqual(
+            caption,
+            "\n".join(
+                [
+                    "⬇️ Скачать",
+                    "",
+                    "📺 Реинкарнация безработного",
+                    "📚 Сезон 3",
+                    "",
+                    "Выберите источник",
+                ]
+            ),
+        )
+        markup = query.message.edit_caption.await_args.kwargs["reply_markup"]
+        self.assertEqual(
+            [[button.text for button in row] for row in markup.inline_keyboard],
+            [["🌐 Rezka", "🧲 Prowlarr"], ["⬅️ Назад"]],
+        )
+        self.assertEqual(
+            [button.callback_data for button in markup.inline_keyboard[0]],
+            [f"ms:r:{TRACKING_ID}:3:0", f"ms:p:{TRACKING_ID}:3:0"],
+        )
+        self.assertEqual(
+            markup.inline_keyboard[1][0].callback_data,
+            f"ms:b:{TRACKING_ID}:3:24",
+        )
+
+    async def test_season_source_back_reopens_download_source_choice_screen(self):
+        update, query = callback_update(f"ms:b:{TRACKING_ID}:3:0")
+        query.message.photo = (object(),)
+        self.adapter._is_callback_user_authorized = lambda *_args, **_kwargs: True
+        tracking = json.dumps(
+            {
+                "tracking": [
+                    {"id": TRACKING_ID, "title": "Реинкарнация безработного"}
+                ]
+            }
+        ).encode()
+
+        with mock.patch.object(
+            self.plugin, "_run_media", mock.AsyncMock(return_value=(0, tracking))
+        ):
+            await self.adapter._handle_callback_query(update, None)
+
+        caption = query.message.edit_caption.await_args.kwargs["caption"]
+        self.assertIn("⬇️ Скачать", caption)
+        self.assertIn("📚 Сезон 3", caption)
+        self.assertIn("Выберите источник", caption)
+        self.assertNotIn("🆕 S03E00", caption)
+        markup = query.message.edit_caption.await_args.kwargs["reply_markup"]
+        self.assertEqual(
+            [button.callback_data for button in markup.inline_keyboard[0]],
+            [f"ms:r:{TRACKING_ID}:3:0", f"ms:p:{TRACKING_ID}:3:0"],
+        )
+        self.assertEqual(
+            markup.inline_keyboard[1][0].callback_data,
+            f"mp:tracking:{TRACKING_ID}:1",
+        )
+
+    async def test_season_rezka_callback_searches_whole_season_without_queuing(self):
+        update, query = callback_update(f"ms:r:{TRACKING_ID}:3:0")
+        self.adapter._is_callback_user_authorized = lambda *_args, **_kwargs: True
+        tracking = json.dumps(
+            {
+                "tracking": [
+                    {
+                        "id": TRACKING_ID,
+                        "title": "Реинкарнация безработного",
+                        "release_identity": {
+                            "source": "tvmaze",
+                            "source_id": 81228,
+                        },
+                        "state": "choice_needed",
+                    }
+                ]
+            }
+        ).encode()
+        release = json.dumps(
+            {
+                "status": "matched",
+                "source": "tvmaze",
+                "show": {
+                    "source_id": 81228,
+                    "title": "Mushoku Tensei",
+                    "original_title": None,
+                    "year": 2026,
+                    "lifecycle": "ongoing",
+                },
+            }
+        ).encode()
+        search = json.dumps(
+            {
+                "api_version": "v1",
+                "session_id": "00000000-0000-0000-0000-000000000111",
+                "source": "rezka",
+                "expires_at": "2099-07-27T12:00:00Z",
+                "results": [
+                    {
+                        "source": "rezka",
+                        "result_id": "rezka:1",
+                        "title": "Реинкарнация безработного",
+                        "original_title": "Mushoku Tensei",
+                        "year": 2026,
+                        "translations": [{"id": 1, "name": "AniLibria"}],
+                    }
+                ],
+            }
+        ).encode()
+        run_media = mock.AsyncMock(
+            side_effect=[(0, tracking), (0, release), (0, search)]
+        )
+
+        with mock.patch.object(self.plugin, "_run_media", run_media):
+            await self.adapter._handle_callback_query(update, None)
+
+        self.assertEqual(run_media.await_count, 3)
+        self.assertEqual(
+            run_media.await_args_list[0].args[0][0],
+            "mcp__media_admin__media_tracking_list",
+        )
+        self.assertNotIn(
+            "media_episode_choice_set",
+            run_media.await_args_list[0].args[0][0],
+        )
+        self.assertEqual(
+            run_media.await_args_list[2].args[0],
+            (
+                "mcp__media_admin__media_search",
+                {
+                    "source": "rezka",
+                    "query": "Реинкарнация безработного",
+                    "media_kind": "series",
+                    "season": 3,
+                },
+            ),
+        )
+        query.answer.assert_awaited_once_with(text="Ищу варианты…")
+        rendered = query.message.edit_text.await_args.args[0]
+        self.assertIn("📚 S03", rendered)
+        self.assertNotIn("🆕 S03E00", rendered)
+        self.assertIn("🎙 AniLibria", rendered)
+        labels = [
+            button.text
+            for row in query.message.edit_text.await_args.kwargs[
+                "reply_markup"
+            ].inline_keyboard
+            for button in row
+        ]
+        self.assertIn("⬇️ Скачать", labels)
+        self.assertNotIn(
+            "mcp__media_admin__media_download",
+            [call.args[0][0] for call in run_media.await_args_list],
+        )
+
     async def test_source_back_finds_tracking_from_a_later_cursor_page(self):
         update, query = callback_update(f"ms:b:{TRACKING_ID}:3:5")
         query.message.photo = (object(),)
@@ -7745,6 +7922,49 @@ class TelegramHomePluginTests(unittest.IsolatedAsyncioTestCase):
         ].inline_keyboard
         self.assertEqual([button.text for button in rows[0]], ["S1", "S2", "S3"])
         self.assertEqual([button.text for button in rows[1]], ["S4", "S5"])
+
+    async def test_tmdb_tv_season_download_reuses_source_choice_screen(self):
+        update, query = callback_update("mx:w:t:77:2")
+        query.message.photo = (object(),)
+        self.adapter._is_callback_user_authorized = lambda *_args, **_kwargs: True
+        details = {
+            "tmdb_id": 77,
+            "media_type": "tv",
+            "title": "Сериал",
+            "season_count": 5,
+        }
+        with mock.patch.object(
+            self.adapter,
+            "_details_payload",
+            mock.AsyncMock(return_value=details),
+        ):
+            await self.adapter._handle_callback_query(update, None)
+
+        caption = query.message.edit_caption.await_args.kwargs["caption"]
+        self.assertEqual(
+            caption,
+            "\n".join(
+                [
+                    "⬇️ Скачать",
+                    "",
+                    "📺 Сериал",
+                    "📚 Сезон 2",
+                    "",
+                    "Выберите источник",
+                ]
+            ),
+        )
+        rows = query.message.edit_caption.await_args.kwargs[
+            "reply_markup"
+        ].inline_keyboard
+        self.assertEqual(
+            [[button.text for button in row] for row in rows],
+            [["🌐 Rezka", "🧲 Prowlarr"], ["⬅️ Назад"]],
+        )
+        self.assertEqual(
+            [button.callback_data for button in rows[0]],
+            ["mx:r:t:77:2", "mx:p:t:77:2"],
+        )
 
     async def test_media_navigation_back_restores_exact_previous_screen(self):
         trending = {

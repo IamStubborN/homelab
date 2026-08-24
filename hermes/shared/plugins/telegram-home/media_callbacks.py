@@ -15,14 +15,14 @@ _CALLBACK_RE = re.compile(
     r"(?::([0-9a-f]{8}))?\Z"
 )
 _SOURCE_CHOICE_CALLBACK_RE = re.compile(
-    r"ms:(a|r|p):"
+    r"ms:(a|r|p|s):"
     r"([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}):"
-    r"(0|[1-9][0-9]{0,9}):([1-9][0-9]{0,9})\Z"
+    r"(0|[1-9][0-9]{0,9}):(0|[1-9][0-9]{0,9})\Z"
 )
 _SOURCE_BACK_CALLBACK_RE = re.compile(
     r"ms:b:"
     r"([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}):"
-    r"(0|[1-9][0-9]{0,9}):([1-9][0-9]{0,9})\Z"
+    r"(0|[1-9][0-9]{0,9}):(0|[1-9][0-9]{0,9})\Z"
 )
 _DOWNLOAD_ACTION_CALLBACK_RE = re.compile(r"md:([A-Za-z0-9_-]{12,24})\Z")
 _PRESENTATION_CALLBACK_RE = re.compile(

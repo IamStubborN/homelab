@@ -307,6 +307,20 @@ class MediaNotificationRenderTests(unittest.TestCase):
             ),
         )
         self.assertTrue(notification.season_complete)
+        self.assertEqual(
+            [[action.label for action in row] for row in card.button_rows],
+            [["🌐 Rezka"], ["📦 Скачать сезон"]],
+        )
+        self.assertEqual(
+            card.button_rows[1][0].callback_data,
+            f"ms:s:{TRACKING_ID}:3:24",
+        )
+        self.assertEqual(
+            module.parse_source_choice_callback_data(
+                card.button_rows[1][0].callback_data
+            ),
+            ("season", TRACKING_ID, 3, 24),
+        )
 
     def test_source_choice_parser_rejects_non_boolean_season_complete(self):
         module = load_module()

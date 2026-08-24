@@ -118,6 +118,34 @@ from .notifier_client import (
 _SEARCH_LOADING_TOAST = "Ищу варианты…"
 
 
+def _download_source_choice_card(
+    title: str,
+    *,
+    media_type: str,
+    season: int,
+    rezka_callback: str,
+    prowlarr_callback: str,
+    back_callback: str,
+) -> tuple[str, InlineKeyboardMarkup]:
+    icon = "🎬" if media_type == "movie" else "📺"
+    lines = ["⬇️ Скачать", "", f"{icon} {title}"]
+    if media_type == "tv":
+        lines.append(f"📚 Сезон {season}")
+    lines.extend(("", "Выберите источник"))
+    markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🌐 Rezka", callback_data=rezka_callback),
+                InlineKeyboardButton(
+                    "🧲 Prowlarr", callback_data=prowlarr_callback
+                ),
+            ],
+            [InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)],
+        ]
+    )
+    return "\n".join(lines), markup
+
+
 def _action_markup(
     store: MediaActionStore, actions: tuple[SearchAction, ...]
 ) -> InlineKeyboardMarkup | None:
@@ -1637,26 +1665,18 @@ class HomeTelegramAdapter(TelegramAdapter):
         ):
             return
         kind_code = "m" if media_type == "movie" else "t"
-        icon = "🎬" if media_type == "movie" else "📺"
-        lines = ["⬇️ Скачать", "", f"{icon} {title}"]
-        if media_type == "tv":
-            lines.append(f"📚 Сезон {season}")
-        lines.extend(("", "Выберите источник"))
-        markup = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "🌐 Rezka", callback_data=f"mx:r:{kind_code}:{tmdb_id}:{season}"
-                ),
-                InlineKeyboardButton(
-                    "🧲 Prowlarr", callback_data=f"mx:p:{kind_code}:{tmdb_id}:{season}"
-                ),
-            ],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="mn:b")],
-        ])
+        text, markup = _download_source_choice_card(
+            title,
+            media_type=media_type,
+            season=season,
+            rezka_callback=f"mx:r:{kind_code}:{tmdb_id}:{season}",
+            prowlarr_callback=f"mx:p:{kind_code}:{tmdb_id}:{season}",
+            back_callback="mn:b",
+        )
         async with self._media_panel_message_lock(message):
             if not self._media_panel_transition_is_current(message, generation):
                 return
-            await self._edit_message_card(message, "\n".join(lines), markup)
+            await self._edit_message_card(message, text, markup)
 
     async def _search_from_tmdb_card(
         self,
@@ -4468,6 +4488,18 @@ class HomeTelegramAdapter(TelegramAdapter):
             season = int(season_text)
             episode = int(episode_text)
             await query.answer()
+            if episode == 0:
+                if season < 1:
+                    return
+                await self._show_tracking_season_download_choice(
+                    query_message,
+                    tracking_id,
+                    season,
+                    generation,
+                    back_callback=f"mp:tracking:{tracking_id}:1",
+                    retry_callback=f"ms:b:{tracking_id}:{season}:0",
+                )
+                return
             tracking_code, tracking_output = await _tracking_pages(
                 _run_media, self._media_plugin_context
             )
@@ -4521,9 +4553,30 @@ class HomeTelegramAdapter(TelegramAdapter):
             return
 
         action_code, tracking_id, season_text, episode_text = match.groups()
-        source_action = {"a": "all", "r": "rezka", "p": "prowlarr"}[action_code]
         season = int(season_text)
         episode = int(episode_text)
+        if action_code == "s":
+            await query.answer()
+            if season < 1:
+                return
+            back_callback = (
+                f"ms:b:{tracking_id}:{season}:{episode}"
+                if episode >= 1
+                else f"mp:tracking:{tracking_id}:1"
+            )
+            await self._show_tracking_season_download_choice(
+                query_message,
+                tracking_id,
+                season,
+                generation,
+                back_callback=back_callback,
+                retry_callback=data,
+            )
+            return
+        if episode == 0 and (action_code not in {"r", "p"} or season < 1):
+            await query.answer()
+            return
+        source_action = {"a": "all", "r": "rezka", "p": "prowlarr"}[action_code]
         # A callback must be acknowledged before any network or rendering work.
         # Telegram otherwise reports a spinner/timeout even when the cached
         # choice set is available.
@@ -4535,6 +4588,20 @@ class HomeTelegramAdapter(TelegramAdapter):
             # known stale-query response instead of failing the callback.
             if not _is_expired_callback_query(error):
                 raise
+        if episode == 0:
+            _tracking_code, tracking_output = await _tracking_pages(
+                _run_media, self._media_plugin_context
+            )
+            await self._handle_legacy_source_choice_callback(
+                query,
+                source_action,
+                tracking_id,
+                season,
+                0,
+                tracking_output,
+                generation,
+            )
+            return
 
         choice_set_id = str(
             uuid.uuid5(
@@ -4715,6 +4782,53 @@ class HomeTelegramAdapter(TelegramAdapter):
         await self._present_search_once(
             query_message, combined, store, generation
         )
+
+    async def _show_tracking_season_download_choice(
+        self,
+        message,
+        tracking_id: str,
+        season: int,
+        generation: int,
+        *,
+        back_callback: str,
+        retry_callback: str,
+    ) -> None:
+        tracking_code, tracking_output = await _tracking_pages(
+            _run_media, self._media_plugin_context
+        )
+        title = (
+            _tracking_title(tracking_output, tracking_id)
+            if tracking_code == 0
+            else None
+        )
+        if title is None:
+            markup = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "🔄 Повторить", callback_data=retry_callback
+                        )
+                    ],
+                    [InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)],
+                ]
+            )
+            await self._edit_tracking_choice_card(
+                message,
+                "⚠️ Не удалось восстановить выбор источника. "
+                "Обновите отслеживания.",
+                markup,
+                generation,
+            )
+            return
+        text, markup = _download_source_choice_card(
+            title,
+            media_type="tv",
+            season=season,
+            rezka_callback=f"ms:r:{tracking_id}:{season}:0",
+            prowlarr_callback=f"ms:p:{tracking_id}:{season}:0",
+            back_callback=back_callback,
+        )
+        await self._edit_tracking_choice_card(message, text, markup, generation)
 
     async def _edit_tracking_choice_card(
         self,

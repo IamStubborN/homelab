@@ -30,7 +30,9 @@ keeps upgrades non-destructive and avoids silently starting with empty state.
 
 `compose.media-orchestrator.yml` is included by the root `compose.yml` and is
 managed as part of the `homelab` Compose project. Application images must be
-published before running a root deployment.
+published before running a root deployment. `MEDIA_POSTGRES_IMAGE` stays on a
+PostgreSQL 17 tag without a digest so Watchtower can apply patch updates; do
+not pin it by sha256 and do not use `postgres:latest`.
 
 The private application repository exports a four-file release contract. Copy
 one real export to the ignored `media/release/` directory, validate it with

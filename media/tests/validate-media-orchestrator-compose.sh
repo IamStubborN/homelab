@@ -118,6 +118,8 @@ assert_yq '(.services.gluetun-rezka-watcher.secrets | length) == 1 and .services
     'watcher itself must receive only the lifecycle secret'
 assert_yq '.secrets as $secrets | (($secrets | length) == 16 and ($secrets | has("media_database_url")) and ($secrets | has("media_postgres_password")) and ($secrets | has("gluetun_rezka_control_api_key")) and ($secrets | has("media_primary_rezka_broker_token") | not) and ($secrets | has("media_rezka_username") | not) and ($secrets | has("media_rezka_password") | not))' \
     'compose must declare anonymous-session secrets without broker credentials'
+assert_yq '.services["media-postgres"].labels["com.centurylinklabs.watchtower.enable"] == "true" and .services["media-postgres"].labels["com.centurylinklabs.watchtower.monitor-only"] == null' \
+    'media-postgres must be Watchtower-enabled without monitor-only'
 assert_yq '.services.media-postgres.networks as $networks | (($networks | length) == 1 and ($networks | has("media-db")))' \
     'PostgreSQL must only join the private database network'
 assert_yq '.networks.media-db.internal == true and .networks.media-private.internal == true' \

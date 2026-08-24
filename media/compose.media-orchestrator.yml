@@ -43,7 +43,7 @@ x-service-environment: &service-environment
 services:
   media-postgres:
     <<: *locked-down
-    image: ${MEDIA_POSTGRES_IMAGE:?set MEDIA_POSTGRES_IMAGE to an immutable PostgreSQL tag or digest}
+    image: ${MEDIA_POSTGRES_IMAGE:?set MEDIA_POSTGRES_IMAGE to a PostgreSQL 17 tag without a digest}
     container_name: media-postgres
     restart: unless-stopped
     read_only: true
@@ -79,6 +79,9 @@ services:
       start_period: 30s
     secrets:
       - media_postgres_password
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+      com.centurylinklabs.watchtower.stop-timeout: "60s"
     networks:
       - media-db
 

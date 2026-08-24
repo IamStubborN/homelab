@@ -9,7 +9,7 @@ services:
       - ./data:/data
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
-      - "com.centurylinklabs.watchtower.monitor-only=true"
+      - "com.centurylinklabs.watchtower.stop-timeout=60s"
       - "traefik.enable=true"
       - "traefik.http.routers.bitwarden.tls=true"
       - "traefik.http.routers.bitwarden.entrypoints=http,https"

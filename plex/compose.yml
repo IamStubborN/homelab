@@ -65,6 +65,7 @@ services:
       retries: 3
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.stop-timeout=120s"
       - "deunhealth.restart.on.unhealthy=true"
       - "traefik.enable=true"
       - "traefik.http.routers.plex.tls=true"

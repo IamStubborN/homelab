@@ -1,6 +1,15 @@
 #!/bin/sh
 set -eu
 
+probe_output_is_ready() {
+    [ "$1" = '{"category":"RezkaReachable"}' ]
+}
+
+if [ "${WATCHER_PROBE_CONTRACT_TEST:-0}" = 1 ]; then
+    probe_output_is_ready "${WATCHER_PROBE_OUTPUT:-}"
+    exit
+fi
+
 PARENT=${PARENT_CONTAINER:-gluetun-rezka}
 DEPENDENT=${DEPENDENT_CONTAINER:-download-runner}
 HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-120}
@@ -9,8 +18,10 @@ ROTATION_ATTEMPTS=${ROTATION_ATTEMPTS:-3}
 LIFECYCLE_WRITE_ATTEMPTS=${LIFECYCLE_WRITE_ATTEMPTS:-3}
 LIFECYCLE_RETRY_DELAY=${LIFECYCLE_RETRY_DELAY:-2}
 LIFECYCLE_HTTP_TIMEOUT=${LIFECYCLE_HTTP_TIMEOUT:-10}
-REZKA_PROBE_URL=${REZKA_PROBE_URL:-https://rezka.ag/}
-REZKA_PROBE_TIMEOUT=${REZKA_PROBE_TIMEOUT:-20}
+REZKA_PROBE_IMAGE=${REZKA_PROBE_IMAGE:?REZKA_PROBE_IMAGE is required}
+PROBE_UID=${PROBE_UID:?PROBE_UID is required}
+PROBE_GID=${PROBE_GID:?PROBE_GID is required}
+MEDIA_SERVICE_URL=${MEDIA_SERVICE_URL:-http://media-service:8080}
 STATE_DIR=${STATE_DIR:-/state}
 if [ -z "${MEDIA_LIFECYCLE_TOKEN:-}" ] && [ -n "${MEDIA_LIFECYCLE_TOKEN_FILE:-}" ] && [ -f "$MEDIA_LIFECYCLE_TOKEN_FILE" ]; then
   MEDIA_LIFECYCLE_TOKEN="$(tr -d '\n' < "$MEDIA_LIFECYCLE_TOKEN_FILE")"
@@ -39,17 +50,6 @@ wait_healthy() {
     return 1
 }
 
-restart_dependent() {
-    state=$(docker inspect "$DEPENDENT" --format '{{.State.Status}}' 2>/dev/null || true)
-    if [ "$state" != running ]; then
-        log "$DEPENDENT is not running; no restart needed"
-        return
-    fi
-
-    log "restarting $DEPENDENT after $PARENT namespace replacement"
-    docker restart "$DEPENDENT" >/dev/null
-}
-
 public_ip() {
     ip=$(docker exec "$PARENT" cat /tmp/gluetun/ip 2>/dev/null | tr -d '\r\n' || true)
     if [ -n "$ip" ]; then
@@ -67,11 +67,52 @@ public_ip() {
     done
 }
 
+mount_source() {
+    destination=$1
+    docker inspect "$DEPENDENT" \
+        --format "{{range .Mounts}}{{if eq .Destination \"$destination\"}}{{.Source}}{{end}}{{end}}" \
+        2>/dev/null || true
+}
+
+session_volume_name() {
+    docker inspect "$DEPENDENT" \
+        --format '{{range .Mounts}}{{if eq .Destination "/var/lib/media-orchestrator/session"}}{{.Name}}{{end}}{{end}}' \
+        2>/dev/null || true
+}
+
 rezka_egress_healthy() {
-    docker exec "$PARENT" wget -q -O /dev/null \
-        --timeout="$REZKA_PROBE_TIMEOUT" \
-        --user-agent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36' \
-        "$REZKA_PROBE_URL"
+    # Run the immutable runner's challenge-aware CLI in the parent's namespace. Mount only the
+    # encrypted jar and two secrets required by RunnerConfig; never expose media storage or
+    # qBittorrent credentials to the probe. Only the typed category is inspected.
+    session_volume=$(session_volume_name)
+    runner_token_source=$(mount_source /run/secrets/media_runner_token)
+    cookie_key_source=$(mount_source /run/secrets/rezka_cookie_key)
+    if [ -z "$session_volume" ] || [ -z "$runner_token_source" ] || [ -z "$cookie_key_source" ]; then
+        log "cannot resolve the probe's restricted session and secret mounts"
+        return 1
+    fi
+    probe_output=$(docker run --rm \
+        --user "$PROBE_UID:$PROBE_GID" \
+        --read-only \
+        --tmpfs /tmp:rw,nosuid,nodev,exec,size=512m,mode=1777 \
+        --shm-size 256m \
+        --cap-drop ALL \
+        --security-opt no-new-privileges:true \
+        --network "container:$PARENT" \
+        --mount "type=volume,source=$session_volume,target=/var/lib/media-orchestrator/session" \
+        --mount "type=bind,source=$runner_token_source,target=/run/secrets/media_runner_token,readonly" \
+        --mount "type=bind,source=$cookie_key_source,target=/run/secrets/rezka_cookie_key,readonly" \
+        -e "MEDIA_SERVICE_URL=$MEDIA_SERVICE_URL" \
+        -e MEDIA_TOKEN_FILE=/run/secrets/media_runner_token \
+        -e "MEDIA_REZKA_PROXY_URL=$MEDIA_REZKA_PROXY_URL" \
+        -e "MEDIA_REZKA_MIRRORS=$MEDIA_REZKA_MIRRORS" \
+        -e "MEDIA_REZKA_SESSION_PROBE_URL=$MEDIA_REZKA_SESSION_PROBE_URL" \
+        -e "MEDIA_REZKA_SESSION_VALID_MARKERS_JSON=$MEDIA_REZKA_SESSION_VALID_MARKERS_JSON" \
+        -e "MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON=$MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON" \
+        -e MEDIA_REZKA_COOKIE_KEY_FILE=/run/secrets/rezka_cookie_key \
+        -e MEDIA_REZKA_SESSION_STORE_FILE=/var/lib/media-orchestrator/session/session.bin \
+        "$REZKA_PROBE_IMAGE" rezka probe --json 2>/dev/null || true)
+    probe_output_is_ready "$probe_output"
 }
 
 record_rotation() {
@@ -180,7 +221,7 @@ rotate_parent() {
 start_dependent() {
     state=$(docker inspect "$DEPENDENT" --format '{{.State.Status}}' 2>/dev/null || true)
     if [ "$state" = running ]; then
-        log "$DEPENDENT is already running; checking its network namespace"
+        log "$DEPENDENT is already running; leaving the active attempt untouched"
         check_stale_namespace
         return
     fi
@@ -195,8 +236,10 @@ check_stale_namespace() {
     if [ -n "$parent_started" ] && [ -n "$dependent_started" ] \
         && [ "$dependent_started" != "$parent_started" ] \
         && [ "$oldest_started" = "$dependent_started" ]; then
-        restart_dependent
+        log "$DEPENDENT still uses the previous $PARENT namespace; its sticky lease must end the attempt retryably"
+        return 1
     fi
+    return 0
 }
 
 mkdir -p "$STATE_DIR"
@@ -204,32 +247,32 @@ touch "$STATE_DIR/rotations.tsv"
 
 log "watching $PARENT and $DEPENDENT; only this dedicated pair may be controlled"
 sleep "$SETTLE_DELAY"
-check_stale_namespace
+check_stale_namespace || true
 
 dependent_state=$(docker inspect "$DEPENDENT" --format '{{.State.Status}}' 2>/dev/null || true)
 if [ "$dependent_state" = running ] && wait_healthy; then
     current_ip=$(public_ip)
     if ! rezka_egress_healthy; then
-        log "$PARENT egress is healthy but Rezka rejected it; preparing a fresh VPN session"
-        docker stop "$DEPENDENT" >/dev/null || true
-        ROTATION_PREVIOUS_IP=$current_ip
-        if put_lifecycle rotating null "$current_ip" '' \
-            && rotate_parent \
-            && put_lifecycle ready null "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP"; then
-            start_dependent
-        else
-            put_lifecycle blocked '"vpn_rotation_failed"' \
-                "$ROTATION_PREVIOUS_IP" "${ROTATION_CURRENT_IP:-}" || true
-            log "startup Rezka egress reconciliation failed; $DEPENDENT remains stopped"
+        log "$PARENT egress is healthy but Rezka rejected it; gating new work until $DEPENDENT exits"
+        if ! put_lifecycle rotating null "$current_ip" ''; then
+            log "cannot gate new work; leaving the running attempt untouched"
+            exit 1
         fi
     elif ! put_lifecycle ready null "$current_ip" "$current_ip"; then
-        log "cannot initialize ready lifecycle state; stopping $DEPENDENT fail-closed"
-        docker stop "$DEPENDENT" >/dev/null || true
+        log "cannot initialize ready lifecycle state; leaving the running attempt untouched"
         exit 1
     fi
 elif [ "$dependent_state" != running ]; then
     ROTATION_PREVIOUS_IP=$(public_ip)
-    if ! put_lifecycle rotating null "$ROTATION_PREVIOUS_IP" ''; then
+    if wait_healthy && rezka_egress_healthy; then
+        if put_lifecycle ready null "$ROTATION_PREVIOUS_IP" "$ROTATION_PREVIOUS_IP"; then
+            log "existing VPN session is Rezka-ready; reusing it"
+            start_dependent
+        else
+            log "cannot initialize ready lifecycle state; $DEPENDENT remains stopped"
+            exit 1
+        fi
+    elif ! put_lifecycle rotating null "$ROTATION_PREVIOUS_IP" ''; then
         log "cannot initialize rotating lifecycle state; $DEPENDENT remains stopped"
         exit 1
     elif rotate_parent && put_lifecycle ready null "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP"; then
@@ -275,7 +318,7 @@ docker events \
         fi
     elif [ "$container" = "$PARENT" ] && [ "$action" = start ]; then
         log "$PARENT start detected"
-        check_stale_namespace
+        check_stale_namespace || true
     fi
 done
 

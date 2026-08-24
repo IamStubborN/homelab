@@ -244,7 +244,6 @@ services:
     networks:
       - media-private
       - rezka-egress
-      - rezka-credentials
       - proxy
 
   download-runner:
@@ -269,11 +268,10 @@ services:
       MEDIA_REZKA_SESSION_PROBE_URL: ${MEDIA_REZKA_SESSION_PROBE_URL:?set the HTTPS session probe URL}
       MEDIA_REZKA_SESSION_VALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_VALID_MARKERS_JSON:?set valid session markers JSON}
       MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON:?set invalid session markers JSON}
-      MEDIA_REZKA_CREDENTIAL_BROKER_URL: http://vaultwarden-broker-primary:8787
-      MEDIA_REZKA_CREDENTIAL_BROKER_TOKEN_FILE: /run/secrets/media_primary_rezka_broker_token
-      MEDIA_REZKA_CREDENTIAL_BROKER_PRIVATE_HTTP_HOSTS: vaultwarden-broker-primary
       MEDIA_REZKA_COOKIE_KEY_FILE: /run/secrets/rezka_cookie_key
       MEDIA_REZKA_SESSION_STORE_FILE: /var/lib/media-orchestrator/session/session.bin
+      MEDIA_GLUETUN_URL: http://127.0.0.1:8000
+      MEDIA_GLUETUN_API_KEY_FILE: /run/secrets/gluetun_rezka_control_api_key
       MEDIA_RUNNER_EXIT_AFTER_JOB: "true"
       MEDIA_QBITTORRENT_URL: http://gluetun:8400
       MEDIA_QBITTORRENT_TV_CATEGORY: ${MEDIA_QBITTORRENT_TV_CATEGORY:?set existing TV category}
@@ -289,8 +287,8 @@ services:
       TZ: ${TIMEZONE:-UTC}
     secrets:
       - media_runner_token
-      - media_primary_rezka_broker_token
       - rezka_cookie_key
+      - gluetun_rezka_control_api_key
       - media_qbittorrent_password
     volumes:
       # One bind mount preserves atomic rename between staging and Plex roots.
@@ -304,6 +302,7 @@ services:
         target: /var/lib/media-orchestrator/session
         volume:
           nocopy: true
+    shm_size: 256mb
     tmpfs:
       - /tmp:size=1g,mode=1777
       - /run/media-orchestrator:size=16m,mode=0700
@@ -331,8 +330,11 @@ services:
     <<: *locked-down
     image: ${GLUETUN_REZKA_WATCHER_IMAGE:?set GLUETUN_REZKA_WATCHER_IMAGE to an immutable Docker CLI tag or digest}
     container_name: gluetun-rezka-watcher
+    user: ${PUID:-1000}:${PGID:-1000}
     restart: unless-stopped
     read_only: true
+    group_add:
+      - ${DOCKER_SOCKET_GID:?set DOCKER_SOCKET_GID to the host Docker socket group ID}
     environment:
       MEDIA_LIFECYCLE_TOKEN_FILE: /run/secrets/media_lifecycle_token
       PARENT_CONTAINER: gluetun-rezka
@@ -340,8 +342,15 @@ services:
       HEALTH_TIMEOUT: "120"
       SETTLE_DELAY: "10"
       ROTATION_ATTEMPTS: "3"
-      REZKA_PROBE_URL: ${MEDIA_REZKA_SESSION_PROBE_URL:?set the HTTPS Rezka probe URL}
-      REZKA_PROBE_TIMEOUT: "20"
+      REZKA_PROBE_IMAGE: ${DOWNLOAD_RUNNER_IMAGE:?set DOWNLOAD_RUNNER_IMAGE to an immutable media-orchestrator runner tag or digest}
+      PROBE_UID: ${PUID:-1000}
+      PROBE_GID: ${PGID:-1000}
+      MEDIA_SERVICE_URL: http://media-service:8080
+      MEDIA_REZKA_PROXY_URL: http://127.0.0.1:8888
+      MEDIA_REZKA_MIRRORS: ${MEDIA_REZKA_MIRRORS:?set comma-separated HTTPS Rezka mirrors}
+      MEDIA_REZKA_SESSION_PROBE_URL: ${MEDIA_REZKA_SESSION_PROBE_URL:?set the HTTPS session probe URL}
+      MEDIA_REZKA_SESSION_VALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_VALID_MARKERS_JSON:?set valid session markers JSON}
+      MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON: ${MEDIA_REZKA_SESSION_INVALID_MARKERS_JSON:?set invalid session markers JSON}
       STATE_DIR: /state
     secrets:
       - media_lifecycle_token
@@ -374,6 +383,8 @@ secrets:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/gluetun_rezka_wireguard_private_key
   gluetun_rezka_control_auth_config:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/gluetun_rezka_control_auth_config
+  gluetun_rezka_control_api_key:
+    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/gluetun_rezka_control_api_key
   media_database_url:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_database_url
   media_primary_token:
@@ -400,9 +411,6 @@ secrets:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_qbittorrent_password
   media_postgres_password:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_postgres_password
-  media_primary_rezka_broker_token:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/primary_rezka_broker_token
-
 volumes:
   # Preserve the existing data while this stack moves under the homelab project.
   media_postgres_data:
@@ -427,8 +435,5 @@ networks:
     name: ${MEDIA_NETWORK:-media-internal}
     external: true
   rezka-egress:
-  rezka-credentials:
-    name: rezka-credentials
-    external: true
   proxy:
     external: true

@@ -61,7 +61,6 @@ networks used by Media Orchestrator once:
 
 ```bash
 docker network create media-internal
-docker network create rezka-credentials
 ```
 
 Create the host paths before starting. Staging remains outside Plex roots, but
@@ -75,19 +74,19 @@ install -d -m 0750 \
 install -d -m 0700 "${MEDIA_SECRETS_DIR}"
 ```
 
-Set the application credentials in the real ignored root `.env`; never commit
-their values. This includes the PostgreSQL password and database URL, all three
-API tokens, both webhook HMAC values, the Prowlarr API key, Plex token, Rezka
-cookie key, qBittorrent password, Gluetun control API key, and the Vaultwarden
-broker token. Search and download stay anonymous. Session refresh still
-resolves one-time Rezka credentials through `vaultwarden-broker-primary`. Set
-`PRIMARY_REZKA_BROKER_TOKEN` to the token configured for that broker.
+Set the application secrets in the real ignored root `.env`; never commit their
+values. This includes the PostgreSQL password and database URL, all three API
+tokens, both webhook HMAC values, the Prowlarr API key, Plex token, anonymous
+Rezka cookie key, qBittorrent password, and Gluetun control API key. Rezka is
+always anonymous: the encrypted cookie jar carries only provider cookies and
+Anubis clearance.
 
 Create these local secret files with mode `0600`:
 
 ```text
 gluetun_rezka_wireguard_private_key
 gluetun_rezka_control_auth_config
+gluetun_rezka_control_api_key
 ```
 
 `MEDIA_DATABASE_URL` uses the private hostname, for example
@@ -96,14 +95,14 @@ The two media API tokens and webhook HMAC values must match the corresponding
 values in the `hermes-home` deployment. Set the real Plex TV/movie section IDs,
 the existing qBittorrent TV and movies categories, and the qBittorrent username
 in `.env`.
-`MEDIA_REZKA_COOKIE_KEY` is base64 for exactly 32 decoded bytes. The Gluetun API key
-is generated with `docker run --rm qmcgaw/gluetun:<pinned-version> genkey`; set
-the same key as `GLUETUN_REZKA_CONTROL_API_KEY` in `.env` and in the auth config:
+`MEDIA_REZKA_COOKIE_KEY` is base64 for exactly 32 decoded bytes. Generate the
+Gluetun API key with `docker run --rm qmcgaw/gluetun:<pinned-version> genkey`.
+Write the same value to `gluetun_rezka_control_api_key` and the auth config:
 
 ```toml
 [[roles]]
 name = "download-runner"
-routes = ["GET /v1/vpn/status", "PUT /v1/vpn/status", "GET /v1/publicip/ip"]
+routes = ["GET /v1/publicip/ip"]
 auth = "apikey"
 apikey = "replace-with-generated-key"
 ```
@@ -111,16 +110,34 @@ apikey = "replace-with-generated-key"
 The control server binds to `127.0.0.1` inside the namespace shared only by
 `gluetun-rezka` and `download-runner`; it has no published port or Traefik
 route. `HEALTH_RESTART_VPN=off` prevents Gluetun health recovery from changing
-the job IP. The runner owns explicit rotation only after a terminal job state.
-Because the runner uses `network_mode: service:gluetun-rezka`, the
-`gluetun-rezka` service joins the external `rezka-credentials` network on its
-behalf. Session refresh reaches `http://vaultwarden-broker-primary:8787` over
-that shared namespace. Routine search and download keep the anonymous cookie
-jar.
+the job IP. The runner binds each Rezka job to its initial public IP, checks it
+every five seconds and again at completion, and cooperatively stops the attempt
+as retryable if the IP changes or cannot be verified. Routine search and
+download reuse the current VPN lease and encrypted anonymous cookie jar; only
+the watcher performs an explicit rotation after lifecycle enters `rotating`.
+
+The watcher runs `media rezka probe --json` from the immutable runner image with
+the application UID/GID in the same Gluetun namespace. The one-shot container
+receives only the encrypted session volume, runner API token, and cookie key;
+it does not inherit the runner's media mounts or qBittorrent secret. A challenge
+page is therefore reported as a failed typed probe, never as a healthy HTTP
+status. The watcher never stops or restarts an active runner after an unexpected
+namespace change; the runner's sticky IP lease ends that attempt safely and the
+watcher reconciles lifecycle only after it exits.
+
+The runner image contains a checksum-pinned Chrome for Testing
+`chrome-headless-shell` binary. Anubis browser fallback turns on automatically
+when that binary is present; there is no compose toggle to disable it. The
+native SHA-256 solver remains the default path and does not launch Chromium.
+The service image does not include Chrome. There is no FlareSolverr on the
+direct Rezka path, no user Chrome profile, and no extra session volume. The
+existing `media-orchestrator_rezka_session_encrypted` volume is unchanged.
+Obscura and Lightpanda stay out of this path: Anubis blocks Lightpanda, and
+neither is a real Chromium cookie/JS runtime for `preact` / `metarefresh`.
 
 ## Validate
 
-The repository test creates temporary dummy environment values and the two
+The repository test creates temporary dummy environment values and the three
 required Gluetun secret files, then only renders Compose:
 
 ```bash
@@ -129,7 +146,7 @@ shellcheck media/gluetun-rezka-watcher/watch.sh \
   media/tests/validate-media-orchestrator-compose.sh
 ```
 
-For an operator-side render using the real ignored environment and the two
+For an operator-side render using the real ignored environment and the three
 Gluetun secret file paths:
 
 ```bash
@@ -138,7 +155,7 @@ docker compose --env-file .env config --quiet
 
 ## Start And Operate
 
-Do not run these commands until the images, root environment values, and two
+Do not run these commands until the images, root environment values, and three
 Gluetun secret files are ready. The service talks to Prowlarr directly through
 `http://prowlarr:9696`, to qBittorrent through `http://gluetun:8400`, and to
 Plex through `http://plex:32400`. Prowlarr stays outside the VPN so indexer
@@ -157,10 +174,11 @@ docker compose --env-file .env up -d
 docker compose --env-file .env ps
 ```
 
-The existing `gluetun-watcher` in `download/compose.yml` remains paired only with the torrent Gluetun
-stack. `gluetun-rezka-watcher` watches only `gluetun-rezka` and restarts only
-`download-runner` when that dedicated container is recreated. An in-process VPN
-rotation does not restart the runner, preserving one runner job per namespace.
+The existing `gluetun-watcher` in `download/compose.yml` remains paired only
+with the torrent Gluetun stack. `gluetun-rezka-watcher` watches only
+`gluetun-rezka`. It gates new work before rotation and never stops or restarts
+an active `download-runner`; an unexpected namespace or IP change is handled by
+the runner as a retryable attempt failure.
 
 ## FlareSolverr
 

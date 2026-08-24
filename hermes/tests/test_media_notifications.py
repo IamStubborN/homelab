@@ -276,6 +276,55 @@ class MediaNotificationRenderTests(unittest.TestCase):
             [["🌐 Rezka", "🧲 Prowlarr"]],
         )
 
+    def test_source_choice_card_announces_a_complete_season(self):
+        module = load_module()
+        notification = module.parse_source_choice(
+            {
+                "event_type": "media.source-choice",
+                "schema_version": 1,
+                "card_key": f"tracking:{TRACKING_ID}:3:24",
+                "tracking_id": TRACKING_ID,
+                "title": "Реинкарнация безработного",
+                "season": 3,
+                "episode": 24,
+                "actions": ["rezka"],
+                "season_complete": True,
+            }
+        )
+
+        card = module.render_source_choice(notification)
+
+        self.assertEqual(
+            card.text,
+            "\n".join(
+                [
+                    "🎬 Реинкарнация безработного",
+                    "🆕 S03E24",
+                    "📦 Сезон полностью вышел — можно скачать",
+                    "",
+                    "✅ Rezka · серия и озвучки",
+                ]
+            ),
+        )
+        self.assertTrue(notification.season_complete)
+
+    def test_source_choice_parser_rejects_non_boolean_season_complete(self):
+        module = load_module()
+        with self.assertRaises(module.NotificationParseError):
+            module.parse_source_choice(
+                {
+                    "event_type": "media.source-choice",
+                    "schema_version": 1,
+                    "card_key": f"tracking:{TRACKING_ID}:3:5",
+                    "tracking_id": TRACKING_ID,
+                    "title": "Реинкарнация безработного",
+                    "season": 3,
+                    "episode": 5,
+                    "actions": ["rezka"],
+                    "season_complete": 1,
+                }
+            )
+
     def test_parser_accepts_detailed_and_legacy_schema_v2_payloads(self):
         module = load_module()
 

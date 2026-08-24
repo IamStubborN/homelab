@@ -245,6 +245,7 @@ class SourceChoiceNotification:
     choice_set_expires_at: str | None = None
     rezka_count: int | None = None
     prowlarr_count: int | None = None
+    season_complete: bool = False
 
 
 @dataclass(frozen=True)
@@ -863,6 +864,7 @@ def parse_source_choice(payload: Mapping[str, Any]) -> SourceChoiceNotification:
             "choice_set_expires_at",
             "rezka_count",
             "prowlarr_count",
+            "season_complete",
         }
     )
     _validate_fields(
@@ -876,6 +878,7 @@ def parse_source_choice(payload: Mapping[str, Any]) -> SourceChoiceNotification:
             "choice_set_expires_at",
             "rezka_count",
             "prowlarr_count",
+            "season_complete",
         },
     )
     if payload.get("event_type") != "media.source-choice":
@@ -934,6 +937,9 @@ def parse_source_choice(payload: Mapping[str, Any]) -> SourceChoiceNotification:
         prowlarr_count = _integer(prowlarr_count, minimum=0, maximum=1000)
         if prowlarr_count is None:
             raise NotificationParseError("invalid prowlarr_count")
+    season_complete = payload.get("season_complete")
+    if season_complete is not None and not isinstance(season_complete, bool):
+        raise NotificationParseError("invalid season_complete")
     return SourceChoiceNotification(
         card_key=card_key,
         tracking_id=tracking_id,
@@ -946,6 +952,7 @@ def parse_source_choice(payload: Mapping[str, Any]) -> SourceChoiceNotification:
         choice_set_expires_at=choice_set_expires_at,
         rezka_count=rezka_count,
         prowlarr_count=prowlarr_count,
+        season_complete=bool(season_complete),
     )
 
 
@@ -1354,15 +1361,16 @@ def render_source_choice(notification: SourceChoiceNotification) -> RenderedCard
                 else "раздачи"
             )
         )
+    lines = [
+        f"🎬 {notification.title}",
+        f"🆕 S{notification.season:02d}E{notification.episode:02d}",
+    ]
+    if notification.season_complete:
+        lines.append("📦 Сезон полностью вышел — можно скачать")
+    lines.append("")
+    lines.extend(availability)
     return RenderedCard(
-        "\n".join(
-            [
-                f"🎬 {notification.title}",
-                f"🆕 S{notification.season:02d}E{notification.episode:02d}",
-                "",
-                *availability,
-            ]
-        ),
+        "\n".join(lines),
         (actions,),
         notification.poster_url or _SOURCE_CHOICE_FALLBACK_PHOTO,
     )

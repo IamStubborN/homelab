@@ -22,8 +22,7 @@ services:
       - RECONCILE_INTERVAL=1h
       - HEALTH_ADDRESS=:8080
     volumes:
-      # Keep mutable state in its pre-split location for upgrade compatibility.
-      - ../media/plex-orphan-watcher/state:/state
+      - ./plex-orphan-watcher/state:/state
       - ${INTERNAL_STORAGE:-/mnt/internal}/media:/data/internal/media
       - ${USB_STORAGE:-/mnt/usb_drive}/media:/data/usb_drive/media
       - ${INTERNAL_STORAGE:-/mnt/internal}/torrents:/data/internal/torrents:ro
@@ -53,7 +52,7 @@ services:
       - TZ=${TIMEZONE:-UTC}
       - PLEX_CLAIM=${PLEX_CLAIM}
     volumes:
-      - ../media/plex/config:/config
+      - ./config:/config
       - /etc/localtime:/etc/localtime:ro
       - /dev/shm:/transcode
       - ${INTERNAL_STORAGE:-/mnt/internal}:/data/internal
@@ -93,8 +92,8 @@ services:
       - SCHEDULER_ENABLE=false
       - DEBUG=true
     volumes:
-      - ../media/plex-auto-languages/config:/config
-      - ../media/plex-auto-languages/logs:/logs
+      - ./plex-auto-languages/config:/config
+      - ./plex-auto-languages/logs:/logs
     secrets:
       - plex_token
     labels:
@@ -118,8 +117,8 @@ services:
       - PGID=1000
       - TZ=${TIMEZONE:-UTC}
     volumes:
-      - ../media/media-preview-generator/config:/config
-      - ../media/plex/config:/plex:rw
+      - ./media-preview-generator/config:/config
+      - ./config:/plex:rw
       - /etc/localtime:/etc/localtime:ro
       - ${INTERNAL_STORAGE:-/mnt/internal}:/data/internal:ro
       - ${USB_STORAGE:-/mnt/usb_drive}:/data/usb_drive:ro
@@ -143,7 +142,7 @@ services:
 
 secrets:
   plex_token:
-    file: ../media/secrets/plex_token
+    file: ./secrets/plex_token
 
 networks:
   proxy:

@@ -22,7 +22,7 @@ class VaultwardenCredentialPluginTests(unittest.TestCase):
         plugin = load_plugin()
         self.assertEqual(
             plugin.TOKEN_FILE,
-            pathlib.Path("/run/hermes-home-secrets/media_api_token"),
+            pathlib.Path("/run/hermes-home-secrets/broker_api_token"),
         )
         response = plugin.handle(
             {

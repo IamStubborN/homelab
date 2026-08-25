@@ -114,9 +114,8 @@ install_skills() {
 }
 
 shared_skills="health home-assistant media search-ladder"
-shared_skill_cleanup="$shared_skills media-admin movies series trending watching"
+shared_skill_cleanup="$shared_skills media-admin movies series trending watching vaultwarden-login"
 install_skills /etc/hermes-home/skills "$shared_skills" "$shared_skill_cleanup"
-install_skills /etc/hermes-home/personal-skills "vaultwarden-login" "vaultwarden-login"
 chown -R 10000:10000 /opt/data/skills
 
 # Shared skills are managed by this repository, not by background reviews.

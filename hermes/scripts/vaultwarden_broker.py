@@ -17,7 +17,6 @@ BW = os.environ.get("BW_PATH", "/opt/tools/bw")
 SERVER_FILE = pathlib.Path("/etc/hermes-home/vaultwarden-server")
 SESSION_FILE = pathlib.Path("/run/secrets/vaultwarden_session")
 BROKER_TOKEN_FILE = pathlib.Path("/run/secrets/broker_api_token")
-RUNNER_TOKEN_FILE = pathlib.Path("/run/secrets/rezka_broker_token")
 APPDATA = "/opt/data/vaultwarden"
 AUDIT_FILE = pathlib.Path(APPDATA) / "audit.jsonl"
 ALLOWLIST_FILE = pathlib.Path("/etc/hermes-home/vaultwarden-login-allowlist.json")
@@ -423,14 +422,13 @@ def execute(command, argument):
             status=request.status,
         )
         return redact_login_request(request)
-    if command in {"credential_resolve", "browser_credential_resolve"} and isinstance(argument, str):
+    if command == "browser_credential_resolve" and isinstance(argument, str):
         return resolve_approved_credential(argument)
     raise InvalidCommand("unsupported command")
 
 
-def is_authorized(command, supplied, broker_token, runner_token):
-    expected = runner_token if command == "credential_resolve" else broker_token
-    return bool(expected) and hmac.compare_digest(supplied, f"Bearer {expected}")
+def is_authorized(supplied, broker_token):
+    return bool(broker_token) and hmac.compare_digest(supplied, f"Bearer {broker_token}")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -466,13 +464,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "invalid_request"})
             return
         broker_token = BROKER_TOKEN_FILE.read_text(encoding="utf-8").strip()
-        runner_token = RUNNER_TOKEN_FILE.read_text(encoding="utf-8").strip()
-        if not is_authorized(
-            payload.get("command"),
-            self.headers.get("Authorization", ""),
-            broker_token,
-            runner_token,
-        ):
+        if not is_authorized(self.headers.get("Authorization", ""), broker_token):
             self.send_json(401, {"error": "unauthorized"})
             return
         try:
@@ -491,7 +483,6 @@ if __name__ == "__main__":
         not SESSION_FILE.is_file() or not SESSION_FILE.read_text(encoding="utf-8").strip()
     ):
         raise SystemExit("Vaultwarden session secret is missing")
-    for token_file in (BROKER_TOKEN_FILE, RUNNER_TOKEN_FILE):
-        if not token_file.is_file() or not token_file.read_text(encoding="utf-8").strip():
-            raise SystemExit("Vaultwarden broker token is missing")
+    if not BROKER_TOKEN_FILE.is_file() or not BROKER_TOKEN_FILE.read_text(encoding="utf-8").strip():
+        raise SystemExit("Vaultwarden broker token is missing")
     ThreadingHTTPServer(("0.0.0.0", 8787), Handler).serve_forever()

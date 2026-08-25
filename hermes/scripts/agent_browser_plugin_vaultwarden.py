@@ -6,7 +6,7 @@ import urllib.request
 
 
 PROTOCOL = "agent-browser.plugin.v1"
-TOKEN_FILE = pathlib.Path("/run/hermes-home-secrets/media_api_token")
+TOKEN_FILE = pathlib.Path("/run/hermes-home-secrets/broker_api_token")
 BROKER_URL = "http://vaultwarden-broker-primary:8787/v1/command"
 
 

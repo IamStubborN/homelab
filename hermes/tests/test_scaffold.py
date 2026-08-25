@@ -351,18 +351,19 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
                 entry["source"] if isinstance(entry, dict) else entry
                 for entry in services[f"hermes-{profile}"]["secrets"]
             }
-            self.assertEqual(
-                names,
-                {
-                    f"{profile}_telegram_token",
-                    f"{profile}_media_api_token",
-                    f"{profile}_health_api_token",
-                    f"{profile}_homeassistant_token",
-                    f"{profile}_omniroute_api_key",
-                    f"{profile}_webhook_hmac",
-                    "search_ladder_api_key",
-                },
-            )
+            expected = {
+                f"{profile}_telegram_token",
+                f"{profile}_media_api_token",
+                f"{profile}_health_api_token",
+                f"{profile}_homeassistant_token",
+                f"{profile}_omniroute_api_key",
+                f"{profile}_groq_api_key",
+                f"{profile}_webhook_hmac",
+                "search_ladder_api_key",
+            }
+            if profile == "primary":
+                expected.add("primary_vaultwarden_broker_token")
+            self.assertEqual(names, expected)
             self.assertNotIn("/run/secrets/vaultwarden_session", str(services[f"hermes-{profile}"]))
 
         broker = services["vaultwarden-broker-primary"]
@@ -370,14 +371,12 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
             {secret["source"] for secret in broker["secrets"]},
             {
                 "primary_vaultwarden_session",
-                "primary_media_api_token",
-                "primary_rezka_broker_token",
+                "primary_vaultwarden_broker_token",
             },
         )
         secret_targets = {secret["source"]: secret["target"] for secret in broker["secrets"]}
-        self.assertEqual(secret_targets["primary_media_api_token"], "broker_api_token")
-        self.assertEqual(secret_targets["primary_rezka_broker_token"], "rezka_broker_token")
-        self.assertNotIn("rezka_broker_token", str(services["hermes-primary"]))
+        self.assertEqual(secret_targets["primary_vaultwarden_broker_token"], "broker_api_token")
+        self.assertNotIn("rezka_broker_token", self.compose_text)
         self.assertIn(
             "agent-browser-plugin-vaultwarden",
             services["hermes-primary"]["environment"]["AGENT_BROWSER_PLUGINS"],
@@ -444,14 +443,8 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
             "/etc/hermes-home/vaultwarden-login-allowlist.json:ro",
             broker_mounts,
         )
-        self.assertEqual(
-            set(primary_broker["networks"]), {"primary-private", "rezka-credentials"}
-        )
-        self.assertTrue(self.compose["networks"]["rezka-credentials"]["external"])
-        self.assertEqual(
-            self.compose["networks"]["rezka-credentials"]["name"],
-            "rezka-credentials",
-        )
+        self.assertEqual(set(primary_broker["networks"]), {"primary-private"})
+        self.assertNotIn("rezka-credentials", self.compose_text)
         self.assertIn("vaultwarden-broker-primary", services["hermes-primary"]["depends_on"])
         self.assertNotIn("vaultwarden", str(services["hermes-secondary"]))
         self.assertNotIn("vaultwarden-broker-secondary", self.compose_text)
@@ -543,28 +536,19 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("`search-ladder`", skill)
         self.assertNotIn("curl", skill.lower())
 
-    def test_rezka_login_allowlist_is_bound_to_one_vault_item(self):
+    def test_vaultwarden_login_allowlist_starts_empty(self):
         policy = json.loads(read("config/vaultwarden-login-allowlist.json"))
-        self.assertEqual(len(policy["domains"]), 1)
-        rezka = policy["domains"][0]
-        self.assertEqual(rezka["hostname"], "rezka.ag")
-        self.assertTrue(rezka["credential_item_id"])
-        self.assertEqual(set(rezka), {"hostname", "include_subdomains", "credential_item_id"})
+        self.assertEqual(policy["domains"], [])
 
-    def test_rezka_runtime_renews_automatically_without_browser_login(self):
+    def test_rezka_runtime_is_anonymous_without_vaultwarden_login(self):
         media_skill = read("shared/skills/media/SKILL.md")
-        vaultwarden_skill = read("profiles/primary/skills/vaultwarden-login/SKILL.md")
         readme = read("README.md")
-        self.assertIn("renewed automatically by `media-service`", media_skill)
-        self.assertIn("Never ask\nfor Telegram approval or use the browser", media_skill)
-        self.assertNotIn("media rezka session refresh --credential-request ID", media_skill)
-        for document in (media_skill, vaultwarden_skill, readme):
-            self.assertIn("media_rezka_session_refresh", document)
-            self.assertIn("credential_request_id", document)
-        for document in (media_skill, vaultwarden_skill, readme):
-            self.assertNotIn("vaultwarden-browser-login", document)
-            self.assertNotIn("Anubis", document)
-            self.assertNotIn("DLE", document)
+        self.assertIn("Rezka is always anonymous", media_skill)
+        self.assertIn("Never request Rezka\ncredentials", media_skill)
+        for document in (media_skill, readme):
+            self.assertNotIn("media_rezka_session_refresh", document)
+            self.assertNotIn("credential_request_id", document)
+            self.assertNotIn("rezka_broker", document)
         self.assertFalse((ROOT / "scripts/vaultwarden_browser_login.py").exists())
 
     def test_tracking_distinguishes_release_only_and_rezka_download_modes(self):
@@ -723,8 +707,7 @@ class SkillContractTests(unittest.TestCase):
             "./secrets/search_ladder.api_key",
         )
 
-    def test_vaultwarden_login_skill_is_primary_only_and_requires_explicit_approval(self):
-        skill = read("profiles/primary/skills/vaultwarden-login/SKILL.md")
+    def test_vaultwarden_browser_client_is_primary_only_and_requires_explicit_approval(self):
         client = read("scripts/vaultwarden-safe")
         entrypoint = read("scripts/hermes-home-entrypoint")
 
@@ -734,11 +717,8 @@ class SkillContractTests(unittest.TestCase):
             "login-approve ID",
             "login-deny ID",
         ):
-            self.assertIn(command, skill)
             self.assertIn(command, client)
 
-        self.assertIn("available only to Primary", skill)
-        self.assertIn("native Telegram approval control", skill)
         self.assertIn("primary) ;;", client)
         self.assertNotIn("secondary", client.lower())
         self.assertNotIn("password", client.lower())
@@ -752,9 +732,14 @@ class SkillContractTests(unittest.TestCase):
                 f"{client_command}) broker_command={broker_command} ;;",
                 client,
             )
+        self.assertFalse((ROOT / "profiles/primary/skills/vaultwarden-login/SKILL.md").exists())
         self.assertFalse((ROOT / "profiles/secondary/skills/vaultwarden-login").exists())
         self.assertIn(
-            "install_skills /etc/hermes-home/personal-skills",
+            "media-admin movies series trending watching vaultwarden-login",
+            entrypoint,
+        )
+        self.assertNotIn(
+            'install_skills /etc/hermes-home/personal-skills "vaultwarden-login"',
             entrypoint,
         )
         self.assertNotIn("browser-sockets", entrypoint)
@@ -829,7 +814,7 @@ class SkillContractTests(unittest.TestCase):
             [tool["name"] for tool in artifact["tools"]],
             sorted(capabilities),
         )
-        self.assertEqual(len(artifact["tools"]), 43)
+        self.assertEqual(len(artifact["tools"]), 42)
 
     def test_media_capability_check_consumes_the_release_bundle(self):
         env = os.environ.copy()
@@ -842,7 +827,7 @@ class SkillContractTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("43 dynamically discovered tools", result.stdout)
+        self.assertIn("42 dynamically discovered tools", result.stdout)
 
     def test_media_capability_sync_rolls_back_on_second_publication_failure(self):
         checker = self.load_capability_checker()

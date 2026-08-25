@@ -1,6 +1,6 @@
 # Hermes
 
-Private, Docker-first Hermes profiles for Primary and Secondary. Both profiles run the unmodified official `nousresearch/hermes-agent` image pinned by repository digest while keeping configuration, memory, browser identity, Telegram credentials, and media credentials isolated. Vaultwarden login automation is available only to Primary.
+Private, Docker-first Hermes profiles for Primary and Secondary. Both profiles run the unmodified official `nousresearch/hermes-agent` image pinned by repository digest while keeping configuration, memory, browser identity, Telegram credentials, and media credentials isolated. Explicit Vaultwarden browser login is available only to Primary.
 
 The umbrella design is maintained in [`media-orchestrator`](https://github.com/IamStubborN/media-orchestrator/blob/main/docs/superpowers/specs/2026-07-10-media-orchestrator-mvp-design.md).
 
@@ -44,7 +44,7 @@ hermes-secondary          media-notifier-secondary
 agent-browser-updater     vaultwarden-broker-primary
 ```
 
-The Hermes containers share the official image but not state or credentials. Each has its own profile, config, SOUL, personal skills, memory, browser metadata, Telegram bot token, media client token, and health client token. Primary alone has a Vaultwarden broker, login skill, and approval plugin. Profile sources are mounted read-only under `/etc/hermes-home`; the entrypoint installs shared and profile-local skills and plugins into the writable profile volume before the official bootstrap runs. Neither container receives the Docker socket.
+The Hermes containers share the official image but not state or credentials. Each has its own profile, config, SOUL, personal skills, memory, browser metadata, Telegram bot token, media client token, and health client token. Primary alone has a Vaultwarden broker and approval plugin. Profile sources are mounted read-only under `/etc/hermes-home`; the entrypoint installs shared and profile-local skills and plugins into the writable profile volume before the official bootstrap runs. Neither container receives the Docker socket.
 
 Hermes services are excluded from Watchtower and pinned to an exact digest.
 Upgrades are manual: update the managed profile `_config_version` to the schema
@@ -75,7 +75,7 @@ remains available for trusted host operators, supplies its token from a private
 file, clears caller-provided configuration, rejects identity and token flags,
 and forces JSON output.
 
-The Primary Vaultwarden session is isolated by secret scoping and network segmentation, not by file permissions: `primary_vaultwarden_session` is mounted only into `vaultwarden-broker-primary`, never into a Hermes container. The broker joins Primary's private network for approval operations and the external `rezka-credentials` network for media runner credential resolution. `hermes-secondary` has no Vaultwarden broker, session secret, server configuration, or login skill. The Hermes-facing `vaultwarden-safe` client can return status, sync state, up to five item summaries, usernames, and URIs; passwords, notes, TOTP values, and complete item JSON never cross the Hermes boundary.
+The Primary Vaultwarden session is isolated by secret scoping and network segmentation, not by file permissions: `primary_vaultwarden_session` is mounted only into `vaultwarden-broker-primary`, never into a Hermes container. The broker joins only Primary's private network and serves the generic metadata and approved browser-credential interfaces. `hermes-secondary` has no Vaultwarden broker, session secret, server configuration, or login skill. The Hermes-facing `vaultwarden-safe` client can return status, sync state, up to five item summaries, usernames, and URIs; passwords, notes, TOTP values, and complete item JSON never cross the Hermes boundary.
 
 ## Operator CLI artifact
 
@@ -138,8 +138,8 @@ No Hermes image build is required.
 
 1. Replace `config/vaultwarden-server` with the HTTPS URL of the Vaultwarden deployment.
 2. Create `.env` from `.env.example` and set the numeric Telegram user/chat IDs and media network name.
-3. Create each untracked file under `secrets/` from its `.example` counterpart, including `primary.vaultwarden_session`, `primary.rezka_broker_token`, and the shared `search_ladder.api_key`; keep ownership with deployment UID/GID `1000`, and use mode `0640`. The root bootstrap reads these mounted files and creates private, ephemeral runtime copies only for secrets needed after dropping to the image's unprivileged Hermes UID/GID `10000`.
-4. Ensure the external media, `agent-tools`, and `rezka-credentials` networks exist, then run `docker compose pull` and `docker compose up -d`.
+3. Create each untracked file under `secrets/` from its `.example` counterpart, including `primary.vaultwarden_session`, `primary.vaultwarden_broker_token`, and the shared `search_ladder.api_key`; keep ownership with deployment UID/GID `1000`, and use mode `0640`. The root bootstrap reads these mounted files and creates private, ephemeral runtime copies only for secrets needed after dropping to the image's unprivileged Hermes UID/GID `10000`.
+4. Ensure the external media and `agent-tools` networks exist, then run `docker compose pull` and `docker compose up -d`.
 
 No provider API key or real Telegram/Vaultwarden/media secret is committed. Hermes model credentials can be initialized later in each profile volume through the normal official setup flow.
 
@@ -193,7 +193,8 @@ Docker access, or another transport.
 
 ## Primary Vaultwarden login
 
-Only Primary receives the `vaultwarden-login` personal skill. It uses these redacted commands:
+Only Primary's profile has the generic Vaultwarden browser-credential boundary.
+Use these redacted commands when an explicitly reviewed website needs a login:
 
 ```sh
 vaultwarden-safe login-request URL
@@ -205,21 +206,11 @@ vaultwarden-safe login-deny ID
 `login-request` accepts only an HTTPS URL from the reviewed allowlist. `login-approve` is escalated by the Primary-only Hermes plugin to the native Telegram approval control and is bound to the exact request ID. Every request needs a fresh approval and expires after two minutes. A denial, expiration, MFA, CAPTCHA, passkey, redirect, or cross-origin form action fails closed. Terminal status retains the redacted outcome, and the broker writes redacted JSONL audit events to its private Vaultwarden volume.
 
 Every non-empty allowlist entry requires `hostname` and `credential_item_id`.
-After Telegram approval, Hermes invokes the `media_rezka_session_refresh` MCP
-tool with the one-time request ID as `credential_request_id`. The media runner calls the existing broker
-`POST /v1/command` endpoint with
-`{command:"credential_resolve",argument:request_id}` and its dedicated broker
-token. The credential remains inside the broker-runner boundary and is never
-returned through MCP, Telegram, the model, or logs. The generic agent-browser
-Vaultwarden provider instead calls `browser_credential_resolve` with
-`/run/secrets/media_api_token`. Both commands consume the same approved request
-permanently, and neither token can authorize the other command.
-
-Routine Rezka downloader authentication does not use this approval flow.
-`media-service` renews its cookie session automatically from private credential
-files mounted only into that service. The approval flow remains available for
-explicit browser login and operator recovery, not normal media searches or
-downloads.
+The generic agent-browser Vaultwarden provider calls
+`browser_credential_resolve` with the dedicated broker token. Credentials stay
+inside the broker and are never returned through MCP, Telegram, the model, or
+logs. The committed allowlist is intentionally empty until a low-risk host is
+reviewed and added explicitly.
 
 The broker `/health` endpoint is a fast process liveness check. Use the authenticated `vaultwarden-safe status` command for Vaultwarden readiness and session state; a slow or locked remote vault must not create a container restart loop.
 
@@ -281,7 +272,7 @@ request ID so timestamp, profile isolation, and replay protection remain active.
 
 ## Browser isolation
 
-The official image includes Playwright Chromium and the profile configs enable the officially supported local Docker browser path. Browser output uses agent-browser content boundary markers, and a separate `browser_auth` volume is reserved per profile. The Primary broker cannot read browser profiles or cookie files. Rezka authentication is owned by the media orchestrator and does not use Hermes browser automation.
+The official image includes Playwright Chromium and the profile configs enable the officially supported local Docker browser path. Browser output uses agent-browser content boundary markers, and a separate `browser_auth` volume is reserved per profile. The Primary broker cannot read browser profiles or cookie files. Rezka uses anonymous media-orchestrator sessions and does not use Hermes browser automation.
 
 Hermes documents durable login persistence only for Camofox when an external Camofox server maps the stable profile `userId` to a persistent browser profile. This repository does not deploy Camofox, so `browser.camofox.managed_persistence` remains disabled. Local Chromium tasks work in Docker, but their login state is not claimed to survive restarts.
 

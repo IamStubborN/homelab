@@ -608,9 +608,9 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
             current.split(),
             ["health", "home-assistant", "media", "search-ladder"],
         )
-        cleanup = f"{current} media-admin movies series trending watching"
+        cleanup = f"{current} media-admin movies series trending watching vaultwarden-login"
         self.assertIn(
-            'shared_skill_cleanup="$shared_skills media-admin movies series trending watching"',
+            'shared_skill_cleanup="$shared_skills media-admin movies series trending watching vaultwarden-login"',
             entrypoint,
         )
 
@@ -631,6 +631,7 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
                 "series",
                 "trending",
                 "watching",
+                "vaultwarden-login",
                 "user-custom",
             ):
                 (destination / name).mkdir()

@@ -151,7 +151,7 @@ class LoginPolicyTests(unittest.TestCase):
         self.assertEqual(terminal.status, "completed")
         self.assertEqual(terminal.outcome, "submitted")
 
-    def test_approved_login_is_resolved_once_by_the_credential_provider(self):
+    def test_approved_login_is_resolved_once_by_the_browser_provider(self):
         policy = BROKER.LoginPolicy.from_file(
             self.write_policy(
                 [{"hostname": "example.test", "credential_item_id": "vault-item-1"}]
@@ -173,7 +173,7 @@ class LoginPolicyTests(unittest.TestCase):
             },
         }
         with mock.patch.object(BROKER, "run_bw", return_value=json.dumps(item)) as run_bw:
-            result = BROKER.execute("credential_resolve", request.request_id)
+            result = BROKER.execute("browser_credential_resolve", request.request_id)
 
         run_bw.assert_called_once_with("get", "item", "vault-item-1")
         self.assertEqual(
@@ -186,40 +186,23 @@ class LoginPolicyTests(unittest.TestCase):
         )
         self.assertEqual(store.status(request.request_id).status, "consumed")
         with self.assertRaises(BROKER.InvalidLoginRequest):
-            BROKER.execute("credential_resolve", request.request_id)
-
-    def test_credential_resolve_uses_only_the_runner_broker_token(self):
-        self.assertTrue(
-            BROKER.is_authorized(
-                "credential_resolve", "Bearer runner-token", "media-token", "runner-token"
-            )
-        )
-
-        self.assertFalse(
-            BROKER.is_authorized(
-                "credential_resolve", "Bearer media-token", "media-token", "runner-token"
-            )
-        )
+            BROKER.execute("browser_credential_resolve", request.request_id)
 
     def test_browser_credential_resolve_uses_only_the_broker_api_token(self):
         self.assertTrue(
             BROKER.is_authorized(
-                "browser_credential_resolve",
                 "Bearer media-token",
                 "media-token",
-                "runner-token",
             )
         )
         self.assertFalse(
             BROKER.is_authorized(
-                "browser_credential_resolve",
                 "Bearer runner-token",
                 "media-token",
-                "runner-token",
             )
         )
 
-    def test_runner_and_browser_resolvers_share_one_shot_consumption(self):
+    def test_browser_resolver_consumes_one_shot_approval(self):
         policy = BROKER.LoginPolicy.from_file(
             self.write_policy(
                 [{"hostname": "example.test", "credential_item_id": "vault-item-1"}]
@@ -244,7 +227,7 @@ class LoginPolicyTests(unittest.TestCase):
         with mock.patch.object(BROKER, "run_bw", return_value=json.dumps(item)):
             BROKER.execute("browser_credential_resolve", request.request_id)
             with self.assertRaises(BROKER.InvalidLoginRequest):
-                BROKER.execute("credential_resolve", request.request_id)
+                BROKER.execute("browser_credential_resolve", request.request_id)
 
     def test_credential_response_rejects_oversized_values_and_consumes_request(self):
         policy = BROKER.LoginPolicy.from_file(
@@ -270,26 +253,30 @@ class LoginPolicyTests(unittest.TestCase):
 
         with mock.patch.object(BROKER, "run_bw", return_value=json.dumps(item)):
             with self.assertRaises(BROKER.InvalidLoginRequest):
-                BROKER.execute("credential_resolve", request.request_id)
+                BROKER.execute("browser_credential_resolve", request.request_id)
 
         self.assertEqual(store.status(request.request_id).status, "failed")
         self.assertFalse(
             BROKER.is_authorized(
-                "credential_resolve", "Bearer media-token", "media-token", "runner-token"
+                "Bearer wrong-token", "media-token"
             )
         )
+
+    def test_media_runner_credential_resolve_command_is_removed(self):
+        with self.assertRaises(BROKER.InvalidCommand):
+            BROKER.execute("credential_resolve", "request-1")
 
     def test_safe_operations_use_only_the_broker_api_token(self):
         for command in ("login_request", "login_status", "login_approve", "login_deny"):
             with self.subTest(command=command):
                 self.assertTrue(
                     BROKER.is_authorized(
-                        command, "Bearer media-token", "media-token", "runner-token"
+                        "Bearer media-token", "media-token"
                     )
                 )
                 self.assertFalse(
                     BROKER.is_authorized(
-                        command, "Bearer runner-token", "media-token", "runner-token"
+                        "Bearer runner-token", "media-token"
                     )
                 )
 

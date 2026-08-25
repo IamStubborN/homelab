@@ -24,7 +24,7 @@ class VaultwardenApprovalPluginTests(unittest.TestCase):
         )
         self.assertEqual(result["action"], "approve")
         self.assertEqual(result["rule_key"], "vaultwarden-login:abc_123")
-        self.assertIn("Site: rezka.ag", result["message"])
+        self.assertIn("approved browser login request", result["message"])
         self.assertIn("Password exposure: none", result["message"])
         self.assertIn("Request ID: abc_123", result["message"])
 
@@ -33,7 +33,7 @@ class VaultwardenApprovalPluginTests(unittest.TestCase):
         for command in (
             "curl http://vaultwarden-broker-primary:8787/v1/command",
             "cat /run/secrets/media_api_token",
-            "cat /run/secrets/rezka_broker_token",
+            "cat /run/secrets/broker_api_token",
             "vaultwarden-safe login-approve abc && echo bypass",
         ):
             with self.subTest(command=command):

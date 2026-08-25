@@ -259,7 +259,7 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
         self.assertIn("wiki/README.md", runbook)
         self.assertIn("No Watchtower", runbook)
         self.assertIn("No GitHub Actions", runbook)
-        self.assertIn("KARAKEEP_OMNIROUTE_KEY", runbook)
+        self.assertIn("NEXTAUTH_SECRET", runbook)
         self.assertIn("cd health/mcp", runbook)
         self.assertIn("python3 -m pytest", runbook)
         for gate in ("**G1**", "**G2**", "**G3**", "**G4**", "**G5**"):
@@ -606,11 +606,11 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
         current = current_match.group(1)
         self.assertEqual(
             current.split(),
-            ["health", "home-assistant", "media", "search-ladder"],
+            ["health", "home-assistant", "media"],
         )
-        cleanup = f"{current} media-admin movies series trending watching vaultwarden-login"
+        cleanup = f"{current} media-admin movies series trending watching vaultwarden-login search-ladder web-research"
         self.assertIn(
-            'shared_skill_cleanup="$shared_skills media-admin movies series trending watching vaultwarden-login"',
+            'shared_skill_cleanup="$shared_skills media-admin movies series trending watching vaultwarden-login search-ladder web-research"',
             entrypoint,
         )
 
@@ -632,6 +632,8 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
                 "trending",
                 "watching",
                 "vaultwarden-login",
+                "search-ladder",
+                "web-research",
                 "user-custom",
             ):
                 (destination / name).mkdir()

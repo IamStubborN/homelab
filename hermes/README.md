@@ -138,20 +138,15 @@ No Hermes image build is required.
 
 1. Replace `config/vaultwarden-server` with the HTTPS URL of the Vaultwarden deployment.
 2. Create `.env` from `.env.example` and set the numeric Telegram user/chat IDs and media network name.
-3. Create each untracked file under `secrets/` from its `.example` counterpart, including `primary.vaultwarden_session`, `primary.vaultwarden_broker_token`, and the shared `search_ladder.api_key`; keep ownership with deployment UID/GID `1000`, and use mode `0640`. The root bootstrap reads these mounted files and creates private, ephemeral runtime copies only for secrets needed after dropping to the image's unprivileged Hermes UID/GID `10000`.
+3. Create each untracked file under `secrets/` from its `.example` counterpart, including `primary.vaultwarden_session`, `primary.vaultwarden_broker_token`, and the shared `opencode_go_api_key`, `tavily_api_key`, and `exa_api_key`; keep ownership with deployment UID/GID `1000`, and use mode `0640`. The root bootstrap reads these mounted files and creates private, ephemeral runtime copies only for secrets needed after dropping to the image's unprivileged Hermes UID/GID `10000`.
 4. Ensure the external media and `agent-tools` networks exist, then run `docker compose pull` and `docker compose up -d`.
 
 No provider API key or real Telegram/Vaultwarden/media secret is committed. Hermes model credentials can be initialized later in each profile volume through the normal official setup flow.
 
-## Web research skill
+## Web search
 
-The shared `search-ladder` skill uses the authenticated homelab adaptive research
-pipeline first: `Exa → Tavily → Firecrawl → Ollama`, cached extraction, bounded
-exact excerpts, and model finalization only when needed. Both profiles receive
-the same broker credential as a read-only Docker secret copied to their private
-ephemeral runtime directory. The client has a fixed internal endpoint and emits
-no credential. Hermes falls back once to native `web_search`; native
-`web_extract` is reserved for explicit raw-page needs or insufficient evidence.
+Both profiles use native Hermes web backends: Exa for search and extract.
+API keys are shared Docker secrets.
 
 ## Media skill
 

@@ -344,7 +344,7 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
         self.assertIn("trusted-host operator tool", readme)
         self.assertIn("not mounted into either Hermes container", readme)
 
-    def test_required_profile_secrets_are_isolated_and_search_key_is_shared(self):
+    def test_required_profile_secrets_are_isolated_and_llm_keys_are_shared(self):
         services = self.compose["services"]
         for profile in ("primary", "secondary"):
             names = {
@@ -356,10 +356,11 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
                 f"{profile}_media_api_token",
                 f"{profile}_health_api_token",
                 f"{profile}_homeassistant_token",
-                f"{profile}_omniroute_api_key",
                 f"{profile}_groq_api_key",
                 f"{profile}_webhook_hmac",
-                "search_ladder_api_key",
+                "opencode_go_api_key",
+                "tavily_api_key",
+                "exa_api_key",
             }
             if profile == "primary":
                 expected.add("primary_vaultwarden_broker_token")
@@ -496,8 +497,6 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
             service = self.compose["services"][f"hermes-{profile}"]
             self.assertIn("agent-tools", service["networks"])
             self.assertNotIn("SEARXNG_URL", service["environment"])
-            # Firecrawl was retired from the deployment; native web tools now
-            # run through the search-ladder plugin (key from OPENAI_API_KEY).
             self.assertNotIn("FIRECRAWL_API_URL", service["environment"])
             self.assertIn(
                 "./shared/plugins:/etc/hermes-home/shared-plugins:ro",
@@ -538,20 +537,9 @@ class SkillContractTests(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
-    def test_shared_web_research_skill_prefers_bounded_adaptive_pipeline(self):
-        skill = read("shared/skills/search-ladder/SKILL.md")
-        self.assertIn("/opt/data/skills/search-ladder/search.py", skill)
-        self.assertIn("bounded evidence", skill)
-        self.assertIn("finalizer summaries", skill)
-        self.assertIn("`web_search` once", skill)
-        self.assertIn("then `web_extract` only", skill)
-        self.assertIn("untrusted data", skill)
-        self.assertIn("Do not probe internal services", skill)
-        self.assertIn("supporting excerpts", skill)
-
-    def test_media_routes_public_evidence_to_web_research(self):
+    def test_media_routes_public_evidence_to_native_web_search(self):
         skill = read("shared/skills/media/SKILL.md")
-        self.assertIn("`search-ladder`", skill)
+        self.assertIn("`web_search`", skill)
         self.assertNotIn("curl", skill.lower())
 
     def test_vaultwarden_login_allowlist_starts_empty(self):
@@ -697,7 +685,7 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("/run/hermes-home-secrets", entrypoint)
         self.assertIn("install -o 10000 -g 10000 -m 0400", entrypoint)
         self.assertIn(
-            "for secret in media_api_token health_api_token broker_api_token webhook_hmac search_ladder_api_key",
+            "for secret in media_api_token health_api_token broker_api_token webhook_hmac",
             entrypoint,
         )
         self.assertIn('source="/run/secrets/$secret"', entrypoint)
@@ -717,12 +705,20 @@ class SkillContractTests(unittest.TestCase):
                 "/run/hermes-home-secrets/webhook_hmac",
             )
             self.assertIn(
-                {"source": "search_ladder_api_key", "target": "search_ladder_api_key"},
+                {"source": "opencode_go_api_key", "target": "opencode_go_api_key"},
+                service["secrets"],
+            )
+            self.assertIn(
+                {"source": "tavily_api_key", "target": "tavily_api_key"},
+                service["secrets"],
+            )
+            self.assertIn(
+                {"source": "exa_api_key", "target": "exa_api_key"},
                 service["secrets"],
             )
         self.assertEqual(
-            compose["secrets"]["search_ladder_api_key"]["file"],
-            "./secrets/search_ladder.api_key",
+            compose["secrets"]["opencode_go_api_key"]["file"],
+            "./secrets/opencode_go_api_key",
         )
 
     def test_vaultwarden_browser_client_is_primary_only_and_requires_explicit_approval(self):
@@ -753,7 +749,7 @@ class SkillContractTests(unittest.TestCase):
         self.assertFalse((ROOT / "profiles/primary/skills/vaultwarden-login/SKILL.md").exists())
         self.assertFalse((ROOT / "profiles/secondary/skills/vaultwarden-login").exists())
         self.assertIn(
-            "media-admin movies series trending watching vaultwarden-login",
+            "media-admin movies series trending watching vaultwarden-login search-ladder web-research",
             entrypoint,
         )
         self.assertNotIn(
@@ -762,6 +758,7 @@ class SkillContractTests(unittest.TestCase):
         )
         self.assertNotIn("browser-sockets", entrypoint)
         self.assertIn("install_plugins /etc/hermes-home/personal-plugins", entrypoint)
+        self.assertIn("rm -rf /opt/data/plugins/web", entrypoint)
         self.assertIn("mkdir -p /opt/data/plugins", entrypoint)
         self.assertIn("/command/s6-setuidgid hermes", entrypoint)
         self.assertIn("media_mcp_schema_revision", entrypoint)
@@ -1230,26 +1227,48 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertIn("native `clarify`", read(f"profiles/{profile}/SOUL.md"))
             self.assertEqual(config["browser"]["inactivity_timeout"], 120)
             self.assertFalse(config["browser"]["camofox"]["managed_persistence"])
-            self.assertEqual(config["web"]["search_backend"], "search-ladder")
-            self.assertEqual(config["web"]["extract_backend"], "search-ladder")
-            self.assertIn("search-ladder", config["plugins"]["enabled"])
+            self.assertEqual(config["web"]["search_backend"], "exa")
+            self.assertEqual(config["web"]["extract_backend"], "exa")
+            enabled = config["plugins"]["enabled"]
+            if profile == "primary":
+                self.assertEqual(enabled, ["telegram-home", "vaultwarden-approval"])
+            else:
+                self.assertEqual(enabled, ["telegram-home"])
             self.assertEqual(config["display"]["tool_progress"], "new")
             self.assertEqual(
                 config["display"]["platforms"]["telegram"]["tool_progress"], "off"
             )
             self.assertEqual(config["display"]["memory_notifications"], "off")
             self.assertFalse(config["compression"]["codex_responses_native"])
+            self.assertEqual(config["compression"]["proactive_prune_tokens"], 48000)
             self.assertEqual(config["skills"]["creation_nudge_interval"], 10)
-            self.assertEqual(config["model"]["provider"], "openai-api")
-            self.assertEqual(config["model"]["default"], "cx/gpt-5.6-luna-medium")
-            self.assertNotIn("fallback_providers", config)  # optional; defaults to [] in Hermes
+            self.assertEqual(config["model"]["provider"], "opencode-go")
+            self.assertEqual(config["model"]["default"], "hy3")
+            self.assertTrue(config["memory"]["memory_enabled"])
+            self.assertTrue(config["memory"]["user_profile_enabled"])
+            self.assertEqual(config["session_reset"]["mode"], "idle")
+            self.assertEqual(config["session_reset"]["idle_minutes"], 1440)
+            telegram_tools = config["platform_toolsets"]["telegram"]
+            for toolset in ("terminal", "file", "web", "browser", "skills", "tts", "memory", "session_search", "vision", "clarify"):
+                self.assertIn(toolset, telegram_tools)
+            self.assertNotIn("todo", telegram_tools)
+            self.assertNotIn("cronjob", telegram_tools)
+            self.assertEqual(config["auxiliary"]["vision"]["provider"], "opencode-go")
+            self.assertEqual(config["auxiliary"]["vision"]["model"], "mimo-v2.5")
+            self.assertEqual(config["auxiliary"]["title_generation"]["provider"], "opencode-go")
+            self.assertEqual(config["auxiliary"]["title_generation"]["model"], "mimo-v2.5")
+            self.assertEqual(config["auxiliary"]["compression"]["provider"], "opencode-go")
+            self.assertEqual(config["auxiliary"]["compression"]["model"], "mimo-v2.5")
+            self.assertEqual(config["auxiliary"]["background_review"]["provider"], "opencode-go")
+            self.assertEqual(config["auxiliary"]["background_review"]["model"], "mimo-v2.5")
+            self.assertEqual(config["fallback_providers"], [{
+                "provider": "opencode-go",
+                "model": "mimo-v2.5",
+                "base_url": "https://opencode.ai/zen/go/v1",
+            }])
             self.assertEqual(config["agent"]["reasoning_effort"], "medium")
-            self.assertEqual(
-                config["agent"]["reasoning_overrides"],
-                {
-                    "cx/gpt-5.6-luna-medium": "medium",
-                },
-            )
+            self.assertEqual(config["agent"]["image_input_mode"], "text")
+            self.assertIsNone(config["agent"]["reasoning_overrides"])
             self.assertFalse(config["approvals"]["destructive_slash_confirm"])
 
     def test_managed_shared_skills_are_pinned_at_startup(self):

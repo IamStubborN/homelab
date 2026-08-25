@@ -153,7 +153,7 @@ docker compose build health-service
 
 Root `docker compose config --quiet` needs a filled `.env` next to
 `compose.yml`. On a laptop without that file it fails on required variables
-such as `KARAKEEP_OMNIROUTE_KEY`. Do not invent secrets. On host-5.example.invalid,
+such as `NEXTAUTH_SECRET`. Do not invent secrets. On host-5.example.invalid,
 after `.env` is present, `docker compose config --quiet` from the repo root
 is the canonical whole-project check.
 

@@ -18,19 +18,28 @@ read_secret TELEGRAM_BOT_TOKEN /run/secrets/telegram_bot_token
 read_secret API_SERVER_KEY /run/secrets/webhook_hmac
 read_secret MEDIA_API_TOKEN /run/secrets/media_api_token
 read_secret HOMEASSISTANT_API_TOKEN /run/secrets/homeassistant_api_token
-read_secret OPENAI_API_KEY /run/secrets/omniroute_api_key
-export OPENAI_BASE_URL=http://omniroute:20129/v1
+read_secret OPENCODE_GO_API_KEY /run/secrets/opencode_go_api_key
+export OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1
+read_secret TAVILY_API_KEY /run/secrets/tavily_api_key
+read_secret EXA_API_KEY /run/secrets/exa_api_key
 read_secret GROQ_API_KEY /run/secrets/groq_api_key
 
 python_packages=/opt/data/python-packages
+lazy_packages=/opt/data/lazy-packages
+install -d -o 10000 -g 10000 -m 0755 "$python_packages" "$lazy_packages" /opt/data/tmp /opt/data/tmp/uv-cache
+export UV_CACHE_DIR=/opt/data/tmp/uv-cache
 if [ ! -d "$python_packages/youtube_transcript_api" ]; then
-    UV_CACHE_DIR=/tmp/uv-cache uv pip install --target "$python_packages" youtube-transcript-api==1.2.4
+    uv pip install --target "$python_packages" youtube-transcript-api==1.2.4
     chown -R 10000:10000 "$python_packages"
 fi
 if [ ! -d "$python_packages/ddgs" ]; then
-    UV_CACHE_DIR=/tmp/uv-cache uv pip install --target "$python_packages" ddgs
+    uv pip install --target "$python_packages" ddgs
     chown -R 10000:10000 "$python_packages"
 fi
+if [ ! -d "$lazy_packages/exa_py" ]; then
+    uv pip install --python /opt/hermes/.venv/bin/python3 --target "$lazy_packages" 'exa-py==2.10.2'
+fi
+chown -R 10000:10000 "$lazy_packages"
 export PYTHONPATH="$python_packages${PYTHONPATH:+:$PYTHONPATH}"
 
 # Durable temp for TTS/auto-TTS (Hermes blocks /tmp as protected)
@@ -41,7 +50,7 @@ export TEMP=/opt/data/tmp
 
 runtime_secret_dir=/run/hermes-home-secrets
 install -d -o 10000 -g 10000 -m 0700 "$runtime_secret_dir"
-for secret in media_api_token health_api_token broker_api_token webhook_hmac search_ladder_api_key; do
+for secret in media_api_token health_api_token broker_api_token webhook_hmac; do
     source="/run/secrets/$secret"
     [ -f "$source" ] || continue
     install -o 10000 -g 10000 -m 0400 "$source" "$runtime_secret_dir/$secret"
@@ -113,8 +122,8 @@ install_skills() {
     done
 }
 
-shared_skills="health home-assistant media search-ladder"
-shared_skill_cleanup="$shared_skills media-admin movies series trending watching vaultwarden-login"
+shared_skills="health home-assistant media"
+shared_skill_cleanup="$shared_skills media-admin movies series trending watching vaultwarden-login search-ladder web-research"
 install_skills /etc/hermes-home/skills "$shared_skills" "$shared_skill_cleanup"
 chown -R 10000:10000 /opt/data/skills
 
@@ -138,6 +147,7 @@ install_plugins() {
 
 install_plugins /etc/hermes-home/personal-plugins
 install_plugins /etc/hermes-home/shared-plugins
+rm -rf /opt/data/plugins/web
 chown -R 10000:10000 /opt/data/plugins
 # Keep the derived schema cache across ordinary restarts. The checked-in schema
 # artifact is available during offline startup; its canonical tool array changes

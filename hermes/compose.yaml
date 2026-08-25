@@ -279,16 +279,18 @@ services:
         target: health_api_token
       - source: primary_homeassistant_token
         target: homeassistant_api_token
-      - source: primary_omniroute_api_key
-        target: omniroute_api_key
+      - source: opencode_go_api_key
+        target: opencode_go_api_key
+      - source: tavily_api_key
+        target: tavily_api_key
+      - source: exa_api_key
+        target: exa_api_key
       - source: primary_groq_api_key
         target: groq_api_key
       - source: primary_vaultwarden_broker_token
         target: broker_api_token
       - source: primary_webhook_hmac
         target: webhook_hmac
-      - source: search_ladder_api_key
-        target: search_ladder_api_key
     networks: [media, agent-tools, health-internal, primary-private]
 
   hermes-secondary:
@@ -349,14 +351,16 @@ services:
         target: health_api_token
       - source: secondary_homeassistant_token
         target: homeassistant_api_token
-      - source: secondary_omniroute_api_key
-        target: omniroute_api_key
+      - source: opencode_go_api_key
+        target: opencode_go_api_key
+      - source: tavily_api_key
+        target: tavily_api_key
+      - source: exa_api_key
+        target: exa_api_key
       - source: secondary_groq_api_key
         target: groq_api_key
       - source: secondary_webhook_hmac
         target: webhook_hmac
-      - source: search_ladder_api_key
-        target: search_ladder_api_key
     networks: [media, agent-tools, health-internal, secondary-private]
 
 networks:
@@ -409,8 +413,14 @@ secrets:
     file: ../health/secrets/primary.health_api_token
   primary_homeassistant_token:
     file: ./secrets/primary.homeassistant_token
-  primary_omniroute_api_key:
-    file: ./secrets/primary.omniroute_api_key
+  opencode_go_api_key:
+    file: ./secrets/opencode_go_api_key
+  tavily_api_key:
+    file: ./secrets/tavily_api_key
+  exa_api_key:
+    file: ./secrets/exa_api_key
+  nvidia_api_key:
+    file: ./secrets/nvidia_api_key
   primary_groq_api_key:
     file: ./secrets/primary.groq_api_key
   primary_webhook_hmac:
@@ -427,11 +437,7 @@ secrets:
     file: ../health/secrets/secondary.health_api_token
   secondary_homeassistant_token:
     file: ./secrets/secondary.homeassistant_token
-  secondary_omniroute_api_key:
-    file: ./secrets/secondary.omniroute_api_key
   secondary_groq_api_key:
     file: ./secrets/secondary.groq_api_key
   secondary_webhook_hmac:
     file: ./secrets/secondary.webhook_hmac
-  search_ladder_api_key:
-    file: ./secrets/search_ladder.api_key

@@ -20,9 +20,7 @@ with the documented Docker Compose or guarded media deployment commands.
 - Media Orchestrator with a dedicated Rezka VPN, managed by the root Compose project
 - KaraKeep, Freedium, Movie Tracker, Glance, Speedtest Tracker
 - Bitwarden (Vaultwarden), Mosquitto, RustDesk
-- OmniRoute LLM gateway, Ollama IPEX embeddings, and Search Ladder
-- Cursorpipe OpenAI-compatible proxy for the official Cursor API key
-- Hindsight shared memory server for Pi clients
+- OpenCode Go for household chat, NVIDIA embeddings for KaraKeep
 - Family Health Python MCP cashier (jsonl under `/mnt/internal/wiki/shared/health`)
 - Home Assistant with public-safe example config only
 
@@ -54,9 +52,6 @@ Fill real values only in ignored local files:
 - `download/secrets/protonvpn_wireguard_private_key`
 - `plex/secrets/plex_token`
 - `homeassistant/config/secrets.yaml`
-
-Cursorpipe and Ollama IPEX publish no host ports. OmniRoute exposes its API only
-on host loopback (`127.0.0.1:20129`); authenticated public routes use Traefik.
 
 
 Initialize the Freedium submodule:

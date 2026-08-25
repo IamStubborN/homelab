@@ -165,11 +165,7 @@ Use the tracked helper for database backups:
 freedium/backup-db.sh
 ```
 
-**OmniRoute** (`/omniroute/`): Household LLM gateway plus its private Redis. Startup patches and provider registration live in `omniroute/start.sh`. See `omniroute/README.md`.
-
-**Search Ladder** (`/search-ladder/`): Authenticated research broker for the Hermes `web-research` skill. See `search-ladder/README.md`.
-
-**Cursorpipe** (`/cursorpipe/`): Internal OpenAI-compatible proxy for the official Cursor API key. OmniRoute registers it as a custom chat provider. See `cursorpipe/README.md`.
+**Hermes** (`/hermes/`): Household Telegram agents. Chat and auxiliary tasks use OpenCode Go; web search and extract use native Exa. See `hermes/README.md`.
 
 **Movie-Tracker** (`/movie-tracker/`): Python Telegram bot deployed from the private image `ghcr.io/example/movie-tracker:latest`. The homelab repository intentionally tracks only the compose wrapper. A clean host must be logged in to GHCR before pulling:
 ```bash

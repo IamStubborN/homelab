@@ -5,8 +5,13 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    entrypoint: [/bin/sh, /llm-entrypoint.sh]
     volumes:
       - ./data/web:/data
+      - ./llm-entrypoint.sh:/llm-entrypoint.sh:ro
+    secrets:
+      - karakeep_opencode_api_key
+      - karakeep_nvidia_api_key
     environment:
       MEILI_ADDR: http://meilisearch:7700
       BROWSER_WEB_URL: http://chrome:9222
@@ -14,22 +19,16 @@ services:
       NEXTAUTH_URL: ${NEXTAUTH_URL}
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
 
-      OPENAI_BASE_URL: http://omniroute:20129/v1
-      OPENAI_API_KEY: ${KARAKEEP_OMNIROUTE_KEY:?set KARAKEEP_OMNIROUTE_KEY}
-
-      INFERENCE_TEXT_MODEL: cx/gpt-5.6-luna-low
-      INFERENCE_IMAGE_MODEL: cx/gpt-5.6-luna-low
+      OPENAI_BASE_URL: https://opencode.ai/zen/go/v1
+      INFERENCE_TEXT_MODEL: mimo-v2.5
+      INFERENCE_IMAGE_MODEL: mimo-v2.5
       INFERENCE_ENABLE_AUTO_SUMMARIZATION: true
       INFERENCE_JOB_TIMEOUT_SEC: 600
       INFERENCE_CONTEXT_LENGTH: 32768
-      OPENAI_REASONING_EFFORT: low
 
-      # NVIDIA NV-EmbedQA E5 via OmniRoute. Do not set dimensions override:
-      # this model rejects the OpenAI `dimensions` field.
-      EMBEDDING_OPENAI_BASE_URL: http://omniroute:20129/v1
-      EMBEDDING_OPENAI_API_KEY: ${KARAKEEP_OMNIROUTE_KEY:?set KARAKEEP_OMNIROUTE_KEY}
-      EMBEDDING_TEXT_MODEL: nvidia/nvidia/nv-embedqa-e5-v5
-      EMBEDDING_DIMENSIONS: 1024
+      EMBEDDING_OPENAI_BASE_URL: https://integrate.api.nvidia.com/v1
+      EMBEDDING_TEXT_MODEL: nvidia/nemotron-3-embed-1b
+      EMBEDDING_DIMENSIONS: 2048
       EMBEDDING_ENABLE_AUTO_INDEXING: true
 
       # Allow crawler to access internal hostnames
@@ -52,7 +51,6 @@ services:
     networks:
       - proxy
       - karakeep-internal
-      - agent-tools
 
   chrome:
     container_name: karakeep-chrome
@@ -78,7 +76,6 @@ services:
 
     networks:
       - karakeep-internal
-      - agent-tools
 
   meilisearch:
     container_name: karakeep-meilisearch
@@ -108,5 +105,9 @@ networks:
     internal: true
   proxy:
     external: true
-  agent-tools:
-    name: agent-tools
+
+secrets:
+  karakeep_opencode_api_key:
+    file: ../hermes/secrets/opencode_go_api_key
+  karakeep_nvidia_api_key:
+    file: ../hermes/secrets/nvidia_api_key

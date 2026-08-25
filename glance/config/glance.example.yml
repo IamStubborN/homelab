@@ -66,13 +66,6 @@ pages:
                     url: https://kavita.${DOCKER_DOMAIN}/
                     icon: si:bookstack
 
-              - title: Research & AI
-                color: 194 54 42
-                links:
-                  - title: OmniRoute
-                    url: https://omniroute.${DOCKER_DOMAIN}/
-                    icon: si:openrouter
-
           - type: rss
             title: Self-hosted
             cache: 2h
@@ -491,14 +484,6 @@ pages:
                 url: https://media-preview.${DOCKER_DOMAIN}/
                 icon: si:plex
                 timeout: 5s
-              - title: OmniRoute
-                url: https://omniroute.${DOCKER_DOMAIN}/
-                icon: si:openrouter
-                timeout: 5s
-              - title: Search Ladder
-                url: https://search-ladder.${DOCKER_DOMAIN}/healthz
-                icon: /assets/search-ladder.svg
-                timeout: 5s
               - title: Proxmox
                 url: https://proxmox.${LAN_DOMAIN}/
                 icon: si:proxmox
@@ -531,10 +516,3 @@ pages:
                   - title: Media Preview
                     url: https://media-preview.${DOCKER_DOMAIN}/
                     icon: si:plex
-
-              - title: Research & AI
-                color: 194 54 42
-                links:
-                  - title: OmniRoute
-                    url: https://omniroute.${DOCKER_DOMAIN}/
-                    icon: si:openrouter

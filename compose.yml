@@ -20,8 +20,6 @@ include:
     - freedium/compose.yml
     - movie-tracker/docker-compose.yml
     - bitwarden/compose.yml
-    - omniroute/compose.yml
-    - search-ladder/compose.yml
     - hermes/compose.yaml
     - media/compose.media-orchestrator.yml
     - health/compose.yml

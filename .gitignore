@@ -133,6 +133,7 @@ movie-tracker/.git/
 media/.media-orchestrator.deploy.lock
 media/.media-orchestrator-images.previous
 media/.media-orchestrator-images.previous.generation.*/
+media/.hermes-stage.*/
 
 # Service-specific runtime folders with only compose/config tracked
 ai/ollama/

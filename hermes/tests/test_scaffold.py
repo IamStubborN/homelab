@@ -383,6 +383,24 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
         )
         self.assertNotIn("secondary_vaultwarden_session", self.compose_text)
 
+    def test_named_volumes_and_private_networks_use_the_homelab_prefix(self):
+        for key, volume in self.compose["volumes"].items():
+            self.assertEqual(volume["name"], f"homelab_{key}")
+            self.assertNotEqual(volume.get("external"), True)
+        for key in ("primary-private", "secondary-private", "none"):
+            network = self.compose["networks"][key]
+            self.assertEqual(network["name"], f"homelab_{key}")
+            self.assertNotEqual(network.get("external"), True)
+        self.assertNotIn("hermes-home_", self.compose_text)
+        self.assertIn(
+            "homelab_hermes_primary_vaultwarden",
+            read("scripts/init-primary-vaultwarden"),
+        )
+        self.assertIn(
+            "homelab_vaultwarden_tools",
+            read("scripts/init-primary-vaultwarden"),
+        )
+
     def test_hermes_controls_only_its_profile_notifier(self):
         services = self.compose["services"]
         notifier_names = {

@@ -415,19 +415,14 @@ secrets:
   media_postgres_password:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_postgres_password
 volumes:
-  # Preserve the existing data while this stack moves under the homelab project.
   media_postgres_data:
-    name: media-orchestrator_media_postgres_data
-    external: true
+    name: homelab_media_postgres_data
   gluetun_rezka_state:
-    name: media-orchestrator_gluetun_rezka_state
-    external: true
+    name: homelab_gluetun_rezka_state
   gluetun_rezka_lifecycle:
-    name: media-orchestrator_gluetun_rezka_lifecycle
-    external: true
+    name: homelab_gluetun_rezka_lifecycle
   rezka_session_encrypted:
-    name: media-orchestrator_rezka_session_encrypted
-    external: true
+    name: homelab_rezka_session_encrypted
 
 networks:
   media-db:

@@ -369,50 +369,36 @@ networks:
     name: health-internal
     external: true
   primary-private:
-    name: hermes-home_primary-private
-    external: true
+    name: homelab_primary-private
   secondary-private:
-    name: hermes-home_secondary-private
-    external: true
+    name: homelab_secondary-private
   none:
-    name: hermes-home_none
-    external: true
+    name: homelab_none
     internal: true
 
 volumes:
   agent_browser_tools:
-    name: hermes-home_agent_browser_tools
-    external: true
+    name: homelab_agent_browser_tools
   hermes_primary_profile:
-    name: hermes-home_hermes_primary_profile
-    external: true
+    name: homelab_hermes_primary_profile
   hermes_primary_memory:
-    name: hermes-home_hermes_primary_memory
-    external: true
+    name: homelab_hermes_primary_memory
   hermes_primary_browser:
-    name: hermes-home_hermes_primary_browser
-    external: true
+    name: homelab_hermes_primary_browser
   hermes_primary_vaultwarden:
-    name: hermes-home_hermes_primary_vaultwarden
-    external: true
+    name: homelab_hermes_primary_vaultwarden
   hermes_secondary_profile:
-    name: hermes-home_hermes_secondary_profile
-    external: true
+    name: homelab_hermes_secondary_profile
   hermes_secondary_memory:
-    name: hermes-home_hermes_secondary_memory
-    external: true
+    name: homelab_hermes_secondary_memory
   hermes_secondary_browser:
-    name: hermes-home_hermes_secondary_browser
-    external: true
+    name: homelab_hermes_secondary_browser
   media_notifier_primary:
-    name: hermes-home_media_notifier_primary
-    external: true
+    name: homelab_media_notifier_primary
   media_notifier_secondary:
-    name: hermes-home_media_notifier_secondary
-    external: true
+    name: homelab_media_notifier_secondary
   vaultwarden_tools:
-    name: hermes-home_vaultwarden_tools
-    external: true
+    name: homelab_vaultwarden_tools
 
 secrets:
   primary_telegram_token:

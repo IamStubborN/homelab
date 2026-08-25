@@ -133,7 +133,7 @@ when that binary is present; there is no compose toggle to disable it. The
 native SHA-256 solver remains the default path and does not launch Chromium.
 The service image does not include Chrome. There is no FlareSolverr on the
 direct Rezka path, no user Chrome profile, and no extra session volume. The
-existing `media-orchestrator_rezka_session_encrypted` volume is unchanged.
+existing `homelab_rezka_session_encrypted` volume is unchanged.
 Obscura and Lightpanda stay out of this path: Anubis blocks Lightpanda, and
 neither is a real Chromium cookie/JS runtime for `preact` / `metarefresh`.
 
@@ -230,5 +230,4 @@ docker compose --env-file .env up -d \
 ```
 
 The database, Gluetun, lifecycle, and encrypted-session volumes have explicit
-`media-orchestrator_*` names so the root-project migration preserves existing
-data. Never delete those volumes during a normal rollback.
+`homelab_*` names. Never delete those volumes during a normal rollback.

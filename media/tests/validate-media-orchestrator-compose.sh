@@ -100,8 +100,8 @@ assert_yq '(.services.gluetun-rezka-watcher.environment | has("MEDIA_REZKA_BROWS
     'watcher must not take Anubis browser toggle env; the runner image enables chrome automatically'
 assert_yq '.services.download-runner.volumes | any_c(.target == "/var/lib/media-orchestrator/session" and .volume.nocopy == true) and .services.media-service.volumes | any_c(.target == "/var/lib/media-orchestrator/session" and .volume.nocopy == true)' \
     'encrypted session volume must remain nocopy on service and runner'
-assert_yq '.volumes.rezka_session_encrypted.name == "media-orchestrator_rezka_session_encrypted" and .volumes.rezka_session_encrypted.external == true' \
-    'encrypted session volume must stay the existing external volume'
+assert_yq '.volumes.rezka_session_encrypted.name == "homelab_rezka_session_encrypted" and (.volumes.rezka_session_encrypted.external | not)' \
+    'encrypted session volume must use the homelab project volume'
 assert_yq '((.services.download-runner.volumes | length) == 2) and (.services.download-runner.volumes | any_c(.target == "/data/internal")) and (.services.download-runner.volumes | any_c(.target == "/var/lib/media-orchestrator/session"))' \
     'download-runner must not persist a Chrome profile volume'
 assert_yq '.services.download-runner.tmpfs | any_c(. == "/tmp:size=1g,mode=1777")' \

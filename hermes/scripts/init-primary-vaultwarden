@@ -3,8 +3,8 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-volume=${VAULTWARDEN_VOLUME:-hermes-home_hermes_primary_vaultwarden}
-tools_volume=${VAULTWARDEN_TOOLS_VOLUME:-hermes-home_vaultwarden_tools}
+volume=${VAULTWARDEN_VOLUME:-homelab_hermes_primary_vaultwarden}
+tools_volume=${VAULTWARDEN_TOOLS_VOLUME:-homelab_vaultwarden_tools}
 
 docker run --rm -it \
     --pull always \

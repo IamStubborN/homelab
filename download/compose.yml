@@ -179,6 +179,8 @@ services:
       - "8191"
     shm_size: 512mb
     mem_limit: 2g
+    tmpfs:
+      - /config:rw,noexec,nosuid,size=32m
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8191/ >/dev/null || exit 1"]
       interval: 30s

@@ -82,7 +82,7 @@ Media services route through Gluetun container:
 
 Use this file and the tracked `*.example.*` files for clean-host recovery. The repository intentionally does not contain runtime data, local Home Assistant state, or secrets. Freedium source is tracked as a pinned git submodule.
 
-Clean-host restore requires more than the root `.env`: create service-local env files for services with `env_file` (`glance/.env`, `speedtest-tracker/.env`), restore Docker secret files under `traefik/secrets/` and `media/secrets/` (`MEDIA_SECRETS_DIR`), restore ignored runtime data directories, and verify host prerequisites such as storage mounts, `/dev/net/tun`, `/dev/dri`, `/run/dbus`, Docker socket access, ports `80/443`, and the external `proxy` network. The Plex and download Compose definitions are split into `plex/` and `download/`, but their mutable state deliberately remains under `media/` for upgrade compatibility.
+Clean-host restore requires more than the root `.env`: create service-local env files for services with `env_file` (`glance/.env`, `speedtest-tracker/.env`), restore Docker secret files under `traefik/secrets/` and `media/secrets/` (`MEDIA_SECRETS_DIR`), restore ignored runtime data directories, and verify host prerequisites such as storage mounts, `/dev/net/tun`, `/dev/dri`, `/run/dbus`, Docker socket access, ports `80/443`, and the external `proxy` network. Follow the storage classes below. The Plex and download Compose definitions are split into `plex/` and `download/`; some of their mutable state still remains under `media/` for upgrade compatibility.
 
 
 ### Gluetun control-server API key
@@ -181,7 +181,31 @@ When modifying custom applications:
 - For image-based apps such as Movie-Tracker, change and publish the application in its own repository, then pull the image here.
 - For source-built apps such as Freedium, update the pinned submodule deliberately and rebuild the relevant service.
 
-### Storage Mounts
-- `${INTERNAL_STORAGE:-/mnt/internal}/` - Main storage (torrents, media, books)
-- `${USB_STORAGE:-/mnt/usb_drive}/` - Secondary USB storage
-- Services mount these as `/data/internal` and `/data/usb_drive`
+### Storage classes
+
+Pick the class by data kind. Do not invent a fourth style, and do not move a
+service between classes for naming consistency.
+
+- **Libraries:** `${INTERNAL_STORAGE:-/mnt/internal}` and
+  `${USB_STORAGE:-/mnt/usb_drive}`. Media, torrents, books, and the live wiki
+  vault. Services mount these as `/data/internal` and `/data/usb_drive`. Never
+  put library trees in Docker named volumes.
+- **App state:** bind mounts under the service directory next to its Compose
+  file (`plex/config`, `download/qbittorrent/config`, `bitwarden/data`,
+  `homeassistant/config`, Traefik ACME, *arr configs). This is the default for
+  operator-visible databases and settings. Plex and download Compose live in
+  `plex/` and `download/`; their mutable state stays under `media/` only where
+  upgrade compatibility still requires it.
+- **Engine state:** Docker named volumes prefixed `homelab_` for runtime that
+  should not sit in the git checkout (Hermes profiles, Vaultwarden broker
+  tools, media-orchestrator Postgres and Rezka session, Movie-Tracker cache).
+  Do not keep `external: true` pins to old project prefixes
+  (`hermes-home_*`, `media-orchestrator_*`).
+- **Ephemeral:** tmpfs (`FlareSolverr` `/config`, container `/tmp`). Do not
+  persist challenge-solver or throwaway cache state as an anonymous volume.
+- **Secrets:** ignored files under `secrets/` (mode `0640`), never named
+  volumes or Compose literals.
+
+On restore, recreate bind-mount directories from backup, recreate `homelab_*`
+volumes only for engine state, and remount the library disks. The root `.env`
+alone is not enough.

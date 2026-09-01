@@ -117,6 +117,14 @@ def _media_error_code(output: bytes) -> str | None:
     return error.strip().lower() if isinstance(error, str) and error.strip() else None
 
 
+def _is_season_required_error(output: bytes) -> bool:
+    """Prowlarr series search without season returns invalid_request, not downtime."""
+    return _media_error_code(output) == "invalid_request"
+
+
+PROWLARR_SEASON_REQUIRED_TEXT = "⚠️ Prowlarr: укажи сезон."
+
+
 def _sanitize_details(output: bytes) -> str:
     try:
         value = json.loads(output.decode("utf-8"))
@@ -466,6 +474,7 @@ def _combine_source_results(
     failed_providers: list[str],
     *,
     page: int = 0,
+    season_required_providers: list[str] | None = None,
 ) -> RenderedSearch | None:
     if not searches:
         return None
@@ -489,9 +498,15 @@ def _combine_source_results(
         )
         if source in {"rezka", "prowlarr"} and results == []
     ]
+    season_required_providers = [
+        provider
+        for provider in (season_required_providers or [])
+        if provider in {"Rezka", "Prowlarr"}
+    ]
     combined_context: dict[str, object] = {
         "search_pages": search_pages,
         "failed_providers": list(failed_providers),
+        "season_required_providers": list(season_required_providers),
     }
     release_actions: list[SearchAction] = []
     continuation_actions: list[SearchAction] = []
@@ -550,7 +565,12 @@ def _combine_source_results(
 
     # A one-provider override opens its existing release carousel directly.
     # Unified rendering is reserved for the ordinary two-provider search.
-    if len(searches) == 1 and not failed_providers and not release_actions:
+    if (
+        len(searches) == 1
+        and not failed_providers
+        and not season_required_providers
+        and not release_actions
+    ):
         return searches[0]
 
     # Fuse both provider rankings into one normalized [0, 1] score. Provider
@@ -614,8 +634,13 @@ def _combine_source_results(
         for provider in empty_providers
     )
     footer_lines.extend(
+        "⚠️ Prowlarr: укажи сезон." if provider == "Prowlarr" else f"⚠️ {provider}: укажи сезон."
+        for provider in season_required_providers
+    )
+    footer_lines.extend(
         f"⚠️ {provider} временно недоступен."
         for provider in failed_providers
+        if provider not in season_required_providers
     )
     footer_actions: list[SearchAction] = []
     expires_at = (

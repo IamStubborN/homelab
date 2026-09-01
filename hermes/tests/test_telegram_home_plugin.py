@@ -2631,6 +2631,55 @@ class TelegramHomePluginTests(unittest.IsolatedAsyncioTestCase):
         query.message.reply_text.assert_not_awaited()
         self.assertEqual(run_media.await_count, 3)
 
+
+    def test_combine_marks_prowlarr_invalid_request_as_season_required(self):
+        rezka = self.plugin._render_source_search(
+            json.dumps(
+                {
+                    "api_version": "v1",
+                    "session_id": "00000000-0000-0000-0000-000000000111",
+                    "source": "rezka",
+                    "expires_at": "2099-07-27T12:00:00Z",
+                    "results": [
+                        {
+                            "source": "rezka",
+                            "result_id": "rezka:1",
+                            "title": "Silo",
+                            "translations": [{"id": 1, "name": "LostFilm"}],
+                        }
+                    ],
+                }
+            ).encode(),
+            "rezka",
+            2,
+            0,
+            carousel=False,
+        )
+        combined = self.plugin._combine_source_results(
+            [rezka],
+            [],
+            season_required_providers=["Prowlarr"],
+        )
+        self.assertIsNotNone(combined)
+        self.assertIn("Prowlarr: укажи сезон", combined.text)
+        self.assertNotIn("Prowlarr временно недоступен", combined.text)
+
+    def test_prowlarr_invalid_request_is_season_required_error(self):
+        self.assertTrue(
+            self.plugin._is_season_required_error(b'{"error":"invalid_request"}')
+        )
+        self.assertTrue(
+            self.plugin._is_season_required_error(
+                b'{"error":{"code":"invalid_request"}}'
+            )
+        )
+        self.assertFalse(self.plugin._is_season_required_error(b"{}"))
+        self.assertFalse(
+            self.plugin._is_season_required_error(
+                b'{"error":{"code":"provider_unavailable"}}'
+            )
+        )
+
     async def test_rezka_translation_card_can_return_to_combined_results(self):
         update, query = callback_update(f"ms:b:{TRACKING_ID}:3:5")
         query.message.photo = (object(),)

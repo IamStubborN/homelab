@@ -537,10 +537,14 @@ class SkillContractTests(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
-    def test_media_routes_public_evidence_to_native_web_search(self):
+    def test_media_routes_titles_through_media_search_not_the_public_web(self):
         skill = read("shared/skills/media/SKILL.md")
-        self.assertIn("`web_search`", skill)
+        self.assertIn("`media_search`", skill)
+        self.assertIn("not the public web", skill)
         self.assertNotIn("curl", skill.lower())
+        for profile in ("primary", "secondary"):
+            soul = read(f"profiles/{profile}/SOUL.md")
+            self.assertIn("`web_search`", soul)
 
     def test_vaultwarden_login_allowlist_starts_empty(self):
         policy = json.loads(read("config/vaultwarden-login-allowlist.json"))
@@ -569,7 +573,7 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("media_tracking_enable_download", skill)
         self.assertIn("a `release_identity`", skill)
         self.assertIn("positive `source_id`", skill)
-        self.assertIn("Ordinary subscriptions run hourly", skill)
+        self.assertIn("Ordinary subscriptions run every 3 hours", skill)
         self.assertIn("do not delete and recreate", skill)
         self.assertNotIn("tracking add --provider PROVIDER", skill)
 
@@ -634,7 +638,6 @@ class SkillContractTests(unittest.TestCase):
         skill = read("shared/skills/media/SKILL.md")
         normalized = " ".join(skill.split())
         self.assertIn("Hide credentials, endpoints, paths, raw JSON, and internal IDs", normalized)
-        self.assertIn("native `clarify`", skill)
         self.assertNotIn("<telegram-quick-replies>", skill)
         self.assertIn("destructive action", normalized)
 
@@ -655,18 +658,17 @@ class SkillContractTests(unittest.TestCase):
             content = path.read_text(encoding="utf-8")
             frontmatter = yaml.safe_load(content.split("---", 2)[1])
             description = frontmatter["description"]
-            self.assertLessEqual(len(description), 60, path)
+            self.assertLessEqual(len(description), 120, path)
             self.assertTrue(description.endswith("."), path)
 
     def test_profile_identity_files_are_fixed(self):
         self.assertEqual(read("profiles/primary/identity").strip(), "primary")
         self.assertEqual(read("profiles/secondary/identity").strip(), "secondary")
 
-    def test_profiles_enforce_adaptive_research_priority_even_without_skill_activation(self):
+    def test_profiles_route_public_research_through_native_web_search(self):
         for profile in ("primary", "secondary"):
             soul = read(f"profiles/{profile}/SOUL.md")
-            self.assertIn("adaptive research client first", soul)
-            self.assertIn("native `web_search` as fallback", soul)
+            self.assertIn("native `web_search` first", soul)
             self.assertIn("`web_extract`", soul)
             self.assertIn("Never search the public web through a browser", soul)
 

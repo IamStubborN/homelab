@@ -1,6 +1,6 @@
 ---
 name: home-assistant
-description: Use when reading or controlling the smart home.
+description: Use when reading or controlling lights, climate, or other smart-home devices.
 ---
 
 # Home Assistant

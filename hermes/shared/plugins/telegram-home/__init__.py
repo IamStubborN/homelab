@@ -78,10 +78,12 @@ from .media_panel import (
     render_tracking_scheduled_card,
 )
 from .media_search import (
+    PROWLARR_SEASON_REQUIRED_TEXT,
     _bounded_text,
     _combine_source_results,
     _decode_search_page,
     _episode_count_label,
+    _is_season_required_error,
     _media_error_code,
     _render_alternative_search,
     _render_release_details,
@@ -1725,6 +1727,7 @@ class HomeTelegramAdapter(TelegramAdapter):
         ))
         rendered_searches = []
         failed_sources = []
+        season_required_sources = []
         for source, (returncode, output) in zip(sources, searches, strict=True):
             rendered = (
                 _render_source_search(
@@ -1741,6 +1744,8 @@ class HomeTelegramAdapter(TelegramAdapter):
             )
             if rendered is not None:
                 rendered_searches.append(rendered)
+            elif source == "prowlarr" and _is_season_required_error(output):
+                season_required_sources.append("Prowlarr")
             else:
                 failed_sources.append("Rezka" if source == "rezka" else "Prowlarr")
         if not any(
@@ -1756,7 +1761,11 @@ class HomeTelegramAdapter(TelegramAdapter):
             unavailable_title = {
                 "a": "⚠️ Источники временно недоступны",
                 "r": "⚠️ Rezka временно недоступен",
-                "p": "⚠️ Prowlarr временно недоступен",
+                "p": (
+                    PROWLARR_SEASON_REQUIRED_TEXT
+                    if season_required_sources and not failed_sources
+                    else "⚠️ Prowlarr временно недоступен"
+                ),
             }[action]
             lines = [
                 unavailable_title if unavailable else "⚠️ Вариантов нет",
@@ -1769,6 +1778,8 @@ class HomeTelegramAdapter(TelegramAdapter):
                 lines.append(source_badge)
             if failed_sources and not unavailable:
                 lines.append(f"⚠️ Недоступно: {', '.join(failed_sources)}")
+            if season_required_sources and not unavailable:
+                lines.append(PROWLARR_SEASON_REQUIRED_TEXT)
             kind_code = "m" if media_type == "movie" else "t"
             rows = []
             if unavailable:
@@ -1804,7 +1815,7 @@ class HomeTelegramAdapter(TelegramAdapter):
                 else:
                     await message.edit_text("\n".join(lines), reply_markup=markup)
             return
-        combined = _combine_source_results(rendered_searches, failed_sources)
+        combined = _combine_source_results(rendered_searches, failed_sources, season_required_providers=season_required_sources)
         if combined is None or not self._rendered_has_search_results(combined):
             await self._edit_callback_result(
                 message,
@@ -3752,14 +3763,19 @@ class HomeTelegramAdapter(TelegramAdapter):
             )
             if rendered is not None:
                 rendered_searches.append(rendered)
-        failed_sources = [
-            "Rezka" if source == "rezka" else "Prowlarr"
-            for source in sources
-            if source not in pages
-        ]
+        failed_sources = []
+        season_required_sources = []
+        for source, (returncode, output) in zip(sources, searches, strict=True):
+            if source in pages:
+                continue
+            if source == "prowlarr" and _is_season_required_error(output):
+                season_required_sources.append("Prowlarr")
+            else:
+                failed_sources.append("Rezka" if source == "rezka" else "Prowlarr")
         rendered = _combine_source_results(
             rendered_searches,
             failed_sources,
+            season_required_providers=season_required_sources,
         )
         if rendered is None:
             store.release(token)
@@ -4005,6 +4021,7 @@ class HomeTelegramAdapter(TelegramAdapter):
         if isinstance(combined_context, dict):
             pages = combined_context.get("search_pages")
             failures = combined_context.get("failed_providers")
+            season_required = combined_context.get("season_required_providers")
             if isinstance(pages, list) and isinstance(failures, list):
                 rendered_searches = []
                 for page in pages[:2]:
@@ -4033,9 +4050,15 @@ class HomeTelegramAdapter(TelegramAdapter):
                     for provider in failures
                     if provider in {"Rezka", "Prowlarr"}
                 ]
+                season_required_providers = [
+                    provider
+                    for provider in (season_required or [])
+                    if provider in {"Rezka", "Prowlarr"}
+                ]
                 combined = _combine_source_results(
                     rendered_searches,
                     failed_providers,
+                    season_required_providers=season_required_providers,
                     page=(
                         payload.get("combined_page", 0)
                         if isinstance(payload.get("combined_page", 0), int)
@@ -4407,6 +4430,7 @@ class HomeTelegramAdapter(TelegramAdapter):
     ) -> RenderedSearch | None:
         pages = context.get("search_pages")
         failures = context.get("failed_providers")
+        season_required = context.get("season_required_providers") or []
         season = context.get("season", 0)
         episode = context.get("episode", 0)
         back_action = _source_back_action(context.get("back_action"))
@@ -4460,6 +4484,11 @@ class HomeTelegramAdapter(TelegramAdapter):
                 if provider in {"Rezka", "Prowlarr"}
             ],
             page=max(page, 0),
+            season_required_providers=[
+                provider
+                for provider in season_required
+                if provider in {"Rezka", "Prowlarr"}
+            ],
         )
 
     async def _handle_source_choice_callback(self, query) -> None:
@@ -4917,6 +4946,7 @@ class HomeTelegramAdapter(TelegramAdapter):
             payload={"tracking_id": tracking_id, "season": season, "episode": episode},
             expires_at="2099-12-31T23:59:59Z",
         )
+        season_required_sources = []
         for source, (returncode, output) in zip(sources, searches, strict=True):
             provider = "Rezka" if source == "rezka" else "Prowlarr"
             output = _rank_tracking_search_output(
@@ -4935,10 +4965,17 @@ class HomeTelegramAdapter(TelegramAdapter):
                 else None
             )
             if page is None:
-                failed_sources.append(provider)
+                if source == "prowlarr" and _is_season_required_error(output):
+                    season_required_sources.append("Prowlarr")
+                else:
+                    failed_sources.append(provider)
             else:
                 rendered_searches.append(page)
-        combined = _combine_source_results(rendered_searches, failed_sources)
+        combined = _combine_source_results(
+            rendered_searches,
+            failed_sources,
+            season_required_providers=season_required_sources,
+        )
         if combined is None or not self._rendered_has_search_results(combined):
             action_code = {"all": "a", "rezka": "r", "prowlarr": "p"}[source_action]
             markup = InlineKeyboardMarkup([

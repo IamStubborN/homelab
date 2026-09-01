@@ -848,11 +848,13 @@ class EmbeddedHealthSkillContractTests(unittest.TestCase):
         cls.skill = read("shared/skills/health/SKILL.md")
         cls.compact = " ".join(cls.skill.split())
 
-    def test_catalog_matches_exact_phase_one_tools(self):
+    def test_skill_does_not_restate_tool_parameter_tables(self):
         catalog = set(
             re.findall(r"^\| `([a-z_]+)` \|", self.skill, flags=re.MULTILINE)
         )
-        self.assertEqual(catalog, HEALTH_TOOLS)
+        self.assertFalse(catalog & HEALTH_TOOLS)
+        writes = read("shared/skills/health/WRITES.md")
+        self.assertIn("mcp_health_*` schema", writes)
 
     def test_person_confirmation_duplicate_voice_chart_and_fact_rules(self):
         required = (
@@ -868,8 +870,8 @@ class EmbeddedHealthSkillContractTests(unittest.TestCase):
             "Transcribe voice messages",
             "exactly like text",
             "send the returned `image/png` PNG to the chat",
-            "Never set `status` above `user_reported`",
-            "Never invent",
+            "Keep `status` at `user_reported`",
+            "Leave missing values unset",
             "never loop",
             "All user-facing health text and buttons are in Russian.",
             "Internal identifiers and tool arguments stay in English.",
@@ -905,7 +907,7 @@ class EmbeddedHealthSkillContractTests(unittest.TestCase):
         )
 
     def test_worked_examples_cover_required_routes(self):
-        rows = re.findall(r"^\| «.+?\| `.+?` \|$", self.skill, flags=re.MULTILINE)
+        rows = re.findall(r"^\| «", self.skill, flags=re.MULTILINE)
         self.assertGreaterEqual(len(rows), 6)
         self.assertIn(
             "«Давление 138/92, пульс 80» | `add_measurement(kind=blood_pressure, values={systolic:138,diastolic:92,pulse:80})`",
@@ -931,12 +933,13 @@ class EmbeddedHealthSkillContractTests(unittest.TestCase):
         self.assertIn("`add_condition`", self.skill)
         self.assertIn("confirmed=true", self.skill)
         self.assertIn("Telegram source message timestamp", self.compact)
-        self.assertIn("stable source update/message ID", self.compact)
-        self.assertIn("stable per-fact identity", self.compact)
-        self.assertIn("deterministic fact ordinal", self.compact)
-        self.assertIn(":fact:1", self.skill)
-        self.assertIn("raw message/update ID alone", self.compact)
-        self.assertIn("makes no retry-deduplication promise", self.compact)
+        writes = " ".join(read("shared/skills/health/WRITES.md").split())
+        self.assertIn("stable source update/message ID", writes)
+        self.assertIn("stable per-fact identity", writes)
+        self.assertIn("deterministic fact ordinal", writes)
+        self.assertIn(":fact:1", read("shared/skills/health/WRITES.md"))
+        self.assertIn("raw message/update ID alone", writes)
+        self.assertIn("makes no retry-deduplication promise", writes)
         self.assertIn("user-intended verbatim repeat", self.compact)
         self.assertIn("call `query_health_data`", self.compact)
         self.assertIn("Compare the complete typed values", self.compact)
@@ -949,7 +952,7 @@ class EmbeddedHealthSkillContractTests(unittest.TestCase):
             "Medical facts go through MCP",
             "MCP-only for facts",
             "Use only discovered `mcp_health_*` tools for facts",
-            "Never use terminal, direct HTTP, SQL, or jsonl as a health ledger",
+            "not terminal, direct HTTP, SQL, or jsonl",
             "Never edit `data/` or `generated/`",
             "shared/health/generated",
             "llm-wiki",

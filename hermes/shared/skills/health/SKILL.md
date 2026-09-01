@@ -1,43 +1,31 @@
 ---
 name: health
-description: Use when managing family health records and charts.
+description: Use when recording, querying, or charting family health.
 ---
 
 # Family health
 
 Use only discovered `mcp_health_*` tools for facts. Either spouse may read or
-write either person's data. Medical facts go through MCP. Never use terminal,
-direct HTTP, SQL, or jsonl as a health ledger. Never edit `data/` or
-`generated/`. Read current medical state with `llm-wiki` on
-`shared/health/generated/*.md` and SCHEMA. Hide tokens, endpoints, raw JSON,
-and internal record IDs unless explicitly requested for technical details.
+write either person's data. Medical facts go through MCP. MCP-only for facts.
+Use those tools as the health ledger, not terminal, direct HTTP, SQL, or jsonl.
+The cashier owns `data/` and `generated/`. Never edit `data/` or `generated/`.
 
 All user-facing health text and buttons are in Russian. Internal identifiers
 and tool arguments stay in English.
 
-## Facts vs synthesis
+## Ledger vs wiki
 
-MCP-only for facts. Do not treat the wiki as a ledger and do not read jsonl.
+Read current medical state with `llm-wiki` on `shared/health/generated/*.md`
+and `shared/health/SCHEMA.md`, not jsonl. Wiki is for synthesis only: people
+pages, family notes, and narrative that cite generated facts. Put `person` on
+every health page. Do not mix Primary and Secondary on one synthesis page. Do
+not store blood pressure, labs, meals, or other medical facts as personal
+journal pages.
 
-- Writes (measurements, meals, symptoms, sleep, medications, conditions,
-  allergies, labs, corrections, charts, structured queries) go through MCP.
-- Current-state reading for those facts: use `llm-wiki` on
-  `shared/health/generated/*.md` and `shared/health/SCHEMA.md`, not jsonl.
-  Typical generated pages include `PRIMARY_CURRENT_PROFILE.md`,
-  `SECONDARY_CURRENT_MEDICATIONS.md`, `PRIMARY_RECENT_MEASUREMENTS.md`,
-  `PRIMARY_RECENT_LABS.md`, `SECONDARY_ALLERGIES.md`, and
-  `FAMILY_DIET_SNAPSHOTS.md` under `/wiki/shared/health/generated/`.
-- Wiki is for synthesis only: people pages, family notes, and narrative
-  summaries that cite generated facts. Put `person` on every health page. Do
-  not mix Primary and Secondary on one synthesis page. Do not store blood
-  pressure, labs, meals, or other medical facts as personal journal pages.
-- Never edit `data/` or `generated/`. The cashier owns those paths.
-- If a required tool is absent or a write fails, say health-service is not
-  deployed or the write failed. No silent wiki-as-ledger fallback. Do not
-  substitute another transport or invent a tool name.
+If a required tool is absent or a write fails, say health-service is not
+deployed or the write failed. No silent wiki-as-ledger fallback.
 
-`WIKI_PATH` is `/wiki` (this person's tree). Family health is nested at
-`/wiki/shared/health`.
+`WIKI_PATH` is `/wiki`. Family health is nested at `/wiki/shared/health`.
 
 ## Resolve the person
 
@@ -50,29 +38,12 @@ MCP-only for facts. Do not treat the wiki as a ledger and do not read jsonl.
 Omit `person` for the owner default. Pass `person=primary` or
 `person=secondary` only after an explicit name or completed clarification.
 
-## Operations
-
-Times use RFC 3339; dates use `YYYY-MM-DD`.
-
-| Tool | Parameters |
-| --- | --- |
-| `add_measurement` | `person?`, `kind`, `values`, `source?`, `status?`, `event_time?`, `source_event_id?` |
-| `correct_measurement` | `measurement_id`, `new_values`, `reason`, `confirmed?` |
-| `add_meal` | `person?`, `description`, `items?`, `calories?`, `status?`, `event_time?`, `source_event_id?` |
-| `add_symptom` | `person?`, `description`, `severity?`, `status?`, `event_time?`, `source_event_id?` |
-| `add_sleep_record` | `person?`, `start_time`, `end_time`, `quality?`, `notes?`, `status?`, `source_event_id?` |
-| `add_medication` | `person?`, `name`, `dose?`, `schedule?`, `started_at?`, `status?`, `confirmed?` |
-| `stop_medication` | `person?`, `medication_id`, `stopped_at?`, `reason?`, `confirmed?` |
-| `add_condition` | `person?`, `name`, `notes?`, `diagnosed_at?`, `status?`, `confirmed?` |
-| `add_allergy` | `person?`, `allergen`, `reaction?`, `severity?`, `status?` |
-| `add_lab_result` | `person?`, `test_date`, `test_name`, `value`, `unit?`, `reference_min?`, `reference_max?`, `flag?`, `laboratory?`, `source_document?`, `status?` |
-| `query_health_data` | `person?`, `section`, `limit?`, `from?`, `to?` |
-| `generate_chart` | `person?`, `kind`, `days?`, `title?` |
-
-## Writes and confirmations
+## Writes
 
 Write routine measurements, meals, symptoms, and sleep immediately. Echo the
-recorded fact and offer `✏️ Исправить`.
+recorded fact and offer `✏️ Исправить`. Pass `event_time` from the Telegram
+source message timestamp. For `source_event_id` and retry identity, read
+[WRITES.md](WRITES.md) in this skill folder.
 
 For medication, condition, and correction operations, first use native
 `clarify` with exactly three buttons:
@@ -80,17 +51,6 @@ For medication, condition, and correction operations, first use native
 Only after `✅ Записать`, call the tool. Pass `confirmed=true` to
 `add_medication`, `stop_medication`, `add_condition`, and
 `correct_measurement`. Edit returns to correction; cancel writes nothing.
-
-For routine event writes, pass `event_time` from the Telegram source message
-timestamp. When transport metadata exposes a stable source update/message ID,
-form `source_event_id` as a stable per-fact identity: append a deterministic
-fact ordinal such as `:fact:1`, `:fact:2` to that source ID. Two facts parsed
-from one message must use different ordinals, and a retry must reuse the same
-ordinal for the same fact. Never pass the raw message/update ID alone and never
-invent either value when the live gateway does not expose that metadata;
-without `source_event_id`, the service makes no retry-deduplication promise.
-Reusing a per-fact source ID with changed values returns the original record as
-a duplicate and does not overwrite it.
 
 Before writing a user-intended verbatim repeat with no new time or context,
 call `query_health_data` for the same person and matching section or
@@ -106,7 +66,10 @@ and reuse its complete `systolic`, `diastolic`, and `pulse` values. The
 never send a partial `{value:83}` object for blood pressure.
 
 Repeat allergies and laboratory fields before writing when interpretation is
-unclear. Never invent missing values.
+unclear. Leave missing values unset.
+
+Keep `status` at `user_reported` unless the user cites a doctor or a document.
+Preserve exactly what the user reported.
 
 ## Interaction contract
 
@@ -122,12 +85,8 @@ unclear. Never invent missing values.
 - Transcribe voice messages, then process them exactly like text through the
   same person and confirmation rules.
 - For a chart, send the returned `image/png` PNG to the chat.
-- Never set `status` above `user_reported` unless the user cites a doctor or a
-  document. Preserve exactly what the user reported.
 - On a tool error, show the reason and ask what to fix. Do not retry and never
   loop automatically.
-- If a required tool is absent, say health-service is not deployed. Do not
-  substitute another transport or invent a tool name.
 
 ## Examples
 
@@ -136,11 +95,6 @@ unclear. Never invent missing values.
 | «Давление 138/92, пульс 80» | `add_measurement(kind=blood_pressure, values={systolic:138,diastolic:92,pulse:80})` |
 | «Запиши Secondary вес 78,2» | `add_measurement(person=secondary, kind=weight, values={value:78.2,unit:"kg"})` |
 | «покажи вес за месяц» | `generate_chart(kind=weight, days=30)`; send the returned PNG to the chat |
-| «Обед: борщ и хлеб, примерно 520 ккал» | `add_meal(description="борщ и хлеб", calories=520)` |
-| «Спал с 23:10 до 07:00, качество 4» | `add_sleep_record(start_time=<resolved RFC3339>, end_time=<resolved RFC3339>, quality=4)` |
-| «У Secondary болит голова, сила 6 из 10» | `add_symptom(person=secondary, description="головная боль", severity=6)` |
 | «Начал принимать магний 200 мг вечером» | show the confirmation card; after ✅ call `add_medication(name="магний", dose="200 mg", schedule="вечером", confirmed=true)` |
-| «Исправь тот пульс на 83» | query and resolve the current blood-pressure record, show the confirmation card, then after ✅ call `correct_measurement(measurement_id=<private id>, new_values={systolic:<current>,diastolic:<current>,pulse:83}, reason="user correction", confirmed=true)` |
+| «Исправь тот пульс на 83» | query the current measurement first and reuse its complete systolic/diastolic/pulse, then after ✅ call `correct_measurement(measurement_id=<private id>, new_values={systolic:<current>,diastolic:<current>,pulse:83}, reason="user correction", confirmed=true)` |
 | «У меня диагностировали гипертонию» | show the confirmation card; after ✅ call `add_condition(name="гипертония", status=confirmed_by_doctor, confirmed=true)` |
-| «Какие лекарства сейчас принимает Primary?» | `query_health_data(person=primary, section="medications")` |
-| «Какой сейчас профиль давления у Primary?» | read `/wiki/shared/health/generated/PRIMARY_CURRENT_PROFILE.md` via llm-wiki; do not open jsonl |

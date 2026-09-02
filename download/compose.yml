@@ -11,8 +11,8 @@ services:
       - 6881:6881
       - 6881:6881/udp
     volumes:
-      # Keep mutable state in its pre-split location for upgrade compatibility.
-      - ../media/gluetun/data:/gluetun
+      # Gluetun state lives next to this compose file, not under media/.
+      - ./gluetun/data:/gluetun
       - ./gluetun/scripts:/scripts:ro
     healthcheck:
       test: [ "CMD-SHELL", "/scripts/healthcheck.sh" ]
@@ -86,10 +86,10 @@ services:
     secrets:
       - gluetun_control_api_key
     volumes:
-      - ../media/qbittorrent/config:/config
-      - ../media/qbittorrent/ui:/ui
+      - ./qbittorrent/config:/config
+      - ./qbittorrent/ui:/ui
       - ./qbittorrent/scripts:/scripts
-      - ../media/gluetun/data/forwarded_port:/gluetun/forwarded_port:ro
+      - ./gluetun/data/forwarded_port:/gluetun/forwarded_port:ro
       - /etc/localtime:/etc/localtime:ro
       - ${INTERNAL_STORAGE:-/mnt/internal}/torrents:/data/internal/torrents
       - ${USB_STORAGE:-/mnt/usb_drive}/torrents:/data/usb_drive/torrents
@@ -115,7 +115,7 @@ services:
       - POLL_INTERVAL=5
     volumes:
       - ./qbittorrent/scripts/port-sync.sh:/scripts/port-sync.sh:ro
-      - ../media/gluetun/data/forwarded_port:/gluetun/forwarded_port:ro
+      - ./gluetun/data/forwarded_port:/gluetun/forwarded_port:ro
     tmpfs:
       - /tmp:size=1m,mode=1777
     entrypoint: ["sh", "/scripts/port-sync.sh"]
@@ -159,7 +159,7 @@ services:
       - "traefik.http.routers.prowlarr-direct.rule=Host(`prowlarr.${DOCKER_DOMAIN}`)"
       - "traefik.http.services.prowlarr-direct.loadbalancer.server.port=9696"
     volumes:
-      - ../media/prowlarr/config:/config
+      - ./prowlarr/config:/config
       - /etc/localtime:/etc/localtime:ro
     networks:
       - proxy
@@ -223,11 +223,11 @@ services:
 
 secrets:
   protonvpn_wireguard_private_key:
-    file: ../media/secrets/protonvpn_wireguard_private_key
+    file: ./secrets/protonvpn_wireguard_private_key
   gluetun_control_auth_config:
-    file: ../media/secrets/gluetun_control_auth_config
+    file: ./secrets/gluetun_control_auth_config
   gluetun_control_api_key:
-    file: ../media/secrets/gluetun_control_api_key
+    file: ./secrets/gluetun_control_api_key
 
 networks:
   proxy:

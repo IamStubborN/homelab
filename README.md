@@ -70,9 +70,10 @@ Media Orchestrator is included in the root Compose project. See
 `media/README.md` for its image build, secrets, validation, and rollback notes.
 
 The tracked Compose definitions for Plex and the torrent stack are split into
-`plex/` and `download/`. Their mutable data and secret files intentionally stay
-under `media/` so an existing installation can upgrade without moving state or
-briefly starting against empty directories.
+`plex/` and `download/`. Plex state lives in `plex/`; Gluetun, qBittorrent,
+Prowlarr, and VPN secrets live in `download/`. Media-orchestrator secrets live
+in `media/orchestrator-secrets/` (`MEDIA_SECRETS_DIR`). Do not restore download
+stack state under `media/`.
 
 Family Health is built by the root Compose project from `health/mcp`
 (`family-health-mcp:local`). The host vault lives at `${WIKI_ROOT}`

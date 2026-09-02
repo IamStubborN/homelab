@@ -21,12 +21,17 @@ class MediaSkillTests(unittest.TestCase):
         self.assertIn("deterministic notifier owns the job card", self.skill)
         self.assertNotIn("10-cell progress bar", self.skill)
 
-    def test_series_search_asks_for_season_instead_of_guessing(self):
-        self.assertIn("call `media_search` with `season` set", self.skill)
-        self.assertIn("ask, then search", self.skill)
-        self.assertIn("Treat `invalid_request` as a missing season", self.skill)
+    def test_series_search_discovers_seasons_and_clarifies(self):
+        self.assertIn("search `source=rezka` only", self.skill)
+        self.assertIn("`availability.seasons`", self.skill)
+        self.assertIn("native `clarify`", self.skill)
+        self.assertIn("«Сезон 1»", self.skill)
+        self.assertIn("only after `season` is set", self.skill)
+        self.assertIn("never guess 1", self.skill)
+        self.assertIn("media_details", self.skill)
         self.assertNotIn("Never call", self.skill)
         self.assertNotIn("Prowlarr is down", self.skill)
+        self.assertNotIn("invalid_request", self.skill)
 
     def test_download_requires_exact_result_and_coordinates(self):
         self.assertIn("exact result", self.skill)

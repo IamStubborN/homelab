@@ -26,9 +26,11 @@ For a destructive action, call `media_destructive_prepare`, show its complete pr
 
 ## Tracking
 
-Ordinary tracking is source-independent: obtain a `release_identity` with a positive `source_id`, then call `media_tracking_create` with `translation=release-calendar`. Never create ordinary tracking from a title alone or ask whether it should use Rezka or Prowlarr; later checks search both providers. A season-complete card may offer «📦 Скачать сезон».
+Ordinary tracking is source-independent: obtain a `release_identity` with a positive `source_id`, then call `media_tracking_create` with `translation=release-calendar`. Never create ordinary tracking from a title alone or ask whether it should use Rezka or Prowlarr; later checks search both providers. A season-complete card may offer «📦 Скачать сезон». Creating `release-calendar` without a positive TVmaze `release_identity` is rejected.
 
-Automatic download is a Rezka-only mode requiring an exact result, translation, and season. Prefer `media_tracking_enable_download` on an existing subscription; do not delete and recreate it. Use `media_tracking_set_baseline` for corrections and `media_tracking_check` only for an explicit immediate check. Ordinary subscriptions run every 3 hours; automatic downloads every 30 minutes.
+`check_status=awaiting_source` means the episode has aired on the release calendar but Rezka/Prowlarr cannot download it yet. Card views expose `status_reason`, `pending_episodes`, and `pending_age_seconds`. Use `media_tracking_check` for an explicit recheck; do **not** recreate the subscription while it is awaiting source.
+
+Automatic download is a Rezka-only mode requiring an exact result, translation, and season. Prefer `media_tracking_enable_download` on an existing subscription; do not delete and recreate it. Use `media_tracking_set_baseline` for corrections and `media_tracking_check` only for an explicit immediate check. Ordinary subscriptions run every 3 hours; automatic downloads every 30 minutes. Tracking does not backfill older seasons below the known-through baseline.
 
 ## Rezka session
 

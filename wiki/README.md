@@ -144,7 +144,12 @@ a follow-up; ask before adding either.
 
 One-way copy: host vault → Google Drive folder `HealthWiki/`.
 
-- Service: `health-drive` in `wiki/compose.yml`
+**Not started until G2.** The service uses Compose profile `g2-oauth` so a
+default `compose up` leaves it Created/unstarted. Do not invent Google OAuth
+credentials; complete G2 below, then
+`docker compose --profile g2-oauth up -d health-drive`.
+
+- Service: `health-drive` in `wiki/compose.yml` (profile `g2-oauth`)
 - Image: `rclone/rclone:1.75.0` pinned by digest
 - Source: `${WIKI_ROOT:-/mnt/internal/wiki}` mounted **read-only** at `/data`
 - Destination: `drive:HealthWiki/` (new English folder)

@@ -10,6 +10,9 @@ x-locked-down: &locked-down
 services:
   health-drive:
     <<: *locked-down
+    # Intentionally not started until G2 OAuth exists. Enable with:
+    #   docker compose --profile g2-oauth up -d health-drive
+    profiles: [g2-oauth]
     image: rclone/rclone:1.75.0@sha256:b06aed988cf5967de7c25be5925240983981c757f4ed1ac9d2fa659d51d60548
     container_name: health-drive
     user: "10000:10000"

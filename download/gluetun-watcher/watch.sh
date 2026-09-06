@@ -16,12 +16,35 @@ if ! docker compose version >/dev/null 2>&1; then
     exit 1
 fi
 
+# Resolve the parent to a full container ID once. Docker's events
+# --filter container=<name> prefix-matches names, so "gluetun" would also
+# match "gluetun-rezka" / "gluetun-watcher" and spuriously recreate qBit.
+resolve_parent_id() {
+    docker inspect "$PARENT" --format '{{.Id}}' 2>/dev/null
+}
+
+PARENT_ID=$(resolve_parent_id)
+if [ -z "$PARENT_ID" ]; then
+    log "FATAL: cannot resolve parent container id for $PARENT"
+    exit 1
+fi
+printf '%s\n' "$PARENT_ID" | grep -Eq '^[0-9a-fA-F]{64}$' || {
+    log "FATAL: parent container id is invalid for $PARENT"
+    exit 1
+}
+# Exact-name belt: reject if inspect name is not exactly $PARENT.
+parent_name=$(docker inspect "$PARENT_ID" --format '{{.Name}}' 2>/dev/null | sed 's#^/##')
+if [ "$parent_name" != "$PARENT" ]; then
+    log "FATAL: parent name mismatch: expected $PARENT, got ${parent_name:-unknown}"
+    exit 1
+fi
+
 get_compose_metadata() {
-    PROJECT=$(docker inspect "$PARENT" \
+    PROJECT=$(docker inspect "$PARENT_ID" \
         --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null)
-    CONFIG=$(docker inspect "$PARENT" \
+    CONFIG=$(docker inspect "$PARENT_ID" \
         --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null)
-    WORKDIR=$(docker inspect "$PARENT" \
+    WORKDIR=$(docker inspect "$PARENT_ID" \
         --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null)
 
     if [ -z "$PROJECT" ] || [ -z "$CONFIG" ] || [ -z "$WORKDIR" ]; then
@@ -67,7 +90,7 @@ recreate_dependent() {
 wait_healthy() {
     elapsed=0
     while [ "$elapsed" -lt "$HEALTH_TIMEOUT" ]; do
-        status=$(docker inspect "$PARENT" \
+        status=$(docker inspect "$PARENT_ID" \
             --format '{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
         if [ "$status" = "healthy" ]; then
             return 0
@@ -95,7 +118,7 @@ restart_dependents() {
 
 # Check if dependents started before gluetun (stale namespace)
 check_startup_order() {
-    parent_started=$(docker inspect "$PARENT" \
+    parent_started=$(docker inspect "$PARENT_ID" \
         --format '{{.State.StartedAt}}' 2>/dev/null || echo "")
     if [ -z "$parent_started" ]; then
         log "Cannot get $PARENT start time, skip initial check"
@@ -128,7 +151,7 @@ check_startup_order() {
 }
 
 # ---- main ----
-log "Starting (parent=$PARENT, dependents=[$DEPENDENTS])"
+log "Starting (parent=$PARENT id=$(printf '%.12s' "$PARENT_ID"), dependents=[$DEPENDENTS])"
 log "Health timeout=${HEALTH_TIMEOUT}s, settle delay=${SETTLE_DELAY}s"
 
 sleep "$SETTLE_DELAY"
@@ -136,14 +159,18 @@ sleep "$SETTLE_DELAY"
 log "Initial startup order check..."
 check_startup_order
 
-log "Watching docker events for $PARENT..."
+log "Watching docker events for exact parent id of $PARENT..."
 docker events \
-    --filter "container=$PARENT" \
+    --filter "container=$PARENT_ID" \
     --filter "event=start" \
-    --format '{{.Action}}' | while IFS= read -r action; do
+    --format '{{.Actor.ID}} {{.Action}}' | while IFS= read -r line; do
+    event_id=${line%% *}
+    action=${line#* }
 
     # Docker may return exec_start health-check events for an event=start filter.
     [ "$action" = "start" ] || continue
+    # Exact ID match (filter should already be exact; keep as defense in depth).
+    [ "$event_id" = "$PARENT_ID" ] || continue
 
     log "$PARENT start event detected"
     log "Waiting for $PARENT healthy (${HEALTH_TIMEOUT}s)..."

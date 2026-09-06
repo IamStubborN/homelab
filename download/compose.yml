@@ -216,7 +216,7 @@ services:
       - ${HOMELAB_ROOT:-/opt/homelab}:${HOMELAB_ROOT:-/opt/homelab}:ro
     entrypoint: ["sh", "/watch.sh"]
     healthcheck:
-      test: [CMD, pgrep, -f, "docker events.*container=gluetun"]
+      test: [CMD, pgrep, -f, "docker events.*container="]
       interval: 30s
       timeout: 5s
       retries: 3

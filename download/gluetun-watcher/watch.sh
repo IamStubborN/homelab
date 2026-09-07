@@ -6,6 +6,8 @@ PARENT="${PARENT_CONTAINER:-gluetun}"
 DEPENDENTS="${DEPENDENT_CONTAINERS:-qbittorrent}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
 SETTLE_DELAY="${SETTLE_DELAY:-10}"
+# Coalesce rapid parent start events before deciding to recreate.
+RECREATE_DEBOUNCE="${RECREATE_DEBOUNCE:-20}"
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') [gluetun-watcher] $1"
@@ -39,6 +41,8 @@ if [ "$parent_name" != "$PARENT" ]; then
     exit 1
 fi
 
+PARENT_ID_SHORT=$(printf '%.12s' "$PARENT_ID")
+
 get_compose_metadata() {
     PROJECT=$(docker inspect "$PARENT_ID" \
         --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null)
@@ -53,6 +57,72 @@ get_compose_metadata() {
     fi
 
     return 0
+}
+
+parent_sandbox_key() {
+    docker inspect "$PARENT_ID" \
+        --format '{{.NetworkSettings.SandboxKey}}' 2>/dev/null || echo ""
+}
+
+# True when a dependent still needs force-recreate onto the current parent
+# network namespace (stale NetworkMode, mismatched SandboxKey, or started
+# before the parent).
+dependent_needs_refresh() {
+    ctr=$1
+    mode=$(docker inspect "$ctr" \
+        --format '{{.HostConfig.NetworkMode}}' 2>/dev/null || echo "")
+    case "$mode" in
+        "container:$PARENT_ID"|"container:$PARENT_ID_SHORT") ;;
+        *)
+            log "$ctr: NetworkMode '$mode' is not container:$PARENT_ID_SHORT"
+            return 0
+            ;;
+    esac
+
+    parent_ns=$(parent_sandbox_key)
+    dep_ns=$(docker inspect "$ctr" \
+        --format '{{.NetworkSettings.SandboxKey}}' 2>/dev/null || echo "")
+    if [ -n "$parent_ns" ] && [ -n "$dep_ns" ]; then
+        if [ "$parent_ns" != "$dep_ns" ]; then
+            log "$ctr: SandboxKey differs from $PARENT (stale netns)"
+            return 0
+        fi
+        # NetworkMode and SandboxKey both agree — current netns. Do not also
+        # require StartedAt ordering; a just-recreated dependent may still
+        # report an older stamp in edge races, and matching netns is enough.
+        return 1
+    fi
+
+    # Fallback when SandboxKey is unavailable: start-order heuristic.
+    parent_started=$(docker inspect "$PARENT_ID" \
+        --format '{{.State.StartedAt}}' 2>/dev/null || echo "")
+    ctr_started=$(docker inspect "$ctr" \
+        --format '{{.State.StartedAt}}' 2>/dev/null || echo "")
+    if [ -n "$parent_started" ] && [ -n "$ctr_started" ]; then
+        older=$(printf '%s\n%s\n' "$ctr_started" "$parent_started" | sort | head -n1)
+        if [ "$ctr_started" != "$parent_started" ] && [ "$older" = "$ctr_started" ]; then
+            log "$ctr: started before $PARENT (stale namespace)"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+dependents_need_refresh() {
+    need=1
+    for ctr in $DEPENDENTS; do
+        if ! docker inspect "$ctr" >/dev/null 2>&1; then
+            log "$ctr: missing; needs recreate"
+            return 0
+        fi
+        if dependent_needs_refresh "$ctr"; then
+            need=0
+        else
+            log "$ctr: already on current $PARENT netns"
+        fi
+    done
+    return "$need"
 }
 
 recreate_dependent() {
@@ -118,41 +188,41 @@ restart_dependents() {
 
 # Check if dependents started before gluetun (stale namespace)
 check_startup_order() {
-    parent_started=$(docker inspect "$PARENT_ID" \
-        --format '{{.State.StartedAt}}' 2>/dev/null || echo "")
-    if [ -z "$parent_started" ]; then
-        log "Cannot get $PARENT start time, skip initial check"
+    if ! dependents_need_refresh; then
+        log "All dependents OK"
+        return
+    fi
+    log "Stale dependents detected, restarting..."
+    restart_dependents
+}
+
+refresh_dependents_if_needed() {
+    log "$PARENT start event detected"
+    if [ "$RECREATE_DEBOUNCE" -gt 0 ] 2>/dev/null; then
+        log "Debouncing ${RECREATE_DEBOUNCE}s to coalesce rapid start events..."
+        sleep "$RECREATE_DEBOUNCE"
+    fi
+
+    log "Waiting for $PARENT healthy (${HEALTH_TIMEOUT}s)..."
+    if ! wait_healthy; then
+        log "WARNING: $PARENT not healthy after ${HEALTH_TIMEOUT}s, skipping"
         return
     fi
 
-    stale=0
-    for ctr in $DEPENDENTS; do
-        ctr_started=$(docker inspect "$ctr" \
-            --format '{{.State.StartedAt}}' 2>/dev/null || echo "")
-        if [ -z "$ctr_started" ]; then
-            continue
-        fi
-        # If dependent started before parent — stale namespace
-        older=$(printf '%s\n%s\n' "$ctr_started" "$parent_started" | sort | head -n1)
-        if [ "$ctr_started" != "$parent_started" ] && [ "$older" = "$ctr_started" ]; then
-            log "$ctr: started before $PARENT (stale namespace)"
-            stale=1
-        else
-            log "$ctr: started after $PARENT (OK)"
-        fi
-    done
+    sleep "$SETTLE_DELAY"
 
-    if [ "$stale" -eq 1 ]; then
-        log "Stale dependents detected, restarting..."
-        restart_dependents
-    else
-        log "All dependents OK"
+    if ! dependents_need_refresh; then
+        log "Dependents already share current $PARENT netns; skip recreate"
+        return
     fi
+
+    log "$PARENT is healthy, restarting dependents..."
+    restart_dependents
 }
 
 # ---- main ----
-log "Starting (parent=$PARENT id=$(printf '%.12s' "$PARENT_ID"), dependents=[$DEPENDENTS])"
-log "Health timeout=${HEALTH_TIMEOUT}s, settle delay=${SETTLE_DELAY}s"
+log "Starting (parent=$PARENT id=$PARENT_ID_SHORT, dependents=[$DEPENDENTS])"
+log "Health timeout=${HEALTH_TIMEOUT}s, settle delay=${SETTLE_DELAY}s, recreate debounce=${RECREATE_DEBOUNCE}s"
 
 sleep "$SETTLE_DELAY"
 
@@ -172,16 +242,7 @@ docker events \
     # Exact ID match (filter should already be exact; keep as defense in depth).
     [ "$event_id" = "$PARENT_ID" ] || continue
 
-    log "$PARENT start event detected"
-    log "Waiting for $PARENT healthy (${HEALTH_TIMEOUT}s)..."
-
-    if wait_healthy; then
-        log "$PARENT is healthy, restarting dependents..."
-        sleep "$SETTLE_DELAY"
-        restart_dependents
-    else
-        log "WARNING: $PARENT not healthy after ${HEALTH_TIMEOUT}s, skipping"
-    fi
+    refresh_dependents_if_needed
 done
 
 log "Event stream ended, exiting"

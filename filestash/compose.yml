@@ -3,8 +3,10 @@
 # UI: https://files.${DOCKER_DOMAIN}
 # State stays on the LXC disk under filestash/data/ (not /mnt/internal).
 #
-# Samba runs network_mode: host, so Docker DNS name `samba` is unreachable.
-# extra_hosts maps `samba` -> host-gateway (proxy bridge IP) where smbd listens :445.
+# Primary storage: bind-mount the same host paths Samba shares (RW), then use
+# Local backends rooted at /mnt/shares/{internal,usb_drive}/.
+# Optional SMB fallback: Samba uses network_mode: host, so extra_hosts maps
+# hostname samba -> host-gateway where smbd listens :445.
 
 services:
   filestash:
@@ -14,13 +16,17 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      - APPLICATION_URL=https://files.${DOCKER_DOMAIN}
+      # Host only — Filestash prefixes https:// itself; a full URL becomes http://https://...
+      - APPLICATION_URL=files.${DOCKER_DOMAIN}
       - CANARY=true
       - OFFICE_URL=http://filestash-wopi:9980
       - OFFICE_FILESTASH_URL=http://filestash:8334
       - OFFICE_REWRITE_URL=http://filestash-wopi:9980
     volumes:
       - ./data:/app/data/state
+      - /etc/localtime:/etc/localtime:ro
+      - ${INTERNAL_STORAGE:-/mnt/internal}:/mnt/shares/internal
+      - ${USB_STORAGE:-/mnt/usb_drive}:/mnt/shares/usb_drive
     extra_hosts:
       - "samba:host-gateway"
     labels:
@@ -31,12 +37,17 @@ services:
       - "traefik.http.routers.filestash.entrypoints=http,https"
       - "traefik.http.routers.filestash.rule=Host(`files.${DOCKER_DOMAIN}`)"
       - "traefik.http.services.filestash.loadbalancer.server.port=8334"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8334/about >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     depends_on:
       - filestash-wopi
     networks:
       - proxy
       - filestash-internal
-    # No host ports — Traefik covers HTTPS on the proxy network.
 
   filestash-wopi:
     image: collabora/code:24.04.10.2.1
@@ -56,7 +67,6 @@ services:
       - "com.centurylinklabs.watchtower.enable=false"
     networks:
       - filestash-internal
-    # Internal-only; Filestash reaches WOPI over filestash-internal.
 
 networks:
   filestash-internal:

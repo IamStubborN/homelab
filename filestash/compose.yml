@@ -1,0 +1,60 @@
+# Filestash file manager + Collabora Online (WOPI) per upstream recommended stack:
+# https://downloads.filestash.app/latest/docker-compose.yml
+# UI: https://files.${DOCKER_DOMAIN}
+# State stays on the LXC disk under filestash/data/ (not /mnt/internal).
+
+services:
+  filestash:
+    image: machines/filestash:latest
+    container_name: filestash
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - APPLICATION_URL=https://files.${DOCKER_DOMAIN}
+      - CANARY=true
+      - OFFICE_URL=http://filestash-wopi:9980
+      - OFFICE_FILESTASH_URL=http://filestash:8334
+      - OFFICE_REWRITE_URL=http://filestash-wopi:9980
+    volumes:
+      - ./data:/app/data/state
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.filestash.tls=true"
+      - "traefik.http.routers.filestash.entrypoints=http,https"
+      - "traefik.http.routers.filestash.rule=Host(`files.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.filestash.loadbalancer.server.port=8334"
+    depends_on:
+      - filestash-wopi
+    networks:
+      - proxy
+      - filestash-internal
+    # No host ports — Traefik covers HTTPS on the proxy network.
+
+  filestash-wopi:
+    image: collabora/code:24.04.10.2.1
+    container_name: filestash_wopi
+    restart: unless-stopped
+    environment:
+      - extra_params=--o:ssl.enable=false
+      - aliasgroup1=https://files.${DOCKER_DOMAIN}:443
+    command:
+      - /bin/bash
+      - -c
+      - |
+        curl -o /usr/share/coolwsd/browser/dist/branding-desktop.css https://gist.githubusercontent.com/mickael-kerjean/bc1f57cd312cf04731d30185cc4e7ba2/raw/d706dcdf23c21441e5af289d871b33defc2770ea/destop.css
+        /bin/su -s /bin/bash -c '/start-collabora-online.sh' cool
+    user: root
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    networks:
+      - filestash-internal
+    # Internal-only; Filestash reaches WOPI over filestash-internal.
+
+networks:
+  filestash-internal:
+    internal: true
+  proxy:
+    external: true

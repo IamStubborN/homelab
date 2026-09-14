@@ -59,7 +59,7 @@ make check-codecs VIDEO_DIR=/path/to/dir  # Custom directory
 3. **Media Orchestrator**: Active root-Compose module (`media/compose.media-orchestrator.yml`) with a dedicated `gluetun-rezka` VPN namespace; see `media/README.md`
 4. **Family Health**: Python MCP cashier (`health-service`, image `family-health-mcp:local`) writes append-only jsonl under `${WIKI_ROOT}/shared/health`. Live vault is `/mnt/internal/wiki` on host-5.example.invalid (not in git; `/opt/data/wiki` is wrong on this host). `health-internal` is Hermes + health-service only. Wiki host services (`obsidian-sync`, `health-drive`) live in `wiki/compose.yml`. `health-drive` stays Created/unstarted until G2 rclone OAuth is configured; it uses Compose profile `g2-oauth` and must not be started without credentials. No Postgres, no SQLite, no Rust health binary. See `health/README.md`. Plan: `health/docs/plans/2026-08-19-family-health-wiki.md`.
 5. **Custom Apps**: KaraKeep (web scraper with AI/MeiliSearch), Freedium (Medium proxy), Movie-Tracker (Telegram bot)
-6. **File Management**: Samba shares, Kavita (ebook reader), FileBrowser (disabled)
+6. **File Management**: Samba shares, Kavita (ebook reader), Filestash (`filestash/`, `https://files.${DOCKER_DOMAIN}`), FileBrowser (disabled)
 7. **Monitoring**: Watchtower (auto-updates), DeUnhealth (health checks)
 8. **Other Services**: Bitwarden (Vaultwarden), Mosquitto (MQTT broker), RustDesk (remote desktop relay)
 

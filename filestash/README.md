@@ -79,8 +79,16 @@ docker compose up -d --force-recreate filestash filestash-wopi
 
 Verify mounts: `docker exec filestash ls /mnt/shares/internal /mnt/shares/usb_drive`
 
-## S3 placeholders
+## S3 placeholders (Atlas)
 
-Three empty S3 backends are registered as labels `s3-1`, `s3-2`, `s3-3` (no keys).
-Fill endpoint / bucket / access key / secret in **Admin → Storage**, or say the
-values here and we will wire auto-connect like the local shares.
+Four empty S3 backends (no keys in git — live only under `filestash/data/`, gitignored):
+
+- `Atlas[Test]`
+- `Atlas[Stage]`
+- `Atlas[Green-Prod]`
+- `Atlas[Yellow-Prod]`
+
+**Where to put keys by hand:** open `https://host-7.example.invalid/admin`
+→ log in with the admin password → **Storage** (or Connections) → edit each Atlas
+backend → set endpoint, region, bucket, access key, secret. Saving writes only to
+the host file `filestash/data/config/config.json` (not tracked by git).

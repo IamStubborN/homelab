@@ -6,7 +6,7 @@ services:
     security_opt:
       - no-new-privileges:true
     labels:
-      - "com.centurylinklabs.watchtower.enable=false"
+      - "com.centurylinklabs.watchtower.enable=true"
 
     ports:
       - "${LAN_BIND_IP:-127.0.0.1}:1883:1883"

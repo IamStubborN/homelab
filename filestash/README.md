@@ -1,6 +1,7 @@
 # Filestash
 
 Web file manager at `https://files.${DOCKER_DOMAIN}` (Traefik, no host ports).
+LAN-only on `*.docker.example.invalid` — no public exposure assumed.
 
 ## Stack
 
@@ -15,6 +16,25 @@ State: `filestash/data/` on the LXC disk (gitignored). Do not put state on `/mnt
 Filestash prefixes the scheme itself; a full URL becomes `http://https://...` redirects.
 Runtime `general.host` in `data/config/config.json` must match that bare host.
 
+## Auth (how it works now)
+
+**Share browsing — no login form (LAN open).** Runtime middleware uses Filestash
+`passthrough` with `strategy: direct`. Selecting **internal** or **usb_drive** opens
+that Local backend immediately (no password prompt).
+
+Filestash’s Local backend `Init()` always checks a password against `auth.admin`
+(bcrypt). For auto-connect, encrypted `middleware.attribute_mapping.params` embeds
+that same admin password statically for each share path. Users never type it; only
+`/admin` asks for it.
+
+**Admin console** (`/admin`) remains password-protected via `auth.admin` in
+`data/config/config.json` (gitignored). The password is not stored in git.
+
+Middleware `identity_provider.params` and `attribute_mapping.params` are AES-GCM
+encrypted with a key derived from `general.secret_key`. They must be **single**-encrypted
+JSON. Double-encrypting (or writing Python `None`) causes:
+`unpacking idp - invalid character 'n' in literal null`.
+
 ## Primary storage (bind mounts → Local backends)
 
 Same host paths Samba already shares, mounted RW into the container:
@@ -24,16 +44,11 @@ Same host paths Samba already shares, mounted RW into the container:
 | `${INTERNAL_STORAGE:-/mnt/internal}` | `/mnt/shares/internal` | `internal` |
 | `${USB_STORAGE:-/mnt/usb_drive}` | `/mnt/shares/usb_drive` | `usb_drive` |
 
-Runtime `data/config/config.json` (gitignored) enables those Local connections and maps
-passthrough `password_only` auth so the login password is the Filestash **admin password**.
-Attribute mapping roots each backend at the container path above (trailing slash required).
-
 ### How to open shares in the UI
 
 1. Open `https://host-7.example.invalid`
-2. Pick **internal** or **usb_drive** on the login screen
-3. Enter the Filestash **admin password** (set on first boot; also printed once in `docker compose logs filestash`)
-4. Browse — chrooted to that mount (`save`, `_partial`, `_cull` stay untouched)
+2. Pick **internal** or **usb_drive**
+3. Browse — chrooted to that mount (`save`, `_partial`, `_cull` stay untouched)
 
 Admin → Storage can add more backends later (multiple **S3** connections are supported;
 no lab S3 credentials are configured by default).

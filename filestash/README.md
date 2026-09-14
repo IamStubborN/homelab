@@ -78,3 +78,9 @@ docker compose up -d --force-recreate filestash filestash-wopi
 ```
 
 Verify mounts: `docker exec filestash ls /mnt/shares/internal /mnt/shares/usb_drive`
+
+## S3 placeholders
+
+Three empty S3 backends are registered as labels `s3-1`, `s3-2`, `s3-3` (no keys).
+Fill endpoint / bucket / access key / secret in **Admin → Storage**, or say the
+values here and we will wire auto-connect like the local shares.

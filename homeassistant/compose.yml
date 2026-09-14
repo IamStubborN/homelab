@@ -1,8 +1,6 @@
 services:
   homeassistant:
-    build:
-      context: .
-    image: homelab-homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
     container_name: homeassistant
     restart: unless-stopped
     privileged: true
@@ -10,7 +8,7 @@ services:
     environment:
       TZ: ${TIMEZONE:-UTC}
     labels:
-      - "com.centurylinklabs.watchtower.enable=false"
+      - "com.centurylinklabs.watchtower.enable=true"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8123/manifest.json >/dev/null || exit 1"]
       interval: 30s

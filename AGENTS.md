@@ -110,12 +110,13 @@ qBittorrent healthcheck fail closed and the Glance widget go blank.
 Watchtower is configured in opt-in mode. Add `com.centurylinklabs.watchtower.enable=true` only to services that should be auto-updated. Keep source-built services and private custom apps disabled unless their backup and restore path is tested.
 
 Plex (`linuxserver/plex:latest`), Vaultwarden (`vaultwarden/server:latest`),
-Traefik (`traefik:latest`), Media Orchestrator Postgres (`postgres:17-alpine`),
-and Freedium Postgres (`postgres:16-alpine`) are Watchtower-enabled. Pin
-Postgres to a major tag without a digest so patch images can be pulled; do not
-use `postgres:latest` (a major jump will not migrate `PGDATA`). Vaultwarden and
-Traefik no longer use `monitor-only`. Source-built application images
-(media-orchestrator service/runner, Freedium app, Hermes, health) stay off.
+Traefik (`traefik:latest`), Home Assistant (`ghcr.io/home-assistant/home-assistant:stable`),
+Media Orchestrator Postgres (`postgres:17-alpine`), and Freedium Postgres
+(`postgres:16-alpine`) are Watchtower-enabled. Pin Postgres to a major tag
+without a digest so patch images can be pulled; do not use `postgres:latest`
+(a major jump will not migrate `PGDATA`). Vaultwarden and Traefik no longer use
+`monitor-only`. Source-built application images (media-orchestrator
+service/runner, Freedium app, Hermes, health) stay off.
 
 Run `make check-runtime` after deployment to detect containers launched directly from child Compose files.
 

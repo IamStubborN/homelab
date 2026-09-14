@@ -1,0 +1,47 @@
+# OpenList (AList fork) file listing / multi-storage UI
+# UI: https://openlist.${DOCKER_DOMAIN}
+# State stays on the LXC disk under openlist/data/ (not /mnt/internal).
+#
+# Same host bind mounts as Filestash/Samba for Local drivers.
+# Atlas S3 storages are configured via admin API after bootstrap (not in git).
+
+services:
+  openlist:
+    image: openlistteam/openlist:latest
+    container_name: openlist
+    # v4.1+: set user for volume perms (host uid/gid on host-5.example.invalid)
+    user: "1000:1000"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TIMEZONE:-UTC}
+      - UMASK=022
+      # Initial admin password: set once from ignored openlist/data/.admin-password
+      # via host .env OPENLIST_ADMIN_PASSWORD (never commit). Leave unset after first boot.
+      - OPENLIST_ADMIN_PASSWORD=${OPENLIST_ADMIN_PASSWORD:-}
+    volumes:
+      - ./data:/opt/openlist/data
+      - /etc/localtime:/etc/localtime:ro
+      - ${INTERNAL_STORAGE:-/mnt/internal}:/mnt/shares/internal
+      - ${USB_STORAGE:-/mnt/usb_drive}:/mnt/shares/usb_drive
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.openlist.tls=true"
+      - "traefik.http.routers.openlist.entrypoints=http,https"
+      - "traefik.http.routers.openlist.rule=Host(`openlist.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.openlist.loadbalancer.server.port=5244"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5244/ping >/dev/null || curl -fsS http://127.0.0.1:5244/ping >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true

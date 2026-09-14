@@ -16,7 +16,7 @@ with the documented Docker Compose or guarded media deployment commands.
 - Traefik reverse proxy with Cloudflare DNS challenge
 - Gluetun VPN routing for selected media services
 - qBittorrent and Prowlarr
-- Plex, Kavita, Samba, Filestash, Watchtower, DeUnhealth
+- Plex, Kavita, Samba, Filestash, OpenList, Watchtower, DeUnhealth
 - Media Orchestrator with a dedicated Rezka VPN, managed by the root Compose project
 - KaraKeep, Freedium, Movie Tracker, Glance, Speedtest Tracker
 - Bitwarden (Vaultwarden), Mosquitto, RustDesk

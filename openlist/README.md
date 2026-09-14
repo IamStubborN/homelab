@@ -37,17 +37,17 @@ credentials copied from Filestash gitignored config — never commit keys):
 | `/Atlas/Test/SR` | `static.pl-test.cdn-platform.xyz` | _(bucket root)_ |
 | `/Atlas/Test/BO` | `bo.pl-test.cdn-platform.xyz` | |
 | `/Atlas/Feature/BO` | `bo.pl-feature.cdn-platform.xyz` | |
-| `/Atlas/Test/CMS` | `media.pl-test.cdn-platform.xyz` | `cms/` |
+| `/Atlas/Test/CMS` | `media.pl-test.cdn-platform.xyz` | `/cms` |
 | `/Atlas/Stage/SR` | `static.pl-stage1.cdn-platform.xyz` | |
 | `/Atlas/Stage/BO` | `bo.pl-stage1.cdn-platform.xyz` | |
-| `/Atlas/Stage/CMS` | `media.pl-stage1.cdn-platform.xyz` | `cms/` |
-| `/Atlas/Stage/CMS2` | `media.pl-stage1.cdn-platform.xyz` | `cms2/` |
+| `/Atlas/Stage/CMS` | `media.pl-stage1.cdn-platform.xyz` | `/cms` |
+| `/Atlas/Stage/CMS2` | `media.pl-stage1.cdn-platform.xyz` | `/cms2` |
 | `/Atlas/Green-Prod/SR` | `static.pl-01.cdn-platform.xyz` | |
 | `/Atlas/Green-Prod/BO` | `bo.pl-01.cdn-platform.xyz` | |
-| `/Atlas/Green-Prod/CMS` | `media.pl-01.cdn-platform.xyz` | `cms/` |
+| `/Atlas/Green-Prod/CMS` | `media.pl-01.cdn-platform.xyz` | `/cms` |
 | `/Atlas/Yellow-Prod/SR` | `static.pl-01.cdn-yellow-platform.xyz` | |
 | `/Atlas/Yellow-Prod/BO` | `bo.pl-01.cdn-yellow-platform.xyz` | |
-| `/Atlas/Yellow-Prod/CMS` | `media.pl-01.cdn-yellow-platform.xyz` | `cms/` |
+| `/Atlas/Yellow-Prod/CMS` | `media.pl-01.cdn-yellow-platform.xyz` | `/cms` |
 
 ## Guest access (LAN)
 

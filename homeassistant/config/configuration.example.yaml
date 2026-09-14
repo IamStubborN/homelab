@@ -4,10 +4,10 @@ homeassistant:
   external_url: "https://host-8.example.invalid"
   internal_url: "http://host-9.example.invalid:8123"
 
-http:
-  use_x_forwarded_for: true
-  trusted_proxies:
-    - "127.0.0.1"
+# HTTP / trusted proxies are configured in the HA UI (Settings → System → Network),
+# not in YAML. Live config no longer ships an `http:` block. If restoring from
+# scratch behind Traefik, set use_x_forwarded_for + trusted_proxies in the UI
+# (or temporarily in YAML) to include the Docker proxy network / Traefik IPs.
 
 automation: !include automations.yaml
 script: !include scripts.yaml

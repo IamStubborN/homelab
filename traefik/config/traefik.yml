@@ -15,9 +15,6 @@ entryPoints:
           scheme: https
   https:
     address: ":443"
-  wproxy:
-    address: ":9000"
-
 
 providers:
   docker:

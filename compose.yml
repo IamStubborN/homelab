@@ -16,7 +16,6 @@ include:
     - watchtower/compose.yml
     - deunhealth/compose.yml
     - samba/compose.yml
-    - filestash/compose.yml
     - openlist/compose.yml
     - rustdesk/compose.yml
     - freedium/compose.yml

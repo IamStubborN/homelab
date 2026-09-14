@@ -1,7 +1,7 @@
 # OpenList
 
 Multi-storage file browser at `https://openlist.${DOCKER_DOMAIN}` (Traefik, no host ports).
-LAN-only on `*.docker.example.invalid` — does **not** replace Filestash (`files.*`).
+LAN-only on `*.docker.example.invalid` — primary file manager UI.
 
 ## Stack
 
@@ -14,11 +14,11 @@ Admin password: ignored file `openlist/data/.admin-password` (chmod 600). Option
 
 ## Public URL
 
-`https://openlist.${DOCKER_DOMAIN}` — Traefik Host rule only. Filestash keeps `files.*`.
+`https://openlist.${DOCKER_DOMAIN}` — Traefik Host rule only (replaces former `files.*` Filestash URL).
 
 ## Local mounts
 
-Same host paths Samba/Filestash share, mounted RW:
+Same host paths Samba shares, mounted RW:
 
 | Host path | Container path | OpenList mount |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ Never delete or rearrange `save/`, `_partial/`, `_cull/` under internal.
 ## Atlas S3
 
 Fourteen AWS S3 (`eu-central-1`) storages, one mount each (configured via admin API,
-credentials copied from Filestash gitignored config — never commit keys):
+credentials configured via admin API — never commit keys):
 
 | Mount | Bucket | Root/prefix |
 | --- | --- | --- |

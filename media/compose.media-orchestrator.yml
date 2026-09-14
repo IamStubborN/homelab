@@ -105,6 +105,8 @@ services:
         condition: service_healthy
     secrets:
       - media_database_url
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
     networks:
       - media-db
 
@@ -127,6 +129,8 @@ services:
     volumes:
       - rezka_session_encrypted:/var/lib/media-orchestrator/session
       - ./session-init/prepare.sh:/prepare-session.sh:ro
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
 
   media-service:
     <<: *locked-down
@@ -186,6 +190,7 @@ services:
         condition: service_completed_successfully
     labels:
       traefik.enable: "false"
+      com.centurylinklabs.watchtower.enable: "false"
     networks:
       - media-db
       - media-private
@@ -244,6 +249,7 @@ services:
       start_period: 30s
     labels:
       traefik.enable: "false"
+      com.centurylinklabs.watchtower.enable: "false"
     networks:
       - media-private
       - rezka-egress
@@ -321,6 +327,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
     depends_on:
       gluetun-rezka:
         condition: service_healthy
@@ -377,6 +385,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
     depends_on:
       gluetun-rezka:
         condition: service_healthy

@@ -124,6 +124,18 @@ assert_yq '.services.media-postgres.networks as $networks | (($networks | length
     'PostgreSQL must only join the private database network'
 assert_yq '.networks.media-db.internal == true and .networks.media-private.internal == true' \
     'database and application networks must be internal'
+assert_yq '.services["media-service"].labels["com.centurylinklabs.watchtower.enable"] == "false"' \
+    'media-service must opt out of Watchtower'
+assert_yq '.services["media-migrate"].labels["com.centurylinklabs.watchtower.enable"] == "false"' \
+    'media-migrate must opt out of Watchtower'
+assert_yq '.services["media-session-init"].labels["com.centurylinklabs.watchtower.enable"] == "false"' \
+    'media-session-init must opt out of Watchtower'
+assert_yq '.services["download-runner"].labels["com.centurylinklabs.watchtower.enable"] == "false"' \
+    'download-runner must opt out of Watchtower'
+assert_yq '.services["gluetun-rezka"].labels["com.centurylinklabs.watchtower.enable"] == "false"' \
+    'gluetun-rezka must opt out of Watchtower'
+assert_yq '.services["gluetun-rezka-watcher"].labels["com.centurylinklabs.watchtower.enable"] == "false"' \
+    'gluetun-rezka-watcher must opt out of Watchtower'
 assert_yq '.services.download-runner.network_mode == "service:gluetun-rezka"' \
     'runner must exclusively share the dedicated Rezka VPN namespace'
 assert_yq '(.services.gluetun-rezka.networks | has("rezka-credentials") | not)' \

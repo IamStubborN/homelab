@@ -1244,8 +1244,8 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertFalse(config["compression"]["codex_responses_native"])
             self.assertEqual(config["compression"]["proactive_prune_tokens"], 48000)
             self.assertEqual(config["skills"]["creation_nudge_interval"], 10)
-            self.assertEqual(config["model"]["provider"], "opencode-go")
-            self.assertEqual(config["model"]["default"], "hy3")
+            self.assertEqual(config["model"]["provider"], "openai-codex")
+            self.assertEqual(config["model"]["default"], "gpt-5.6-luna")
             self.assertTrue(config["memory"]["memory_enabled"])
             self.assertTrue(config["memory"]["user_profile_enabled"])
             self.assertEqual(config["session_reset"]["mode"], "idle")
@@ -1255,20 +1255,19 @@ class ProfileConfigTests(unittest.TestCase):
                 self.assertIn(toolset, telegram_tools)
             self.assertNotIn("todo", telegram_tools)
             self.assertNotIn("cronjob", telegram_tools)
-            self.assertEqual(config["auxiliary"]["vision"]["provider"], "opencode-go")
-            self.assertEqual(config["auxiliary"]["vision"]["model"], "mimo-v2.5")
-            self.assertEqual(config["auxiliary"]["title_generation"]["provider"], "opencode-go")
-            self.assertEqual(config["auxiliary"]["title_generation"]["model"], "mimo-v2.5")
-            self.assertEqual(config["auxiliary"]["compression"]["provider"], "opencode-go")
-            self.assertEqual(config["auxiliary"]["compression"]["model"], "mimo-v2.5")
-            self.assertEqual(config["auxiliary"]["background_review"]["provider"], "opencode-go")
-            self.assertEqual(config["auxiliary"]["background_review"]["model"], "mimo-v2.5")
+            self.assertEqual(config["auxiliary"]["vision"]["provider"], "openai-codex")
+            self.assertEqual(config["auxiliary"]["vision"]["model"], "gpt-5.6-luna")
+            self.assertEqual(config["auxiliary"]["title_generation"]["provider"], "openai-codex")
+            self.assertEqual(config["auxiliary"]["title_generation"]["model"], "gpt-5.6-luna")
+            self.assertEqual(config["auxiliary"]["compression"]["provider"], "openai-codex")
+            self.assertEqual(config["auxiliary"]["compression"]["model"], "gpt-5.6-luna")
+            self.assertEqual(config["auxiliary"]["background_review"]["provider"], "openai-codex")
+            self.assertEqual(config["auxiliary"]["background_review"]["model"], "gpt-5.6-luna")
             self.assertEqual(config["fallback_providers"], [{
-                "provider": "opencode-go",
-                "model": "mimo-v2.5",
-                "base_url": "https://opencode.ai/zen/go/v1",
+                "provider": "openai-codex",
+                "model": "gpt-5.6-luna",
             }])
-            self.assertEqual(config["agent"]["reasoning_effort"], "medium")
+            self.assertEqual(config["agent"]["reasoning_effort"], "high")
             self.assertEqual(config["agent"]["image_input_mode"], "text")
             self.assertIsNone(config["agent"]["reasoning_overrides"])
             self.assertFalse(config["approvals"]["destructive_slash_confirm"])

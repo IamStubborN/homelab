@@ -1268,7 +1268,7 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertEqual(config["auxiliary"]["background_review"]["model"], "gpt-5.6-luna")
             self.assertEqual(config["fallback_providers"], [{
                 "provider": "custom",
-                "model": "gpt-5.6-luna",
+                "model": "grok-4.6",
                 "base_url": "http://cli-proxy-api:8317/v1",
                 "key_env": "CLIPROXY_API_KEY",
             }])

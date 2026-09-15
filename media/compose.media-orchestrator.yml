@@ -370,6 +370,10 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./gluetun-rezka-watcher/watch.sh:/watch.sh:ro
+      # Same absolute HOMELAB_ROOT bind as download/gluetun-watcher so
+      # `docker compose --project-directory … -f …/compose.yml` can read the
+      # host project tree during download-runner force-recreate.
+      - ${HOMELAB_ROOT:-/opt/homelab}:${HOMELAB_ROOT:-/opt/homelab}:ro
       - gluetun_rezka_lifecycle:/state
     tmpfs:
       - /tmp:size=16m,mode=1777

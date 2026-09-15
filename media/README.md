@@ -186,7 +186,10 @@ with the torrent Gluetun stack. `gluetun-rezka-watcher` watches only
 `gluetun-rezka`. It gates new work before rotation and does not `docker stop`
 or `docker restart` an active `download-runner` for ordinary lifecycle changes.
 If the runner is orphaned on a previous Gluetun netns after parent restart, the
-watcher force-recreates it onto the current namespace promptly.
+watcher force-recreates it onto the current namespace promptly. Like
+`gluetun-watcher`, it bind-mounts `${HOMELAB_ROOT}` at the same absolute path
+so in-container `docker compose --project-directory … -f …/compose.yml` can
+read the host project tree.
 
 ## FlareSolverr
 

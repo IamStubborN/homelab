@@ -116,6 +116,8 @@ assert_yq '.services.gluetun-rezka-watcher.environment.MEDIA_REZKA_PROXY_URL == 
     'watcher probe must use Gluetun HTTP proxy inside the shared network namespace'
 assert_yq '(.services.gluetun-rezka-watcher.secrets | length) == 1 and .services.gluetun-rezka-watcher.secrets[0].source == "media_lifecycle_token"' \
     'watcher itself must receive only the lifecycle secret'
+assert_yq '.services.gluetun-rezka-watcher.volumes | any_c(.type == "bind" and .source == "/opt/homelab" and .target == "/opt/homelab" and .read_only == true)' \
+    'watcher must bind-mount HOMELAB_ROOT so Compose recreate can read project files'
 assert_yq '.secrets as $secrets | (($secrets | length) == 16 and ($secrets | has("media_database_url")) and ($secrets | has("media_postgres_password")) and ($secrets | has("gluetun_rezka_control_api_key")) and ($secrets | has("media_primary_rezka_broker_token") | not) and ($secrets | has("media_rezka_username") | not) and ($secrets | has("media_rezka_password") | not))' \
     'compose must declare anonymous-session secrets without broker credentials'
 assert_yq '.services["media-postgres"].labels["com.centurylinklabs.watchtower.enable"] == "true" and .services["media-postgres"].labels["com.centurylinklabs.watchtower.monitor-only"] == null' \

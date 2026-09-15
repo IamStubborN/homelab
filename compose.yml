@@ -17,6 +17,7 @@ include:
     - deunhealth/compose.yml
     - samba/compose.yml
     - openlist/compose.yml
+    - cliproxyapi/compose.yml
     - rustdesk/compose.yml
     - freedium/compose.yml
     - movie-tracker/docker-compose.yml

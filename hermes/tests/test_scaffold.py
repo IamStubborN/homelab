@@ -358,7 +358,7 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
                 f"{profile}_homeassistant_token",
                 f"{profile}_groq_api_key",
                 f"{profile}_webhook_hmac",
-                "opencode_go_api_key",
+                "cliproxy_api_key",
                 "tavily_api_key",
                 "exa_api_key",
             }
@@ -707,7 +707,7 @@ class SkillContractTests(unittest.TestCase):
                 "/run/hermes-home-secrets/webhook_hmac",
             )
             self.assertIn(
-                {"source": "opencode_go_api_key", "target": "opencode_go_api_key"},
+                {"source": "cliproxy_api_key", "target": "cliproxy_api_key"},
                 service["secrets"],
             )
             self.assertIn(
@@ -719,8 +719,8 @@ class SkillContractTests(unittest.TestCase):
                 service["secrets"],
             )
         self.assertEqual(
-            compose["secrets"]["opencode_go_api_key"]["file"],
-            "./secrets/opencode_go_api_key",
+            compose["secrets"]["cliproxy_api_key"]["file"],
+            "./secrets/cliproxy_api_key",
         )
 
     def test_vaultwarden_browser_client_is_primary_only_and_requires_explicit_approval(self):
@@ -1244,8 +1244,11 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertFalse(config["compression"]["codex_responses_native"])
             self.assertEqual(config["compression"]["proactive_prune_tokens"], 48000)
             self.assertEqual(config["skills"]["creation_nudge_interval"], 10)
-            self.assertEqual(config["model"]["provider"], "openai-codex")
+            self.assertEqual(config["model"]["provider"], "custom:cliproxy")
             self.assertEqual(config["model"]["default"], "gpt-5.6-luna")
+            self.assertEqual(config["model"]["base_url"], "http://cli-proxy-api:8317/v1")
+            self.assertEqual(config["providers"]["cliproxy"]["api"], "http://cli-proxy-api:8317/v1")
+            self.assertEqual(config["providers"]["cliproxy"]["key_env"], "CLIPROXY_API_KEY")
             self.assertTrue(config["memory"]["memory_enabled"])
             self.assertTrue(config["memory"]["user_profile_enabled"])
             self.assertEqual(config["session_reset"]["mode"], "idle")
@@ -1255,17 +1258,19 @@ class ProfileConfigTests(unittest.TestCase):
                 self.assertIn(toolset, telegram_tools)
             self.assertNotIn("todo", telegram_tools)
             self.assertNotIn("cronjob", telegram_tools)
-            self.assertEqual(config["auxiliary"]["vision"]["provider"], "openai-codex")
+            self.assertEqual(config["auxiliary"]["vision"]["provider"], "custom")
             self.assertEqual(config["auxiliary"]["vision"]["model"], "gpt-5.6-luna")
-            self.assertEqual(config["auxiliary"]["title_generation"]["provider"], "openai-codex")
+            self.assertEqual(config["auxiliary"]["title_generation"]["provider"], "custom")
             self.assertEqual(config["auxiliary"]["title_generation"]["model"], "gpt-5.6-luna")
-            self.assertEqual(config["auxiliary"]["compression"]["provider"], "openai-codex")
+            self.assertEqual(config["auxiliary"]["compression"]["provider"], "custom")
             self.assertEqual(config["auxiliary"]["compression"]["model"], "gpt-5.6-luna")
-            self.assertEqual(config["auxiliary"]["background_review"]["provider"], "openai-codex")
+            self.assertEqual(config["auxiliary"]["background_review"]["provider"], "custom")
             self.assertEqual(config["auxiliary"]["background_review"]["model"], "gpt-5.6-luna")
             self.assertEqual(config["fallback_providers"], [{
-                "provider": "openai-codex",
+                "provider": "custom",
                 "model": "gpt-5.6-luna",
+                "base_url": "http://cli-proxy-api:8317/v1",
+                "key_env": "CLIPROXY_API_KEY",
             }])
             self.assertEqual(config["agent"]["reasoning_effort"], "high")
             self.assertEqual(config["agent"]["image_input_mode"], "text")
@@ -1332,7 +1337,7 @@ class ManagedConfigMergeTests(unittest.TestCase):
         spec.loader.exec_module(module)
 
         current = {
-            "model": {"provider": "openai-codex", "default": "gpt-5.6-luna"},
+            "model": {"provider": "custom:cliproxy", "default": "gpt-5.6-luna"},
             "agent": {"verify_on_stop": True, "reasoning_effort": "high"},
         }
         managed = {

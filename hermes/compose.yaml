@@ -279,8 +279,8 @@ services:
         target: health_api_token
       - source: primary_homeassistant_token
         target: homeassistant_api_token
-      - source: opencode_go_api_key
-        target: opencode_go_api_key
+      - source: cliproxy_api_key
+        target: cliproxy_api_key
       - source: tavily_api_key
         target: tavily_api_key
       - source: exa_api_key
@@ -351,8 +351,8 @@ services:
         target: health_api_token
       - source: secondary_homeassistant_token
         target: homeassistant_api_token
-      - source: opencode_go_api_key
-        target: opencode_go_api_key
+      - source: cliproxy_api_key
+        target: cliproxy_api_key
       - source: tavily_api_key
         target: tavily_api_key
       - source: exa_api_key
@@ -413,8 +413,8 @@ secrets:
     file: ../health/secrets/primary.health_api_token
   primary_homeassistant_token:
     file: ./secrets/primary.homeassistant_token
-  opencode_go_api_key:
-    file: ./secrets/opencode_go_api_key
+  cliproxy_api_key:
+    file: ./secrets/cliproxy_api_key
   tavily_api_key:
     file: ./secrets/tavily_api_key
   exa_api_key:

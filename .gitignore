@@ -223,3 +223,8 @@ health/docs/plans/t8-artifacts/
 
 # Local network inventory (contains private host addresses and roles)
 instances/
+
+# CLIProxyAPI runtime (OAuth tokens, live config with client api-key, logs)
+cliproxyapi/config.yaml
+cliproxyapi/auths/
+cliproxyapi/logs/

@@ -1,0 +1,45 @@
+# CLIProxyAPI — OpenAI-compatible gateway for Codex (gpt-5.6-luna) and xAI/Grok OAuth.
+# Internal clients: http://cli-proxy-api:8317/v1
+# HA (host network): http://127.0.0.1:8317/v1
+# OAuth callbacks are bound to localhost on the Docker host for SSH -L tunnels.
+
+services:
+  cli-proxy-api:
+    image: eceasy/cli-proxy-api:latest
+    container_name: cli-proxy-api
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TIMEZONE:-UTC}
+    ports:
+      # API for host-network clients (Home Assistant). Prefer Docker DNS for other services.
+      - "127.0.0.1:8317:8317"
+      # OAuth callbacks (Codex / Claude / Antigravity / xAI) — tunnel from your laptop:
+      #   ssh -L 1455:127.0.0.1:1455 -L 54545:127.0.0.1:54545 -L 51121:127.0.0.1:51121 -L 56121:127.0.0.1:56121 docker.example.invalid
+      - "127.0.0.1:1455:1455"
+      - "127.0.0.1:54545:54545"
+      - "127.0.0.1:51121:51121"
+      - "127.0.0.1:56121:56121"
+    volumes:
+      - ./config.yaml:/CLIProxyAPI/config.yaml:ro
+      - ./auths:/root/.cli-proxy-api
+      - ./logs:/CLIProxyAPI/logs
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3s sh -c 'exec 3<>/dev/tcp/127.0.0.1/8317' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    networks:
+      - proxy
+      - media
+
+networks:
+  proxy:
+    external: true
+  media:
+    name: ${MEDIA_NETWORK:-media-internal}
+    external: true

@@ -1,0 +1,14 @@
+# Copy to config.yaml (gitignored) and set a strong client api-key.
+# Generate: openssl rand -hex 32
+# Place the SAME value in hermes/secrets/cliproxy_api_key for Hermes/Karakeep.
+host: ""
+port: 8317
+auth-dir: "/root/.cli-proxy-api"
+api-keys:
+  - "replace-with-strong-random-client-api-key"
+debug: false
+logging-to-file: true
+request-retry: 3
+quota-exceeded:
+  switch-project: true
+  switch-preview-model: true

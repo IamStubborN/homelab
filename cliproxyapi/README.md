@@ -17,28 +17,41 @@ Authenticate with the shared client key in `hermes/secrets/cliproxy_api_key` (al
 cp cliproxyapi/config.example.yaml cliproxyapi/config.yaml
 # edit api-keys[0], then:
 printf '%s' 'SAME_KEY' > hermes/secrets/cliproxy_api_key
-chmod 0640 hermes/secrets/cliproxy_api_key cliproxyapi/config.yaml
+chmod 0640 hermes/secrets/cliproxy_api_key
+chmod 0600 cliproxyapi/config.yaml
 ```
 
 ## OAuth (Codex + xAI)
 
-From the Docker host, with SSH tunnels from your laptop for the callback ports:
+Binary flags use a **single** leading dash (`-no-browser`, `-codex-login`, `-xai-login`).
+
+### Codex (localhost callback on port 1455)
+
+From your laptop, open an SSH tunnel, then run login on the Docker host:
 
 ```bash
-# Laptop:
-ssh -L 1455:127.0.0.1:1455 \
-    -L 54545:127.0.0.1:54545 \
-    -L 51121:127.0.0.1:51121 \
-    -L 56121:127.0.0.1:56121 \
-    docker.example.invalid
+# Laptop (keep this session open):
+ssh -L 1455:127.0.0.1:1455 docker.example.invalid
 
 # Docker host:
 cd /srv/homelab
-docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI --no-browser --codex-login
-docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI --no-browser --xai-login
+docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser -codex-login
 ```
 
-Open the printed URL in a browser on the laptop (tunnel must be up). Tokens land in `cliproxyapi/auths/` (gitignored).
+Open the printed `https://auth.openai.com/...` URL in the laptop browser. Ignore any `root@public-ip` tunnel example the binary prints — use the `host-5.example.invalid...` tunnel above.
+
+### xAI / Grok (device-code flow)
+
+Current image uses device authorization (no localhost callback required):
+
+```bash
+cd /srv/homelab
+docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser -xai-login
+```
+
+Open the printed `https://accounts.x.ai/oauth2/device?...` URL and enter the shown user code. Port `56121` remains published for older callback-based builds.
+
+Tokens land in `cliproxyapi/auths/` (gitignored).
 
 ## Verify
 
@@ -46,3 +59,5 @@ Open the printed URL in a browser on the laptop (tunnel must be up). Tokens land
 KEY=$(tr -d '\n' < hermes/secrets/cliproxy_api_key)
 curl -fsS -H "Authorization: Bearer $KEY" http://127.0.0.1:8317/v1/models
 ```
+
+After successful OAuth, the models list should include Codex/`gpt-5.6-luna` and Grok models.

@@ -28,7 +28,7 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
     healthcheck:
-      test: ["CMD-SHELL", "timeout 3s sh -c 'exec 3<>/dev/tcp/127.0.0.1/8317' || exit 1"]
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8317'"]
       interval: 30s
       timeout: 5s
       retries: 5

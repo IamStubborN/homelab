@@ -316,13 +316,15 @@ services:
       - /tmp:size=1g,mode=1777
       - /run/media-orchestrator:size=16m,mode=0700
       - /run/yt-dlp:rw,nosuid,nodev,exec,size=256m,mode=1777
+    # Process liveness only — do not probe media-service. That endpoint stays
+    # healthy while this one-shot runner is wedged. PID 1 is `media runner`.
+    # With MEDIA_RUNNER_EXIT_AFTER_JOB=true and restart: "no", an exited
+    # container after a finished attempt is expected; Compose will not keep
+    # restarting it, and Watcher starts the next attempt from lifecycle ready.
     healthcheck:
       test:
-        - CMD
-        - media
-        - healthcheck
-        - --url
-        - http://media-service:8080/v1/health
+        - CMD-SHELL
+        - kill -0 1
       interval: 30s
       timeout: 5s
       retries: 3
@@ -381,18 +383,19 @@ services:
       - /bin/sh
       - /watch.sh
     healthcheck:
-      test:
-        - CMD
-        - docker
-        - info
+      # Match download/gluetun-watcher: the event loop must be alive, not just
+      # that the Docker daemon answers `docker info`.
+      test: [CMD, pgrep, -f, "docker events.*container="]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
       start_period: 15s
     labels:
       com.centurylinklabs.watchtower.enable: "false"
     depends_on:
       gluetun-rezka:
+        condition: service_healthy
+      media-service:
         condition: service_healthy
 
 secrets:
@@ -429,14 +432,20 @@ secrets:
   media_postgres_password:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_postgres_password
 volumes:
+  # Pre-created homelab_* volumes. Mark external so recreate does not warn
+  # about existing named volumes owned by the root project.
   media_postgres_data:
     name: homelab_media_postgres_data
+    external: true
   gluetun_rezka_state:
     name: homelab_gluetun_rezka_state
+    external: true
   gluetun_rezka_lifecycle:
     name: homelab_gluetun_rezka_lifecycle
+    external: true
   rezka_session_encrypted:
     name: homelab_rezka_session_encrypted
+    external: true
 
 networks:
   media-db:

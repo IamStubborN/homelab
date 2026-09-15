@@ -57,9 +57,15 @@ does not rotate cookies, reset the session, or participate in VPN lifecycle.
 
 Copy the media-orchestrator placeholders from the root `.env.example` into the
 real ignored `.env`, replacing every image digest and provider placeholder.
-The application images provide their own `media healthcheck` command; no
-additional HTTP client is required in the runtime images. Create the external
-networks used by Media Orchestrator once:
+The application images provide their own `media healthcheck` command for
+`media-service`. `download-runner` instead uses a process liveness probe
+(`kill -0 1`): with `MEDIA_RUNNER_EXIT_AFTER_JOB=true` and `restart: "no"`, an
+exited container after a finished attempt is expected — do not treat that as a
+broken Watcher path. `gluetun-rezka-watcher` healthchecks the `docker events`
+loop (same pattern as `download/gluetun-watcher`). The four `homelab_*` media named volumes are also declared external because
+they already hold live data; create/restore them before first boot and never
+remove them during a normal recreate. Create the external networks used by
+Media Orchestrator once:
 
 ```bash
 docker network create media-internal
@@ -186,8 +192,11 @@ with the torrent Gluetun stack. `gluetun-rezka-watcher` watches only
 `gluetun-rezka`. It gates new work before rotation and does not `docker stop`
 or `docker restart` an active `download-runner` for ordinary lifecycle changes.
 If the runner is orphaned on a previous Gluetun netns after parent restart, the
-watcher force-recreates it onto the current namespace promptly. Like
-`gluetun-watcher`, it bind-mounts `${HOMELAB_ROOT}` at the same absolute path
+watcher force-recreates it onto the current namespace promptly. Parent events
+are filtered by exact container ID and `exec_start` is ignored. On runner
+`die`, the watcher settles briefly and re-reads lifecycle so a late `rotating`
+write wins over starting under stale `ready`. Like `gluetun-watcher`, it
+bind-mounts `${HOMELAB_ROOT}` at the same absolute path
 so in-container `docker compose --project-directory … -f …/compose.yml` can
 read the host project tree.
 

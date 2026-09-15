@@ -47,6 +47,13 @@ case "\$1" in
             *'{{.Id}}'*)
                 printf '%s\n' "$PARENT_ID"
                 ;;
+            *'{{.Name}}'*)
+                if [ "\$target" = "$PARENT_ID" ] || [ "\$target" = gluetun-rezka ]; then
+                    printf '%s\n' '/gluetun-rezka'
+                else
+                    printf '%s\n' "/\$target"
+                fi
+                ;;
             *com.docker.compose.project.config_files*)
                 printf '%s\n' '/srv/homelab/compose.yml,/srv/homelab/compose.override.yml'
                 ;;
@@ -152,6 +159,7 @@ run_watcher() {
         HEALTH_TIMEOUT=5 \
         SETTLE_DELAY=0 \
         RECREATE_DEBOUNCE=0 \
+        DIE_LIFECYCLE_SETTLE="${DIE_LIFECYCLE_SETTLE:-0}" \
         ROTATION_ATTEMPTS=1 \
         REZKA_PROBE_IMAGE=example/runner:test \
         PROBE_UID=1000 \
@@ -205,7 +213,7 @@ DEPENDENT_STATE='running'
 DEPENDENT_NETMODE="container:$PARENT_ID"
 DEPENDENT_SANDBOX="$PARENT_NS"
 PARENT_SANDBOX="$PARENT_NS"
-DOCKER_EVENTS='gluetun-rezka|start'
+DOCKER_EVENTS="$PARENT_ID|gluetun-rezka|start"
 FLIP_TO_STALE=1
 export PARENT_STARTED DEPENDENT_STARTED DEPENDENT_STATE DEPENDENT_NETMODE \
     DEPENDENT_SANDBOX PARENT_SANDBOX DOCKER_EVENTS FLIP_TO_STALE
@@ -230,7 +238,7 @@ DEPENDENT_STATE='running'
 DEPENDENT_NETMODE="container:$PARENT_ID"
 DEPENDENT_SANDBOX="$PARENT_NS"
 PARENT_SANDBOX="$PARENT_NS"
-DOCKER_EVENTS='gluetun-rezka|start'
+DOCKER_EVENTS="$PARENT_ID|gluetun-rezka|start"
 FLIP_TO_STALE=0
 export PARENT_STARTED DEPENDENT_STARTED DEPENDENT_STATE DEPENDENT_NETMODE \
     DEPENDENT_SANDBOX PARENT_SANDBOX DOCKER_EVENTS FLIP_TO_STALE
@@ -268,4 +276,93 @@ if grep -Fq 'force-recreate' "$DOCKER_CALLS"; then
     exit 1
 fi
 
-echo 'PASS: gluetun-rezka-watcher orphaned-netns force-recreate and skip paths'
+
+# 5) Parent start via exec_start must be ignored
+PARENT_STARTED='2026-09-14T19:18:00Z'
+DEPENDENT_STARTED='2026-09-14T19:19:00Z'
+DEPENDENT_STATE='running'
+DEPENDENT_NETMODE="container:$PARENT_ID"
+DEPENDENT_SANDBOX="$PARENT_NS"
+PARENT_SANDBOX="$PARENT_NS"
+DOCKER_EVENTS="$PARENT_ID|gluetun-rezka|exec_start: /gluetun-entrypoint healthcheck"
+FLIP_TO_STALE=1
+DIE_LIFECYCLE_SETTLE=0
+export PARENT_STARTED DEPENDENT_STARTED DEPENDENT_STATE DEPENDENT_NETMODE \
+    DEPENDENT_SANDBOX PARENT_SANDBOX DOCKER_EVENTS FLIP_TO_STALE DIE_LIFECYCLE_SETTLE
+run_watcher flip
+
+if grep -Fq 'force-recreate' "$DOCKER_CALLS"; then
+    echo "FAIL: exec_start must not trigger orphaned recreate" >&2
+    cat "$TMP/output" >&2
+    cat "$DOCKER_CALLS" >&2
+    exit 1
+fi
+if grep -Fq 'start detected' "$TMP/output"; then
+    echo "FAIL: exec_start must not be treated as parent start" >&2
+    cat "$TMP/output" >&2
+    exit 1
+fi
+
+# 6) Die while ready, then lifecycle flips to rotating within settle → skip start under ready
+cat >"$TMP/wget" <<'EOF'
+#!/bin/sh
+set -eu
+out=
+post=0
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -O) out=$2; shift 2 ;;
+        --post-data) post=1; shift 2 ;;
+        *) shift ;;
+    esac
+done
+count_file="$TMP/lifecycle-gets"
+count=0
+if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+fi
+if [ "$post" -eq 0 ] && [ -n "$out" ]; then
+    count=$((count + 1))
+    printf '%s\n' "$count" >"$count_file"
+    # First reads (startup) stay ready; the post-die settle read flips to rotating.
+    if [ "$count" -ge 2 ]; then
+        printf '{"state":"rotating","current_ip":"203.0.113.10","previous_ip":"203.0.113.10","reason":null}\n' >"$out"
+    else
+        printf '{"state":"ready","current_ip":"203.0.113.10","previous_ip":"203.0.113.10","reason":null}\n' >"$out"
+    fi
+fi
+exit 0
+EOF
+chmod +x "$TMP/wget"
+
+PARENT_STARTED='2026-09-14T19:18:00Z'
+DEPENDENT_STARTED='2026-09-14T19:19:00Z'
+DEPENDENT_STATE='running'
+DEPENDENT_NETMODE="container:$PARENT_ID"
+DEPENDENT_SANDBOX="$PARENT_NS"
+PARENT_SANDBOX="$PARENT_NS"
+DOCKER_EVENTS="dddddddddddd|download-runner|die"
+FLIP_TO_STALE=0
+DIE_LIFECYCLE_SETTLE=0
+: >"$TMP/lifecycle-gets"
+export PARENT_STARTED DEPENDENT_STARTED DEPENDENT_STATE DEPENDENT_NETMODE \
+    DEPENDENT_SANDBOX PARENT_SANDBOX DOCKER_EVENTS FLIP_TO_STALE DIE_LIFECYCLE_SETTLE
+run_watcher
+
+if ! grep -Fq 'requested a fresh VPN session (post-settle)' "$TMP/output"; then
+    echo "FAIL: die+settle should take rotating path, not ready start" >&2
+    cat "$TMP/output" >&2
+    exit 1
+fi
+if grep -Fq 'reusing the current VPN session' "$TMP/output"; then
+    echo "FAIL: ready start must be skipped when lifecycle flips to rotating" >&2
+    cat "$TMP/output" >&2
+    exit 1
+fi
+if ! grep -Eq '(^| )restart gluetun-rezka($| )' "$DOCKER_CALLS"; then
+    echo "FAIL: rotating path should restart gluetun-rezka" >&2
+    cat "$DOCKER_CALLS" >&2
+    exit 1
+fi
+
+echo 'PASS: gluetun-rezka-watcher orphaned-netns, exec_start ignore, and die-settle rotate paths'

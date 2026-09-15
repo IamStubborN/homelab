@@ -43,6 +43,9 @@ HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-120}
 SETTLE_DELAY=${SETTLE_DELAY:-10}
 # Coalesce rapid parent start events before deciding to recreate an orphaned runner.
 RECREATE_DEBOUNCE=${RECREATE_DEBOUNCE:-20}
+# After download-runner die, wait briefly so a late lifecycle→rotating
+# write wins before we start_dependent under a stale ready read.
+DIE_LIFECYCLE_SETTLE=${DIE_LIFECYCLE_SETTLE:-3}
 ROTATION_ATTEMPTS=${ROTATION_ATTEMPTS:-3}
 LIFECYCLE_WRITE_ATTEMPTS=${LIFECYCLE_WRITE_ATTEMPTS:-3}
 LIFECYCLE_RETRY_DELAY=${LIFECYCLE_RETRY_DELAY:-2}
@@ -57,6 +60,32 @@ if [ -z "${MEDIA_LIFECYCLE_TOKEN:-}" ] && [ -n "${MEDIA_LIFECYCLE_TOKEN_FILE:-}"
   export MEDIA_LIFECYCLE_TOKEN
 fi
 : "${MEDIA_LIFECYCLE_TOKEN:?MEDIA_LIFECYCLE_TOKEN is required}"
+
+# Resolve the parent to a full container ID once. Docker's events
+# --filter container=<name> prefix-matches names, so "gluetun-rezka" would also
+# match similarly-named helpers and spuriously recreate the runner.
+resolve_parent_id() {
+    docker inspect "$PARENT" --format '{{.Id}}' 2>/dev/null || true
+}
+
+PARENT_ID=$(resolve_parent_id)
+if [ -z "$PARENT_ID" ]; then
+    printf '%s [gluetun-rezka-watcher] FATAL: cannot resolve parent container id for %s\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "$PARENT" >&2
+    exit 1
+fi
+printf '%s\n' "$PARENT_ID" | grep -Eq '^[0-9a-fA-F]{64}$' || {
+    printf '%s [gluetun-rezka-watcher] FATAL: parent container id is invalid for %s\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "$PARENT" >&2
+    exit 1
+}
+parent_name=$(docker inspect "$PARENT_ID" --format '{{.Name}}' 2>/dev/null | sed 's#^/##')
+if [ "$parent_name" != "$PARENT" ]; then
+    printf '%s [gluetun-rezka-watcher] FATAL: parent name mismatch: expected %s, got %s\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "$PARENT" "${parent_name:-unknown}" >&2
+    exit 1
+fi
+PARENT_ID_SHORT=$(printf '%.12s' "$PARENT_ID")
 
 log() {
     printf '%s [gluetun-rezka-watcher] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1"
@@ -79,21 +108,12 @@ wait_healthy() {
     return 1
 }
 
-resolve_parent_id() {
-    docker inspect "$PARENT" --format '{{.Id}}' 2>/dev/null || true
-}
-
 get_compose_metadata() {
-    parent_id=$(resolve_parent_id)
-    if [ -z "$parent_id" ]; then
-        log "ERROR: cannot resolve $PARENT id for Compose metadata"
-        return 1
-    fi
-    PROJECT=$(docker inspect "$parent_id" \
+    PROJECT=$(docker inspect "$PARENT_ID" \
         --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null)
-    CONFIG=$(docker inspect "$parent_id" \
+    CONFIG=$(docker inspect "$PARENT_ID" \
         --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null)
-    WORKDIR=$(docker inspect "$parent_id" \
+    WORKDIR=$(docker inspect "$PARENT_ID" \
         --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null)
     if [ -z "$PROJECT" ] || [ -z "$CONFIG" ] || [ -z "$WORKDIR" ]; then
         log "ERROR: cannot read compose labels from $PARENT"
@@ -103,9 +123,7 @@ get_compose_metadata() {
 }
 
 parent_sandbox_key() {
-    parent_id=$(resolve_parent_id)
-    [ -n "$parent_id" ] || { printf ''; return; }
-    docker inspect "$parent_id" \
+    docker inspect "$PARENT_ID" \
         --format '{{.NetworkSettings.SandboxKey}}' 2>/dev/null || true
 }
 
@@ -113,19 +131,12 @@ parent_sandbox_key() {
 # network namespace (stale NetworkMode, mismatched SandboxKey, or started before
 # the parent). Orphaned netns cannot finish a sticky lease — recreate promptly.
 dependent_needs_refresh() {
-    parent_id=$(resolve_parent_id)
-    if [ -z "$parent_id" ]; then
-        log "cannot resolve $PARENT id while checking $DEPENDENT"
-        return 0
-    fi
-    parent_id_short=$(printf '%.12s' "$parent_id")
-
     mode=$(docker inspect "$DEPENDENT" \
         --format '{{.HostConfig.NetworkMode}}' 2>/dev/null || true)
     case "$mode" in
-        "container:$parent_id"|"container:$parent_id_short") ;;
+        "container:$PARENT_ID"|"container:$PARENT_ID_SHORT") ;;
         *)
-            log "$DEPENDENT: NetworkMode '${mode:-missing}' is not container:$parent_id_short"
+            log "$DEPENDENT: NetworkMode '${mode:-missing}' is not container:$PARENT_ID_SHORT"
             return 0
             ;;
     esac
@@ -414,7 +425,7 @@ start_dependent() {
 mkdir -p "$STATE_DIR"
 touch "$STATE_DIR/rotations.tsv"
 
-log "watching $PARENT and $DEPENDENT; only this dedicated pair may be controlled"
+log "watching $PARENT id=$PARENT_ID_SHORT and $DEPENDENT; only this dedicated pair may be controlled"
 sleep "$SETTLE_DELAY"
 refresh_orphaned_dependent || true
 
@@ -467,20 +478,28 @@ elif [ "$dependent_state" != running ]; then
     fi
 fi
 
+log "Watching docker events for exact parent id=$PARENT_ID_SHORT and dependent=$DEPENDENT"
 docker events \
     --filter type=container \
-    --filter "container=$PARENT" \
+    --filter "container=$PARENT_ID" \
     --filter "container=$DEPENDENT" \
     --filter "event=start" \
     --filter "event=die" \
-    --format '{{.Actor.Attributes.name}}|{{.Action}}' | while IFS='|' read -r container action; do
+    --format '{{.Actor.ID}}|{{.Actor.Attributes.name}}|{{.Action}}' | while IFS='|' read -r event_id container action; do
+    # Docker may return exec_start health-check events for an event=start filter.
+    case "$action" in
+        start|die) ;;
+        *) continue ;;
+    esac
+
     if [ "$container" = "$DEPENDENT" ] && [ "$action" = die ]; then
+        if [ "$DIE_LIFECYCLE_SETTLE" -gt 0 ] 2>/dev/null; then
+            log "$DEPENDENT died; settling ${DIE_LIFECYCLE_SETTLE}s so a late rotating write can win"
+            sleep "$DIE_LIFECYCLE_SETTLE"
+        fi
         lifecycle_state=$(get_lifecycle_state || true)
-        if [ "$lifecycle_state" = ready ]; then
-            log "$DEPENDENT completed an attempt; reusing the current VPN session"
-            start_dependent
-        elif [ "$lifecycle_state" = rotating ]; then
-            log "$DEPENDENT requested a fresh VPN session"
+        if [ "$lifecycle_state" = rotating ]; then
+            log "$DEPENDENT requested a fresh VPN session (post-settle)"
             ROTATION_PREVIOUS_IP=$(public_ip)
             if rotate_parent; then
                 if put_lifecycle ready null "$ROTATION_PREVIOUS_IP" "$ROTATION_CURRENT_IP"; then
@@ -495,12 +514,15 @@ docker events \
                 fi
                 log "VPN rotation failed; $DEPENDENT remains stopped and queued work is gated"
             fi
+        elif [ "$lifecycle_state" = ready ]; then
+            log "$DEPENDENT completed an attempt; reusing the current VPN session"
+            start_dependent
         elif [ "$lifecycle_state" = blocked ]; then
             log "$DEPENDENT stopped while lifecycle is blocked; queued work remains gated"
         else
             log "cannot read lifecycle state; $DEPENDENT remains stopped fail-closed"
         fi
-    elif [ "$container" = "$PARENT" ] && [ "$action" = start ]; then
+    elif [ "$event_id" = "$PARENT_ID" ] && [ "$action" = start ]; then
         refresh_orphaned_dependent_after_parent_start || true
     fi
 done

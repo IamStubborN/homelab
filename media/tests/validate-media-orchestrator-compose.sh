@@ -100,8 +100,16 @@ assert_yq '(.services.gluetun-rezka-watcher.environment | has("MEDIA_REZKA_BROWS
     'watcher must not take Anubis browser toggle env; the runner image enables chrome automatically'
 assert_yq '.services.download-runner.volumes | any_c(.target == "/var/lib/media-orchestrator/session" and .volume.nocopy == true) and .services.media-service.volumes | any_c(.target == "/var/lib/media-orchestrator/session" and .volume.nocopy == true)' \
     'encrypted session volume must remain nocopy on service and runner'
-assert_yq '.volumes.rezka_session_encrypted.name == "homelab_rezka_session_encrypted" and (.volumes.rezka_session_encrypted.external | not)' \
-    'encrypted session volume must use the homelab project volume'
+assert_yq '.volumes.rezka_session_encrypted.name == "homelab_rezka_session_encrypted" and .volumes.rezka_session_encrypted.external == true' \
+    'encrypted session volume must stay the existing external homelab_ volume'
+assert_yq '.volumes.media_postgres_data.external == true and .volumes.gluetun_rezka_state.external == true and .volumes.gluetun_rezka_lifecycle.external == true' \
+    'media named volumes must be external to avoid recreate warnings'
+assert_yq '.services["gluetun-rezka-watcher"].depends_on["media-service"].condition == "service_healthy"' \
+    'gluetun-rezka-watcher must wait for media-service healthy like torrent watcher waits on gluetun'
+assert_yq '.services["gluetun-rezka-watcher"].healthcheck.test == ["CMD","pgrep","-f","docker events.*container="] or (.services["gluetun-rezka-watcher"].healthcheck.test | tostring | contains("pgrep"))' \
+    'gluetun-rezka-watcher healthcheck must watch the docker events loop'
+assert_yq '(.services["download-runner"].healthcheck.test | tostring | contains("kill -0 1"))' \
+    'download-runner healthcheck must reflect runner process liveness, not media-service'
 assert_yq '((.services.download-runner.volumes | length) == 2) and (.services.download-runner.volumes | any_c(.target == "/data/internal")) and (.services.download-runner.volumes | any_c(.target == "/var/lib/media-orchestrator/session"))' \
     'download-runner must not persist a Chrome profile volume'
 assert_yq '.services.download-runner.tmpfs | any_c(. == "/tmp:size=1g,mode=1777")' \
@@ -234,6 +242,12 @@ if ! grep -Fq 'up -d --force-recreate --no-deps' "$MEDIA_DIR/gluetun-rezka-watch
 fi
 if grep -Fq 'sticky lease must end the attempt retryably' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh"; then
     printf 'FAIL: watcher must not wait forever on sticky lease for orphaned netns\n' >&2
+    exit 1
+fi
+if ! grep -Fq 'container=$PARENT_ID' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh" \
+    || ! grep -Fq 'DIE_LIFECYCLE_SETTLE' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh" \
+    || ! grep -Fq 'exec_start' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh"; then
+    printf 'FAIL: watcher must filter exact parent id, settle on die, and ignore exec_start\n' >&2
     exit 1
 fi
 if grep -Fq -- '--volumes-from' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh" \

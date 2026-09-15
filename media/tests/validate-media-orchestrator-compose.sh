@@ -224,6 +224,16 @@ if grep -Eq 'docker (restart|stop) "?\$DEPENDENT"?' "$MEDIA_DIR/gluetun-rezka-wa
     printf 'FAIL: watcher must not stop or restart an active runner during VPN lifecycle handling\n' >&2
     exit 1
 fi
+if ! grep -Fq 'up -d --force-recreate --no-deps' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh" \
+    || ! grep -Fq 'refresh_orphaned_dependent' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh" \
+    || ! grep -Fq 'SandboxKey' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh"; then
+    printf 'FAIL: watcher must force-recreate orphaned runners onto the current Gluetun netns\n' >&2
+    exit 1
+fi
+if grep -Fq 'sticky lease must end the attempt retryably' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh"; then
+    printf 'FAIL: watcher must not wait forever on sticky lease for orphaned netns\n' >&2
+    exit 1
+fi
 if grep -Fq -- '--volumes-from' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh" \
     || ! grep -Fq -- '--user "$PROBE_UID:$PROBE_GID"' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh" \
     || ! grep -Fq -- '--read-only' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh" \

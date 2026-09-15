@@ -41,6 +41,8 @@ PARENT=${PARENT_CONTAINER:-gluetun-rezka}
 DEPENDENT=${DEPENDENT_CONTAINER:-download-runner}
 HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-120}
 SETTLE_DELAY=${SETTLE_DELAY:-10}
+# Coalesce rapid parent start events before deciding to recreate an orphaned runner.
+RECREATE_DEBOUNCE=${RECREATE_DEBOUNCE:-20}
 ROTATION_ATTEMPTS=${ROTATION_ATTEMPTS:-3}
 LIFECYCLE_WRITE_ATTEMPTS=${LIFECYCLE_WRITE_ATTEMPTS:-3}
 LIFECYCLE_RETRY_DELAY=${LIFECYCLE_RETRY_DELAY:-2}
@@ -75,6 +77,144 @@ wait_healthy() {
         elapsed=$((elapsed + 5))
     done
     return 1
+}
+
+resolve_parent_id() {
+    docker inspect "$PARENT" --format '{{.Id}}' 2>/dev/null || true
+}
+
+get_compose_metadata() {
+    parent_id=$(resolve_parent_id)
+    if [ -z "$parent_id" ]; then
+        log "ERROR: cannot resolve $PARENT id for Compose metadata"
+        return 1
+    fi
+    PROJECT=$(docker inspect "$parent_id" \
+        --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null)
+    CONFIG=$(docker inspect "$parent_id" \
+        --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null)
+    WORKDIR=$(docker inspect "$parent_id" \
+        --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null)
+    if [ -z "$PROJECT" ] || [ -z "$CONFIG" ] || [ -z "$WORKDIR" ]; then
+        log "ERROR: cannot read compose labels from $PARENT"
+        return 1
+    fi
+    return 0
+}
+
+parent_sandbox_key() {
+    parent_id=$(resolve_parent_id)
+    [ -n "$parent_id" ] || { printf ''; return; }
+    docker inspect "$parent_id" \
+        --format '{{.NetworkSettings.SandboxKey}}' 2>/dev/null || true
+}
+
+# True when the dependent still needs force-recreate onto the current parent
+# network namespace (stale NetworkMode, mismatched SandboxKey, or started before
+# the parent). Orphaned netns cannot finish a sticky lease — recreate promptly.
+dependent_needs_refresh() {
+    parent_id=$(resolve_parent_id)
+    if [ -z "$parent_id" ]; then
+        log "cannot resolve $PARENT id while checking $DEPENDENT"
+        return 0
+    fi
+    parent_id_short=$(printf '%.12s' "$parent_id")
+
+    mode=$(docker inspect "$DEPENDENT" \
+        --format '{{.HostConfig.NetworkMode}}' 2>/dev/null || true)
+    case "$mode" in
+        "container:$parent_id"|"container:$parent_id_short") ;;
+        *)
+            log "$DEPENDENT: NetworkMode '${mode:-missing}' is not container:$parent_id_short"
+            return 0
+            ;;
+    esac
+
+    parent_ns=$(parent_sandbox_key)
+    dep_ns=$(docker inspect "$DEPENDENT" \
+        --format '{{.NetworkSettings.SandboxKey}}' 2>/dev/null || true)
+    if [ -n "$parent_ns" ] && [ -n "$dep_ns" ]; then
+        if [ "$parent_ns" != "$dep_ns" ]; then
+            log "$DEPENDENT: SandboxKey differs from $PARENT (orphaned netns)"
+            return 0
+        fi
+        return 1
+    fi
+
+    parent_started=$(started_at "$PARENT")
+    dependent_started=$(started_at "$DEPENDENT")
+    if [ -n "$parent_started" ] && [ -n "$dependent_started" ]; then
+        older=$(printf '%s\n%s\n' "$dependent_started" "$parent_started" | sort | head -n1)
+        if [ "$dependent_started" != "$parent_started" ] && [ "$older" = "$dependent_started" ]; then
+            log "$DEPENDENT: started before $PARENT (stale namespace)"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+recreate_dependent() {
+    if ! get_compose_metadata; then
+        return 1
+    fi
+
+    set -- docker compose -p "$PROJECT" --project-directory "$WORKDIR"
+    old_ifs=$IFS
+    IFS=,
+    for config_file in $CONFIG; do
+        set -- "$@" -f "$config_file"
+    done
+    IFS=$old_ifs
+    set -- "$@" up -d --force-recreate --no-deps "$DEPENDENT"
+
+    log "$DEPENDENT: recreating with Compose (gluetun namespace changed)..."
+    if output=$("$@" 2>&1); then
+        if [ -n "$output" ]; then
+            printf '%s\n' "$output" | while IFS= read -r line; do
+                log "  $line"
+            done
+        fi
+        log "$DEPENDENT: done"
+        return 0
+    fi
+
+    if [ -n "$output" ]; then
+        printf '%s\n' "$output" | while IFS= read -r line; do
+            log "  $line"
+        done
+    fi
+    log "ERROR: failed to recreate $DEPENDENT"
+    return 1
+}
+
+# Force-recreate only when the runner is still running on a dead/orphaned netns.
+# Stopped runners are started later via start_dependent once lifecycle is ready.
+refresh_orphaned_dependent() {
+    state=$(docker inspect "$DEPENDENT" --format '{{.State.Status}}' 2>/dev/null || true)
+    if [ "$state" != running ]; then
+        return 0
+    fi
+    if ! dependent_needs_refresh; then
+        log "$DEPENDENT already shares current $PARENT netns"
+        return 0
+    fi
+    log "$DEPENDENT is orphaned on the previous $PARENT netns; force-recreating onto the current namespace"
+    recreate_dependent
+}
+
+refresh_orphaned_dependent_after_parent_start() {
+    log "$PARENT start detected"
+    if [ "$RECREATE_DEBOUNCE" -gt 0 ] 2>/dev/null; then
+        log "Debouncing ${RECREATE_DEBOUNCE}s to coalesce rapid start events..."
+        sleep "$RECREATE_DEBOUNCE"
+    fi
+    log "Waiting for $PARENT healthy (${HEALTH_TIMEOUT}s)..."
+    if ! wait_healthy; then
+        log "WARNING: $PARENT not healthy after ${HEALTH_TIMEOUT}s; leaving $DEPENDENT untouched"
+        return 1
+    fi
+    sleep "$SETTLE_DELAY"
+    refresh_orphaned_dependent
 }
 
 public_ip() {
@@ -254,25 +394,21 @@ rotate_parent() {
 start_dependent() {
     state=$(docker inspect "$DEPENDENT" --format '{{.State.Status}}' 2>/dev/null || true)
     if [ "$state" = running ]; then
-        log "$DEPENDENT is already running; leaving the active attempt untouched"
-        check_stale_namespace
+        if dependent_needs_refresh; then
+            log "$DEPENDENT is running on a stale $PARENT namespace; force-recreating"
+            recreate_dependent
+            return
+        fi
+        log "$DEPENDENT is already running on the current $PARENT namespace; leaving the active attempt untouched"
+        return
+    fi
+    if ! docker inspect "$DEPENDENT" >/dev/null 2>&1 || dependent_needs_refresh; then
+        log "starting $DEPENDENT on the prepared VPN session via Compose recreate"
+        recreate_dependent
         return
     fi
     log "starting $DEPENDENT on the prepared VPN session"
     docker start "$DEPENDENT" >/dev/null
-}
-
-check_stale_namespace() {
-    parent_started=$(started_at "$PARENT")
-    dependent_started=$(started_at "$DEPENDENT")
-    oldest_started=$(printf '%s\n%s\n' "$parent_started" "$dependent_started" | sort | head -n 1)
-    if [ -n "$parent_started" ] && [ -n "$dependent_started" ] \
-        && [ "$dependent_started" != "$parent_started" ] \
-        && [ "$oldest_started" = "$dependent_started" ]; then
-        log "$DEPENDENT still uses the previous $PARENT namespace; its sticky lease must end the attempt retryably"
-        return 1
-    fi
-    return 0
 }
 
 mkdir -p "$STATE_DIR"
@@ -280,7 +416,7 @@ touch "$STATE_DIR/rotations.tsv"
 
 log "watching $PARENT and $DEPENDENT; only this dedicated pair may be controlled"
 sleep "$SETTLE_DELAY"
-check_stale_namespace || true
+refresh_orphaned_dependent || true
 
 dependent_state=$(docker inspect "$DEPENDENT" --format '{{.State.Status}}' 2>/dev/null || true)
 if [ "$dependent_state" = running ] && wait_healthy; then
@@ -365,8 +501,7 @@ docker events \
             log "cannot read lifecycle state; $DEPENDENT remains stopped fail-closed"
         fi
     elif [ "$container" = "$PARENT" ] && [ "$action" = start ]; then
-        log "$PARENT start detected"
-        check_stale_namespace || true
+        refresh_orphaned_dependent_after_parent_start || true
     fi
 done
 

@@ -123,9 +123,12 @@ the application UID/GID in the same Gluetun namespace. The one-shot container
 receives only the encrypted session volume, runner API token, and cookie key;
 it does not inherit the runner's media mounts or qBittorrent secret. A challenge
 page is therefore reported as a failed typed probe, never as a healthy HTTP
-status. The watcher never stops or restarts an active runner after an unexpected
-namespace change; the runner's sticky IP lease ends that attempt safely and the
-watcher reconciles lifecycle only after it exits.
+status. An unexpected Gluetun restart/recreation that leaves the runner on a dead
+network namespace is recovered by Compose `--force-recreate --no-deps` (same
+pattern as `download/gluetun-watcher`), even while a sticky lease is still
+open — an orphaned netns cannot finish the attempt. Sticky leases still protect
+healthy same-namespace IP drift; the watcher does not `docker stop`/`restart`
+the runner for ordinary lifecycle gating.
 
 The runner image contains a checksum-pinned Chrome for Testing
 `chrome-headless-shell` binary. Anubis browser fallback turns on automatically
@@ -144,8 +147,10 @@ required Gluetun secret files, then only renders Compose:
 
 ```bash
 media/tests/validate-media-orchestrator-compose.sh
+tests/gluetun-rezka-watcher-test.sh
 shellcheck media/gluetun-rezka-watcher/watch.sh \
-  media/tests/validate-media-orchestrator-compose.sh
+  media/tests/validate-media-orchestrator-compose.sh \
+  tests/gluetun-rezka-watcher-test.sh
 ```
 
 For an operator-side render using the real ignored environment and the three
@@ -178,9 +183,10 @@ docker compose --env-file .env ps
 
 The existing `gluetun-watcher` in `download/compose.yml` remains paired only
 with the torrent Gluetun stack. `gluetun-rezka-watcher` watches only
-`gluetun-rezka`. It gates new work before rotation and never stops or restarts
-an active `download-runner`; an unexpected namespace or IP change is handled by
-the runner as a retryable attempt failure.
+`gluetun-rezka`. It gates new work before rotation and does not `docker stop`
+or `docker restart` an active `download-runner` for ordinary lifecycle changes.
+If the runner is orphaned on a previous Gluetun netns after parent restart, the
+watcher force-recreates it onto the current namespace promptly.
 
 ## FlareSolverr
 

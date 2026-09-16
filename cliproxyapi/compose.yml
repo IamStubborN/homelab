@@ -1,4 +1,5 @@
 # CLIProxyAPI — OpenAI-compatible gateway for Codex (gpt-5.6-luna) and xAI/Grok OAuth.
+# Public (Traefik): https://cliproxy.${DOCKER_DOMAIN}/v1
 # Internal clients: http://cli-proxy-api:8317/v1
 # HA (host network): http://127.0.0.1:8317/v1
 # OAuth callbacks are bound to localhost on the Docker host for SSH -L tunnels.
@@ -27,6 +28,12 @@ services:
       - ./logs:/CLIProxyAPI/logs
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.cliproxy.tls=true"
+      - "traefik.http.routers.cliproxy.entrypoints=http,https"
+      - "traefik.http.routers.cliproxy.rule=Host(`cliproxy.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.cliproxy.loadbalancer.server.port=8317"
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8317'"]
       interval: 30s

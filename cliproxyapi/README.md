@@ -6,10 +6,11 @@ OpenAI-compatible gateway (`eceasy/cli-proxy-api`) for household LLM clients.
 
 | Client | Base URL |
 | --- | --- |
+| LAN / Traefik | `https://cliproxy.${DOCKER_DOMAIN}/v1` |
 | Hermes / Karakeep (Docker DNS) | `http://cli-proxy-api:8317/v1` |
 | Home Assistant (`network_mode: host`) | `http://127.0.0.1:8317/v1` |
 
-Authenticate with the shared client key in `hermes/secrets/cliproxy_api_key` (also listed under `api-keys` in `config.yaml`).
+Authenticate with the shared client key in `hermes/secrets/cliproxy_api_key` (also listed under `api-keys` in `config.yaml`). Traefik does not replace client api-key auth.
 
 ## First-time setup
 
@@ -58,6 +59,8 @@ Tokens land in `cliproxyapi/auths/` (gitignored).
 ```bash
 KEY=$(tr -d '\n' < hermes/secrets/cliproxy_api_key)
 curl -fsS -H "Authorization: Bearer $KEY" http://127.0.0.1:8317/v1/models
+# via Traefik:
+curl -fsS -H "Authorization: Bearer $KEY" "https://cliproxy.${DOCKER_DOMAIN}/v1/models"
 ```
 
 After successful OAuth, the models list should include Codex/`gpt-5.6-luna` and Grok models.

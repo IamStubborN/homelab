@@ -54,6 +54,25 @@ Open the printed `https://accounts.x.ai/oauth2/device?...` URL and enter the sho
 
 Tokens land in `cliproxyapi/auths/` (gitignored).
 
+
+## Control Center (Management API)
+
+UI: `https://cliproxy.${DOCKER_DOMAIN}/management.html`
+
+Management API base: `/v0/management` (same Traefik host; router is host-wide, not `/v1`-only).
+
+1. Generate a management secret: `openssl rand -hex 32`
+2. Store it in `hermes/secrets/cliproxy_management_key` (gitignored) and set the same plaintext under `remote-management.secret-key` in `config.yaml`.
+3. Keep `remote-management.allow-remote: true` so Traefik/LAN access works (localhost alone is not enough behind the proxy hostname).
+4. Paste the **plaintext** key into «Ключ управления» (not the bcrypt hash written back into `config.yaml` after startup).
+
+```bash
+MGMT=$(tr -d '\n' < hermes/secrets/cliproxy_management_key)
+# without key → 401/403; with key → non-404
+curl -sS -o /dev/null -w '%{http_code}\n' "https://cliproxy.${DOCKER_DOMAIN}/v0/management/config"
+curl -fsS -H "Authorization: Bearer $MGMT" "https://cliproxy.${DOCKER_DOMAIN}/v0/management/config" | head
+```
+
 ## Verify
 
 ```bash

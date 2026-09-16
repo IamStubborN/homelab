@@ -1,8 +1,17 @@
 # Copy to config.yaml (gitignored) and set a strong client api-key.
 # Generate: openssl rand -hex 32
 # Place the SAME value in hermes/secrets/cliproxy_api_key for Hermes/Karakeep.
+# Management key: openssl rand -hex 32 → hermes/secrets/cliproxy_management_key
+# and remote-management.secret-key below (plaintext is bcrypt-hashed on startup).
 host: ""
 port: 8317
+remote-management:
+  # Required for Control Center via Traefik (not localhost).
+  allow-remote: true
+  # Empty disables Management API (404 on /v0/management). Paste plaintext key;
+  # the process rewrites this to bcrypt on first start (config mount must be writable).
+  secret-key: ""
+  disable-control-panel: false
 auth-dir: "/root/.cli-proxy-api"
 api-keys:
   - "replace-with-strong-random-client-api-key"

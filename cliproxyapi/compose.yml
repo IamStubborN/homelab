@@ -23,7 +23,7 @@ services:
       - "127.0.0.1:51121:51121"
       - "127.0.0.1:56121:56121"
     volumes:
-      - ./config.yaml:/CLIProxyAPI/config.yaml:ro
+      - ./config.yaml:/CLIProxyAPI/config.yaml
       - ./auths:/root/.cli-proxy-api
       - ./logs:/CLIProxyAPI/logs
     labels:

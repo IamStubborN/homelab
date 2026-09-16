@@ -155,7 +155,7 @@ cp homeassistant/config/scenes.example.yaml homeassistant/config/scenes.yaml
 ```
 
 ### Custom Applications
-**CLIProxyAPI** (`/cliproxyapi/`): OpenAI-compatible LLM gateway (Codex OAuth + xAI/Grok OAuth). Public: `https://cliproxy.${DOCKER_DOMAIN}/v1`; Docker DNS: `http://cli-proxy-api:8317/v1`; HA: `http://127.0.0.1:8317/v1`.
+**CLIProxyAPI** (`/cliproxyapi/`): OpenAI-compatible LLM gateway (Codex OAuth + xAI/Grok OAuth). Public: `https://cliproxy.${DOCKER_DOMAIN}/v1`; Control Center: `https://cliproxy.${DOCKER_DOMAIN}/management.html` (needs `remote-management.allow-remote` + `secret-key`; plaintext in `hermes/secrets/cliproxy_management_key`); Docker DNS: `http://cli-proxy-api:8317/v1`; HA: `http://127.0.0.1:8317/v1`.
 
 **KaraKeep** (`/karakeep/`): Web scraper with AI summarization and MeiliSearch.
 

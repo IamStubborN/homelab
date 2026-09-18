@@ -67,7 +67,7 @@ make check-codecs VIDEO_DIR=/path/to/dir  # Custom directory
 ### VPN Routing (Gluetun)
 Media services route through Gluetun container:
 - qBittorrent and speedtest-tracker-vpn use `network_mode: service:gluetun`; Prowlarr connects directly
-- TorrServer uses `network_mode: service:gluetun-torrserver` so it has its own Proton forwarded port
+- TorrServer uses `network_mode: service:gluetun-torrserver` so it has its own Proton forwarded port. Prisma stores that Host as `http://` (it prepends `http://` unless the value already starts with `http://`). `torrserver-http` on `:80` priority 100 is that exception; `http-catchall-redirect` in `traefik/config/config.yml` (copy from `config.example.yml`) sends every other Host to HTTPS.
 - Plex: Does NOT route through VPN (direct network access)
 - Health checks integrated with DeUnhealth for auto-restart
 

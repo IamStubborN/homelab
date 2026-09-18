@@ -8,7 +8,9 @@ This directory keeps Media Orchestrator, the dedicated Rezka VPN, and their secr
 The torrent stack lives in `download/compose.yml` and uses `qmcgaw/gluetun:latest` with Watchtower updates enabled.
 Gluetun selects Proton VPN port-forwarding servers in Bulgaria, and
 `qbittorrent-port-sync` applies the current forwarded port to qBittorrent over
-its local API without restarting qBittorrent.
+its local API without restarting qBittorrent. TorrServer has its own
+`gluetun-torrserver` namespace and forwarded port (`torrserver-port-sync`
+writes `PeersListenPort`). LAN URL is `https://torrserver.${DOCKER_DOMAIN}`.
 
 Before the first start, create the ignored runtime files with permissions that
 allow the unprivileged sync container to read the non-secret forwarded port:
@@ -16,8 +18,11 @@ allow the unprivileged sync container to read the non-secret forwarded port:
 ```bash
 install -d -m 0755 download/gluetun/data
 install -m 0644 /dev/null download/gluetun/data/forwarded_port
+install -d -m 0755 download/gluetun-torrserver/data
+install -m 0644 /dev/null download/gluetun-torrserver/data/forwarded_port
 install -d -m 0700 download/secrets
 install -m 0600 /dev/null download/secrets/protonvpn_wireguard_private_key
+install -m 0600 /dev/null download/secrets/protonvpn_wireguard_private_key_torrserver
 install -m 0600 /dev/null download/secrets/gluetun_control_auth_config
 install -m 0600 /dev/null download/secrets/gluetun_control_api_key
 ```

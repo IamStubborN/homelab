@@ -59,6 +59,9 @@ pages:
                   - title: qBittorrent
                     url: https://qbittorrent.${DOCKER_DOMAIN}/
                     icon: si:qbittorrent
+                  - title: TorrServer
+                    url: https://torrserver.${DOCKER_DOMAIN}/
+                    icon: si:webtorrent
                   - title: Prowlarr
                     url: https://prowlarr.${DOCKER_DOMAIN}/
                     icon: sh:prowlarr
@@ -436,6 +439,10 @@ pages:
               - title: qBittorrent
                 url: https://qbittorrent.${DOCKER_DOMAIN}/
                 icon: si:qbittorrent
+                timeout: 5s
+              - title: TorrServer
+                url: https://torrserver.${DOCKER_DOMAIN}/
+                icon: si:webtorrent
                 timeout: 5s
               - title: Prowlarr
                 url: https://prowlarr.${DOCKER_DOMAIN}/

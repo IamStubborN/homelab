@@ -50,6 +50,7 @@ Fill real values only in ignored local files:
 - `speedtest-tracker/.env`
 - `traefik/secrets/cf_dns_api_token`
 - `download/secrets/protonvpn_wireguard_private_key`
+- `download/secrets/protonvpn_wireguard_private_key_torrserver`
 - `plex/secrets/plex_token`
 - `homeassistant/config/secrets.yaml`
 

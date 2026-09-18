@@ -66,8 +66,8 @@ make check-codecs VIDEO_DIR=/path/to/dir  # Custom directory
 
 ### VPN Routing (Gluetun)
 Media services route through Gluetun container:
-- qBittorrent uses `network_mode: service:gluetun`; Prowlarr connects directly
-- speedtest-tracker-vpn also routes through the same Gluetun container: `network_mode: service:gluetun`
+- qBittorrent and speedtest-tracker-vpn use `network_mode: service:gluetun`; Prowlarr connects directly
+- TorrServer uses `network_mode: service:gluetun-torrserver` so it has its own Proton forwarded port
 - Plex: Does NOT route through VPN (direct network access)
 - Health checks integrated with DeUnhealth for auto-restart
 

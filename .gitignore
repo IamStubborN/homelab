@@ -71,8 +71,10 @@ media/recyclarr/
 media/sonarr/config/
 media/gluetun/data/
 download/gluetun/data/
+download/gluetun-torrserver/
 download/prowlarr/
 download/qbittorrent/config/
+download/torrserver/
 plex/config/
 plex/media-preview-generator/
 media/release/

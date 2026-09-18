@@ -7,9 +7,6 @@ services:
       - NET_ADMIN
     devices:
       - /dev/net/tun:/dev/net/tun
-    ports:
-      - 6881:6881
-      - 6881:6881/udp
     volumes:
       # Gluetun state lives next to this compose file, not under media/.
       - ./gluetun/data:/gluetun
@@ -93,6 +90,119 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - ${INTERNAL_STORAGE:-/mnt/internal}/torrents:/data/internal/torrents
       - ${USB_STORAGE:-/mnt/usb_drive}/torrents:/data/usb_drive/torrents
+
+  gluetun-torrserver:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun-torrserver
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./gluetun-torrserver/data:/gluetun
+      - ./gluetun/scripts:/scripts:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "/scripts/healthcheck.sh" ]
+      interval: 20s
+      timeout: 15s
+      retries: 2
+      start_period: 60s
+    environment:
+      - TZ=${TIMEZONE:-UTC}
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - PORT_FORWARD_ONLY=on
+      - SERVER_COUNTRIES=Bulgaria
+      - WIREGUARD_PRIVATE_KEY_SECRETFILE=/run/secrets/protonvpn_wireguard_private_key_torrserver
+      - DNS_SERVER=on
+      - DNS_UPSTREAM_RESOLVERS=cloudflare,google
+      - BLOCK_MALICIOUS=off
+      - DNS_UPSTREAM_IPV6=off
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH=/run/secrets/gluetun_control_auth_config
+      - VPN_PORT_FORWARDING=on
+      - VPN_PORT_FORWARDING_STATUS_FILE=/gluetun/forwarded_port
+    secrets:
+      - protonvpn_wireguard_private_key_torrserver
+      - gluetun_control_auth_config
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.torrserver.tls=true"
+      - "traefik.http.routers.torrserver.entrypoints=http,https"
+      - "traefik.http.routers.torrserver.service=torrserver"
+      - "traefik.http.routers.torrserver.rule=Host(`torrserver.${DOCKER_DOMAIN}`)"
+      - "traefik.http.services.torrserver.loadbalancer.server.port=8090"
+      - "deunhealth.restart.on.unhealthy=true"
+    networks:
+      - proxy
+    security_opt:
+      - no-new-privileges:true
+
+  torrserver:
+    container_name: torrserver
+    image: ghcr.io/yourok/torrserver:latest
+    network_mode: 'service:gluetun-torrserver'
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      gluetun-torrserver:
+        condition: service_healthy
+        restart: true
+    environment:
+      - TS_PORT=8090
+      - TS_DONTKILL=1
+      - TS_HTTPAUTH=0
+      - TS_CONF_PATH=/opt/ts/config
+    volumes:
+      - ./torrserver/config:/opt/ts/config
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8090/echo >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "deunhealth.restart.on.unhealthy=true"
+
+  torrserver-port-sync:
+    image: alpine:3.23
+    container_name: torrserver-port-sync
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      gluetun-torrserver:
+        condition: service_healthy
+      torrserver:
+        condition: service_started
+    environment:
+      - TORRSERVER_URL=http://gluetun-torrserver:8090
+      - FORWARDED_PORT_FILE=/gluetun/forwarded_port
+      - SYNC_STATE_FILE=/tmp/synced_port
+      - POLL_INTERVAL=5
+    volumes:
+      - ./torrserver-port-sync.sh:/scripts/port-sync.sh:ro
+      - ./gluetun-torrserver/data/forwarded_port:/gluetun/forwarded_port:ro
+    tmpfs:
+      - /tmp:size=1m,mode=1777
+    entrypoint: ["sh", "/scripts/port-sync.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /tmp/synced_port && test \"$$(cat /tmp/synced_port)\" = \"$$(tr -dc '0-9' < /gluetun/forwarded_port)\""]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    networks:
+      - proxy
 
   qbittorrent-port-sync:
     image: alpine:3.23
@@ -221,9 +331,38 @@ services:
       timeout: 5s
       retries: 3
 
+  gluetun-torrserver-watcher:
+    image: docker:cli
+    container_name: gluetun-torrserver-watcher
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      gluetun-torrserver:
+        condition: service_healthy
+    environment:
+      - PARENT_CONTAINER=gluetun-torrserver
+      - DEPENDENT_CONTAINERS=torrserver
+      - HEALTH_TIMEOUT=120
+      - SETTLE_DELAY=10
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./gluetun-watcher/watch.sh:/watch.sh:ro
+      - ${HOMELAB_ROOT:-/opt/homelab}:${HOMELAB_ROOT:-/opt/homelab}:ro
+    entrypoint: ["sh", "/watch.sh"]
+    healthcheck:
+      test: [CMD, pgrep, -f, "docker events.*container="]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 secrets:
   protonvpn_wireguard_private_key:
     file: ./secrets/protonvpn_wireguard_private_key
+  protonvpn_wireguard_private_key_torrserver:
+    file: ./secrets/protonvpn_wireguard_private_key_torrserver
   gluetun_control_auth_config:
     file: ./secrets/gluetun_control_auth_config
   gluetun_control_api_key:

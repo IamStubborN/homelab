@@ -22,9 +22,9 @@ chmod 0640 hermes/secrets/cliproxy_api_key
 chmod 0600 cliproxyapi/config.yaml
 ```
 
-## OAuth (Codex + xAI)
+## OAuth (Codex)
 
-Binary flags use a **single** leading dash (`-no-browser`, `-codex-login`, `-xai-login`).
+Binary flags use a **single** leading dash (`-no-browser`, `-codex-login`).
 
 ### Codex (localhost callback on port 1455)
 
@@ -40,20 +40,6 @@ docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser -codex-lo
 ```
 
 Open the printed `https://auth.openai.com/...` URL in the laptop browser. Ignore any `root@public-ip` tunnel example the binary prints — use the `host-5.example.invalid...` tunnel above.
-
-### xAI / Grok (device-code flow)
-
-Current image uses device authorization (no localhost callback required):
-
-```bash
-cd /srv/homelab
-docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser -xai-login
-```
-
-Open the printed `https://accounts.x.ai/oauth2/device?...` URL and enter the shown user code. Port `56121` remains published for older callback-based builds.
-
-Tokens land in `cliproxyapi/auths/` (gitignored).
-
 
 ## Control Center (Management API)
 
@@ -82,4 +68,4 @@ curl -fsS -H "Authorization: Bearer $KEY" http://127.0.0.1:8317/v1/models
 curl -fsS -H "Authorization: Bearer $KEY" "https://cliproxy.${DOCKER_DOMAIN}/v1/models"
 ```
 
-After successful OAuth, the models list should include Codex/`gpt-5.6-luna` and Grok models.
+After successful OAuth, the models list should include Codex/`gpt-5.6-luna`.

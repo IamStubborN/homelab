@@ -2366,13 +2366,7 @@ class HomeTelegramAdapter(TelegramAdapter):
                 tool, arguments = operation
             if not retry_safe_action:
                 receipts.consume(data, message_id)
-            operation_task = (
-                asyncio.create_task(
-                    _run_media((tool, arguments), self._media_plugin_context)
-                )
-                if action == "cancel"
-                else None
-            )
+            operation_task = None
             try:
                 if action == "cancel" and self._media_plugin_context is not None:
                     try:
@@ -2407,6 +2401,13 @@ class HomeTelegramAdapter(TelegramAdapter):
                             "Failed to render optimistic media job cancellation %s",
                             job_id,
                         )
+                operation_task = (
+                    asyncio.create_task(
+                        _run_media((tool, arguments), self._media_plugin_context)
+                    )
+                    if action == "cancel"
+                    else None
+                )
                 returncode, stdout = (
                     await operation_task
                     if operation_task is not None

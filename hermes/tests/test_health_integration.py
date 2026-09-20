@@ -48,16 +48,23 @@ def compose_environment() -> dict:
 
 
 def rendered_compose(
-    path: pathlib.Path, cwd: pathlib.Path, *, interpolate: bool = True
+    path: pathlib.Path,
+    cwd: pathlib.Path,
+    *,
+    interpolate: bool = True,
+    profiles: tuple[str, ...] = (),
 ) -> dict:
     command = ["docker", "compose", "-f", str(path), "config"]
     if not interpolate:
         command.append("--no-interpolate")
     command.extend(("--format", "json"))
+    environment = compose_environment()
+    if profiles:
+        environment["COMPOSE_PROFILES"] = ",".join(profiles)
     result = subprocess.run(
         command,
         cwd=cwd,
-        env=compose_environment(),
+        env=environment,
         check=True,
         capture_output=True,
         text=True,
@@ -83,7 +90,9 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
             HOMELAB_ROOT / "health/compose.yml", HOMELAB_ROOT / "health"
         )
         cls.wiki = rendered_compose(
-            HOMELAB_ROOT / "wiki/compose.yml", HOMELAB_ROOT / "wiki"
+            HOMELAB_ROOT / "wiki/compose.yml",
+            HOMELAB_ROOT / "wiki",
+            profiles=("g2-oauth",),
         )
 
     def test_both_embedded_profiles_share_the_health_stack_network(self):
@@ -132,7 +141,7 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
         self.assertNotIn("health-pg-data", self.homelab.get("volumes", {}))
         for name in ("health-service", "hermes-primary", "hermes-secondary"):
             self.assertIn("health-internal", services[name]["networks"])
-        for name in ("health-drive", "obsidian-sync"):
+        for name in ("health-drive", "syncthing"):
             self.assertIn(name, services)
             self.assertNotIn("health-internal", services[name].get("networks", {}))
 
@@ -179,9 +188,9 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
         self.assertTrue((HOMELAB_ROOT / "health/service").is_dir())
 
     def test_wiki_compose_mounts_host_vault_and_stays_off_health_internal(self):
-        for name, target, read_only in (
-            ("health-drive", "/data", True),
-            ("obsidian-sync", "/vault", False),
+        for name, target, read_only, watchtower in (
+            ("health-drive", "/data", True, "false"),
+            ("syncthing", "/var/syncthing/wiki", False, "true"),
         ):
             service = self.wiki["services"][name]
             mount = volume_target(service, target)
@@ -190,12 +199,12 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
             self.assertEqual(service["user"], "10000:10000")
             self.assertEqual(
                 service["labels"]["com.centurylinklabs.watchtower.enable"],
-                "false",
+                watchtower,
             )
             self.assertNotIn("health-internal", service.get("networks", {}))
         self.assertEqual(
-            self.wiki["services"]["obsidian-sync"]["image"],
-            "homelab-obsidian-sync:local",
+            self.wiki["services"]["syncthing"]["image"],
+            "syncthing/syncthing:latest",
         )
 
     def test_hermes_secrets_reuse_the_health_stack_token_files(self):
@@ -219,7 +228,7 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
-            self.assertEqual(config["_config_version"], 34)
+            self.assertEqual(config["_config_version"], 41)
             disabled = config["skills"]["platform_disabled"]["telegram"]
             self.assertNotIn("llm-wiki", disabled)
             self.assertIn("obsidian", disabled)

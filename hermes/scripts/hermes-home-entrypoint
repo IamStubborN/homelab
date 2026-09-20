@@ -18,10 +18,6 @@ read_secret TELEGRAM_BOT_TOKEN /run/secrets/telegram_bot_token
 read_secret API_SERVER_KEY /run/secrets/webhook_hmac
 read_secret MEDIA_API_TOKEN /run/secrets/media_api_token
 read_secret HOMEASSISTANT_API_TOKEN /run/secrets/homeassistant_api_token
-read_secret CLIPROXY_API_KEY /run/secrets/cliproxy_api_key
-# OpenAI-compatible clients (custom base_url auxiliary) fall back to OPENAI_API_KEY.
-export OPENAI_API_KEY="$CLIPROXY_API_KEY"
-export OPENAI_BASE_URL=http://cli-proxy-api:8317/v1
 read_secret TAVILY_API_KEY /run/secrets/tavily_api_key
 read_secret EXA_API_KEY /run/secrets/exa_api_key
 read_secret GROQ_API_KEY /run/secrets/groq_api_key

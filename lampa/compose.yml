@@ -1,4 +1,43 @@
 services:
+  lampa-ai-adapter:
+    build: ./ai-adapter
+    container_name: lampa-ai-adapter
+    restart: unless-stopped
+    depends_on:
+      cli-proxy-api:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      CLI_PROXY_BASE: http://cli-proxy-api:8317/v1
+      CLI_PROXY_MODEL: gpt-5.6-luna
+      CLI_PROXY_KEY_FILE: /run/secrets/cliproxy_api_key
+      TMDB_BASE: https://lampa.${DOCKER_DOMAIN}/tmdb/api/3
+      TMDB_API_KEY: replace-with-private-tmdb-key
+      LAMPAC_FALLBACK_BASE: https://lampa:9118
+    secrets:
+      - cliproxy_api_key
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.lampa-ai.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/ai/`)"
+      - "traefik.http.routers.lampa-ai.entrypoints=http,https"
+      - "traefik.http.routers.lampa-ai.tls=true"
+      - "traefik.http.routers.lampa-ai.priority=100"
+      - "traefik.http.routers.lampa-ai.middlewares=lampa-ai-ratelimit"
+      - "traefik.http.middlewares.lampa-ai-ratelimit.ratelimit.average=10"
+      - "traefik.http.middlewares.lampa-ai-ratelimit.ratelimit.period=1m"
+      - "traefik.http.middlewares.lampa-ai-ratelimit.ratelimit.burst=5"
+      - "traefik.http.services.lampa-ai.loadbalancer.server.port=8080"
+    networks:
+      - proxy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
   lampa:
     image: ghcr.io/lampac-nextgen/lampac:latest
     container_name: lampa
@@ -33,3 +72,7 @@ services:
 networks:
   proxy:
     external: true
+
+secrets:
+  cliproxy_api_key:
+    file: ../hermes/secrets/cliproxy_api_key

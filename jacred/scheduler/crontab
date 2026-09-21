@@ -193,21 +193,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # anibelka-ParseLatest -> /cron/anibelka/ParseLatest (max_time=900s)
 10 7 * * *  /usr/local/bin/run-job.sh anibelka-ParseLatest http://jacred:9117/cron/anibelka/ParseLatest 900
 
-# --- korsars (login / bb_data; Rutor-style) ---
-# minutes 15/27/45/57 — avoid kinozal :03,:18,:33,:48
-# korsars-parse -> /cron/korsars/parse (max_time=900s)
-15,27,45,57 * * * *  /usr/local/bin/run-job.sh korsars-parse http://jacred:9117/cron/korsars/parse 900
-
-# korsars-UpdateTasksParse -> /cron/korsars/UpdateTasksParse (max_time=60s)
-45 2 * * *  /usr/local/bin/run-job.sh korsars-UpdateTasksParse http://jacred:9117/cron/korsars/UpdateTasksParse 60
-
-# korsars-ParseAllTask -> /cron/korsars/ParseAllTask (max_time=60s)
-# ~3.6h cycle; 05:xx and 17:xx. New round only when pending=0.
-53 5,17 * * *  /usr/local/bin/run-job.sh korsars-ParseAllTask http://jacred:9117/cron/korsars/ParseAllTask 60
-
-# korsars-ParseLatest -> /cron/korsars/ParseLatest (max_time=900s)
-15 7 * * *  /usr/local/bin/run-job.sh korsars-ParseLatest http://jacred:9117/cron/korsars/ParseLatest 900
-
 # --- ultradox (search-like Referer; Rutor-style) ---
 # ultradox-parse -> /cron/ultradox/parse (max_time=900s)
 # every 30 min :13,:43 — avoid rutor 1/16/31/46; parse ~5 min
@@ -222,9 +207,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # ultradox-ParseLatest -> /cron/ultradox/ParseLatest (max_time=900s)
 20 7 * * *  /usr/local/bin/run-job.sh ultradox-ParseLatest http://jacred:9117/cron/ultradox/ParseLatest 900
-
-# --- baibako (requires login or cookie; parser is marked unstable upstream) ---
-8,23,38,53 * * * *  /usr/local/bin/run-job.sh baibako-parse http://jacred:9117/cron/baibako/parse 900
 
 # --- knaben ---
 12,32,52 * * * *  /usr/local/bin/run-job.sh knaben-parse http://jacred:9117/cron/knaben/parse 900

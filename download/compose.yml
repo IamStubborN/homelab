@@ -362,6 +362,37 @@ services:
     networks:
       - proxy
 
+  # Dedicated browser pool for JacRed crawl/ParseAll work.
+  solverr-crawl:
+    container_name: solverr-crawl
+    image: ghcr.io/unseensnick/solverr:latest
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - LOG_LEVEL=info
+      - TZ=${TIMEZONE:-UTC}
+      - BROWSER_LOCALE=en-US
+      - MAX_TIMEOUT_MS=300000
+    expose:
+      - "8191"
+    shm_size: 512mb
+    mem_limit: 2g
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8191/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "deunhealth.restart.on.unhealthy=true"
+      - "traefik.enable=false"
+    networks:
+      - proxy
+
   gluetun-watcher:
     image: docker:cli
     container_name: gluetun-watcher

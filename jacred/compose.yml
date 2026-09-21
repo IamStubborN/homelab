@@ -12,6 +12,8 @@ services:
     depends_on:
       solverr:
         condition: service_healthy
+      solverr-crawl:
+        condition: service_healthy
     volumes:
       - ./config:/app/config
       - ./data:/app/Data

@@ -31,6 +31,9 @@ services:
       - "traefik.docker.network=proxy"
       - "traefik.http.routers.cliproxy.tls=true"
       - "traefik.http.routers.cliproxy.entrypoints=http,https"
+      # Management API/консоль — сознательно доступны в локалке за management-ключом.
+      # ВНИМАНИЕ: часть эндпоинтов (напр. /v0/management/api-key-usage) отдаёт upstream-ключи
+      # открытым текстом. Закрыть можно, добавив к правилу: && !PathPrefix(`/v0/management`) && !PathPrefix(`/management.html`)
       - "traefik.http.routers.cliproxy.rule=Host(`cliproxy.${DOCKER_DOMAIN}`)"
       - "traefik.http.services.cliproxy.loadbalancer.server.port=8317"
     healthcheck:

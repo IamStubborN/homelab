@@ -41,22 +41,99 @@ docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser -codex-lo
 
 Open the printed `https://auth.openai.com/...` URL in the laptop browser. Ignore any `root@public-ip` tunnel example the binary prints — use the `host-5.example.invalid...` tunnel above.
 
+## OpenCode Go (third-party models)
+
+The `openai-compatibility` entry named `opencode-go` in `config.yaml` adds selected
+[OpenCode Go](https://opencode.ai/docs/go) models to the same `/v1` surface as the
+Codex OAuth models. The gateway calls Go's `/chat/completions`, so **only models that
+answer on that endpoint can be listed** (see “Adding models”). The Go key is a literal
+in `config.yaml` (gitignored); on the Mac the same value lives in sops as
+`OPENCODE_GO_API_KEY`.
+
+Two things are easy to get wrong:
+
+- `headers: x-opencode-session: "$session-id"` — the `$NAME` form copies a header from
+the downstream request. OpenCode Go rejects requests without a session header
+(`400 MissingSessionID`), and Codex sends it as `session-id` (**dash**, not underscore).
+Remove that line and every Go model starts failing.
+- An alias must not collide with a native model. `gpt-5.6-luna` exists in Go *and* in
+the Codex account, so it stays out of the block.
+
+Model names and context windows mirror `~/.cache/opencode/models.json` (the OpenCode
+CLI's cache).
+
+### Adding models
+
+Probe the upstream first — the live `/models` list contains entries that are not
+actually served:
+
+```bash
+go_key=$(python3 -c "import yaml;print(yaml.safe_load(open('cliproxyapi/config.yaml'))['openai-compatibility'][0]['api-key-entries'][0]['api-key'])")
+curl -s -o /dev/null -w '%{http_code}\n' https://opencode.ai/zen/go/v1/chat/completions \
+  -H "Authorization: Bearer $go_key" -H 'Content-Type: application/json' \
+  -H 'x-opencode-session: probe' \
+  -d '{"model":"glm-5.3","messages":[{"role":"user","content":"hi"}],"max_tokens":8}'
+```
+
+`200` means it can be added. Known failures: `Model is unavailable` (listed but not
+served), `403 DataPolicyError` (muse-spark models need an explicit opt-in in the
+OpenCode console), and `not supported for format oa-compat` (Responses-only models
+such as `grok-4.6`). Add a working model to the `models:` list in `config.yaml` and
+`docker compose restart cli-proxy-api`.
+
+### Codex on the Mac
+
+Codex uses the gateway as a **custom provider** (`model_provider = "cliproxy"`), not
+`openai_base_url`: the gateway expects the client api-key, while Codex would send its
+ChatGPT token there (`401 Invalid API key`).
+
+The desktop model picker reads `model_catalog_json`, and that file *replaces* the
+bundled catalog — every selectable model has to be listed in it. Keep it in sync with
+the gateway block:
+
+```bash
+cd cliproxyapi
+./make-codex-catalog.py           # rebuild ~/.codex/model_catalog.json
+./make-codex-catalog.py --check   # non-zero exit when out of sync
+```
+
+Native (ChatGPT) models come from `~/.codex/model_catalog.native.json`, so the script
+owns only the OpenCode Go part. Codex reads the file at startup — restart it after
+rebuilding.
+
+Codex pins the provider **per thread**: chats created before `model_provider` changed
+keep routing to ChatGPT, and picking a Go model there fails with
+`The '<model>' model is not supported when using Codex with a ChatGPT account`.
+Start a new chat.
+
 ## Control Center (Management API)
 
-UI: `https://cliproxy.${DOCKER_DOMAIN}/management.html`
+UI: `https://cliproxy.${DOCKER_DOMAIN}/management.html` (LAN only).
+Management API base: `/v0/management` on the same Traefik host.
 
-Management API base: `/v0/management` (same Traefik host; router is host-wide, not `/v1`-only).
+> ⚠️ **Do not paste management API output anywhere.** Some endpoints return the
+> upstream credentials **in plaintext** — `GET /v0/management/api-key-usage` (and
+> `/v0/management/config`) embed the provider API keys as part of the JSON. Anyone
+> with the management key plus network access can read every upstream key, so the
+> management key must be treated as a secret that unlocks all of them. If you need to
+> show someone a response, mask `sk-…` values first.
+>
+> To close the surface off (it stays reachable over the LAN, which is deliberate for
+> the Control Center), append to the Traefik rule in `compose.yml`:
+> `&& !PathPrefix(`/v0/management`) && !PathPrefix(`/management.html`)
+> and recreate the container. Keep `remote-management.allow-remote: true` either way:
+> the container sees the Docker gateway as the peer, so `allow-remote: false` answers
+> `403` even through an SSH tunnel to `127.0.0.1:8317`.
 
 1. Generate a management secret: `openssl rand -hex 32`
 2. Store it in `hermes/secrets/cliproxy_management_key` (gitignored) and set the same plaintext under `remote-management.secret-key` in `config.yaml`.
-3. Keep `remote-management.allow-remote: true` so Traefik/LAN access works (localhost alone is not enough behind the proxy hostname).
-4. Paste the **plaintext** key into «Ключ управления» (not the bcrypt hash written back into `config.yaml` after startup).
+3. Paste the **plaintext** key into «Ключ управления» (not the bcrypt hash written back into `config.yaml` after startup).
 
 ```bash
 MGMT=$(tr -d '\n' < hermes/secrets/cliproxy_management_key)
 # without key → 401/403; with key → non-404
 curl -sS -o /dev/null -w '%{http_code}\n' "https://cliproxy.${DOCKER_DOMAIN}/v0/management/config"
-curl -fsS -H "Authorization: Bearer $MGMT" "https://cliproxy.${DOCKER_DOMAIN}/v0/management/config" | head
+curl -fsS -H "Authorization: Bearer $MGMT" "https://cliproxy.${DOCKER_DOMAIN}/v0/management/config" | sed -E 's/sk-[A-Za-z0-9]+/<KEY>/g' | head
 ```
 
 ## Verify

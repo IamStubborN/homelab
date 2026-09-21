@@ -75,6 +75,9 @@ download/gluetun-torrserver/
 download/prowlarr/
 download/qbittorrent/config/
 download/torrserver/
+jacred/data/
+jacred/config/init.yaml
+jacred/config/init.yaml.bak*
 plex/config/
 plex/media-preview-generator/
 media/release/

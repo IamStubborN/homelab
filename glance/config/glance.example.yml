@@ -62,6 +62,9 @@ pages:
                   - title: TorrServer
                     url: https://torrserver.${DOCKER_DOMAIN}/
                     icon: si:webtorrent
+                  - title: Lampa
+                    url: https://lampa.${DOCKER_DOMAIN}/
+                    icon: si:playback
                   - title: Prowlarr
                     url: https://prowlarr.${DOCKER_DOMAIN}/
                     icon: sh:prowlarr

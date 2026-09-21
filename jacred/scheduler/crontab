@@ -130,10 +130,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # full forum walk ~27 min; every 2h (hourly was overlapping itself vs curl --max-time 900)
 25 */2 * * *  /usr/local/bin/run-job.sh mazepa-parse http://jacred:9117/cron/mazepa/parse 2400
 
-# --- lostfilm (~18k) ---
-# lostfilm-parse -> /cron/lostfilm/parse (max_time=900s)
-11,26,41,56 * * * *  /usr/local/bin/run-job.sh lostfilm-parse http://jacred:9117/cron/lostfilm/parse 900
-
 # --- selezen (~16k) ---
 # selezen-parse -> /cron/selezen/parse (max_time=900s)
 9,24,39,54 * * * *  /usr/local/bin/run-job.sh selezen-parse http://jacred:9117/cron/selezen/parse 900
@@ -154,10 +150,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # subsplease-ParseShows -> /cron/subsplease/ParseShows (default limit=50; max_time=1800s)
 25 5 * * *  /usr/local/bin/run-job.sh subsplease-ParseShows http://jacred:9117/cron/subsplease/ParseShows 1800
 
-# --- aniliberty (~5k) ---
-# aniliberty-parse -> /cron/aniliberty/parse (max_time=900s)
-6,21,36,51 * * * *  /usr/local/bin/run-job.sh aniliberty-parse http://jacred:9117/cron/aniliberty/parse 900
-
 # --- anidub (~4k) ---
 # anidub-parse -> /cron/anidub/parse (max_time=900s)
 4,19,34,49 * * * *  /usr/local/bin/run-job.sh anidub-parse http://jacred:9117/cron/anidub/parse 900
@@ -169,10 +161,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # --- leproduction ---
 # leproduction-parse -> /cron/leproduction/parse?limit_page=3 (max_time=900s)
 45 6 * * *  /usr/local/bin/run-job.sh leproduction-parse "http://jacred:9117/cron/leproduction/parse?limit_page=3" 900
-
-# --- viruseproject ---
-# viruseproject-parse -> /cron/viruseproject/parse?limit_page=3 (max_time=900s)
-50 6 * * *  /usr/local/bin/run-job.sh viruseproject-parse "http://jacred:9117/cron/viruseproject/parse?limit_page=3" 900
 
 # --- anifilm (login or session cookie) ---
 # anifilm-parse -> /cron/anifilm/parse (max_time=1800s)

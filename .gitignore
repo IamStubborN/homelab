@@ -78,6 +78,9 @@ download/torrserver/
 jacred/data/
 jacred/config/init.yaml
 jacred/config/init.yaml.bak*
+lampa/config/passwd
+lampa/cache/
+lampa/database/
 plex/config/
 plex/media-preview-generator/
 media/release/
@@ -105,6 +108,7 @@ homeassistant/config/.cache/
 homeassistant/config/deps/
 homeassistant/config/home-assistant*.db*
 homeassistant/config/home-assistant.log*
+homeassistant/config/ip_bans.yaml
 homeassistant/config/secrets.yaml
 homeassistant/config/secrets.yaml.bak*
 homeassistant/config/www/

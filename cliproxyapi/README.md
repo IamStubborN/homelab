@@ -12,6 +12,23 @@ OpenAI-compatible gateway (`eceasy/cli-proxy-api`) for household LLM clients.
 
 Authenticate with the shared client key in `hermes/secrets/cliproxy_api_key` (also listed under `api-keys` in `config.yaml`). Traefik does not replace client api-key auth.
 
+### Which key belongs to which client
+
+The gateway's **client** key (who may call the gateway) and the **upstream** OpenCode Go keys
+listed in the `openai-compatibility` block are different credentials — do not mix them up:
+
+| Path | Credential | Stored in |
+| --- | --- | --- |
+| Codex / Karakeep / HA → gateway | gateway client key | `api-keys` in `config.yaml`, `hermes/secrets/cliproxy_api_key` |
+| Codex on the Mac → gateway | gateway client key | sops `CLIPROXY_API_KEY` |
+| gateway → OpenCode Go | Go key named `cliproxy` in the console | `openai-compatibility` in `config.yaml`, sops `OPENCODE_GO_API_KEY` |
+| pi agent → OpenCode Go (direct) | Go key named `pi` | `~/.pi/agent/auth.json` |
+| OpenCode CLI → OpenCode Go (direct) | Go key named `opencode-cli` | `~/.local/share/opencode/auth.json` |
+
+One key per client, so rotating one does not touch the others. When rotating an upstream
+Go key, update the `openai-compatibility` block **and** sops `OPENCODE_GO_API_KEY`, then
+`docker compose restart cli-proxy-api`.
+
 ## First-time setup
 
 ```bash

@@ -1,0 +1,35 @@
+services:
+  lampa:
+    image: ghcr.io/lampac-nextgen/lampac:latest
+    container_name: lampa
+    restart: unless-stopped
+    depends_on:
+      jacred:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    shm_size: 1024mb
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.lampa.tls=true"
+      - "traefik.http.routers.lampa.entrypoints=http,https"
+      - "traefik.http.routers.lampa.rule=Host(`lampa.${DOCKER_DOMAIN}`)"
+      - "traefik.http.routers.lampa.middlewares=lampa-forwarded"
+      - "traefik.http.middlewares.lampa-forwarded.headers.customRequestHeaders.xscheme=https"
+      - "traefik.http.middlewares.lampa-forwarded.headers.customRequestHeaders.xhost=lampa.${DOCKER_DOMAIN}"
+      - "traefik.http.services.lampa.loadbalancer.server.port=9118"
+    volumes:
+      - ./config/init.conf:/lampac/init.conf:ro
+      - ./config/passwd:/lampac/passwd:ro
+      - ./config/lampainit-invc.js:/lampac/module/LampaWeb/plugins/lampainit-invc.js:ro
+      - ./mods/Tracks:/lampac/mods/Tracks:ro
+      - ./cache:/lampac/cache
+      - ./database:/lampac/database
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true

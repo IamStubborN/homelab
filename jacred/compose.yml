@@ -1,0 +1,48 @@
+services:
+  jacred:
+    image: ghcr.io/jacred-fdb/jacred:latest
+    container_name: jacred
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: ${TIMEZONE:-Europe/Sofia}
+      UMASK: "0027"
+      DOTNET_USE_POLLING_FILE_WATCHER: "1"
+    depends_on:
+      solverr:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/Data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-s", "--max-time", "10", "http://127.0.0.1:9117/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 45s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "deunhealth.restart.on.unhealthy=true"
+    networks:
+      - proxy
+
+  jacred-cron:
+    build:
+      context: ./scheduler
+    container_name: jacred-cron
+    restart: unless-stopped
+    init: true
+    depends_on:
+      jacred:
+        condition: service_healthy
+    environment:
+      TZ: ${TIMEZONE:-Europe/Sofia}
+      CURL_CONNECT_TIMEOUT: "10"
+      LOCK_DIR: /tmp/jacred-cron-locks
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true

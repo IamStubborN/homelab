@@ -117,6 +117,8 @@ services:
       - WIREGUARD_PRIVATE_KEY_SECRETFILE=/run/secrets/protonvpn_wireguard_private_key_torrserver
       - DNS_SERVER=on
       - DNS_UPSTREAM_RESOLVERS=cloudflare,google
+      # Allow TorrServer's shared VPN namespace to reach Traefik on the LAN.
+      - FIREWALL_OUTBOUND_SUBNETS=${LAN_SUBNET:-192.0.2.17/24}
       - BLOCK_MALICIOUS=off
       - DNS_UPSTREAM_IPV6=off
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
@@ -137,6 +139,20 @@ services:
       - "traefik.http.routers.torrserver-http.service=torrserver"
       - "traefik.http.routers.torrserver-http.rule=Host(`torrserver.${DOCKER_DOMAIN}`)"
       - "traefik.http.routers.torrserver-http.priority=100"
+      - "traefik.http.routers.lampa-torrserver.tls=true"
+      - "traefik.http.routers.lampa-torrserver.entrypoints=https"
+      - "traefik.http.routers.lampa-torrserver.service=torrserver"
+      - "traefik.http.routers.lampa-torrserver.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/torrserver`)"
+      - "traefik.http.routers.lampa-torrserver.priority=100"
+      - "traefik.http.routers.lampa-torrserver.middlewares=lampa-torrserver-strip"
+      - "traefik.http.middlewares.lampa-torrserver-strip.stripprefix.prefixes=/torrserver"
+      # TorrServer's HLS playlists use root-relative /gst/* segment URLs.
+      # Keep this second route unstripped so those browser requests resolve.
+      - "traefik.http.routers.lampa-torrserver-gst.tls=true"
+      - "traefik.http.routers.lampa-torrserver-gst.entrypoints=https"
+      - "traefik.http.routers.lampa-torrserver-gst.service=torrserver"
+      - "traefik.http.routers.lampa-torrserver-gst.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/gst`)"
+      - "traefik.http.routers.lampa-torrserver-gst.priority=101"
       - "traefik.http.services.torrserver.loadbalancer.server.port=8090"
       - "deunhealth.restart.on.unhealthy=true"
     networks:
@@ -146,7 +162,11 @@ services:
 
   torrserver:
     container_name: torrserver
-    image: ghcr.io/yourok/torrserver:latest
+    build:
+      context: ./torrserver
+      args:
+        TORRSERVER_VERSION: MatriX.145
+    image: homelab/torrserver-gst:MatriX.145
     network_mode: 'service:gluetun-torrserver'
     restart: unless-stopped
     security_opt:
@@ -160,6 +180,22 @@ services:
       - TS_DONTKILL=1
       - TS_HTTPAUTH=0
       - TS_CONF_PATH=/opt/ts/config
+      - LIBVA_DRIVER_NAME=iHD
+    # The custom image executes the TorrServer binary directly, so pass the
+    # paths explicitly instead of relying on TS_* variables that the binary
+    # itself does not parse.
+    command:
+      - --path
+      - /opt/ts/config
+      - --logpath
+      - /opt/ts/log/torrserver.log
+      - --port
+      - "8090"
+      - --torrentsdir
+      - /opt/ts/torrents
+      - --dontkill
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
     volumes:
       - ./torrserver/config:/opt/ts/config
     healthcheck:
@@ -271,36 +307,54 @@ services:
       - "traefik.http.routers.prowlarr-direct.service=prowlarr-direct"
       - "traefik.http.routers.prowlarr-direct.priority=100"
       - "traefik.http.routers.prowlarr-direct.rule=Host(`prowlarr.${DOCKER_DOMAIN}`)"
+      - "traefik.http.routers.lampa-prowlarr.tls=true"
+      - "traefik.http.routers.lampa-prowlarr.entrypoints=https"
+      - "traefik.http.routers.lampa-prowlarr.service=prowlarr-lampa"
+      - "traefik.http.routers.lampa-prowlarr.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/prowlarr`)"
+      - "traefik.http.routers.lampa-prowlarr.priority=100"
+      - "traefik.http.routers.lampa-prowlarr.middlewares=lampa-prowlarr-strip"
+      - "traefik.http.middlewares.lampa-prowlarr-strip.stripprefix.prefixes=/prowlarr"
+      # TorrServer uses Docker DNS and reaches Traefik directly; the public
+      # Lampa FQDN remains the browser-facing interface above.
+      - "traefik.http.routers.lampa-prowlarr-internal.entrypoints=http"
+      - "traefik.http.routers.lampa-prowlarr-internal.service=prowlarr-lampa"
+      - "traefik.http.routers.lampa-prowlarr-internal.rule=Host(`traefik`) && PathPrefix(`/prowlarr`)"
+      - "traefik.http.routers.lampa-prowlarr-internal.priority=120"
+      - "traefik.http.routers.lampa-prowlarr-internal.middlewares=lampa-prowlarr-internal-strip"
+      - "traefik.http.middlewares.lampa-prowlarr-internal-strip.stripprefix.prefixes=/prowlarr"
       - "traefik.http.services.prowlarr-direct.loadbalancer.server.port=9696"
+      - "traefik.http.services.prowlarr-lampa.loadbalancer.server.port=9696"
     volumes:
       - ./prowlarr/config:/config
       - /etc/localtime:/etc/localtime:ro
     networks:
       - proxy
 
-  flaresolverr:
-    container_name: flaresolverr
-    image: ghcr.io/flaresolverr/flaresolverr:latest
+  # Solverr exposes the FlareSolverr-compatible /v1 API and adds a stealth
+  # browser fallback for protected trackers.
+  solverr:
+    container_name: solverr
+    image: ghcr.io/unseensnick/solverr:latest
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
     environment:
-      - LOG_LEVEL=warning
-      - LOG_HTML=false
-      - CAPTCHA_SOLVER=none
+      - LOG_LEVEL=info
       - TZ=${TIMEZONE:-UTC}
+      - BROWSER_LOCALE=en-US
+      - MAX_TIMEOUT_MS=300000
     expose:
       - "8191"
     shm_size: 512mb
     mem_limit: 2g
     tmpfs:
-      - /config:rw,noexec,nosuid,size=32m
+      - /tmp:rw,noexec,nosuid,size=256m
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8191/ >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 90s
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "deunhealth.restart.on.unhealthy=true"

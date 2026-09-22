@@ -19,7 +19,7 @@ listed in the `openai-compatibility` block are different credentials — do not 
 
 | Path | Credential | Stored in |
 | --- | --- | --- |
-| Codex / Karakeep / HA → gateway | gateway client key | `api-keys` in `config.yaml`, `hermes/secrets/cliproxy_api_key` |
+| Karakeep / HA → gateway | gateway client key | `api-keys` in `config.yaml`, `hermes/secrets/cliproxy_api_key` |
 | gateway → OpenCode Go | Go key named `cliproxy` in the console | `openai-compatibility` in `config.yaml`, sops `OPENCODE_GO_API_KEY` |
 | pi agent → OpenCode Go (direct) | Go key named `pi` | `~/.pi/agent/auth.json` |
 | OpenCode CLI → OpenCode Go (direct) | Go key named `opencode-cli` | `~/.local/share/opencode/auth.json` |

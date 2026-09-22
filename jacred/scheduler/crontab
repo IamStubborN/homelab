@@ -12,6 +12,10 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # every 5 min (e.g. :00,:05,:10,…)
 */5 * * * *  /usr/local/bin/run-job.sh jsondb-save http://jacred:9117/jsondb/save 60
 
+# tracks.log is written directly by JacRed and has no application-side limit.
+# Keep five 50 MiB generations without restarting JacRed.
+*/15 * * * *  /usr/local/bin/rotate-jacred-logs.sh
+
 # cloudflare-warmup keep-alive -> /cron/cloudflare/Warmup (max_time=300s)
 # every 20 min — keeps FlareSolverr session `jacred-rutracker_org` warm (cf_clearance in browser)
 5,25,45 * * * *  /usr/local/bin/run-job.sh cloudflare-keepalive http://jacred:9117/cron/cloudflare/Warmup 300

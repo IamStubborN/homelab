@@ -42,6 +42,8 @@ services:
       TZ: ${TIMEZONE:-Europe/Sofia}
       CURL_CONNECT_TIMEOUT: "10"
       LOCK_DIR: /tmp/jacred-cron-locks
+    volumes:
+      - ./data/log:/var/log/jacred
     networks:
       - proxy
 

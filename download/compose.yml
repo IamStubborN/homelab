@@ -347,6 +347,8 @@ services:
       - "8191"
     shm_size: 512mb
     mem_limit: 2g
+    ulimits:
+      core: 0        # падающий Chrome не должен сыпать core-дампы на диск (был инцидент на 24 ГБ)
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=256m
     healthcheck:
@@ -378,6 +380,8 @@ services:
       - "8191"
     shm_size: 512mb
     mem_limit: 2g
+    ulimits:
+      core: 0        # падающий Chrome не должен сыпать core-дампы на диск (был инцидент на 24 ГБ)
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=256m
     healthcheck:

@@ -336,6 +336,7 @@ services:
     container_name: solverr
     image: ghcr.io/unseensnick/solverr:latest
     restart: unless-stopped
+    init: true
     security_opt:
       - no-new-privileges:true
     environment:
@@ -347,6 +348,8 @@ services:
       - "8191"
     shm_size: 1gb          # Chrome 152 на 512 МБ shm падает — вероятная причина сбоев Xvfb
     mem_limit: 3g
+    pids_limit: 512
+    stop_grace_period: 30s
     ulimits:
       core: 0        # падающий Chrome не должен сыпать core-дампы на диск (был инцидент на 24 ГБ)
     tmpfs:
@@ -369,6 +372,7 @@ services:
     container_name: solverr-crawl
     image: ghcr.io/unseensnick/solverr:latest
     restart: unless-stopped
+    init: true
     security_opt:
       - no-new-privileges:true
     environment:
@@ -380,6 +384,8 @@ services:
       - "8191"
     shm_size: 1gb          # Chrome 152 на 512 МБ shm падает — вероятная причина сбоев Xvfb
     mem_limit: 3g
+    pids_limit: 512
+    stop_grace_period: 30s
     ulimits:
       core: 0        # падающий Chrome не должен сыпать core-дампы на диск (был инцидент на 24 ГБ)
     tmpfs:

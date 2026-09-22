@@ -5,17 +5,19 @@ import json
 import os
 import re
 import ssl
+import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 CLI_PROXY_BASE = os.environ.get("CLI_PROXY_BASE", "http://cli-proxy-api:8317/v1").rstrip("/")
 CLI_PROXY_KEY_FILE = os.environ.get("CLI_PROXY_KEY_FILE", "/run/secrets/cliproxy_api_key")
 MODEL = os.environ.get("CLI_PROXY_MODEL", "gpt-5.6-luna")
-TMDB_BASE = os.environ.get("TMDB_BASE", "https://host-10.example.invalid/tmdb/api/3").rstrip("/")
+TMDB_BASE = os.environ.get("TMDB_BASE", "http://lampa:9118/tmdb/api/3").rstrip("/")
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "replace-with-private-tmdb-key")
-LAMPAC_FALLBACK_BASE = os.environ.get("LAMPAC_FALLBACK_BASE", "https://lampa:9118").rstrip("/")
+LAMPAC_FALLBACK_BASE = os.environ.get("LAMPAC_FALLBACK_BASE", "http://lampa:9118").rstrip("/")
 HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "55"))
 
 TLS_CONTEXT = ssl._create_unverified_context()
@@ -98,6 +100,44 @@ def card_from_tmdb(item, media_type=None):
     return card
 
 
+def resolve_candidate(candidate, required_type=None):
+    if not isinstance(candidate, dict):
+        return None
+    title = str(candidate.get("title", "")).strip()
+    if not title:
+        return None
+    candidate_type = candidate.get("type")
+    if candidate_type not in ("movie", "tv"):
+        candidate_type = required_type
+    try:
+        found = tmdb("/search/multi", query=title, language="ru-RU", include_adult="false").get("results", [])
+    except Exception:
+        return None
+    for item in found:
+        if item.get("media_type") not in ("movie", "tv"):
+            continue
+        if candidate_type and item["media_type"] != candidate_type:
+            continue
+        return card_from_tmdb(item)
+    return None
+
+
+def resolve_candidates(candidates, required_type=None):
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        resolved = executor.map(lambda item: resolve_candidate(item, required_type), candidates[:8])
+    results = []
+    seen = set()
+    for card in resolved:
+        if not card:
+            continue
+        identity = (card.get("media_type"), card.get("id"))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        results.append(card)
+    return results[:8]
+
+
 def search_cards(query):
     instruction = (
         "Return only JSON, an array of up to 8 objects with keys title and type. "
@@ -106,23 +146,7 @@ def search_cards(query):
     )
     raw = completion(instruction, query, max_tokens=900)
     candidates = parse_json(raw)
-    results = []
-    for candidate in candidates if isinstance(candidates, list) else []:
-        title = str(candidate.get("title", "")).strip()
-        if not title:
-            continue
-        media_type = candidate.get("type") if candidate.get("type") in ("movie", "tv") else "multi"
-        try:
-            found = tmdb("/search/multi", query=title, language="ru-RU", include_adult="false").get("results", [])
-        except Exception:
-            found = []
-        for item in found:
-            if item.get("media_type") in ("movie", "tv") and (media_type == "multi" or item["media_type"] == media_type):
-                results.append(card_from_tmdb(item))
-                break
-        if len(results) >= 8:
-            break
-    return {"results": results}
+    return {"results": resolve_candidates(candidates if isinstance(candidates, list) else [])}
 
 
 def card_details(card_id, card_type):
@@ -145,22 +169,7 @@ def recommendations(card_id, card_type):
         + json.dumps(details, ensure_ascii=False)
     )
     candidates = parse_json(completion("You are a film recommendation engine.", prompt, max_tokens=900))
-    results = []
-    for candidate in candidates if isinstance(candidates, list) else []:
-        title = str(candidate.get("title", "")).strip()
-        if not title:
-            continue
-        try:
-            found = tmdb("/search/multi", query=title, language="ru-RU", include_adult="false").get("results", [])
-        except Exception:
-            found = []
-        for item in found:
-            if item.get("media_type") in ("movie", "tv"):
-                results.append(card_from_tmdb(item))
-                break
-        if len(results) >= 8:
-            break
-    return {"results": results}
+    return {"results": resolve_candidates(candidates if isinstance(candidates, list) else [])}
 
 
 class Handler(BaseHTTPRequestHandler):

@@ -31,6 +31,7 @@ var lampainit_invc = {};
 
   function patchParser() {
     var torrserverProxyOrigin = 'http://traefik';
+    var browserProxyOrigin = window.location.origin;
 
     // Prowlarr may return Docker-internal download URLs. TorrServer runs in
     // another network namespace, so expose those URLs through Traefik's
@@ -47,8 +48,11 @@ var lampainit_invc = {};
                 var parsed = new URL(item.MagnetUri);
                 if (parsed.pathname.indexOf('/download') === -1) return;
 
-                item.MagnetUri = torrserverProxyOrigin + '/prowlarr' + parsed.pathname + parsed.search;
-                item.Link = item.MagnetUri;
+                var proxyPath = '/prowlarr' + parsed.pathname + parsed.search;
+                // TorrServer fetches MagnetUri from its VPN namespace. Link
+                // remains browser-safe for UI actions and previews.
+                item.MagnetUri = torrserverProxyOrigin + proxyPath;
+                item.Link = browserProxyOrigin + proxyPath;
               } catch (error) {}
             });
           }
@@ -68,7 +72,10 @@ var lampainit_invc = {};
 
     Lampa.Plugins.get().forEach(function (plugin) {
       if (typeof plugin.url !== 'string') return;
-      if (plugin.url.indexOf('la,padocker') === -1 && plugin.url.indexOf('stunnorm') === -1) return;
+      // Remove only the known obsolete third-party plugin host. The old
+      // malformed marker `la,padocker` was never a valid URL match and could
+      // not reliably clean stale installations.
+      if (plugin.url.indexOf('stunnorm') === -1) return;
       if (typeof Lampa.Plugins.remove === 'function') Lampa.Plugins.remove(plugin.url);
     });
 

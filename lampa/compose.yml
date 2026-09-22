@@ -8,13 +8,19 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+    pids_limit: 64
     environment:
       CLI_PROXY_BASE: http://cli-proxy-api:8317/v1
       CLI_PROXY_MODEL: gpt-5.6-luna
       CLI_PROXY_KEY_FILE: /run/secrets/cliproxy_api_key
-      TMDB_BASE: https://lampa.${DOCKER_DOMAIN}/tmdb/api/3
+      TMDB_BASE: http://lampa:9118/tmdb/api/3
       TMDB_API_KEY: replace-with-private-tmdb-key
-      LAMPAC_FALLBACK_BASE: https://lampa:9118
+      LAMPAC_FALLBACK_BASE: http://lampa:9118
     secrets:
       - cliproxy_api_key
     labels:

@@ -26,6 +26,15 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "deunhealth.restart.on.unhealthy=true"
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.lampa-jacred.tls=true"
+      - "traefik.http.routers.lampa-jacred.entrypoints=https"
+      - "traefik.http.routers.lampa-jacred.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/jacred`)"
+      - "traefik.http.routers.lampa-jacred.priority=110"
+      - "traefik.http.routers.lampa-jacred.middlewares=lampa-jacred-strip"
+      - "traefik.http.middlewares.lampa-jacred-strip.stripprefix.prefixes=/jacred"
+      - "traefik.http.services.lampa-jacred.loadbalancer.server.port=9117"
     networks:
       - proxy
 

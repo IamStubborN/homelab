@@ -19,10 +19,16 @@ var lampainit_invc = {};
     // Browser playback needs TorrServer's HLS transcoder for AC-3/E-AC-3;
     // Android TV keeps the native/Vimu path instead.
     Lampa.Storage.set('torrserver_gts', useTorrserverGst);
-    Lampa.Storage.set('prowlarr_url', origin + '/prowlarr');
-    Lampa.Storage.set('prowlarr_key', '__PROWLARR_KEY__');
+    // JacRed is the configured torrent backend. Do not overwrite its native
+    // Lampa plugin with the legacy Prowlarr client settings.
+    if (typeof Lampa.Storage.remove === 'function') {
+      Lampa.Storage.remove('prowlarr_url');
+      Lampa.Storage.remove('prowlarr_key');
+    }
+    Lampa.Storage.set('jackett_url', origin + '/jacred');
+    Lampa.Storage.set('jackett_key', '');
     Lampa.Storage.set('parser_use', 'true');
-    Lampa.Storage.set('parser_torrent_type', 'prowlarr');
+    Lampa.Storage.set('parser_torrent_type', 'jackett');
     Lampa.Storage.set('parse_in_search', 'true');
     Lampa.Storage.set('parse_timeout', '30');
     Lampa.Storage.set('online_balanser', 'kinobase');

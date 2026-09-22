@@ -20,7 +20,6 @@ listed in the `openai-compatibility` block are different credentials — do not 
 | Path | Credential | Stored in |
 | --- | --- | --- |
 | Codex / Karakeep / HA → gateway | gateway client key | `api-keys` in `config.yaml`, `hermes/secrets/cliproxy_api_key` |
-| Codex on the Mac → gateway | gateway client key | sops `CLIPROXY_API_KEY` |
 | gateway → OpenCode Go | Go key named `cliproxy` in the console | `openai-compatibility` in `config.yaml`, sops `OPENCODE_GO_API_KEY` |
 | pi agent → OpenCode Go (direct) | Go key named `pi` | `~/.pi/agent/auth.json` |
 | OpenCode CLI → OpenCode Go (direct) | Go key named `opencode-cli` | `~/.local/share/opencode/auth.json` |
@@ -73,11 +72,19 @@ Two things are easy to get wrong:
 the downstream request. OpenCode Go rejects requests without a session header
 (`400 MissingSessionID`), and Codex sends it as `session-id` (**dash**, not underscore).
 Remove that line and every Go model starts failing.
+- **Any client of these models must send `session-id` itself.** The gateway only relays
+it; it does not invent one, so a request without that header gets
+`400 MissingSessionID` back from OpenCode Go. Codex CLI/desktop does send it; plain
+`curl` (or a client that doesn't) has to add `-H 'session-id: <stable-id>'`.
 - An alias must not collide with a native model. `gpt-5.6-luna` exists in Go *and* in
 the Codex account, so it stays out of the block.
 
 Model names and context windows mirror `~/.cache/opencode/models.json` (the OpenCode
 CLI's cache).
+
+> Codex on the Mac is **not** wired to this gateway: its `model_provider` and
+> `model_catalog_json` were rolled back, so Codex talks to OpenAI directly again. The
+> Go models above are reachable only by clients that call this gateway themselves.
 
 ### Adding models
 
@@ -97,31 +104,6 @@ served), `403 DataPolicyError` (muse-spark models need an explicit opt-in in the
 OpenCode console), and `not supported for format oa-compat` (Responses-only models
 such as `grok-4.6`). Add a working model to the `models:` list in `config.yaml` and
 `docker compose restart cli-proxy-api`.
-
-### Codex on the Mac
-
-Codex uses the gateway as a **custom provider** (`model_provider = "cliproxy"`), not
-`openai_base_url`: the gateway expects the client api-key, while Codex would send its
-ChatGPT token there (`401 Invalid API key`).
-
-The desktop model picker reads `model_catalog_json`, and that file *replaces* the
-bundled catalog — every selectable model has to be listed in it. Keep it in sync with
-the gateway block:
-
-```bash
-cd cliproxyapi
-./make-codex-catalog.py           # rebuild ~/.codex/model_catalog.json
-./make-codex-catalog.py --check   # non-zero exit when out of sync
-```
-
-Native (ChatGPT) models come from `~/.codex/model_catalog.native.json`, so the script
-owns only the OpenCode Go part. Codex reads the file at startup — restart it after
-rebuilding.
-
-Codex pins the provider **per thread**: chats created before `model_provider` changed
-keep routing to ChatGPT, and picking a Go model there fails with
-`The '<model>' model is not supported when using Codex with a ChatGPT account`.
-Start a new chat.
 
 ## Control Center (Management API)
 

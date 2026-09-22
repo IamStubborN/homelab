@@ -14,6 +14,14 @@ umask 077
 openssl rand -hex 32 > lampa/config/passwd
 ```
 
+The AI adapter reads the TMDB API key from a Docker secret. Create the ignored
+secret file before starting the stack:
+
+```bash
+install -m 0600 /dev/null hermes/secrets/tmdb_api_key
+# Put the TMDB API key on the single line in this file.
+```
+
 The service is published at:
 
 ```text
@@ -25,6 +33,8 @@ On first load the client is configured to use same-origin paths:
 - `/torrserver` → the existing TorrServer;
 - `/prowlarr` → the existing Prowlarr;
 - `/online.js` → Lampac online and anime providers.
+
+The server-side bootstrap also enables Lampac's built-in Dorama section.
 
 The Prowlarr API key is injected into the live server-side bootstrap from the
 existing Prowlarr configuration. It is not stored in this repository or

@@ -16,7 +16,7 @@ CLI_PROXY_BASE = os.environ.get("CLI_PROXY_BASE", "http://cli-proxy-api:8317/v1"
 CLI_PROXY_KEY_FILE = os.environ.get("CLI_PROXY_KEY_FILE", "/run/secrets/cliproxy_api_key")
 MODEL = os.environ.get("CLI_PROXY_MODEL", "gpt-5.6-luna")
 TMDB_BASE = os.environ.get("TMDB_BASE", "http://lampa:9118/tmdb/api/3").rstrip("/")
-TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "replace-with-private-tmdb-key")
+TMDB_API_KEY_FILE = os.environ.get("TMDB_API_KEY_FILE", "/run/secrets/tmdb_api_key")
 LAMPAC_FALLBACK_BASE = os.environ.get("LAMPAC_FALLBACK_BASE", "http://lampa:9118").rstrip("/")
 HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "55"))
 
@@ -48,6 +48,11 @@ def http_json(url, *, method="GET", payload=None, headers=None):
 
 def cliproxy_key():
     with open(CLI_PROXY_KEY_FILE, "r", encoding="utf-8") as key_file:
+        return key_file.read().strip()
+
+
+def tmdb_key():
+    with open(TMDB_API_KEY_FILE, "r", encoding="utf-8") as key_file:
         return key_file.read().strip()
 
 
@@ -86,7 +91,7 @@ def parse_json(text):
 
 
 def tmdb(path, **params):
-    params = {"api_key": TMDB_API_KEY, **params}
+    params = {"api_key": tmdb_key(), **params}
     url = TMDB_BASE + path + "?" + urllib.parse.urlencode(params)
     return http_json(url)
 

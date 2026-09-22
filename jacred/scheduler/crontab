@@ -53,8 +53,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 10 2 * * *  /usr/local/bin/run-job.sh kinozal-UpdateTasksParse http://jacred:9117/cron/kinozal/UpdateTasksParse 60
 
 # kinozal-ParseAllTask -> /cron/kinozal/ParseAllTask (max_time=60s)
-# ~4h cycle; 05:xx and 17:xx. New round only when pending=0.
-35 5,17 * * *  /usr/local/bin/run-job.sh kinozal-ParseAllTask http://jacred:9117/cron/kinozal/ParseAllTask 60
+# One daily kick; ResumeParseAll continues an existing cycle.
+35 5 * * *  /usr/local/bin/run-job.sh kinozal-ParseAllTask http://jacred:9117/cron/kinozal/ParseAllTask 60
 
 # --- rutor (~550k) ---
 # rutor-parse -> /cron/rutor/parse (max_time=900s)
@@ -64,18 +64,16 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 5 2 * * *  /usr/local/bin/run-job.sh rutor-UpdateTasksParse http://jacred:9117/cron/rutor/UpdateTasksParse 60
 
 # rutor-ParseAllTask -> /cron/rutor/ParseAllTask (max_time=60s)
-# ~3.5h cycle; 05:xx and 17:xx. New round only when pending=0.
-30 5,17 * * *  /usr/local/bin/run-job.sh rutor-ParseAllTask http://jacred:9117/cron/rutor/ParseAllTask 60
+# One daily kick; ResumeParseAll continues an existing cycle.
+30 6 * * *  /usr/local/bin/run-job.sh rutor-ParseAllTask http://jacred:9117/cron/rutor/ParseAllTask 60
 
 # --- bitru (~175k; high update churn — parse + archive backfill) ---
 # bitru-parse -> /cron/bitru/parse (max_time=900s) — newest page only
 10,30,50 * * * *  /usr/local/bin/run-job.sh bitru-parse http://jacred:9117/cron/bitru/parse 900
 
 # bitru-backfill -> /cron/bitru/backfill?pages=20 (max_time=900s)
-# default/clamp 1..50; pages=20 ≈ up to 2000 torrents/hour (~3.5d full pass).
-# finished ends this pass; next :40 kick starts again from the newest page (ParseAll analog).
-# Do not raise pages: backfill holds the parse lock and can skip :50 parse.
-40 * * * *  /usr/local/bin/run-job.sh bitru-backfill "http://jacred:9117/cron/bitru/backfill?pages=20" 900
+# Historical backfill is intentionally disabled after repeated 900s timeouts.
+# Disabled: repeated timeouts and lock contention; run manually when needed.
 
 # --- nnmclub (~145k) ---
 # nnmclub-parse -> /cron/nnmclub/parse (max_time=900s)
@@ -96,8 +94,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 20 2 * * *  /usr/local/bin/run-job.sh megapeer-UpdateTasksParse http://jacred:9117/cron/megapeer/UpdateTasksParse 60
 
 # megapeer-ParseAllTask -> /cron/megapeer/ParseAllTask (max_time=60s)
-# ~77 pages, reqMinute 5 (~1.3h); three kicks. New round only when pending=0.
-45 5,13,21 * * *  /usr/local/bin/run-job.sh megapeer-ParseAllTask http://jacred:9117/cron/megapeer/ParseAllTask 60
+# One daily kick; ResumeParseAll continues an existing cycle.
+45 8 * * *  /usr/local/bin/run-job.sh megapeer-ParseAllTask http://jacred:9117/cron/megapeer/ParseAllTask 60
 
 # --- knaben (~106k; API aggregate) ---
 # knaben-parse -> /cron/knaben/parse (max_time=900s)
@@ -115,8 +113,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 25 2 * * *  /usr/local/bin/run-job.sh torrentby-UpdateTasksParse http://jacred:9117/cron/torrentby/UpdateTasksParse 60
 
 # torrentby-ParseAllTask -> /cron/torrentby/ParseAllTask (max_time=60s)
-# ~197 pages, minutes per cycle; every 6h. New round only when pending=0.
-50 5,11,17,23 * * *  /usr/local/bin/run-job.sh torrentby-ParseAllTask http://jacred:9117/cron/torrentby/ParseAllTask 60
+# One daily kick; ResumeParseAll continues an existing cycle.
+50 9 * * *  /usr/local/bin/run-job.sh torrentby-ParseAllTask http://jacred:9117/cron/torrentby/ParseAllTask 60
 
 # --- toloka (~58k) ---
 # toloka-parse -> /cron/toloka/parse (max_time=900s) — ~3s, same cadence as other cheap trio
@@ -126,8 +124,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 30 2 * * *  /usr/local/bin/run-job.sh toloka-UpdateTasksParse http://jacred:9117/cron/toloka/UpdateTasksParse 60
 
 # toloka-ParseAllTask -> /cron/toloka/ParseAllTask (max_time=60s)
-# ~783 pages, ~1–2h; three kicks with megapeer. New round only when pending=0.
-55 5,13,21 * * *  /usr/local/bin/run-job.sh toloka-ParseAllTask http://jacred:9117/cron/toloka/ParseAllTask 60
+# One daily kick; ResumeParseAll continues an existing cycle.
+55 10 * * *  /usr/local/bin/run-job.sh toloka-ParseAllTask http://jacred:9117/cron/toloka/ParseAllTask 60
 
 # --- mazepa (~51k) ---
 # mazepa-parse -> /cron/mazepa/parse (max_time=2400s)
@@ -179,8 +177,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 40 2 * * *  /usr/local/bin/run-job.sh anibelka-UpdateTasksParse http://jacred:9117/cron/anibelka/UpdateTasksParse 60
 
 # anibelka-ParseAllTask -> /cron/anibelka/ParseAllTask (max_time=60s)
-# ~3.7h cycle; 05:xx and 17:xx. New round only when pending=0.
-48 5,17 * * *  /usr/local/bin/run-job.sh anibelka-ParseAllTask http://jacred:9117/cron/anibelka/ParseAllTask 60
+# One daily kick; ResumeParseAll continues an existing cycle.
+48 11 * * *  /usr/local/bin/run-job.sh anibelka-ParseAllTask http://jacred:9117/cron/anibelka/ParseAllTask 60
 
 # anibelka-ParseLatest -> /cron/anibelka/ParseLatest (max_time=900s)
 10 7 * * *  /usr/local/bin/run-job.sh anibelka-ParseLatest http://jacred:9117/cron/anibelka/ParseLatest 900
@@ -202,4 +200,4 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # --- knaben ---
 12,32,52 * * * *  /usr/local/bin/run-job.sh knaben-parse http://jacred:9117/cron/knaben/parse 900
-42 * * * *  /usr/local/bin/run-job.sh knaben-backfill "http://jacred:9117/cron/knaben/backfill?pages=10" 900
+# Disabled: run manually only for a controlled historical fill.

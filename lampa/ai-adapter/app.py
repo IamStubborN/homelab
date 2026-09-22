@@ -20,7 +20,7 @@ TMDB_API_KEY_FILE = os.environ.get("TMDB_API_KEY_FILE", "/run/secrets/tmdb_api_k
 LAMPAC_FALLBACK_BASE = os.environ.get("LAMPAC_FALLBACK_BASE", "http://lampa:9118").rstrip("/")
 HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "55"))
 
-TLS_CONTEXT = ssl._create_unverified_context()
+TLS_CONTEXT = ssl.create_default_context()
 
 
 def json_response(handler, status, payload):

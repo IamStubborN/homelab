@@ -17,11 +17,11 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 */15 * * * *  /usr/local/bin/rotate-jacred-logs.sh
 
 # cloudflare-warmup keep-alive -> /cron/cloudflare/Warmup (max_time=300s)
-# every 20 min — keeps FlareSolverr session `jacred-rutracker_org` warm (cf_clearance in browser)
+# every 20 min — keeps the Solverr session `jacred-rutracker_org` warm
 5,25,45 * * * *  /usr/local/bin/run-job.sh cloudflare-keepalive http://jacred:9117/cron/cloudflare/Warmup 300
 
 # cloudflare-warmup -> /cron/cloudflare/Warmup (max_time=300s)
-# every hour at :55 — warm FlareSolverr session before rutracker-parse at :00
+# every hour at :55 — warm the Solverr session before rutracker-parse at :00
 55 * * * *  /usr/local/bin/run-job.sh cloudflare-warmup http://jacred:9117/cron/cloudflare/Warmup 300
 
 # maintenance-check -> /cron/maintenance/Check?mode=report (max_time=60s)

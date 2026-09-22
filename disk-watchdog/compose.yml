@@ -1,0 +1,28 @@
+# Следит за диском хоста и пишет в Telegram, если он заполнен выше порога.
+# Алерт идёт тем же ботом, что и hermes (chat_id берётся из .env).
+services:
+  disk-watchdog:
+    image: alpine:3.22
+    container_name: disk-watchdog
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TIMEZONE:-UTC}
+      - WATCH_NAME=homelab
+      - ALERT_AT_PERCENT=85
+      - CHECK_INTERVAL_SECONDS=600
+      - REMIND_EVERY_SECONDS=21600
+      - TELEGRAM_CHAT_ID=${PRIMARY_TELEGRAM_CHAT_ID}
+      - TELEGRAM_TOKEN_FILE=/run/secrets/telegram_bot_token
+    command: ["/bin/sh", "/watch.sh"]
+    volumes:
+      - ./watch.sh:/watch.sh:ro
+    secrets:
+      - telegram_bot_token
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+secrets:
+  telegram_bot_token:
+    file: ../hermes/secrets/primary.telegram_token

@@ -17,6 +17,7 @@ include:
     - plex/compose.yml
     - watchtower/compose.yml
     - deunhealth/compose.yml
+    - disk-watchdog/compose.yml
     - samba/compose.yml
     - openlist/compose.yml
     - cliproxyapi/compose.yml

@@ -345,12 +345,12 @@ services:
       - MAX_TIMEOUT_MS=300000
     expose:
       - "8191"
-    shm_size: 512mb
-    mem_limit: 2g
+    shm_size: 1gb          # Chrome 152 на 512 МБ shm падает — вероятная причина сбоев Xvfb
+    mem_limit: 3g
     ulimits:
       core: 0        # падающий Chrome не должен сыпать core-дампы на диск (был инцидент на 24 ГБ)
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=256m
+      - /tmp:rw,nosuid,size=1g   # Xvfb держит сокет и lock в /tmp; 256 МБ и noexec мешали
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8191/ >/dev/null || exit 1"]
       interval: 30s
@@ -378,12 +378,12 @@ services:
       - MAX_TIMEOUT_MS=300000
     expose:
       - "8191"
-    shm_size: 512mb
-    mem_limit: 2g
+    shm_size: 1gb          # Chrome 152 на 512 МБ shm падает — вероятная причина сбоев Xvfb
+    mem_limit: 3g
     ulimits:
       core: 0        # падающий Chrome не должен сыпать core-дампы на диск (был инцидент на 24 ГБ)
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=256m
+      - /tmp:rw,nosuid,size=1g   # Xvfb держит сокет и lock в /tmp; 256 МБ и noexec мешали
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8191/ >/dev/null || exit 1"]
       interval: 30s

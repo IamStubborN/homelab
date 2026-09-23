@@ -21,7 +21,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 5,25,45 * * * *  /usr/local/bin/run-job.sh cloudflare-keepalive http://jacred:9117/cron/cloudflare/Warmup 300
 
 # cloudflare-warmup -> /cron/cloudflare/Warmup (max_time=300s)
-# every hour at :55 — warm the Solverr session before rutracker-parse at :00
+# every hour at :55 — keep the Rutracker Solverr session ready
 55 * * * *  /usr/local/bin/run-job.sh cloudflare-warmup http://jacred:9117/cron/cloudflare/Warmup 300
 
 # maintenance-check -> /cron/maintenance/Check?mode=report (max_time=60s)
@@ -34,16 +34,17 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # --- rutracker (~1.5M) ---
 # rutracker-parse -> /cron/rutracker/parse (max_time=3600s)
-# every hour at :00 (after cloudflare-warmup :55)
-0 * * * *  /usr/local/bin/run-job.sh rutracker-parse http://jacred:9117/cron/rutracker/parse 3600
+# Once daily while the initial ParseAll cycle is running; restore the regular
+# incremental cadence after that cycle completes.
+0 1 * * *  /usr/local/bin/run-job.sh rutracker-parse http://jacred:9117/cron/rutracker/parse 3600
 
 # rutracker-UpdateTasksParse -> /cron/rutracker/UpdateTasksParse (max_time=60s)
 20 3 * * *  /usr/local/bin/run-job.sh rutracker-UpdateTasksParse http://jacred:9117/cron/rutracker/UpdateTasksParse 60
 
 # rutracker-ParseAllTask -> /cron/rutracker/ParseAllTask (max_time=60s)
-# Multi-day cycle (~16k pages). Daily kick starts a new round only when pending=0;
-# while running cron returns work. ResumeParseAll covers restarts. Do not add extra kicks.
-40 4 * * *  /usr/local/bin/run-job.sh rutracker-ParseAllTask http://jacred:9117/cron/rutracker/ParseAllTask 60
+# Initial cycle is already running. ResumeParseAll covers restarts; leave the
+# daily kick disabled so completion does not start another full scan.
+# 40 4 * * *  /usr/local/bin/run-job.sh rutracker-ParseAllTask http://jacred:9117/cron/rutracker/ParseAllTask 60
 
 # --- kinozal (~550k) ---
 # kinozal-parse -> /cron/kinozal/parse (max_time=900s)
@@ -185,15 +186,17 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # --- ultradox (search-like Referer; Rutor-style) ---
 # ultradox-parse -> /cron/ultradox/parse (max_time=900s)
-# every 30 min :13,:43 — avoid rutor 1/16/31/46; parse ~5 min
-13,43 * * * *  /usr/local/bin/run-job.sh ultradox-parse http://jacred:9117/cron/ultradox/parse 900
+# Once daily while the initial ParseAll cycle is running; restore the regular
+# incremental cadence after that cycle completes.
+13 4 * * *  /usr/local/bin/run-job.sh ultradox-parse http://jacred:9117/cron/ultradox/parse 900
 
 # ultradox-UpdateTasksParse -> /cron/ultradox/UpdateTasksParse (max_time=60s)
 50 2 * * *  /usr/local/bin/run-job.sh ultradox-UpdateTasksParse http://jacred:9117/cron/ultradox/UpdateTasksParse 60
 
 # ultradox-ParseAllTask -> /cron/ultradox/ParseAllTask (max_time=60s)
-# ~9h cycle; once with nnmclub after the morning fast wave.
-58 12 * * *  /usr/local/bin/run-job.sh ultradox-ParseAllTask http://jacred:9117/cron/ultradox/ParseAllTask 60
+# Initial cycle is already running. ResumeParseAll covers restarts; leave the
+# daily kick disabled so completion does not start another full scan.
+# 58 12 * * *  /usr/local/bin/run-job.sh ultradox-ParseAllTask http://jacred:9117/cron/ultradox/ParseAllTask 60
 
 # ultradox-ParseLatest -> /cron/ultradox/ParseLatest (max_time=900s)
 20 7 * * *  /usr/local/bin/run-job.sh ultradox-ParseLatest http://jacred:9117/cron/ultradox/ParseLatest 900

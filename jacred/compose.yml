@@ -3,6 +3,7 @@ services:
     image: ghcr.io/jacred-fdb/jacred:latest
     container_name: jacred
     restart: unless-stopped
+    cpus: "1.0"
     security_opt:
       - no-new-privileges:true
     environment:

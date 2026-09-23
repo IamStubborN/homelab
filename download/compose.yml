@@ -320,14 +320,21 @@ services:
     container_name: solverr
     image: ghcr.io/unseensnick/solverr:latest
     restart: unless-stopped
+    cpus: "1.5"
     init: true
     security_opt:
       - no-new-privileges:true
+    cap_add:
+      # Stealth Firefox needs user namespaces for its content sandbox.
+      - SYS_ADMIN
     environment:
       - LOG_LEVEL=info
       - TZ=${TIMEZONE:-UTC}
       - BROWSER_LOCALE=en-US
       - MAX_TIMEOUT_MS=300000
+      - SESSION_TTL_MINUTES=15
+      - SESSION_MAX=4
+      - REAPER_INTERVAL_SECONDS=30
     expose:
       - "8191"
     shm_size: 1gb          # Chrome 152 на 512 МБ shm падает — вероятная причина сбоев Xvfb
@@ -356,14 +363,21 @@ services:
     container_name: solverr-crawl
     image: ghcr.io/unseensnick/solverr:latest
     restart: unless-stopped
+    cpus: "0.75"
     init: true
     security_opt:
       - no-new-privileges:true
+    cap_add:
+      # Stealth Firefox needs user namespaces for its content sandbox.
+      - SYS_ADMIN
     environment:
       - LOG_LEVEL=info
       - TZ=${TIMEZONE:-UTC}
       - BROWSER_LOCALE=en-US
       - MAX_TIMEOUT_MS=300000
+      - SESSION_TTL_MINUTES=15
+      - SESSION_MAX=4
+      - REAPER_INTERVAL_SECONDS=30
     expose:
       - "8191"
     shm_size: 1gb          # Chrome 152 на 512 МБ shm падает — вероятная причина сбоев Xvfb

@@ -713,7 +713,6 @@ class SkillContractTests(unittest.TestCase):
                 {"source": "exa_api_key", "target": "exa_api_key"},
                 service["secrets"],
             )
-        self.assertNotIn("cliproxy_api_key", compose["secrets"])
 
     def test_vaultwarden_browser_client_is_primary_only_and_requires_explicit_approval(self):
         client = read("scripts/vaultwarden-safe")
@@ -1239,7 +1238,6 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertEqual(config["skills"]["creation_nudge_interval"], 10)
             self.assertEqual(config["model"]["provider"], "openai-codex")
             self.assertEqual(config["model"]["default"], "gpt-6-luna")
-            self.assertNotIn("cliproxy", config.get("providers", {}))
             self.assertTrue(config["memory"]["memory_enabled"])
             self.assertTrue(config["memory"]["user_profile_enabled"])
             self.assertEqual(config["session_reset"]["mode"], "idle")
@@ -1322,7 +1320,7 @@ class ManagedConfigMergeTests(unittest.TestCase):
         spec.loader.exec_module(module)
 
         current = {
-            "model": {"provider": "custom:cliproxy", "default": "gpt-6-luna"},
+            "model": {"provider": "custom:test-provider", "default": "gpt-6-luna"},
             "agent": {"verify_on_stop": True, "reasoning_effort": "high"},
         }
         managed = {

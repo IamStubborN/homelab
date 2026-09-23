@@ -32,6 +32,14 @@ services:
       - "traefik.http.routers.lampa-ai.tls=true"
       - "traefik.http.routers.lampa-ai.priority=100"
       - "traefik.http.routers.lampa-ai.middlewares=lampa-ai-ratelimit"
+      # Lampa's built-in AI client uses the CUB-compatible route. Keep that
+      # client contract at the edge, but serve it from our Luna adapter.
+      - "traefik.http.routers.lampa-ai-cub.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/cub/red/api/ai/`)"
+      - "traefik.http.routers.lampa-ai-cub.entrypoints=http,https"
+      - "traefik.http.routers.lampa-ai-cub.tls=true"
+      - "traefik.http.routers.lampa-ai-cub.priority=110"
+      - "traefik.http.routers.lampa-ai-cub.middlewares=lampa-ai-cub-strip,lampa-ai-ratelimit"
+      - "traefik.http.middlewares.lampa-ai-cub-strip.stripprefix.prefixes=/cub/red/api"
       - "traefik.http.middlewares.lampa-ai-ratelimit.ratelimit.average=10"
       - "traefik.http.middlewares.lampa-ai-ratelimit.ratelimit.period=1m"
       - "traefik.http.middlewares.lampa-ai-ratelimit.ratelimit.burst=5"

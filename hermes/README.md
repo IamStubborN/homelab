@@ -7,10 +7,29 @@ The umbrella design is maintained in [`media-orchestrator`](https://github.com/I
 ## Deployment Policy
 
 Prefer manual deployment from a trusted operator workstation. This repository
-must not use GitHub Actions to update the household agents. Deployments pull the
-official Hermes image, synchronize the reviewed profile files and skills, and
-recreate the containers through the guarded `media-orchestrator` deployment
-script after confirming that no media job is active.
+must not use GitHub Actions to update the household agents. The agents use the
+official Hermes image; deployment synchronizes reviewed profile files and
+skills and recreates only the affected consumers.
+
+For a profile configuration change only, including a model switch, use the
+profile-only deployment command from `media-orchestrator`. It copies the
+profile YAML from the selected local Homelab checkout, leaves the pinned
+official Hermes image and Media Service untouched, and recreates only the
+Hermes agents. It checks for active media jobs, waits for both agents to become
+healthy, verifies the mounted configs, and restores the previous configs if
+deployment fails:
+
+```bash
+cd /home/operator/Projects/media-orchestrator
+HOMELAB_ROOT=/home/operator/Projects/homelab ./scripts/homelab.sh deploy-hermes-profiles
+```
+
+For shared media skills, MCP schema, or CLI artifact changes, use the guarded
+`media-orchestrator` deployment script after confirming that no media job is
+active. It checks the release bundle against the live Media Service before
+staging those shared artifacts. Profile configuration files are also part of
+the Hermes runtime input and participate in the guarded deployment's recreate
+fingerprint.
 
 ## Official upstream
 

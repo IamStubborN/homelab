@@ -168,7 +168,7 @@ Use the tracked helper for database backups:
 freedium/backup-db.sh
 ```
 
-**Hermes** (`/hermes/`): Household Telegram agents. Chat and auxiliary tasks use CLIProxyAPI (`cliproxyapi/`, `http://cli-proxy-api:8317/v1`, model `gpt-5.6-luna`); web search and extract use native Exa. See `hermes/README.md`.
+**Hermes** (`/hermes/`): Household Telegram agents. Chat and auxiliary tasks use CLIProxyAPI (`cliproxyapi/`, `http://cli-proxy-api:8317/v1`, model `gpt-6-luna`); web search and extract use native Exa. See `hermes/README.md`.
 
 **Movie-Tracker** (`/movie-tracker/`): Python Telegram bot deployed from the private image `ghcr.io/example/movie-tracker:latest`. The homelab repository intentionally tracks only the compose wrapper. A clean host must be logged in to GHCR before pulling:
 ```bash

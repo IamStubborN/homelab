@@ -76,8 +76,8 @@ Remove that line and every Go model starts failing.
 it; it does not invent one, so a request without that header gets
 `400 MissingSessionID` back from OpenCode Go. Codex CLI/desktop does send it; plain
 `curl` (or a client that doesn't) has to add `-H 'session-id: <stable-id>'`.
-- An alias must not collide with a native model. `gpt-5.6-luna` exists in Go *and* in
-the Codex account, so it stays out of the block.
+- An alias must not collide with a native model. Check the current Codex model
+list before adding or renaming any Go aliases.
 
 Model names and context windows mirror `~/.cache/opencode/models.json` (the OpenCode
 CLI's cache).
@@ -144,4 +144,4 @@ curl -fsS -H "Authorization: Bearer $KEY" http://127.0.0.1:8317/v1/models
 curl -fsS -H "Authorization: Bearer $KEY" "https://cliproxy.${DOCKER_DOMAIN}/v1/models"
 ```
 
-After successful OAuth, the models list should include Codex/`gpt-5.6-luna`.
+After successful OAuth, the models list should include Codex/`gpt-6-luna`.

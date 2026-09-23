@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CLI_PROXY_BASE = os.environ.get("CLI_PROXY_BASE", "http://cli-proxy-api:8317/v1").rstrip("/")
 CLI_PROXY_KEY_FILE = os.environ.get("CLI_PROXY_KEY_FILE", "/run/secrets/cliproxy_api_key")
-MODEL = os.environ.get("CLI_PROXY_MODEL", "gpt-5.6-luna")
+MODEL = os.environ.get("CLI_PROXY_MODEL", "gpt-6-luna")
 TMDB_BASE = os.environ.get("TMDB_BASE", "http://lampa:9118/tmdb/api/3").rstrip("/")
 TMDB_API_KEY_FILE = os.environ.get("TMDB_API_KEY_FILE", "/run/secrets/tmdb_api_key")
 LAMPAC_FALLBACK_BASE = os.environ.get("LAMPAC_FALLBACK_BASE", "http://lampa:9118").rstrip("/")

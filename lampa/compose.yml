@@ -16,7 +16,7 @@ services:
     pids_limit: 64
     environment:
       CLI_PROXY_BASE: http://cli-proxy-api:8317/v1
-      CLI_PROXY_MODEL: gpt-5.6-luna
+      CLI_PROXY_MODEL: gpt-6-luna
       CLI_PROXY_KEY_FILE: /run/secrets/cliproxy_api_key
       TMDB_BASE: http://lampa:9118/tmdb/api/3
       TMDB_API_KEY_FILE: /run/secrets/tmdb_api_key

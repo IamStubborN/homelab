@@ -1,4 +1,4 @@
-# CLIProxyAPI — OpenAI-compatible gateway for Codex (gpt-5.6-luna) OAuth.
+# CLIProxyAPI — OpenAI-compatible gateway for Codex (gpt-6-luna) OAuth.
 # Public (Traefik): https://cliproxy.${DOCKER_DOMAIN}/v1
 # Internal clients: http://cli-proxy-api:8317/v1
 # HA (host network): http://127.0.0.1:8317/v1

@@ -1238,7 +1238,7 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertEqual(config["compression"]["proactive_prune_tokens"], 48000)
             self.assertEqual(config["skills"]["creation_nudge_interval"], 10)
             self.assertEqual(config["model"]["provider"], "openai-codex")
-            self.assertEqual(config["model"]["default"], "gpt-5.6-luna")
+            self.assertEqual(config["model"]["default"], "gpt-6-luna")
             self.assertNotIn("cliproxy", config.get("providers", {}))
             self.assertTrue(config["memory"]["memory_enabled"])
             self.assertTrue(config["memory"]["user_profile_enabled"])
@@ -1250,13 +1250,13 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertNotIn("todo", telegram_tools)
             self.assertNotIn("cronjob", telegram_tools)
             self.assertEqual(config["auxiliary"]["vision"]["provider"], "openai-codex")
-            self.assertEqual(config["auxiliary"]["vision"]["model"], "gpt-5.6-luna")
+            self.assertEqual(config["auxiliary"]["vision"]["model"], "gpt-6-luna")
             self.assertEqual(config["auxiliary"]["title_generation"]["provider"], "openai-codex")
-            self.assertEqual(config["auxiliary"]["title_generation"]["model"], "gpt-5.6-luna")
+            self.assertEqual(config["auxiliary"]["title_generation"]["model"], "gpt-6-luna")
             self.assertEqual(config["auxiliary"]["compression"]["provider"], "openai-codex")
-            self.assertEqual(config["auxiliary"]["compression"]["model"], "gpt-5.6-luna")
+            self.assertEqual(config["auxiliary"]["compression"]["model"], "gpt-6-luna")
             self.assertEqual(config["auxiliary"]["background_review"]["provider"], "openai-codex")
-            self.assertEqual(config["auxiliary"]["background_review"]["model"], "gpt-5.6-luna")
+            self.assertEqual(config["auxiliary"]["background_review"]["model"], "gpt-6-luna")
             self.assertEqual(config["agent"]["reasoning_effort"], "high")
             self.assertEqual(config["agent"]["image_input_mode"], "text")
             self.assertIsNone(config["agent"]["reasoning_overrides"])
@@ -1322,7 +1322,7 @@ class ManagedConfigMergeTests(unittest.TestCase):
         spec.loader.exec_module(module)
 
         current = {
-            "model": {"provider": "custom:cliproxy", "default": "gpt-5.6-luna"},
+            "model": {"provider": "custom:cliproxy", "default": "gpt-6-luna"},
             "agent": {"verify_on_stop": True, "reasoning_effort": "high"},
         }
         managed = {

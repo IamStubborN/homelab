@@ -17,12 +17,12 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 */15 * * * *  /usr/local/bin/rotate-jacred-logs.sh
 
 # cloudflare-warmup keep-alive -> /cron/cloudflare/Warmup (max_time=300s)
-# every 20 min — keeps the Solverr session `jacred-rutracker_org` warm
-5,25,45 * * * *  /usr/local/bin/run-job.sh cloudflare-keepalive http://jacred:9117/cron/cloudflare/Warmup 300
+# Temporarily disabled during ParseAll recovery to free browser processes.
+# 5,25,45 * * * *  /usr/local/bin/run-job.sh cloudflare-keepalive http://jacred:9117/cron/cloudflare/Warmup 300
 
 # cloudflare-warmup -> /cron/cloudflare/Warmup (max_time=300s)
-# every hour at :55 — keep the Rutracker Solverr session ready
-55 * * * *  /usr/local/bin/run-job.sh cloudflare-warmup http://jacred:9117/cron/cloudflare/Warmup 300
+# Temporarily disabled during ParseAll recovery to free browser processes.
+# 55 * * * *  /usr/local/bin/run-job.sh cloudflare-warmup http://jacred:9117/cron/cloudflare/Warmup 300
 
 # maintenance-check -> /cron/maintenance/Check?mode=report (max_time=60s)
 # Sunday 05:00
@@ -48,14 +48,16 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # --- kinozal (~550k) ---
 # kinozal-parse -> /cron/kinozal/parse (max_time=900s)
-3,18,33,48 * * * *  /usr/local/bin/run-job.sh kinozal-parse http://jacred:9117/cron/kinozal/parse 900
+# Temporarily disabled while the existing Kinozal ParseAll and torrent recovery run.
+# 3,18,33,48 * * * *  /usr/local/bin/run-job.sh kinozal-parse http://jacred:9117/cron/kinozal/parse 900
 
 # kinozal-UpdateTasksParse -> /cron/kinozal/UpdateTasksParse (max_time=60s)
 10 2 * * *  /usr/local/bin/run-job.sh kinozal-UpdateTasksParse http://jacred:9117/cron/kinozal/UpdateTasksParse 60
 
 # kinozal-ParseAllTask -> /cron/kinozal/ParseAllTask (max_time=60s)
 # One daily kick; ResumeParseAll continues an existing cycle.
-35 5 * * *  /usr/local/bin/run-job.sh kinozal-ParseAllTask http://jacred:9117/cron/kinozal/ParseAllTask 60
+# Temporarily disabled to avoid starting another full browser-heavy cycle.
+# 35 5 * * *  /usr/local/bin/run-job.sh kinozal-ParseAllTask http://jacred:9117/cron/kinozal/ParseAllTask 60
 
 # --- rutor (~550k) ---
 # rutor-parse -> /cron/rutor/parse (max_time=900s)

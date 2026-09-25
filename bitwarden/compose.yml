@@ -16,7 +16,7 @@ services:
     environment:
       DOMAIN: https://host-3.example.invalid
       SIGNUPS_ALLOWED: "false"
-      INVITATIONS_ALLOWED: "true"
+      INVITATIONS_ALLOWED: "false"
       WEBSOCKET_ENABLED: "true"
       TZ: ${TIMEZONE:-UTC}
     volumes:

@@ -78,6 +78,10 @@ download/torrserver/
 jacred/data/
 jacred/config/init.yaml
 jacred/config/init.yaml.bak*
+# Legacy host-local configuration copies may contain API keys.
+jacred/init.yaml
+lampa/init.conf
+lampa/config/lampainit.js
 lampa/config/passwd
 lampa/cache/
 lampa/database/

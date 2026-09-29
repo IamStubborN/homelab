@@ -153,8 +153,8 @@ services:
       - ./scripts/vaultwarden-broker-entrypoint:/usr/local/bin/vaultwarden-broker-entrypoint:ro
       - ./scripts/install_bitwarden_cli.py:/usr/local/bin/install-bitwarden-cli:ro
       - ./scripts/vaultwarden_broker.py:/usr/local/bin/vaultwarden-broker:ro
-      - ./config/vaultwarden-server:/etc/hermes-home/vaultwarden-server:ro
-      - ./config/vaultwarden-login-allowlist.json:/etc/hermes-home/vaultwarden-login-allowlist.json:ro
+      - ${HERMES_VAULTWARDEN_SERVER_PATH:-./config/vaultwarden-server.example}:/etc/hermes-home/vaultwarden-server:ro
+      - ${HERMES_VAULTWARDEN_ALLOWLIST_PATH:-./config/vaultwarden-login-allowlist.example.json}:/etc/hermes-home/vaultwarden-login-allowlist.json:ro
     secrets:
       - source: primary_vaultwarden_session
         target: vaultwarden_session
@@ -224,7 +224,7 @@ services:
       AGENT_BROWSER_CONTENT_BOUNDARIES: "1"
       AGENT_BROWSER_PLUGINS: >-
         [{"name":"vaultwarden","command":"/usr/local/bin/agent-browser-plugin-vaultwarden","capabilities":["credential.read"]}]
-      AGENT_BROWSER_RESTORE: primary
+      AGENT_BROWSER_RESTORE: ${HERMES_PRIMARY_BROWSER_ID:-primary}
       AGENT_BROWSER_USER_AGENT: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: 127.0.0.1
@@ -238,7 +238,9 @@ services:
       TMPDIR: /opt/data/tmp
       TMP: /opt/data/tmp
       TEMP: /opt/data/tmp
-      HEALTH_DEFAULT_PERSON: primary
+      HEALTH_DEFAULT_PERSON: ${HEALTH_PRIMARY_PERSON:-primary}
+      HEALTH_PRIMARY_PERSON: ${HEALTH_PRIMARY_PERSON:-primary}
+      HEALTH_SECONDARY_PERSON: ${HEALTH_SECONDARY_PERSON:-secondary}
       HEALTH_MCP_URL: http://health-service:8080/internal/mcp
       WIKI_PATH: /wiki
       MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-primary:8644
@@ -256,19 +258,19 @@ services:
       - ./scripts/vaultwarden-safe:/usr/local/bin/vaultwarden-safe:ro
       - ./scripts/agent-browser:/usr/local/bin/agent-browser:ro
       - ./scripts/agent_browser_plugin_vaultwarden.py:/usr/local/bin/agent-browser-plugin-vaultwarden:ro
-      - ./profiles/primary/config/config.yaml:/etc/hermes-home/config.yaml:ro
-      - ./profiles/primary/SOUL.md:/etc/hermes-home/SOUL.md:ro
-      - ./profiles/primary/identity:/etc/hermes-home/profile-id:ro
+      - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/config/config.yaml:/etc/hermes-home/config.yaml:ro
+      - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/SOUL.md:/etc/hermes-home/SOUL.md:ro
+      - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/identity:/etc/hermes-home/profile-id:ro
       - ./config/media-service-url:/etc/hermes-home/media-service-url:ro
-      - ./config/vaultwarden-server:/etc/hermes-home/vaultwarden-server:ro
+      - ${HERMES_VAULTWARDEN_SERVER_PATH:-./config/vaultwarden-server.example}:/etc/hermes-home/vaultwarden-server:ro
       - ./shared/skills:/etc/hermes-home/skills:ro
       - ./shared/plugins:/etc/hermes-home/shared-plugins:ro
-      - ./profiles/primary/skills:/etc/hermes-home/personal-skills:ro
-      - ./profiles/primary/plugins:/etc/hermes-home/personal-plugins:ro
+      - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/skills:/etc/hermes-home/personal-skills:ro
+      - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/plugins:/etc/hermes-home/personal-plugins:ro
       # Personal llm-wiki root. Host shared/ is an explicit nested bind (not a
       # copy) so /wiki/shared is the family tree. Bundled obsidian skill stays
       # disabled; official Sync is a separate host service — no OBSIDIAN_VAULT_PATH.
-      - ${WIKI_ROOT:-/mnt/internal/wiki}/primary:/wiki
+      - ${HERMES_PRIMARY_WIKI_PATH:-${WIKI_ROOT:-/mnt/internal/wiki}/primary}:/wiki
       - ${WIKI_ROOT:-/mnt/internal/wiki}/shared:/wiki/shared
     secrets:
       - source: primary_telegram_token
@@ -313,7 +315,9 @@ services:
       TMPDIR: /opt/data/tmp
       TMP: /opt/data/tmp
       TEMP: /opt/data/tmp
-      HEALTH_DEFAULT_PERSON: secondary
+      HEALTH_DEFAULT_PERSON: ${HEALTH_SECONDARY_PERSON:-secondary}
+      HEALTH_PRIMARY_PERSON: ${HEALTH_PRIMARY_PERSON:-primary}
+      HEALTH_SECONDARY_PERSON: ${HEALTH_SECONDARY_PERSON:-secondary}
       HEALTH_MCP_URL: http://health-service:8080/internal/mcp
       WIKI_PATH: /wiki
       MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-secondary:8644
@@ -329,16 +333,16 @@ services:
       - ./scripts/merge_hermes_config.py:/usr/local/bin/merge-hermes-config:ro
       - ./scripts/hermes-mcp-schema-revision:/usr/local/bin/hermes-mcp-schema-revision:ro
       - ./scripts/agent-browser:/usr/local/bin/agent-browser:ro
-      - ./profiles/secondary/config/config.yaml:/etc/hermes-home/config.yaml:ro
-      - ./profiles/secondary/SOUL.md:/etc/hermes-home/SOUL.md:ro
-      - ./profiles/secondary/identity:/etc/hermes-home/profile-id:ro
+      - ${HERMES_SECONDARY_PROFILE_DIR:-./profiles/secondary}/config/config.yaml:/etc/hermes-home/config.yaml:ro
+      - ${HERMES_SECONDARY_PROFILE_DIR:-./profiles/secondary}/SOUL.md:/etc/hermes-home/SOUL.md:ro
+      - ${HERMES_SECONDARY_PROFILE_DIR:-./profiles/secondary}/identity:/etc/hermes-home/profile-id:ro
       - ./config/media-service-url:/etc/hermes-home/media-service-url:ro
       - ./shared/skills:/etc/hermes-home/skills:ro
       - ./shared/plugins:/etc/hermes-home/shared-plugins:ro
-      - ./profiles/secondary/skills:/etc/hermes-home/personal-skills:ro
-      - ./profiles/secondary/plugins:/etc/hermes-home/personal-plugins:ro
+      - ${HERMES_SECONDARY_PROFILE_DIR:-./profiles/secondary}/skills:/etc/hermes-home/personal-skills:ro
+      - ${HERMES_SECONDARY_PROFILE_DIR:-./profiles/secondary}/plugins:/etc/hermes-home/personal-plugins:ro
       # Personal llm-wiki root + nested family shared bind (same layout as Primary).
-      - ${WIKI_ROOT:-/mnt/internal/wiki}/secondary:/wiki
+      - ${HERMES_SECONDARY_WIKI_PATH:-${WIKI_ROOT:-/mnt/internal/wiki}/secondary}:/wiki
       - ${WIKI_ROOT:-/mnt/internal/wiki}/shared:/wiki/shared
     secrets:
       - source: secondary_telegram_token
@@ -380,35 +384,44 @@ volumes:
   agent_browser_tools:
     name: homelab_agent_browser_tools
   hermes_primary_profile:
-    name: homelab_hermes_primary_profile
+    external: ${HERMES_EXISTING_VOLUMES:-false}
+    name: ${HERMES_PRIMARY_PROFILE_VOLUME:-homelab_hermes_primary_profile}
   hermes_primary_memory:
-    name: homelab_hermes_primary_memory
+    external: ${HERMES_EXISTING_VOLUMES:-false}
+    name: ${HERMES_PRIMARY_MEMORY_VOLUME:-homelab_hermes_primary_memory}
   hermes_primary_browser:
-    name: homelab_hermes_primary_browser
+    external: ${HERMES_EXISTING_VOLUMES:-false}
+    name: ${HERMES_PRIMARY_BROWSER_VOLUME:-homelab_hermes_primary_browser}
   hermes_primary_vaultwarden:
-    name: homelab_hermes_primary_vaultwarden
+    external: ${HERMES_EXISTING_VOLUMES:-false}
+    name: ${HERMES_PRIMARY_VAULTWARDEN_VOLUME:-homelab_hermes_primary_vaultwarden}
   hermes_secondary_profile:
-    name: homelab_hermes_secondary_profile
+    external: ${HERMES_EXISTING_VOLUMES:-false}
+    name: ${HERMES_SECONDARY_PROFILE_VOLUME:-homelab_hermes_secondary_profile}
   hermes_secondary_memory:
-    name: homelab_hermes_secondary_memory
+    external: ${HERMES_EXISTING_VOLUMES:-false}
+    name: ${HERMES_SECONDARY_MEMORY_VOLUME:-homelab_hermes_secondary_memory}
   hermes_secondary_browser:
-    name: homelab_hermes_secondary_browser
+    external: ${HERMES_EXISTING_VOLUMES:-false}
+    name: ${HERMES_SECONDARY_BROWSER_VOLUME:-homelab_hermes_secondary_browser}
   media_notifier_primary:
-    name: homelab_media_notifier_primary
+    external: ${HERMES_EXISTING_VOLUMES:-false}
+    name: ${HERMES_PRIMARY_NOTIFIER_VOLUME:-homelab_media_notifier_primary}
   media_notifier_secondary:
-    name: homelab_media_notifier_secondary
+    external: ${HERMES_EXISTING_VOLUMES:-false}
+    name: ${HERMES_SECONDARY_NOTIFIER_VOLUME:-homelab_media_notifier_secondary}
   vaultwarden_tools:
     name: homelab_vaultwarden_tools
 
 secrets:
   primary_telegram_token:
-    file: ./secrets/primary.telegram_token
+    file: ${HERMES_PRIMARY_TELEGRAM_TOKEN_PATH:-./secrets/primary.telegram_token}
   primary_media_api_token:
-    file: ./secrets/primary.media_api_token
+    file: ${HERMES_PRIMARY_MEDIA_API_TOKEN_PATH:-./secrets/primary.media_api_token}
   primary_health_api_token:
-    file: ../health/secrets/primary.health_api_token
+    file: ${HERMES_PRIMARY_HEALTH_API_TOKEN_PATH:-../health/secrets/primary.health_api_token}
   primary_homeassistant_token:
-    file: ./secrets/primary.homeassistant_token
+    file: ${HERMES_PRIMARY_HOMEASSISTANT_TOKEN_PATH:-./secrets/primary.homeassistant_token}
   tavily_api_key:
     file: ./secrets/tavily_api_key
   exa_api_key:
@@ -416,22 +429,22 @@ secrets:
   nvidia_api_key:
     file: ./secrets/nvidia_api_key
   primary_groq_api_key:
-    file: ./secrets/primary.groq_api_key
+    file: ${HERMES_PRIMARY_GROQ_API_KEY_PATH:-./secrets/primary.groq_api_key}
   primary_webhook_hmac:
-    file: ./secrets/primary.webhook_hmac
+    file: ${HERMES_PRIMARY_WEBHOOK_HMAC_PATH:-./secrets/primary.webhook_hmac}
   primary_vaultwarden_session:
-    file: ./secrets/primary.vaultwarden_session
+    file: ${HERMES_PRIMARY_VAULTWARDEN_SESSION_PATH:-./secrets/primary.vaultwarden_session}
   primary_vaultwarden_broker_token:
-    file: ./secrets/primary.vaultwarden_broker_token
+    file: ${HERMES_PRIMARY_VAULTWARDEN_BROKER_TOKEN_PATH:-./secrets/primary.vaultwarden_broker_token}
   secondary_telegram_token:
-    file: ./secrets/secondary.telegram_token
+    file: ${HERMES_SECONDARY_TELEGRAM_TOKEN_PATH:-./secrets/secondary.telegram_token}
   secondary_media_api_token:
-    file: ./secrets/secondary.media_api_token
+    file: ${HERMES_SECONDARY_MEDIA_API_TOKEN_PATH:-./secrets/secondary.media_api_token}
   secondary_health_api_token:
-    file: ../health/secrets/secondary.health_api_token
+    file: ${HERMES_SECONDARY_HEALTH_API_TOKEN_PATH:-../health/secrets/secondary.health_api_token}
   secondary_homeassistant_token:
-    file: ./secrets/secondary.homeassistant_token
+    file: ${HERMES_SECONDARY_HOMEASSISTANT_TOKEN_PATH:-./secrets/secondary.homeassistant_token}
   secondary_groq_api_key:
-    file: ./secrets/secondary.groq_api_key
+    file: ${HERMES_SECONDARY_GROQ_API_KEY_PATH:-./secrets/secondary.groq_api_key}
   secondary_webhook_hmac:
-    file: ./secrets/secondary.webhook_hmac
+    file: ${HERMES_SECONDARY_WEBHOOK_HMAC_PATH:-./secrets/secondary.webhook_hmac}

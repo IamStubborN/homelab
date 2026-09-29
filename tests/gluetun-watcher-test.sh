@@ -11,7 +11,6 @@ OTHER_ID='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 PARENT_SHORT='aaaaaaaaaaaa'
 PARENT_NS='/var/run/docker/netns/aaaa'
 STALE_NS='/var/run/docker/netns/stale'
-FRESH_NS='/var/run/docker/netns/aaaa'
 
 cat >"$TMP/docker" <<EOF
 #!/bin/sh
@@ -19,6 +18,7 @@ set -eu
 
 printf '%s\n' "\$*" >>"\$DOCKER_CALLS"
 
+current_parent_id=\$(cat "\$PARENT_STATE")
 case "\$1" in
     compose)
         # After a force-recreate, dependents share the parent netns.
@@ -32,14 +32,14 @@ case "\$1" in
         # Bare inspect used for existence checks.
         if [ "\$#" -eq 2 ]; then
             case "\$target" in
-                gluetun|"$PARENT_ID"|qbittorrent) exit 0 ;;
+                gluetun|"\$current_parent_id"|qbittorrent) exit 0 ;;
                 *) exit 1 ;;
             esac
         fi
         case "\$*" in
             *'{{.Id}}'*)
-                if [ "\$target" = "gluetun" ] || [ "\$target" = "$PARENT_ID" ]; then
-                    printf '%s\n' "$PARENT_ID"
+                if [ "\$target" = "gluetun" ] || [ "\$target" = "\$current_parent_id" ]; then
+                    printf '%s\n' "\$current_parent_id"
                 elif [ "\$target" = "gluetun-rezka" ]; then
                     printf '%s\n' "$OTHER_ID"
                 else
@@ -47,7 +47,7 @@ case "\$1" in
                 fi
                 ;;
             *'{{.Name}}'*)
-                if [ "\$target" = "$PARENT_ID" ] || [ "\$target" = "gluetun" ]; then
+                if [ "\$target" = "\$current_parent_id" ] || [ "\$target" = "gluetun" ]; then
                     printf '%s\n' '/gluetun'
                 else
                     printf '%s\n' "/\$target"
@@ -66,16 +66,16 @@ case "\$1" in
                 printf '%s\n' 'healthy'
                 ;;
             *HostConfig.NetworkMode*)
-                if [ "\$target" = "gluetun" ] || [ "\$target" = "$PARENT_ID" ]; then
+                if [ "\$target" = "gluetun" ] || [ "\$target" = "\$current_parent_id" ]; then
                     printf '%s\n' 'bridge'
                 elif [ -f "\$NETNS_STATE" ] && [ "\$(cat "\$NETNS_STATE")" = "matched" ]; then
-                    printf '%s\n' "container:$PARENT_ID"
+                    printf '%s\n' "container:\$current_parent_id"
                 else
                     printf '%s\n' "\$DEPENDENT_NETMODE"
                 fi
                 ;;
             *NetworkSettings.SandboxKey*)
-                if [ "\$target" = "gluetun" ] || [ "\$target" = "$PARENT_ID" ]; then
+                if [ "\$target" = "gluetun" ] || [ "\$target" = "\$current_parent_id" ]; then
                     printf '%s\n' "\$PARENT_SANDBOX"
                 elif [ -f "\$NETNS_STATE" ] && [ "\$(cat "\$NETNS_STATE")" = "matched" ]; then
                     printf '%s\n' "\$PARENT_SANDBOX"
@@ -84,7 +84,7 @@ case "\$1" in
                 fi
                 ;;
             *State.StartedAt*)
-                if [ "\$target" = "gluetun" ] || [ "\$target" = "$PARENT_ID" ]; then
+                if [ "\$target" = "gluetun" ] || [ "\$target" = "\$current_parent_id" ]; then
                     printf '%s\n' "\$PARENT_STARTED"
                 else
                     printf '%s\n' "\$DEPENDENT_STARTED"
@@ -96,16 +96,16 @@ case "\$1" in
         esac
         ;;
     events)
-        printf '%s\n' "\$*" | grep -Fq "container=$PARENT_ID" || {
-            echo "events filter missing exact parent id" >&2
-            exit 1
-        }
-        printf '%s\n' "\$*" | grep -Eq 'container=gluetun([^0-9a-fA-F]|$)' && {
-            echo "events filter still uses parent name prefix" >&2
-            exit 1
-        }
+        if [ -n "\${NEW_PARENT_ID:-}" ]; then
+            printf '%s\n' "\$NEW_PARENT_ID" >"\$PARENT_STATE"
+            # A subscription pinned to the retired ID cannot receive this event.
+            case "\$*" in *"container=$PARENT_ID"*) exit 0 ;; esac
+        fi
         if [ -n "\${DOCKER_EVENTS:-}" ]; then
-            printf '%s\n' "\$DOCKER_EVENTS"
+            case "\$*" in
+                *Actor.Attributes.name*) printf '%s\n' "\$DOCKER_EVENTS" ;;
+                *) printf '%s\n' "\$DOCKER_EVENTS" | sed 's/|[^|]*|/ /' ;;
+            esac
         fi
         ;;
     restart)
@@ -118,6 +118,7 @@ chmod +x "$TMP/docker"
 run_watcher() {
     : >"$DOCKER_CALLS"
     : >"$NETNS_STATE"
+    printf '%s\n' "$PARENT_ID" >"$PARENT_STATE"
     PATH="$TMP:$PATH" \
         PARENT_CONTAINER=gluetun \
         DEPENDENT_CONTAINERS=qbittorrent \
@@ -129,7 +130,8 @@ run_watcher() {
 
 DOCKER_CALLS="$TMP/docker-calls"
 NETNS_STATE="$TMP/netns-state"
-export DOCKER_CALLS NETNS_STATE
+PARENT_STATE="$TMP/parent-id"
+export DOCKER_CALLS NETNS_STATE PARENT_STATE
 
 expected='compose -p homelab --project-directory /srv/homelab -f /srv/homelab/compose.yml -f /srv/homelab/compose.override.yml up -d --force-recreate --no-deps qbittorrent'
 
@@ -158,7 +160,7 @@ DEPENDENT_STATE='running'
 DEPENDENT_NETMODE="container:$PARENT_ID"
 DEPENDENT_SANDBOX="$PARENT_NS"
 PARENT_SANDBOX="$PARENT_NS"
-DOCKER_EVENTS='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa exec_start'
+DOCKER_EVENTS='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|gluetun|exec_start'
 export PARENT_STARTED DEPENDENT_STARTED DEPENDENT_STATE DEPENDENT_NETMODE DEPENDENT_SANDBOX PARENT_SANDBOX DOCKER_EVENTS
 run_watcher
 
@@ -176,7 +178,7 @@ DEPENDENT_STATE='running'
 DEPENDENT_NETMODE="container:$PARENT_ID"
 DEPENDENT_SANDBOX="$PARENT_NS"
 PARENT_SANDBOX="$PARENT_NS"
-DOCKER_EVENTS='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb start'
+DOCKER_EVENTS='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|gluetun-rezka|start'
 export PARENT_STARTED DEPENDENT_STARTED DEPENDENT_STATE DEPENDENT_NETMODE DEPENDENT_SANDBOX PARENT_SANDBOX DOCKER_EVENTS
 run_watcher
 
@@ -194,7 +196,7 @@ DEPENDENT_STATE='running'
 DEPENDENT_NETMODE="container:$OTHER_ID"
 DEPENDENT_SANDBOX="$STALE_NS"
 PARENT_SANDBOX="$PARENT_NS"
-DOCKER_EVENTS='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa start'
+DOCKER_EVENTS='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|gluetun|start'
 export PARENT_STARTED DEPENDENT_STARTED DEPENDENT_STATE DEPENDENT_NETMODE DEPENDENT_SANDBOX PARENT_SANDBOX DOCKER_EVENTS
 run_watcher
 
@@ -212,7 +214,7 @@ DEPENDENT_STATE='running'
 DEPENDENT_NETMODE="container:$PARENT_ID"
 DEPENDENT_SANDBOX="$PARENT_NS"
 PARENT_SANDBOX="$PARENT_NS"
-DOCKER_EVENTS='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa start'
+DOCKER_EVENTS='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|gluetun|start'
 export PARENT_STARTED DEPENDENT_STARTED DEPENDENT_STATE DEPENDENT_NETMODE DEPENDENT_SANDBOX PARENT_SANDBOX DOCKER_EVENTS
 run_watcher
 
@@ -236,8 +238,8 @@ DEPENDENT_NETMODE="container:$OTHER_ID"
 DEPENDENT_SANDBOX="$STALE_NS"
 PARENT_SANDBOX="$PARENT_NS"
 DOCKER_EVENTS=$(printf '%s\n%s\n' \
-    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa start' \
-    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa start')
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|gluetun|start' \
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|gluetun|start')
 export PARENT_STARTED DEPENDENT_STARTED DEPENDENT_STATE DEPENDENT_NETMODE DEPENDENT_SANDBOX PARENT_SANDBOX DOCKER_EVENTS
 run_watcher
 
@@ -261,7 +263,7 @@ DEPENDENT_STATE='running'
 DEPENDENT_NETMODE="container:$PARENT_SHORT"
 DEPENDENT_SANDBOX="$PARENT_NS"
 PARENT_SANDBOX="$PARENT_NS"
-DOCKER_EVENTS='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa start'
+DOCKER_EVENTS='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|gluetun|start'
 export PARENT_STARTED DEPENDENT_STARTED DEPENDENT_STATE DEPENDENT_NETMODE DEPENDENT_SANDBOX PARENT_SANDBOX DOCKER_EVENTS
 run_watcher
 
@@ -272,4 +274,37 @@ if grep -Fq 'force-recreate' "$DOCKER_CALLS"; then
     exit 1
 fi
 
-echo 'PASS: gluetun watcher recovery, exact-id filter, debounce/netns skip, and event filtering'
+# 8) Recreated parent has a new ID; matching old dependent must migrate exactly once.
+NEW_PARENT_ID='eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+DEPENDENT_NETMODE="container:$PARENT_ID"
+DOCKER_EVENTS=$(printf '%s\n%s\n' "$NEW_PARENT_ID|gluetun|start" "$NEW_PARENT_ID|gluetun|start")
+export NEW_PARENT_ID DEPENDENT_NETMODE DOCKER_EVENTS
+run_watcher
+if [ "$(grep -Fc 'force-recreate' "$DOCKER_CALLS" || true)" -ne 1 ]; then
+    echo 'FAIL: replacement parent ID was not observed/reconciled exactly once' >&2
+    cat "$TMP/output" >&2
+    exit 1
+fi
+if ! grep -Fq "inspect $NEW_PARENT_ID --format {{index .Config.Labels" "$DOCKER_CALLS"; then
+    echo 'FAIL: replacement parent Compose metadata was not read' >&2
+    exit 1
+fi
+
+# Similarly named helpers must never trigger parent recovery, even if namespace is stale.
+DOCKER_EVENTS="$NEW_PARENT_ID|gluetun-helper|start"
+run_watcher
+if grep -Fq 'force-recreate' "$DOCKER_CALLS"; then
+    echo 'FAIL: similarly named helper triggered parent recovery' >&2
+    exit 1
+fi
+
+# Compose must recognize the event subscription's actual process command line.
+events_command=$(sed -n '/^events /{p;q;}' "$DOCKER_CALLS")
+sed -n 's/.*test: \[CMD, pgrep, -f, "\(.*\)"\].*/\1/p' "$ROOT/download/compose.yml" | while IFS= read -r health_pattern; do
+    if ! printf 'docker %s\n' "$events_command" | grep -Eq "$health_pattern"; then
+        echo 'FAIL: Compose healthcheck does not match the active event subscription' >&2
+        exit 1
+    fi
+done
+
+echo 'PASS: gluetun watcher recovery, exact-name filter and replacement IDs, debounce/netns skip, and event filtering'

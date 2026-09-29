@@ -114,10 +114,9 @@ def resolve_candidate(candidate, required_type=None):
     candidate_type = candidate.get("type")
     if candidate_type not in ("movie", "tv"):
         candidate_type = required_type
-    try:
-        found = tmdb("/search/multi", query=title, language="ru-RU", include_adult="false").get("results", [])
-    except Exception:
-        return None
+    # Dependency failures must reach the route fallback, not become a successful
+    # empty search. None below means only that no matching title was found.
+    found = tmdb("/search/multi", query=title, language="ru-RU", include_adult="false").get("results", [])
     for item in found:
         if item.get("media_type") not in ("movie", "tv"):
             continue

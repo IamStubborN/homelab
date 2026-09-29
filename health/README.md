@@ -11,11 +11,11 @@ http://health-service:8080/internal/mcp
 - Image: `family-health-mcp:local` (build context `health/mcp`)
 - Container name: `health-service` (unchanged on purpose)
 - Process UID:GID: `10000:10000`
-- Host vault: `${WIKI_ROOT}` = `/mnt/internal/wiki` on host-5.example.invalid (not in git)
+- Host vault: `${WIKI_ROOT}` (set in the ignored deployment environment)
 - Cashier mount: `${WIKI_ROOT}/shared/health` → `/wiki/shared/health`
 - No Postgres. No SQLite. No Rust health binary in Compose.
 
-`/opt/data/wiki` is wrong on this host. Do not create or mount it.
+Keep the wiki mount path consistent with the deployed Compose environment.
 
 Obsidian Sync (`obsidian-sync`) and the one-way Drive mirror (`health-drive`)
 live in [`wiki/compose.yml`](../wiki/compose.yml). Human gates **G1** (Obsidian
@@ -27,10 +27,7 @@ The unused Phase 1 Rust crate remains on disk at [`service/`](service/) as
 leftover source only. Compose does not build it. Do not treat
 `family-health-service:local` or `health/service` mise/cargo as the live path.
 
-Design and task DAG:
-[docs/plans/2026-08-19-family-health-wiki.md](docs/plans/2026-08-19-family-health-wiki.md).
-Host path decision (T3):
-[docs/plans/t3-sync-and-host.md](docs/plans/t3-sync-and-host.md).
+Household-specific plans and ingestion notes are kept in private operator records.
 
 ## Topology
 
@@ -85,7 +82,7 @@ sudo -u '#10000' wiki/bootstrap-vault.sh /mnt/internal/wiki
 SSH check after G3 (path must exist only after this gate):
 
 ```bash
-ssh docker.example.invalid 'ls -la /mnt/internal/wiki'
+ssh host-5.example.invalid.example.test 'ls -la /mnt/internal/wiki'
 ```
 
 ## External network (before the first `up`)

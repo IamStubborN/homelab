@@ -16,6 +16,8 @@ and tool arguments stay in English.
 Read current state with `llm-wiki` on `shared/health/generated/*.md` and
 `shared/health/SCHEMA.md`, not jsonl. Wiki only synthesizes people pages, family
 notes, and narrative citing generated facts. Put `person` on every health page.
+Generated filenames begin with the uppercase configured person ID (for
+example, `HEALTH_PRIMARY_PERSON=alpha` gives `ALPHA_CURRENT_PROFILE.md`).
 Do not mix Primary and Secondary on one synthesis page. Do not store blood
 pressure, labs, meals, or other medical facts as personal journal pages.
 
@@ -31,8 +33,14 @@ deployed or the write failed. No silent wiki-as-ledger fallback.
   Primary или Secondary?» with two buttons: `Primary` and `Secondary`. Never
   guess. Do not write until the person is resolved.
 
-Omit `person` for the owner default. Pass `person=primary` or
-`person=secondary` only after an explicit name or completed clarification.
+Omit `person` for the owner default. For an explicitly named other person or a
+completed clarification, read `HEALTH_PRIMARY_PERSON` and
+`HEALTH_SECONDARY_PERSON` from the Hermes environment and pass the selected
+configured ID as `person`. Never send the literal role labels `primary` or
+`secondary` unless they are the configured IDs. If the mapping is unavailable,
+ask for clarification and do not write to an assumed person.
+In the examples below, `$HEALTH_*_PERSON` means substitute the environment
+value before calling a tool; never send the variable name as a tool argument.
 
 ## Writes
 
@@ -87,7 +95,7 @@ Preserve exactly what the user reported.
 | User message | Action |
 | --- | --- |
 | «Давление 138/92, пульс 80» | `add_measurement(kind=blood_pressure, values={systolic:138,diastolic:92,pulse:80})` |
-| «Запиши Secondary вес 78,2» | `add_measurement(person=secondary, kind=weight, values={value:78.2,unit:"kg"})` |
+| «Запиши Secondary вес 78,2» | `add_measurement(person=$HEALTH_SECONDARY_PERSON, kind=weight, values={value:78.2,unit:"kg"})` |
 | «покажи вес за месяц» | `generate_chart(kind=weight, days=30)`; send the returned PNG to the chat |
 | «Начал принимать магний 200 мг вечером» | show the confirmation card; after ✅ call `add_medication(name="магний", dose="200 mg", schedule="вечером", confirmed=true)` |
 | «Исправь тот пульс на 83» | query the current measurement first and reuse its complete systolic/diastolic/pulse, then after ✅ call `correct_measurement(measurement_id=<private id>, new_values={systolic:<current>,diastolic:<current>,pulse:83}, reason="user correction", confirmed=true)` |

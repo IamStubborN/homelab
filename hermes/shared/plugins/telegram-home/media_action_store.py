@@ -10,11 +10,11 @@ import secrets
 import threading
 import time
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
 from .media_models import SearchAction
+from .media_search_sessions import SearchSessions
 
 
 _DEFAULT_MEDIA_ACTIONS_FILE = Path("/opt/data/telegram-media-actions.json")
@@ -51,14 +51,19 @@ class MediaActionStore:
         if not actions:
             return []
         with self._exclusive():
-            values = self._load()
+            values, sessions = self._load()
             now = self._now()
             self._purge(values, now)
             tokens = []
             for action in actions:
                 token = self._new_token(values)
                 values[token] = {
-                    "action": asdict(action),
+                    "action": {
+                        "label": action.label,
+                        "kind": action.kind,
+                        "payload": sessions.encode(action.payload),
+                        "expires_at": action.expires_at,
+                    },
                     "consumed": False,
                     "created_at": now,
                 }
@@ -67,27 +72,27 @@ class MediaActionStore:
                 for token in tokens:
                     values.pop(token, None)
                 raise RuntimeError("media action store is busy")
-            self._write(values)
+            self._write(values, sessions)
             return tokens
 
     def resolve(self, token: str) -> tuple[SearchAction, bool] | None:
         with self._exclusive():
-            values = self._load()
+            values, sessions = self._load()
             now = self._now()
             changed = self._purge(values, now)
             item = values.get(token)
             if changed:
-                self._write(values)
+                self._write(values, sessions)
             if not isinstance(item, dict):
                 return None
-            action = self._decode_action(item.get("action"))
+            action = self._decode_action(item.get("action"), sessions)
             if action is None:
                 return None
             return action, item.get("consumed") is True
 
     def consume(self, token: str) -> None:
         with self._exclusive():
-            values = self._load()
+            values, sessions = self._load()
             item = values.get(token)
             if (
                 not isinstance(item, dict)
@@ -97,19 +102,19 @@ class MediaActionStore:
             item["consumed"] = True
             item.pop("claimed_at", None)
             item.pop("claim_owner", None)
-            self._write(values)
+            self._write(values, sessions)
 
     def claim(self, token: str) -> tuple[SearchAction, str] | None:
         with self._exclusive():
-            values = self._load()
+            values, sessions = self._load()
             now = self._now()
             changed = self._purge(values, now)
             item = values.get(token)
             if not isinstance(item, dict):
                 if changed:
-                    self._write(values)
+                    self._write(values, sessions)
                 return None
-            action = self._decode_action(item.get("action"))
+            action = self._decode_action(item.get("action"), sessions)
             if action is None:
                 return None
             if item.get("consumed") is True:
@@ -127,14 +132,14 @@ class MediaActionStore:
                 return action, "claimed"
             item["claimed_at"] = now
             item["claim_owner"] = self._owner
-            self._write(values)
+            self._write(values, sessions)
             return action, "ready"
 
     @asynccontextmanager
     async def execution(self, token: str):
         async with self._execution_lock(token):
             with self._exclusive():
-                values = self._load()
+                values, sessions = self._load()
                 item = values.get(token)
                 owns_claim = (
                     isinstance(item, dict)
@@ -143,12 +148,12 @@ class MediaActionStore:
                 )
                 if owns_claim:
                     item["claimed_at"] = self._now()
-                    self._write(values)
+                    self._write(values, sessions)
             yield owns_claim
 
     def release(self, token: str) -> None:
         with self._exclusive():
-            values = self._load()
+            values, sessions = self._load()
             item = values.get(token)
             if (
                 not isinstance(item, dict)
@@ -158,17 +163,17 @@ class MediaActionStore:
                 return
             item.pop("claimed_at", None)
             item.pop("claim_owner", None)
-            self._write(values)
+            self._write(values, sessions)
 
     def restore_consumed(self, token: str) -> None:
         """Restore a consumed action when dispatch provably never started."""
         with self._exclusive():
-            values = self._load()
+            values, sessions = self._load()
             item = values.get(token)
             if not isinstance(item, dict) or item.get("consumed") is not True:
                 return
             item["consumed"] = False
-            self._write(values)
+            self._write(values, sessions)
 
     @contextmanager
     def _exclusive(self):
@@ -183,20 +188,29 @@ class MediaActionStore:
                 finally:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
-    def _load(self) -> dict:
+    def _load(self) -> tuple[dict, SearchSessions]:
         try:
             value = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return {}
-        actions = value.get("actions") if isinstance(value, dict) else None
-        return actions if isinstance(actions, dict) else {}
+        except FileNotFoundError:
+            return {}, SearchSessions()
+        if not isinstance(value, dict) or value.get("version") not in {1, 2}:
+            raise ValueError("unsupported media action store")
+        actions = value.get("actions")
+        pages = value.get("search_sessions", {})
+        if not isinstance(actions, dict) or not isinstance(pages, dict):
+            raise ValueError("invalid media action store")
+        sessions = SearchSessions(pages)
+        if value["version"] == 1:
+            actions = sessions.encode(actions)
+        return actions, sessions
 
-    def _write(self, values: dict) -> None:
+    def _write(self, values: dict, sessions: SearchSessions) -> None:
+        sessions.prune(values)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self._path.with_name(f".{self._path.name}.tmp")
         temporary.write_text(
             json.dumps(
-                {"version": 1, "actions": values},
+                {"version": 2, "actions": values, "search_sessions": sessions.pages},
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
@@ -248,7 +262,7 @@ class MediaActionStore:
                 return token
 
     @staticmethod
-    def _decode_action(value) -> SearchAction | None:
+    def _decode_action(value, sessions: SearchSessions) -> SearchAction | None:
         if not isinstance(value, dict):
             return None
         label = _bounded_text(value.get("label"), 80)
@@ -281,6 +295,10 @@ class MediaActionStore:
             or not isinstance(payload, dict)
             or not isinstance(expires_at, str)
         ):
+            return None
+        try:
+            payload = sessions.decode(payload)
+        except ValueError:
             return None
         return SearchAction(label, kind, payload, expires_at)
 

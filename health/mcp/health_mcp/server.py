@@ -194,6 +194,7 @@ async def add_medication(
     started_at: str | None = None,
     status: str | None = None,
     confirmed: bool | None = None,
+    source_event_id: SOURCE_EVENT_ID = None,
 ) -> CallToolResult:
     return _call(
         store().add_medication,
@@ -204,6 +205,7 @@ async def add_medication(
         started_at=started_at,
         status=status,
         confirmed=confirmed,
+        source_event_id=source_event_id,
     )
 
 

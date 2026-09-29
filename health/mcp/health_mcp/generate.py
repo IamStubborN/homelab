@@ -1,27 +1,22 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
-from health_mcp.types import MEASUREMENT_KINDS
+from health_mcp.types import MEASUREMENT_KINDS, PRIMARY_PERSON, SECONDARY_PERSON
 
-PERSON_LABEL = {"primary": "Primary", "secondary": "Secondary"}
+PEOPLE = (PRIMARY_PERSON, SECONDARY_PERSON)
+PERSON_LABEL = {
+    PRIMARY_PERSON: os.environ.get("HEALTH_PRIMARY_LABEL", "Primary"),
+    SECONDARY_PERSON: os.environ.get("HEALTH_SECONDARY_LABEL", "Secondary"),
+}
 
-GENERATED_NAMES = (
-    "PRIMARY_CURRENT_PROFILE.md",
-    "SECONDARY_CURRENT_PROFILE.md",
-    "PRIMARY_CURRENT_MEDICATIONS.md",
-    "SECONDARY_CURRENT_MEDICATIONS.md",
-    "PRIMARY_RECENT_MEASUREMENTS.md",
-    "SECONDARY_RECENT_MEASUREMENTS.md",
-    "PRIMARY_RECENT_LABS.md",
-    "SECONDARY_RECENT_LABS.md",
-    "PRIMARY_DIET_CONTEXT.md",
-    "SECONDARY_DIET_CONTEXT.md",
-    "SECONDARY_ALLERGIES.md",
-    "SECONDARY_CYCLE_CONTEXT.md",
-    "FAMILY_DIET_SNAPSHOTS.md",
-)
+GENERATED_NAMES = tuple(
+    f"{person.upper()}_{kind}.md"
+    for person in PEOPLE
+    for kind in ("CURRENT_PROFILE", "CURRENT_MEDICATIONS", "RECENT_MEASUREMENTS", "RECENT_LABS", "DIET_CONTEXT")
+) + (f"{SECONDARY_PERSON.upper()}_ALLERGIES.md", f"{SECONDARY_PERSON.upper()}_CYCLE_CONTEXT.md", "FAMILY_DIET_SNAPSHOTS.md")
 
 _HEADER = "Generated from append-only health jsonl. Do not edit."
 
@@ -30,7 +25,7 @@ def regenerate(root: Path, ledger: dict[str, dict[str, list[dict[str, Any]]]]) -
     generated = root / "generated"
     generated.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
-    for person in ("primary", "secondary"):
+    for person in PEOPLE:
         events = ledger.get(person, {})
         written.append(_write(generated / f"{person.upper()}_CURRENT_PROFILE.md", _profile(person, events)))
         written.append(
@@ -42,9 +37,9 @@ def regenerate(root: Path, ledger: dict[str, dict[str, list[dict[str, Any]]]]) -
         written.append(_write(generated / f"{person.upper()}_RECENT_LABS.md", _labs(person, events)))
         written.append(_write(generated / f"{person.upper()}_DIET_CONTEXT.md", _diet(person, events)))
     written.append(
-        _write(generated / "SECONDARY_ALLERGIES.md", _allergies("secondary", ledger.get("secondary", {})))
+        _write(generated / f"{SECONDARY_PERSON.upper()}_ALLERGIES.md", _allergies(SECONDARY_PERSON, ledger.get(SECONDARY_PERSON, {})))
     )
-    written.append(_write(generated / "SECONDARY_CYCLE_CONTEXT.md", _cycle_stub()))
+    written.append(_write(generated / f"{SECONDARY_PERSON.upper()}_CYCLE_CONTEXT.md", _cycle_stub()))
     written.append(_write(generated / "FAMILY_DIET_SNAPSHOTS.md", _family_diet(ledger)))
     return written
 
@@ -114,7 +109,7 @@ def _allergies(person: str, events: dict[str, list[dict[str, Any]]]) -> str:
 
 def _cycle_stub() -> str:
     return (
-        "# Secondary — cycle context\n"
+        f"# {PERSON_LABEL[SECONDARY_PERSON]} — cycle context\n"
         "\n"
         f"{_HEADER}\n"
         "\n"
@@ -124,7 +119,7 @@ def _cycle_stub() -> str:
 
 def _family_diet(ledger: dict[str, dict[str, list[dict[str, Any]]]]) -> str:
     lines = ["# Family diet snapshots", "", _HEADER, ""]
-    for person in ("primary", "secondary"):
+    for person in PEOPLE:
         lines.append(f"## {PERSON_LABEL[person]}")
         meals = ledger.get(person, {}).get("meal", [])
         lines.extend(_meal_lines(meals, limit=10) or ["- none"])

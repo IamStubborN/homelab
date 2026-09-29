@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily application database exports and PBS cloud backup
+Wants=network-online.target
+After=network-online.target pve-guests.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-backup-apps-to-pbs
+ExecStopPost=-/usr/local/libexec/homelab-backup-monitor record daily-apps
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=12h

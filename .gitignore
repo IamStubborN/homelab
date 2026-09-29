@@ -7,6 +7,15 @@ secrets.yaml
 **/secrets.yaml
 **/secrets.yaml.bak*
 **/secrets/
+hermes/private-profiles/
+hermes/config/vaultwarden-login-allowlist.json
+hermes/config/vaultwarden-server
+health/mcp/health_mcp/ingest/
+health/mcp/tests/test_ingest*.py
+health/docs/plans/
+health/service/docs/superpowers/
+hermes/docs/superpowers/
+/proxmox-backup/recovery/
 **/*secret*
 
 # health-drive rclone OAuth (T6). Live wiki vault ignore is T7.
@@ -74,7 +83,9 @@ download/gluetun/data/
 download/gluetun-torrserver/
 download/prowlarr/
 download/qbittorrent/config/
-download/torrserver/
+download/torrserver/*
+!download/torrserver/Dockerfile
+!download/torrserver/.dockerignore
 jacred/data/
 jacred/config/init.yaml
 jacred/config/init.yaml.bak*

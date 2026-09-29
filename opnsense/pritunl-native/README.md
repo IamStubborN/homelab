@@ -52,8 +52,17 @@ Installed paths:
 - scripts: `/usr/local/opnsense/scripts/pritunl-native/`;
 - controller: `/usr/local/sbin/pritunl-vpnctl`;
 - secrets: `/conf/pritunl-native/secrets/` (`0600`, never stored in Git);
+- instance ID: `/conf/pritunl-native/instance-uuid` (`0600`, never stored in Git);
 - state: `/conf/pritunl-native/state/`;
 - logs: `/var/log/pritunl-native/`.
+
+Before installing these scripts, copy the disabled OpenVPN instance UUID from
+OPNsense into the private `instance-uuid` file as one line and restrict it to
+root (`0600`). `pritunl-vpnctl` reads that file, or accepts `INSTANCE_UUID` in
+its environment, and exports the value to its watcher process. The controller
+refuses to run without a valid UUID. Keep the private value with the router
+configuration backup; do not add it to this repository. Existing installed
+scripts are unaffected until they are deliberately replaced on OPNsense.
 
 Useful commands:
 

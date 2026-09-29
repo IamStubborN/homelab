@@ -48,6 +48,25 @@ def envelope(payload):
 
 
 class MediaPanelCardsTest(unittest.TestCase):
+    def test_optimistic_cancel_renders_verified_snapshot_without_io(self):
+        job_id = "00000000-0000-0000-0000-000000000001"
+        job = {"id": job_id, "state": "running", "title": "Existing snapshot", "progress": {"progress_percent": 37}}
+        with mock.patch.object(panel, "_command_payload", side_effect=AssertionError("renderer performed I/O")):
+            card = panel.render_job_cancelling_card(job, job_id)
+        self.assertIn("отменяется", card.text)
+        self.assertIn("Existing snapshot", card.text)
+        self.assertIn("37%", card.text)
+        self.assertEqual(job["state"], "running")
+
+    def test_blocked_and_needs_action_jobs_offer_both_cancel_and_retry(self):
+        job_id = "00000000-0000-0000-0000-000000000001"
+        for state in ("blocked_storage", "needs_action"):
+            with self.subTest(state=state):
+                card = panel._render_job_payload({"state": state}, job_id, 1)
+                callbacks = [button.callback_data for row in card.buttons for button in row]
+                self.assertIn(f"mp:job-cancel:{job_id}:1", callbacks)
+                self.assertIn(f"mp:job-retry:{job_id}:1", callbacks)
+
     def test_retry_state_allowlist_matches_backend_contract(self):
         self.assertEqual(
             panel._RETRYABLE_JOB_STATES,
@@ -672,7 +691,7 @@ class MediaPanelCardsTest(unittest.TestCase):
 
         listing = panel._job_list_line(job)
         detail = panel._render_job_payload(
-            None, job, job["id"], 1
+            job, job["id"], 1
         )
 
         self.assertEqual(panel._job_title(job), expected)
@@ -686,7 +705,7 @@ class MediaPanelCardsTest(unittest.TestCase):
         }
         source_backed_listing = panel._job_list_line(source_backed)
         source_backed_detail = panel._render_job_payload(
-            None, source_backed, job["id"], 1
+            source_backed, job["id"], 1
         )
         self.assertEqual(panel._job_title(source_backed), "Каноническое название")
         self.assertIn("Каноническое название", source_backed_listing)
@@ -1461,7 +1480,7 @@ class MediaPanelCardsTest(unittest.TestCase):
 
     def test_plex_player_name_hides_internal_dns_suffix(self):
         self.assertEqual(
-            panel._plex_player_name("host-1.example.invalid"),
+            panel._plex_player_name("Mac.local.example.test"),
             "Mac",
         )
         self.assertEqual(panel._plex_player_name("Living Room TV"), "Living Room TV")

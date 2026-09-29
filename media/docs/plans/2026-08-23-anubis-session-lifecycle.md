@@ -184,7 +184,7 @@ manual and must not be required for the normal test suite.
 
 ## Deployment and rollback
 
-1. Implement and test in `/home/operator/Projects/media-orchestrator`.
+1. Implement and test in `/path/to/media-orchestrator`.
 2. Build the private release contract and run its preflight checks.
 3. Update the homelab release reference only to the resulting immutable image
    digest.

@@ -1,9 +1,14 @@
 services:
   jacred:
-    image: ghcr.io/jacred-fdb/jacred:latest
+    build:
+      context: ./build
+    image: homelab/jacred:20260926-crawl-recovery
     container_name: jacred
     restart: unless-stopped
-    cpus: "1.0"
+    stop_grace_period: 60s
+    # Keep background indexing below one core and yield during contention.
+    cpus: "0.6"
+    cpu_shares: 256
     security_opt:
       - no-new-privileges:true
     environment:
@@ -25,7 +30,7 @@ services:
       retries: 5
       start_period: 45s
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.enable=false"
       - "deunhealth.restart.on.unhealthy=true"
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"

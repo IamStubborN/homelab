@@ -52,6 +52,10 @@
     }
 
     function subscribeTracks(data) {
+      // HLS owns its subtitle setters. Native textTracks/audioTracks are empty
+      // in Chromium and must not replace the playable HLS tracks with ghosts.
+      if (data.homelab_torrent_hash || /\/gst\/[^/]+\/master\.m3u8(?:\?|$)/.test(data.url || '')) return;
+
       var inited = false;
       var inited_parse = false;
       var webos_replace = {};

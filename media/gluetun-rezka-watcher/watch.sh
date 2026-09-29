@@ -61,35 +61,25 @@ if [ -z "${MEDIA_LIFECYCLE_TOKEN:-}" ] && [ -n "${MEDIA_LIFECYCLE_TOKEN_FILE:-}"
 fi
 : "${MEDIA_LIFECYCLE_TOKEN:?MEDIA_LIFECYCLE_TOKEN is required}"
 
-# Resolve the parent to a full container ID once. Docker's events
-# --filter container=<name> prefix-matches names, so "gluetun-rezka" would also
-# match similarly-named helpers and spuriously recreate the runner.
-resolve_parent_id() {
-    docker inspect "$PARENT" --format '{{.Id}}' 2>/dev/null || true
-}
-
-PARENT_ID=$(resolve_parent_id)
-if [ -z "$PARENT_ID" ]; then
-    printf '%s [gluetun-rezka-watcher] FATAL: cannot resolve parent container id for %s\n' \
-        "$(date '+%Y-%m-%d %H:%M:%S')" "$PARENT" >&2
-    exit 1
-fi
-printf '%s\n' "$PARENT_ID" | grep -Eq '^[0-9a-fA-F]{64}$' || {
-    printf '%s [gluetun-rezka-watcher] FATAL: parent container id is invalid for %s\n' \
-        "$(date '+%Y-%m-%d %H:%M:%S')" "$PARENT" >&2
-    exit 1
-}
-parent_name=$(docker inspect "$PARENT_ID" --format '{{.Name}}' 2>/dev/null | sed 's#^/##')
-if [ "$parent_name" != "$PARENT" ]; then
-    printf '%s [gluetun-rezka-watcher] FATAL: parent name mismatch: expected %s, got %s\n' \
-        "$(date '+%Y-%m-%d %H:%M:%S')" "$PARENT" "${parent_name:-unknown}" >&2
-    exit 1
-fi
-PARENT_ID_SHORT=$(printf '%.12s' "$PARENT_ID")
-
 log() {
     printf '%s [gluetun-rezka-watcher] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1"
 }
+
+# Container IDs change on Compose recreate. Subscribe by event type and match
+# exact actor names locally; name filters prefix-match unrelated containers.
+refresh_parent_identity() {
+    current_id=$(docker inspect "$PARENT" --format '{{.Id}}' 2>/dev/null) || return 1
+    printf '%s\n' "$current_id" | grep -Eq '^[0-9a-fA-F]{64}$' || return 1
+    current_name=$(docker inspect "$current_id" --format '{{.Name}}' 2>/dev/null | sed 's#^/##')
+    [ "$current_name" = "$PARENT" ] || return 1
+    PARENT_ID=$current_id
+    PARENT_ID_SHORT=$(printf '%.12s' "$PARENT_ID")
+}
+
+if ! refresh_parent_identity; then
+    log "FATAL: cannot resolve exact parent identity for $PARENT"
+    exit 1
+fi
 
 started_at() {
     docker inspect "$1" --format '{{.State.StartedAt}}' 2>/dev/null || true
@@ -201,6 +191,10 @@ recreate_dependent() {
 # Force-recreate only when the runner is still running on a dead/orphaned netns.
 # Stopped runners are started later via start_dependent once lifecycle is ready.
 refresh_orphaned_dependent() {
+    if ! refresh_parent_identity; then
+        log "WARNING: cannot resolve current $PARENT identity; leaving $DEPENDENT untouched"
+        return 1
+    fi
     state=$(docker inspect "$DEPENDENT" --format '{{.State.Status}}' 2>/dev/null || true)
     if [ "$state" != running ]; then
         return 0
@@ -403,6 +397,10 @@ rotate_parent() {
 }
 
 start_dependent() {
+    if ! refresh_parent_identity; then
+        log "WARNING: cannot resolve current $PARENT identity; leaving $DEPENDENT untouched"
+        return 1
+    fi
     state=$(docker inspect "$DEPENDENT" --format '{{.State.Status}}' 2>/dev/null || true)
     if [ "$state" = running ]; then
         if dependent_needs_refresh; then
@@ -478,14 +476,12 @@ elif [ "$dependent_state" != running ]; then
     fi
 fi
 
-log "Watching docker events for exact parent id=$PARENT_ID_SHORT and dependent=$DEPENDENT"
+log "Watching docker events for exact names parent=$PARENT and dependent=$DEPENDENT"
 docker events \
     --filter type=container \
-    --filter "container=$PARENT_ID" \
-    --filter "container=$DEPENDENT" \
     --filter "event=start" \
     --filter "event=die" \
-    --format '{{.Actor.ID}}|{{.Actor.Attributes.name}}|{{.Action}}' | while IFS='|' read -r event_id container action; do
+    --format '{{.Actor.ID}}|{{.Actor.Attributes.name}}|{{.Action}}' | while IFS='|' read -r _ container action; do
     # Docker may return exec_start health-check events for an event=start filter.
     case "$action" in
         start|die) ;;
@@ -522,7 +518,7 @@ docker events \
         else
             log "cannot read lifecycle state; $DEPENDENT remains stopped fail-closed"
         fi
-    elif [ "$event_id" = "$PARENT_ID" ] && [ "$action" = start ]; then
+    elif [ "$container" = "$PARENT" ] && [ "$action" = start ]; then
         refresh_orphaned_dependent_after_parent_start || true
     fi
 done

@@ -78,14 +78,14 @@ upload_guest_archive() {
       pattern='vzdump-qemu-100-*.vma.zst'
       regex='^vzdump-qemu-100-.*\.vma\.zst$'
       log_file="${archive%.vma.zst}.log"
-      keep=3
+      keep=5
       ;;
     docker)
       remote_directory="${REMOTE_ROOT}/Docker/full-lxc"
       pattern='vzdump-lxc-300-*.tar.zst'
       regex='^vzdump-lxc-300-.*\.tar\.zst$'
       log_file="${archive%.tar.zst}.log"
-      keep=2
+      keep=5
       ;;
     *)
       echo "Unsupported guest kind: ${kind}" >&2
@@ -125,6 +125,17 @@ latest_archive() {
     -printf '%T@ %p\n' | sort -nr | awk 'NR == 1 {$1=""; sub(/^ /, ""); print; exit}'
 }
 
+backup_opnsense_config() {
+  local timestamp archive
+  timestamp=$(date -u '+%Y_%m_%d-%H_%M_%S')
+  archive="${LOCAL_BACKUP_DIR}/opnsense-config-${timestamp}.tar.gz"
+  chmod 700 -- "${LOCAL_BACKUP_DIR}"
+  /usr/local/libexec/homelab-opnsense-config-backup "${archive}"
+  upload_file "${archive}" "${REMOTE_ROOT}/OPNsense/config"
+  prune_remote "${REMOTE_ROOT}/OPNsense/config" 'opnsense-config-*.tar.gz' 5
+  rm -f -- "${archive}"
+}
+
 backup_opnsense() {
   local archive
   vzdump 100 --storage local --mode snapshot --compress zstd --remove 0 \
@@ -136,10 +147,17 @@ backup_opnsense() {
 
 backup_docker() {
   local archive
-  vzdump 300 --storage local --mode snapshot --compress zstd --remove 0 \
-    --notes-template 'Docker LXC 300 full rootfs backup; external bind mounts excluded'
+  # Keep archives private throughout creation, including failed partial files.
+  chmod 700 -- "${LOCAL_BACKUP_DIR}"
+  # Mapped LXC root must traverse its temporary config tree outside dumpdir.
+  (
+    umask 022
+    vzdump 300 --storage local --mode snapshot --compress zstd --remove 0 --tmpdir /var/tmp \
+      --notes-template 'Docker LXC 300 full rootfs backup; external bind mounts excluded'
+  )
   archive=$(latest_archive 'vzdump-lxc-300-*.tar.zst')
   [[ -n "${archive}" ]] || exit 66
+  chmod 600 -- "${archive}"
   upload_guest_archive docker "${archive}"
 }
 
@@ -148,28 +166,19 @@ backup_host_config() {
   timestamp=$(date -u '+%Y_%m_%d-%H_%M_%S')
   archive="${LOCAL_BACKUP_DIR}/proxmox-host-config-${timestamp}.tar.zst"
 
-  tar --acls --numeric-owner -C / \
-    -I 'zstd -T0 -3' \
-    -cf "${archive}" \
-    etc/pve \
-    etc/network/interfaces \
-    etc/hosts \
-    etc/hostname \
-    etc/resolv.conf \
-    etc/apt \
-    etc/default/grub \
-    etc/kernel \
-    etc/modprobe.d \
-    etc/systemd/system \
-    etc/systemd/journald.conf.d
+  chmod 700 -- "${LOCAL_BACKUP_DIR}"
+  /usr/local/libexec/homelab-host-config-backup "${archive}"
 
   zstd -tq "${archive}"
   upload_file "${archive}" "${REMOTE_ROOT}/host-config"
-  prune_remote "${REMOTE_ROOT}/host-config" 'proxmox-host-config-*.tar.zst' 3
+  prune_remote "${REMOTE_ROOT}/host-config" 'proxmox-host-config-*.tar.zst' 5
   rm -f -- "${archive}"
 }
 
 case "${1:-}" in
+  opnsense-config)
+    backup_opnsense_config
+    ;;
   opnsense)
     backup_opnsense
     ;;
@@ -187,7 +196,7 @@ case "${1:-}" in
     upload_guest_archive "$2" "$3"
     ;;
   *)
-    echo "Usage: $0 <opnsense|docker|host-config|upload-existing>" >&2
+    echo "Usage: $0 <opnsense|opnsense-config|docker|host-config|upload-existing>" >&2
     exit 64
     ;;
 esac

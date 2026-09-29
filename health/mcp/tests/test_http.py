@@ -177,3 +177,22 @@ def test_add_measurement_round_trip_over_http(wiki_root: Path) -> None:
         assert "80" in (wiki_root / "generated" / "PRIMARY_RECENT_MEASUREMENTS.md").read_text(
             encoding="utf-8"
         )
+
+
+def test_medication_source_identity_is_idempotent_over_http(wiki_root: Path) -> None:
+    with _client(wiki_root) as client:
+        session_id = _initialize(client)
+        results = []
+        for request_id in (2, 3):
+            status, body, _sid = _mcp(client, {
+                'jsonrpc': '2.0', 'id': request_id, 'method': 'tools/call',
+                'params': {'name': 'add_medication', 'arguments': {
+                    'name': 'synthetic-med-a', 'confirmed': True,
+                    'source_event_id': 'test:http:medication:1',
+                }},
+            }, session_id=session_id)
+            assert status == 200
+            assert not body['result'].get('isError')
+            results.append(body['result']['structuredContent'])
+        assert results[0]['outcome'] == 'created'
+        assert results[1] == {'outcome': 'duplicate', 'existing_id': results[0]['id']}

@@ -16,7 +16,8 @@ services:
       DISPLAY_TIMEZONE: ${TIMEZONE:-UTC}
       APP_TIMEZONE: ${TIMEZONE:-UTC}
       PUBLIC_DASHBOARD: "true"
-      SPEEDTEST_SCHEDULE: "17 */6 * * *"
+      # Sofia local time; leave 30 minutes before the VPN test.
+      SPEEDTEST_SCHEDULE: "0 23 * * *"
       SPEEDTEST_INTERNET_CHECK_HOSTNAME: 1.1.1.1
     volumes:
       - ./config:/config
@@ -55,7 +56,8 @@ services:
       DISPLAY_TIMEZONE: ${TIMEZONE:-UTC}
       APP_TIMEZONE: ${TIMEZONE:-UTC}
       PUBLIC_DASHBOARD: "true"
-      SPEEDTEST_SCHEDULE: "47 */6 * * *"
+      # Sofia local time; nightly crawler starts begin after midnight.
+      SPEEDTEST_SCHEDULE: "30 23 * * *"
       SPEEDTEST_INTERNET_CHECK_HOSTNAME: 1.1.1.1
     volumes:
       - ./config-vpn:/config

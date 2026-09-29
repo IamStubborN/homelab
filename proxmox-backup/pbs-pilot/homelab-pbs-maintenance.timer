@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly PBS and restic maintenance (enable after pilot acceptance)
+
+[Timer]
+OnCalendar=Sun *-*-* 09:00:00 UTC
+Persistent=true
+Unit=homelab-pbs-maintenance.service
+
+[Install]
+WantedBy=timers.target

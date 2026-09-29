@@ -232,3 +232,100 @@ def test_default_person_comes_from_token(
     secondary_rows = store.query(secondary_identity, section="pulse")
     assert primary_rows[0]["values"] == {"value": 60}
     assert secondary_rows[0]["values"] == {"value": 70}
+
+
+def test_committed_measurement_survives_projection_failure_and_retry_repairs_it(
+    store: WikiStore, identity: Identity, wiki_root: Path
+) -> None:
+    generated = wiki_root / 'generated'
+    generated.rmdir()
+    generated.write_text('synthetic projection filesystem failure')
+    created = store.add_measurement(
+        identity, kind='weight', values={'value': 80}, source_event_id='test:projection:1'
+    )
+    assert created.outcome == 'created'
+    assert created.as_dict()['projection_pending'] is True
+    assert store.query(identity, section='weight')[0]['values'] == {'value': 80}
+
+    generated.unlink()
+    generated.mkdir()
+    retry = store.add_measurement(
+        identity, kind='weight', values={'value': 80}, source_event_id='test:projection:1'
+    )
+    assert retry.outcome == 'duplicate'
+    assert retry.existing_id == created.id
+    assert 'projection_pending' not in retry.as_dict()
+    assert len(store.query(identity, section='weight')) == 1
+    assert '80' in (generated / 'PRIMARY_RECENT_MEASUREMENTS.md').read_text()
+
+
+def test_medication_transport_retry_does_not_create_another_prescription(
+    store: WikiStore, identity: Identity, wiki_root: Path
+) -> None:
+    generated = wiki_root / 'generated'
+    generated.rmdir()
+    generated.write_text('synthetic projection filesystem failure')
+    created = store.add_medication(
+        identity, name='synthetic-med-a', confirmed=True, source_event_id='test:medication:1'
+    )
+    assert created.outcome == 'created'
+    assert created.projection_pending
+    generated.unlink()
+    generated.mkdir()
+    retry = store.add_medication(
+        identity, name='synthetic-med-a', confirmed=True, source_event_id='test:medication:1'
+    )
+    assert retry.outcome == 'duplicate'
+    assert retry.existing_id == created.id
+    assert not retry.projection_pending
+    assert len(store.query(identity, section='medications')) == 1
+    separate = store.add_medication(
+        identity, name='synthetic-med-a', confirmed=True, source_event_id='test:medication:2'
+    )
+    assert separate.outcome == 'created'
+    assert len(store.query(identity, section='medications')) == 2
+
+
+def test_resolve_active_indexes_history_once_and_preserves_correction_winners() -> None:
+    from health_mcp.store import resolve_active
+
+    class Event(dict):
+        id_reads = 0
+
+        def __getitem__(self, key):
+            if key == 'id':
+                type(self).id_reads += 1
+            return super().__getitem__(key)
+
+    events = [Event(id=str(i), created_at='2026-01-01') for i in range(1000)]
+    events.extend([
+        Event(id='a', corrects='0', created_at='2026-01-02'),
+        Event(id='b', corrects='a', created_at='2026-01-03'),
+        Event(id='c', corrects='0', created_at='2026-01-04'),
+    ])
+    active = resolve_active(events)
+    assert {row['id'] for row in active} == {str(i) for i in range(1, 1000)} | {'c'}
+    assert Event.id_reads < len(events) * 15
+
+
+@pytest.mark.parametrize('operation', ['correction', 'stop'])
+def test_committed_update_reports_projection_failure_without_losing_the_update(
+    store: WikiStore, identity: Identity, wiki_root: Path, operation: str
+) -> None:
+    if operation == 'correction':
+        original = store.add_measurement(identity, kind='weight', values={'value': 80})
+    else:
+        original = store.add_medication(identity, name='synthetic-med-a', confirmed=True)
+    generated = wiki_root / 'generated'
+    generated.rename(wiki_root / 'saved-generated')
+    generated.write_text('synthetic projection filesystem failure')
+    if operation == 'correction':
+        updated = store.correct_measurement(identity, measurement_id=original.id,
+            new_values={'value': 81}, reason='synthetic correction', confirmed=True)
+        assert store.query(identity, section='weight')[0]['values'] == {'value': 81}
+    else:
+        updated = store.stop_medication(identity, medication_id=original.id, confirmed=True)
+        assert store.query(identity, section='medications') == []
+    assert updated.outcome == 'updated'
+    assert updated.id == original.id
+    assert updated.projection_pending

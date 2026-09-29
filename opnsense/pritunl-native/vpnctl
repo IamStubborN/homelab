@@ -6,9 +6,22 @@ BASE_DIR="${BASE_DIR:-/conf/pritunl-native}"
 STATE_DIR="${STATE_DIR:-$BASE_DIR/state}"
 RUN_DIR="${RUN_DIR:-/var/run/pritunl-native}"
 LOG_DIR="${LOG_DIR:-/var/log/pritunl-native}"
+INSTANCE_UUID="${INSTANCE_UUID:-$(cat "$BASE_DIR/instance-uuid" 2>/dev/null || true)}"
+if [ -z "$INSTANCE_UUID" ]; then
+    printf "INSTANCE_UUID is required (set it or create %s/instance-uuid).\n" "$BASE_DIR" >&2
+    exit 78
+fi
+case "$INSTANCE_UUID" in
+    *[!0-9a-fA-F-]*) printf "Invalid INSTANCE_UUID.\n" >&2; exit 64 ;;
+esac
+case "$INSTANCE_UUID" in
+    ????????-????-????-????-????????????) ;;
+    *) printf "Invalid INSTANCE_UUID.\n" >&2; exit 64 ;;
+esac
+export INSTANCE_UUID
 PID_FILE="$RUN_DIR/watcher.pid"
-OPENVPN_PID_FILE="/var/run/ovpn-instance-00000000-0000-4000-8000-000000000000.pid"
-OPENVPN_CONFIG="/var/etc/openvpn/instance-00000000-0000-4000-8000-000000000000.conf"
+OPENVPN_PID_FILE="/var/run/ovpn-instance-${INSTANCE_UUID}.pid"
+OPENVPN_CONFIG="/var/etc/openvpn/instance-${INSTANCE_UUID}.conf"
 WATCHER="/usr/local/opnsense/scripts/pritunl-native/watcher.sh"
 START_LOCK_FILE="$RUN_DIR/start.lock"
 WATCHER_LOCK_FILE="$RUN_DIR/watcher.lock"

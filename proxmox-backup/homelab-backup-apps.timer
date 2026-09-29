@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily important application data backup
+
+[Timer]
+OnCalendar=*-*-* 02:40:00 UTC
+RandomizedDelaySec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

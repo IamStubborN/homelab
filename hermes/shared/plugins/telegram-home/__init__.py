@@ -2340,7 +2340,6 @@ class HomeTelegramAdapter(TelegramAdapter):
                     receipts.consume(data, message_id)
                     card = await asyncio.to_thread(
                         _render_job_payload,
-                        None,
                         current_job,
                         job_id,
                         job_page,
@@ -2364,15 +2363,19 @@ class HomeTelegramAdapter(TelegramAdapter):
                     receipts.release(data, message_id)
                     return
                 tool, arguments = operation
-            if not retry_safe_action:
-                receipts.consume(data, message_id)
-            operation_task = None
+            async def dispatch_operation():
+                if not retry_safe_action:
+                    receipts.consume(data, message_id)
+                return await _run_media((tool, arguments), self._media_plugin_context)
+
+            operation_task = (
+                asyncio.create_task(dispatch_operation()) if action == "cancel" else None
+            )
             try:
                 if action == "cancel" and self._media_plugin_context is not None:
                     try:
-                        cancelling_card = await asyncio.to_thread(
-                            render_job_cancelling_card,
-                            self._media_plugin_context,
+                        cancelling_card = render_job_cancelling_card(
+                            current_job,
                             job_id,
                             job_page,
                             job_filter,
@@ -2401,19 +2404,10 @@ class HomeTelegramAdapter(TelegramAdapter):
                             "Failed to render optimistic media job cancellation %s",
                             job_id,
                         )
-                operation_task = (
-                    asyncio.create_task(
-                        _run_media((tool, arguments), self._media_plugin_context)
-                    )
-                    if action == "cancel"
-                    else None
-                )
                 returncode, stdout = (
                     await operation_task
                     if operation_task is not None
-                    else await _run_media(
-                        (tool, arguments), self._media_plugin_context
-                    )
+                    else await dispatch_operation()
                 )
             except asyncio.CancelledError:
                 if operation_task is not None and not operation_task.done():

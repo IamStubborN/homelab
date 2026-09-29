@@ -1,0 +1,10 @@
+{
+  "pbs": {"ctid": 101, "path": "/mnt/datastore/homelab", "datastore": "homelab", "max_used_percent": 90},
+  "jobs": {
+    "pbs-maintenance": {"failure_only": true},
+    "opnsense-config": {"remote": "gdrive:Homelab Backups/Proxmox/OPNsense/config", "pattern": "opnsense-config-*.tar.gz", "max_age_hours": 50},
+    "host-config": {"remote": "gdrive:Homelab Backups/Proxmox/host-config", "pattern": "proxmox-host-config-*.tar.zst", "max_age_hours": 194},
+    "opnsense": {"remote": "gdrive:Homelab Backups/Proxmox/OPNsense/full-vm", "pattern": "vzdump-qemu-100-*.vma.zst", "max_age_hours": 194},
+    "docker": {"remote": "gdrive:Homelab Backups/Proxmox/Docker/full-lxc", "pattern": "vzdump-lxc-300-*.tar.zst", "max_age_hours": 866}
+  }
+}

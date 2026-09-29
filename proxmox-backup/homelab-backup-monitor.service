@@ -1,0 +1,10 @@
+[Unit]
+Description=Check backup freshness and notify the owner of problems
+Wants=network-online.target
+After=network-online.target pve-guests.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/homelab-backup-monitor check
+Nice=15
+TimeoutStartSec=10min

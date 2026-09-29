@@ -1,0 +1,16 @@
+[Unit]
+Description=Coherent encrypted PBS datastore copy to Google Drive
+After=network-online.target pve-guests.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-pbs-cloud
+Nice=10
+AllowedCPUs=0-2
+CPUQuota=150%
+IOWeight=50
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+UMask=0077
+SuccessExitStatus=75

@@ -1,208 +1,61 @@
-# JacRed host crontab — edit by hand (source of truth).
-# Install: crontab /opt/jacred/Data/crontab
-# Runner:  /usr/local/bin/run-job.sh <name> <url> <max_time>
-#   flock (no curl pile-up) + curl --max-time
-# Default base: http://jacred:9117 — change host/port if needed.
-# If apikey/devkey is set, append ?apikey=... or ?devkey=... to each URL.
+# JacRed scheduler: container timezone is Europe/Sofia (TIMEZONE in Compose).
+# Incremental updates run every 4–6 hours; heavy jobs start at night.
+# ParseAll is asynchronous and can continue outside these start times.
+# The built-in startup worker also resumes pending cycles after 45 seconds.
+# Keep checkpoints; there is no supported pause/cancel window in v3.15.1.
+# No tracker starts at 22:00–23:59; speed tests start at 23:00 / 23:30.
+# Install through the root Compose project; this file is baked into jacred-cron.
+# run-job.sh locks protect HTTP requests, not background ParseAll lifetime.
 
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# jsondb-save -> /jsondb/save (max_time=60s)
-# every 5 min (e.g. :00,:05,:10,…)
-*/5 * * * *  /usr/local/bin/run-job.sh jsondb-save http://jacred:9117/jsondb/save 60
+# Persistence and bounded log retention remain frequent.
+*/5 * * * * /usr/local/bin/run-job.sh jsondb-save http://jacred:9117/jsondb/save 60
+*/15 * * * * /usr/local/bin/rotate-jacred-logs.sh
 
-# tracks.log is written directly by JacRed and has no application-side limit.
-# Keep five 50 MiB generations without restarting JacRed.
-*/15 * * * *  /usr/local/bin/rotate-jacred-logs.sh
-
-# cloudflare-warmup keep-alive -> /cron/cloudflare/Warmup (max_time=300s)
-# Temporarily disabled during ParseAll recovery to free browser processes.
-# 5,25,45 * * * *  /usr/local/bin/run-job.sh cloudflare-keepalive http://jacred:9117/cron/cloudflare/Warmup 300
-
-# cloudflare-warmup -> /cron/cloudflare/Warmup (max_time=300s)
-# Temporarily disabled during ParseAll recovery to free browser processes.
-# 55 * * * *  /usr/local/bin/run-job.sh cloudflare-warmup http://jacred:9117/cron/cloudflare/Warmup 300
-
-# maintenance-check -> /cron/maintenance/Check?mode=report (max_time=60s)
-# Sunday 05:00
-0 5 * * 0  /usr/local/bin/run-job.sh maintenance-check http://jacred:9117/cron/maintenance/Check?mode=report 60
-
-# parseall-resume -> /cron/maintenance/ResumeParseAll (max_time=60s)
-# continue incomplete cycles after restart / hung cancel; idle if pending=0
-*/15 * * * *  /usr/local/bin/run-job.sh parseall-resume http://jacred:9117/cron/maintenance/ResumeParseAll 60
-
-# --- rutracker (~1.5M) ---
-# rutracker-parse -> /cron/rutracker/parse (max_time=3600s)
-# Once daily while the initial ParseAll cycle is running; restore the regular
-# incremental cadence after that cycle completes.
-0 1 * * *  /usr/local/bin/run-job.sh rutracker-parse http://jacred:9117/cron/rutracker/parse 3600
-
-# rutracker-UpdateTasksParse -> /cron/rutracker/UpdateTasksParse (max_time=60s)
-20 3 * * *  /usr/local/bin/run-job.sh rutracker-UpdateTasksParse http://jacred:9117/cron/rutracker/UpdateTasksParse 60
-
-# rutracker-ParseAllTask -> /cron/rutracker/ParseAllTask (max_time=60s)
-# Initial cycle is already running. ResumeParseAll covers restarts; leave the
-# daily kick disabled so completion does not start another full scan.
-# 40 4 * * *  /usr/local/bin/run-job.sh rutracker-ParseAllTask http://jacred:9117/cron/rutracker/ParseAllTask 60
-
-# --- kinozal (~550k) ---
-# kinozal-parse -> /cron/kinozal/parse (max_time=900s)
-# Temporarily disabled while the existing Kinozal ParseAll and torrent recovery run.
-# 3,18,33,48 * * * *  /usr/local/bin/run-job.sh kinozal-parse http://jacred:9117/cron/kinozal/parse 900
-
-# kinozal-UpdateTasksParse -> /cron/kinozal/UpdateTasksParse (max_time=60s)
-10 2 * * *  /usr/local/bin/run-job.sh kinozal-UpdateTasksParse http://jacred:9117/cron/kinozal/UpdateTasksParse 60
-
-# kinozal-ParseAllTask -> /cron/kinozal/ParseAllTask (max_time=60s)
-# One daily kick; ResumeParseAll continues an existing cycle.
-# Temporarily disabled to avoid starting another full browser-heavy cycle.
-# 35 5 * * *  /usr/local/bin/run-job.sh kinozal-ParseAllTask http://jacred:9117/cron/kinozal/ParseAllTask 60
-
-# --- rutor (~550k) ---
-# rutor-parse -> /cron/rutor/parse (max_time=900s)
-1,16,31,46 * * * *  /usr/local/bin/run-job.sh rutor-parse http://jacred:9117/cron/rutor/parse 900
-
-# rutor-UpdateTasksParse -> /cron/rutor/UpdateTasksParse (max_time=60s)
-5 2 * * *  /usr/local/bin/run-job.sh rutor-UpdateTasksParse http://jacred:9117/cron/rutor/UpdateTasksParse 60
-
-# rutor-ParseAllTask -> /cron/rutor/ParseAllTask (max_time=60s)
-# One daily kick; ResumeParseAll continues an existing cycle.
-30 6 * * *  /usr/local/bin/run-job.sh rutor-ParseAllTask http://jacred:9117/cron/rutor/ParseAllTask 60
-
-# --- bitru (~175k; high update churn — parse + archive backfill) ---
-# bitru-parse -> /cron/bitru/parse (max_time=900s) — newest page only
-10,30,50 * * * *  /usr/local/bin/run-job.sh bitru-parse http://jacred:9117/cron/bitru/parse 900
-
-# bitru-backfill -> /cron/bitru/backfill?pages=20 (max_time=900s)
-# Historical backfill is intentionally disabled after repeated 900s timeouts.
-# Disabled: repeated timeouts and lock contention; run manually when needed.
-
-# --- nnmclub (~145k) ---
-# nnmclub-parse -> /cron/nnmclub/parse (max_time=900s)
-5,20,35,50 * * * *  /usr/local/bin/run-job.sh nnmclub-parse http://jacred:9117/cron/nnmclub/parse 900
-
-# nnmclub-UpdateTasksParse -> /cron/nnmclub/UpdateTasksParse (max_time=60s)
-15 2 * * *  /usr/local/bin/run-job.sh nnmclub-UpdateTasksParse http://jacred:9117/cron/nnmclub/UpdateTasksParse 60
-
-# nnmclub-ParseAllTask -> /cron/nnmclub/ParseAllTask (max_time=60s)
-# ~7h cycle; once after the morning fast wave (not stacked with 05:xx).
-42 12 * * *  /usr/local/bin/run-job.sh nnmclub-ParseAllTask http://jacred:9117/cron/nnmclub/ParseAllTask 60
-
-# --- megapeer (~113k) ---
-# megapeer-parse -> /cron/megapeer/parse (max_time=900s)
-8 * * * *  /usr/local/bin/run-job.sh megapeer-parse http://jacred:9117/cron/megapeer/parse 900
-
-# megapeer-UpdateTasksParse -> /cron/megapeer/UpdateTasksParse (max_time=60s)
-20 2 * * *  /usr/local/bin/run-job.sh megapeer-UpdateTasksParse http://jacred:9117/cron/megapeer/UpdateTasksParse 60
-
-# megapeer-ParseAllTask -> /cron/megapeer/ParseAllTask (max_time=60s)
-# One daily kick; ResumeParseAll continues an existing cycle.
-45 8 * * *  /usr/local/bin/run-job.sh megapeer-ParseAllTask http://jacred:9117/cron/megapeer/ParseAllTask 60
-
-# --- knaben (~106k; API aggregate) ---
-# knaben-parse -> /cron/knaben/parse (max_time=900s)
-# 12,32,52 * * * *  /usr/local/bin/run-job.sh knaben-parse http://jacred:9117/cron/knaben/parse 900
-
-# knaben-backfill -> /cron/knaben/backfill (max_time=900s)
-# leaf TV/Movies subcategories, asc→desc within Knaben 10k window; state: Data/temp/knaben_backfill.json
-# 42 * * * *  /usr/local/bin/run-job.sh knaben-backfill "http://jacred:9117/cron/knaben/backfill?pages=10" 900
-
-# --- torrentby (~58k) ---
-# torrentby-parse -> /cron/torrentby/parse (max_time=900s)
-7,22,37,52 * * * *  /usr/local/bin/run-job.sh torrentby-parse http://jacred:9117/cron/torrentby/parse 900
-
-# torrentby-UpdateTasksParse -> /cron/torrentby/UpdateTasksParse (max_time=60s)
-25 2 * * *  /usr/local/bin/run-job.sh torrentby-UpdateTasksParse http://jacred:9117/cron/torrentby/UpdateTasksParse 60
-
-# torrentby-ParseAllTask -> /cron/torrentby/ParseAllTask (max_time=60s)
-# One daily kick; ResumeParseAll continues an existing cycle.
-50 9 * * *  /usr/local/bin/run-job.sh torrentby-ParseAllTask http://jacred:9117/cron/torrentby/ParseAllTask 60
-
-# --- toloka (~58k) ---
-# toloka-parse -> /cron/toloka/parse (max_time=900s) — ~3s, same cadence as other cheap trio
-14,29,44,59 * * * *  /usr/local/bin/run-job.sh toloka-parse http://jacred:9117/cron/toloka/parse 900
-
-# toloka-UpdateTasksParse -> /cron/toloka/UpdateTasksParse (max_time=60s)
-30 2 * * *  /usr/local/bin/run-job.sh toloka-UpdateTasksParse http://jacred:9117/cron/toloka/UpdateTasksParse 60
-
-# toloka-ParseAllTask -> /cron/toloka/ParseAllTask (max_time=60s)
-# One daily kick; ResumeParseAll continues an existing cycle.
-55 10 * * *  /usr/local/bin/run-job.sh toloka-ParseAllTask http://jacred:9117/cron/toloka/ParseAllTask 60
-
-# --- mazepa (~51k) ---
-# mazepa-parse -> /cron/mazepa/parse (max_time=2400s)
-# full forum walk ~27 min; every 2h (hourly was overlapping itself vs curl --max-time 900)
-25 */2 * * *  /usr/local/bin/run-job.sh mazepa-parse http://jacred:9117/cron/mazepa/parse 2400
-
-# --- selezen (~16k) ---
-# selezen-parse -> /cron/selezen/parse (max_time=900s)
-9,24,39,54 * * * *  /usr/local/bin/run-job.sh selezen-parse http://jacred:9117/cron/selezen/parse 900
-
-# --- animelayer (~6k) ---
-# animelayer-parse -> /cron/animelayer/parse (max_time=900s)
-2,17,32,47 * * * *  /usr/local/bin/run-job.sh animelayer-parse http://jacred:9117/cron/animelayer/parse 900
-
-# --- rudub (ex-BaibaKoTV; HD 1080/2160 only; login/cookie) ---
-# rudub-parse -> /cron/rudub/parse?limit_page=10 (max_time=1800s) — pages 0..9 × vf 4+5
-# Initial FDB fill: ?limit_page=50 (or parseFrom/parseTo). Cap is 100.
-# minute :40 — free of other hourly page parsers (avoid ultradox 13/43 and rutor 1/16/31/46)
-40 * * * *  /usr/local/bin/run-job.sh rudub-parse "http://jacred:9117/cron/rudub/parse?limit_page=10" 1800
-
-# --- subsplease (public API; 1080p magnets; Batches via ParseShows) ---
-# subsplease-parse -> /cron/subsplease/parse?pages=2 (max_time=900s)
-35 * * * *  /usr/local/bin/run-job.sh subsplease-parse "http://jacred:9117/cron/subsplease/parse?pages=2" 900
-# subsplease-ParseShows -> /cron/subsplease/ParseShows (default limit=50; max_time=1800s)
-25 5 * * *  /usr/local/bin/run-job.sh subsplease-ParseShows http://jacred:9117/cron/subsplease/ParseShows 1800
-
-# --- anidub (~4k) ---
-# anidub-parse -> /cron/anidub/parse (max_time=900s)
-4,19,34,49 * * * *  /usr/local/bin/run-job.sh anidub-parse http://jacred:9117/cron/anidub/parse 900
-
-# --- anistar (alias = live mirror, host = FDB urls) ---
-# anistar-parse -> /cron/anistar/parse?limit_page=3 (max_time=900s)
-40 6 * * *  /usr/local/bin/run-job.sh anistar-parse "http://jacred:9117/cron/anistar/parse?limit_page=3" 900
-
-# --- leproduction ---
-# leproduction-parse -> /cron/leproduction/parse?limit_page=3 (max_time=900s)
-45 6 * * *  /usr/local/bin/run-job.sh leproduction-parse "http://jacred:9117/cron/leproduction/parse?limit_page=3" 900
-
-# --- anifilm (login or session cookie) ---
-# anifilm-parse -> /cron/anifilm/parse (max_time=1800s)
-55 6 * * *  /usr/local/bin/run-job.sh anifilm-parse http://jacred:9117/cron/anifilm/parse 1800
-
-# --- anibelka (anonymous only; Rutor-style task trio) ---
-# minutes 29/59 — every 30 min (parse ~5 min; was 15 min)
-# anibelka-parse -> /cron/anibelka/parse (max_time=900s)
-29,59 * * * *  /usr/local/bin/run-job.sh anibelka-parse http://jacred:9117/cron/anibelka/parse 900
-
-# anibelka-UpdateTasksParse -> /cron/anibelka/UpdateTasksParse (max_time=60s)
-40 2 * * *  /usr/local/bin/run-job.sh anibelka-UpdateTasksParse http://jacred:9117/cron/anibelka/UpdateTasksParse 60
-
-# anibelka-ParseAllTask -> /cron/anibelka/ParseAllTask (max_time=60s)
-# One daily kick; ResumeParseAll continues an existing cycle.
-48 11 * * *  /usr/local/bin/run-job.sh anibelka-ParseAllTask http://jacred:9117/cron/anibelka/ParseAllTask 60
-
-# anibelka-ParseLatest -> /cron/anibelka/ParseLatest (max_time=900s)
-10 7 * * *  /usr/local/bin/run-job.sh anibelka-ParseLatest http://jacred:9117/cron/anibelka/ParseLatest 900
-
-# --- ultradox (search-like Referer; Rutor-style) ---
-# ultradox-parse -> /cron/ultradox/parse (max_time=900s)
-# Once daily while the initial ParseAll cycle is running; restore the regular
-# incremental cadence after that cycle completes.
-13 4 * * *  /usr/local/bin/run-job.sh ultradox-parse http://jacred:9117/cron/ultradox/parse 900
-
-# ultradox-UpdateTasksParse -> /cron/ultradox/UpdateTasksParse (max_time=60s)
-50 2 * * *  /usr/local/bin/run-job.sh ultradox-UpdateTasksParse http://jacred:9117/cron/ultradox/UpdateTasksParse 60
-
-# ultradox-ParseAllTask -> /cron/ultradox/ParseAllTask (max_time=60s)
-# Initial cycle is already running. ResumeParseAll covers restarts; leave the
-# daily kick disabled so completion does not start another full scan.
-# 58 12 * * *  /usr/local/bin/run-job.sh ultradox-ParseAllTask http://jacred:9117/cron/ultradox/ParseAllTask 60
-
-# ultradox-ParseLatest -> /cron/ultradox/ParseLatest (max_time=900s)
-20 7 * * *  /usr/local/bin/run-job.sh ultradox-ParseLatest http://jacred:9117/cron/ultradox/ParseLatest 900
-
-# --- knaben ---
-12,32,52 * * * *  /usr/local/bin/run-job.sh knaben-parse http://jacred:9117/cron/knaben/parse 900
-# Disabled: run manually only for a controlled historical fill.
+45 3 * * 0 /usr/local/bin/run-job.sh maintenance-check http://jacred:9117/cron/maintenance/Check?mode=report 60
+# Resume incomplete checkpoints once nightly; do not add a daytime resume loop.
+10 0 * * * /usr/local/bin/run-job.sh parseall-resume http://jacred:9117/cron/maintenance/ResumeParseAll 60
+# Tracker refreshes: cheap recent-page fetches keep daytime search reasonably fresh.
+20 0 * * * /usr/local/bin/run-job.sh rutracker-parse http://jacred:9117/cron/rutracker/parse 3600
+35 1 * * 3 /usr/local/bin/run-job.sh rutracker-UpdateTasksParse http://jacred:9117/cron/rutracker/UpdateTasksParse 60
+35 1 * * 4 /usr/local/bin/run-job.sh kinozal-UpdateTasksParse http://jacred:9117/cron/kinozal/UpdateTasksParse 60
+1 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh rutor-parse http://jacred:9117/cron/rutor/parse 900
+30 0 * * 1 /usr/local/bin/run-job.sh rutor-UpdateTasksParse http://jacred:9117/cron/rutor/UpdateTasksParse 60
+0 1 * * 1 /usr/local/bin/run-job.sh rutor-ParseAllTask http://jacred:9117/cron/rutor/ParseAllTask 60
+10 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh bitru-parse http://jacred:9117/cron/bitru/parse 900
+20 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh nnmclub-parse http://jacred:9117/cron/nnmclub/parse 900
+30 0 * * 2 /usr/local/bin/run-job.sh nnmclub-UpdateTasksParse http://jacred:9117/cron/nnmclub/UpdateTasksParse 60
+0 1 * * 2 /usr/local/bin/run-job.sh nnmclub-ParseAllTask http://jacred:9117/cron/nnmclub/ParseAllTask 60
+8 2,6,10,14,18 * * * /usr/local/bin/run-job.sh megapeer-parse http://jacred:9117/cron/megapeer/parse 900
+30 0 * * 3 /usr/local/bin/run-job.sh megapeer-UpdateTasksParse http://jacred:9117/cron/megapeer/UpdateTasksParse 60
+0 1 * * 3 /usr/local/bin/run-job.sh megapeer-ParseAllTask http://jacred:9117/cron/megapeer/ParseAllTask 60
+27 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh torrentby-parse http://jacred:9117/cron/torrentby/parse 900
+30 0 * * 4 /usr/local/bin/run-job.sh torrentby-UpdateTasksParse http://jacred:9117/cron/torrentby/UpdateTasksParse 60
+0 1 * * 4 /usr/local/bin/run-job.sh torrentby-ParseAllTask http://jacred:9117/cron/torrentby/ParseAllTask 60
+44 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh toloka-parse http://jacred:9117/cron/toloka/parse 900
+30 0 * * 5 /usr/local/bin/run-job.sh toloka-UpdateTasksParse http://jacred:9117/cron/toloka/UpdateTasksParse 60
+0 1 * * 5 /usr/local/bin/run-job.sh toloka-ParseAllTask http://jacred:9117/cron/toloka/ParseAllTask 60
+10 2 * * * /usr/local/bin/run-job.sh mazepa-parse http://jacred:9117/cron/mazepa/parse 2400
+9 2,6,10,14,18 * * * /usr/local/bin/run-job.sh selezen-parse http://jacred:9117/cron/selezen/parse 900
+2 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh animelayer-parse http://jacred:9117/cron/animelayer/parse 900
+40 2,8,14,20 * * * /usr/local/bin/run-job.sh rudub-parse "http://jacred:9117/cron/rudub/parse?limit_page=10" 1800
+35 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh subsplease-parse "http://jacred:9117/cron/subsplease/parse?pages=2" 900
+25 2 * * 6 /usr/local/bin/run-job.sh subsplease-ParseShows http://jacred:9117/cron/subsplease/ParseShows 1800
+4 2,6,10,14,18 * * * /usr/local/bin/run-job.sh anidub-parse http://jacred:9117/cron/anidub/parse 900
+40 2 * * * /usr/local/bin/run-job.sh anistar-parse "http://jacred:9117/cron/anistar/parse?limit_page=3" 900
+45 2 * * * /usr/local/bin/run-job.sh leproduction-parse "http://jacred:9117/cron/leproduction/parse?limit_page=3" 900
+5 3 * * * /usr/local/bin/run-job.sh anifilm-parse http://jacred:9117/cron/anifilm/parse 1800
+29 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh anibelka-parse http://jacred:9117/cron/anibelka/parse 900
+30 0 * * 6 /usr/local/bin/run-job.sh anibelka-UpdateTasksParse http://jacred:9117/cron/anibelka/UpdateTasksParse 60
+0 1 * * 6 /usr/local/bin/run-job.sh anibelka-ParseAllTask http://jacred:9117/cron/anibelka/ParseAllTask 60
+0 2 * * 6 /usr/local/bin/run-job.sh anibelka-ParseLatest http://jacred:9117/cron/anibelka/ParseLatest 900
+43 1 * * * /usr/local/bin/run-job.sh ultradox-parse http://jacred:9117/cron/ultradox/parse 900
+30 0 * * 0 /usr/local/bin/run-job.sh ultradox-UpdateTasksParse http://jacred:9117/cron/ultradox/UpdateTasksParse 60
+0 2 * * 0 /usr/local/bin/run-job.sh ultradox-ParseLatest http://jacred:9117/cron/ultradox/ParseLatest 900
+12 2,6,10,14,18 * * * /usr/local/bin/run-job.sh knaben-parse http://jacred:9117/cron/knaben/parse 900
+# Previously disabled jobs remain disabled: Rutracker/Kinozal/Ultradox full
+# cycle kicks, Kinozal incremental parse, Cloudflare warmup and archive backfills.
+# Weekly full-cycle kicks above are staggered Mon–Sat; Sunday has no new full
+# cycle, leaving more headroom for the host/VM/container backup chain.

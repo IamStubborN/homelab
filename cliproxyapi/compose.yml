@@ -17,7 +17,7 @@ services:
       # API for host-network clients (Home Assistant). Prefer Docker DNS for other services.
       - "127.0.0.1:8317:8317"
       # OAuth callbacks (Codex / Claude / Antigravity) — tunnel from your laptop:
-      #   ssh -L 1455:127.0.0.1:1455 -L 54545:127.0.0.1:54545 -L 51121:127.0.0.1:51121 docker.example.invalid
+      #   ssh -L 1455:127.0.0.1:1455 -L 54545:127.0.0.1:54545 -L 51121:127.0.0.1:51121 docker.example.test
       - "127.0.0.1:1455:1455"
       - "127.0.0.1:54545:54545"
       - "127.0.0.1:51121:51121"

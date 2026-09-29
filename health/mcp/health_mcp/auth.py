@@ -11,6 +11,7 @@ from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from health_mcp.types import CashierError
+from health_mcp.types import PRIMARY_PERSON, SECONDARY_PERSON
 
 MAX_BEARER_TOKEN_BYTES = 512
 
@@ -43,9 +44,9 @@ class TokenMap:
 
     def resolve(self, token: str) -> Identity | None:
         if hmac.compare_digest(token, self._primary):
-            return Identity("primary", "hermes_primary", "primary")
+            return Identity(PRIMARY_PERSON, f"hermes_{PRIMARY_PERSON}", PRIMARY_PERSON)
         if hmac.compare_digest(token, self._secondary):
-            return Identity("secondary", "hermes_secondary", "secondary")
+            return Identity(SECONDARY_PERSON, f"hermes_{SECONDARY_PERSON}", SECONDARY_PERSON)
         return None
 
 

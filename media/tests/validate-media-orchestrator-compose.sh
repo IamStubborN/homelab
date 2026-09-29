@@ -244,10 +244,10 @@ if grep -Fq 'sticky lease must end the attempt retryably' "$MEDIA_DIR/gluetun-re
     printf 'FAIL: watcher must not wait forever on sticky lease for orphaned netns\n' >&2
     exit 1
 fi
-if ! grep -Fq 'container=$PARENT_ID' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh" \
+if ! grep -Fq '"$container" = "$PARENT"' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh" \
     || ! grep -Fq 'DIE_LIFECYCLE_SETTLE' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh" \
     || ! grep -Fq 'exec_start' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh"; then
-    printf 'FAIL: watcher must filter exact parent id, settle on die, and ignore exec_start\n' >&2
+    printf 'FAIL: watcher must match exact parent name, settle on die, and ignore exec_start\n' >&2
     exit 1
 fi
 if grep -Fq -- '--volumes-from' "$MEDIA_DIR/gluetun-rezka-watcher/watch.sh" \

@@ -6,6 +6,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import yaml
 
@@ -83,9 +84,6 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.hermes = rendered_compose(HERMES_ROOT / "compose.yaml", HERMES_ROOT)
-        cls.homelab = rendered_compose(
-            HOMELAB_ROOT / "compose.yml", HOMELAB_ROOT, interpolate=False
-        )
         cls.health = rendered_compose(
             HOMELAB_ROOT / "health/compose.yml", HOMELAB_ROOT / "health"
         )
@@ -94,6 +92,18 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
             HOMELAB_ROOT / "wiki",
             profiles=("g2-oauth",),
         )
+        cls.homelab = {
+            "services": {
+                **cls.hermes["services"],
+                **cls.health["services"],
+                **cls.wiki["services"],
+            },
+            "volumes": {
+                **cls.hermes.get("volumes", {}),
+                **cls.health.get("volumes", {}),
+                **cls.wiki.get("volumes", {}),
+            },
+        }
 
     def test_both_embedded_profiles_share_the_health_stack_network(self):
         for profile in PROFILES:
@@ -102,6 +112,8 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
                 service["environment"]["HEALTH_MCP_URL"],
                 "http://health-service:8080/internal/mcp",
             )
+            self.assertEqual(service["environment"]["HEALTH_PRIMARY_PERSON"], "primary")
+            self.assertEqual(service["environment"]["HEALTH_SECONDARY_PERSON"], "secondary")
             self.assertEqual(service["environment"]["HEALTH_DEFAULT_PERSON"], profile)
             self.assertIn("health-internal", service["networks"])
             self.assertEqual(
@@ -134,7 +146,22 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
         self.assertTrue(network["external"])
         self.assertEqual(network["name"], "health-internal")
 
+    def test_both_profiles_receive_private_health_person_ids(self):
+        with patch.dict(os.environ, {
+            "HEALTH_PRIMARY_PERSON": "legacy_one",
+            "HEALTH_SECONDARY_PERSON": "legacy_two",
+        }):
+            compose = rendered_compose(HERMES_ROOT / "compose.yaml", HERMES_ROOT)
+        for role in PROFILES:
+            environment = compose["services"][f"hermes-{role}"]["environment"]
+            self.assertEqual(environment["HEALTH_PRIMARY_PERSON"], "legacy_one")
+            self.assertEqual(environment["HEALTH_SECONDARY_PERSON"], "legacy_two")
+            self.assertEqual(environment["HEALTH_DEFAULT_PERSON"], f"legacy_{'one' if role == 'primary' else 'two'}")
+
     def test_root_compose_connects_health_service_and_both_hermes_profiles(self):
+        includes = (HOMELAB_ROOT / "compose.yml").read_text(encoding="utf-8")
+        for path in ("hermes/compose.yaml", "health/compose.yml", "wiki/compose.yml"):
+            self.assertIn(path, includes)
         services = self.homelab["services"]
         self.assertIn("health-service", services)
         self.assertNotIn("health-postgres", services)
@@ -208,12 +235,13 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
         )
 
     def test_hermes_secrets_reuse_the_health_stack_token_files(self):
+        health = rendered_compose(HOMELAB_ROOT / "health/compose.yml", HOMELAB_ROOT / "health")
         for profile in PROFILES:
             hermes_file = pathlib.Path(
                 self.hermes["secrets"][f"{profile}_health_api_token"]["file"]
             )
             health_file = pathlib.Path(
-                self.homelab["secrets"][f"{profile}_health_api_token"]["file"]
+                health["secrets"][f"{profile}_health_api_token"]["file"]
             )
             self.assertEqual(hermes_file, health_file)
             self.assertEqual(
@@ -256,9 +284,8 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
         compact = " ".join(runbook.split())
         self.assertIn("family-health-mcp:local", runbook)
         self.assertIn("build context `health/mcp`", runbook)
-        self.assertIn("/mnt/internal/wiki", runbook)
         self.assertIn("`${WIKI_ROOT}/shared/health`", runbook)
-        self.assertIn("`/opt/data/wiki` is wrong on this host", runbook)
+        self.assertIn("ignored deployment environment", runbook)
         self.assertIn("install -o 10000 -g 10000 -m 0400", runbook)
         self.assertIn("`10000:10000 400`", runbook)
         self.assertIn("There are no Postgres passwords", compact)
@@ -923,7 +950,7 @@ class EmbeddedHealthSkillContractTests(unittest.TestCase):
             self.skill,
         )
         self.assertIn(
-            '«Запиши Secondary вес 78,2» | `add_measurement(person=secondary, kind=weight, values={value:78.2,unit:"kg"})`',
+            '«Запиши Secondary вес 78,2» | `add_measurement(person=$HEALTH_SECONDARY_PERSON, kind=weight, values={value:78.2,unit:"kg"})`',
             self.skill,
         )
         self.assertIn(
@@ -987,7 +1014,7 @@ class EmbeddedHealthWikiExampleTests(unittest.TestCase):
             self.assertNotIn("OBSIDIAN_VAULT_PATH", service["environment"])
             mounts = "\n".join(service["volumes"])
             self.assertIn(
-                f"${{WIKI_ROOT:-/mnt/internal/wiki}}/{profile}:/wiki",
+                f"${{HERMES_{profile.upper()}_WIKI_PATH:-${{WIKI_ROOT:-/mnt/internal/wiki}}/{profile}}}:/wiki",
                 mounts,
             )
             self.assertIn(
@@ -1012,7 +1039,7 @@ class EmbeddedHealthWikiExampleTests(unittest.TestCase):
         )
         self.assertEqual(
             health["services"]["health-service"]["image"],
-            "family-health-mcp:local",
+            "${HEALTH_MCP_IMAGE:-family-health-mcp:local}",
         )
 
     def test_example_schema_files_keep_mcp_as_the_medical_ledger(self):

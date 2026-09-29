@@ -1,0 +1,196 @@
+terminal:
+  backend: local
+  cwd: /opt/data/workspace
+  home_mode: profile
+  timeout: 180
+
+model:
+  provider: openai-codex
+  default: gpt-6-luna
+  context_length: 272000
+
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  memory_char_limit: 4000
+  user_char_limit: 1375
+
+session_reset:
+  mode: idle
+  idle_minutes: 1440
+
+auxiliary:
+  vision:
+    provider: openai-codex
+    model: gpt-6-luna
+  title_generation:
+    provider: openai-codex
+    model: gpt-6-luna
+  compression:
+    provider: openai-codex
+    model: gpt-6-luna
+  background_review:
+    provider: openai-codex
+    model: gpt-6-luna
+
+browser:
+  inactivity_timeout: 120
+  command_timeout: 30
+  record_sessions: false
+  camofox:
+    managed_persistence: false
+
+web:
+  search_backend: exa
+  extract_backend: exa
+
+tools:
+  tool_search:
+    enabled: auto
+    listing: auto
+    listing_max_tokens: 1000
+
+mcp_servers:
+  media_admin:
+    url: http://media-service:8080/internal/mcp
+    lazy: true
+    headers:
+      Authorization: "Bearer ${MEDIA_API_TOKEN}"
+    tools:
+      resources: false
+      prompts: false
+  home_assistant:
+    url: http://homeassistant.example.test:8123/api/mcp
+    lazy: true
+    headers:
+      Authorization: "Bearer ${HOMEASSISTANT_API_TOKEN}"
+    tools:
+      resources: false
+      prompts: false
+  health:
+    url: ${HEALTH_MCP_URL}
+    lazy: true
+    headers:
+      Authorization: "Bearer ${HEALTH_API_TOKEN_FILE}"
+    tools:
+      resources: false
+      prompts: false
+
+image_gen: null
+video_gen: null
+stt:
+  provider: groq
+  language: "ru"
+  groq:
+    language: "ru"
+
+tts:
+  provider: edge
+  edge:
+    voice: "ru-RU-SvetlanaNeural"
+    speed: 1.2
+
+voice:
+  auto_tts: false
+
+platform_toolsets:
+  telegram: [terminal, file, web, browser, skills, tts, memory, session_search, vision, clarify]
+
+platforms:
+  telegram:
+    reply_to_mode: first
+    extra:
+      command_menu:
+        priority_mode: prepend
+        priority:
+          - media
+          - watching
+          - movies
+          - series
+          - trending
+  webhook: null
+
+display:
+  tool_progress: new
+  memory_notifications: "off"
+  platforms:
+    telegram:
+      tool_progress: "off"
+compression:
+  codex_responses_native: false
+  proactive_prune_tokens: 48000
+skills:
+  creation_nudge_interval: 10
+  platform_disabled:
+    telegram: &disabled-telegram-skills
+      - airtable
+      - architecture-diagram
+      - ascii-art
+      - ascii-video
+      - audiocraft-audio-generation
+      - baoyu-infographic
+      - blogwatcher
+      - claude-code
+      - claude-design
+      - codebase-inspection
+      - codex
+      - comfyui
+      - computer-use
+      - design-md
+      - dogfood
+      - evaluating-llms-harness
+      - excalidraw
+      - gif-search
+      - github-auth
+      - github-code-review
+      - github-issues
+      - github-pr-workflow
+      - github-repo-management
+      - heartmula
+      - hermes-agent-skill-authoring
+      - himalaya
+      - huggingface-hub
+      - humanizer
+      - jupyter-live-kernel
+      - llama-cpp
+      - manim-video
+      - nano-pdf
+      - node-inspect-debugger
+      - notion
+      - obsidian
+      - opencode
+      - openhue
+      - p5js
+      - petdex
+      - plan
+      - polymarket
+      - popular-web-designs
+      - powerpoint
+      - pretext
+      - python-debugpy
+      - requesting-code-review
+      - segment-anything-model
+      - serving-llms-vllm
+      - simplify-code
+      - sketch
+      - songsee
+      - songwriting-and-ai-music
+      - spike
+      - systematic-debugging
+      - teams-meeting-pipeline
+      - test-driven-development
+      - touchdesigner-mcp
+      - weights-and-biases
+      - xurl
+      - yuanbao
+agent:
+  verify_on_stop: false
+  service_tier: fast
+  reasoning_effort: medium
+  image_input_mode: text
+  reasoning_overrides: null
+approvals:
+  destructive_slash_confirm: false
+plugins:
+  enabled: [telegram-home]
+_config_version: 41

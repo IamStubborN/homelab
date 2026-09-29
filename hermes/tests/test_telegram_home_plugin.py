@@ -194,6 +194,164 @@ class TelegramHomePluginTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    async def test_cancel_dispatch_does_not_wait_for_telegram_presentation(self):
+        update, query = callback_update(business_callback("cancel"))
+        self.adapter._is_callback_user_authorized = lambda *_args, **_kwargs: True
+        self.adapter._media_plugin_context = business_job_context()
+        edit_started = asyncio.Event()
+        release_edit = asyncio.Event()
+        dispatched = asyncio.Event()
+
+        async def blocked_edit(*_args, **_kwargs):
+            edit_started.set()
+            await release_edit.wait()
+
+        async def cancel(*_args, **_kwargs):
+            dispatched.set()
+            return 0, b"{}"
+
+        with mock.patch.object(self.adapter, "_edit_media_panel_card", side_effect=blocked_edit), mock.patch.object(
+            self.plugin, "_run_media", side_effect=cancel
+        ):
+            task = asyncio.create_task(self.adapter._handle_callback_query(update, None))
+            try:
+                await asyncio.wait_for(edit_started.wait(), 1)
+                await asyncio.wait_for(dispatched.wait(), 0.2)
+            finally:
+                release_edit.set()
+                await task
+
+    async def test_cancel_interrupted_before_dispatch_can_be_retried(self):
+        update, query = callback_update(business_callback("cancel"))
+        self.adapter._is_callback_user_authorized = lambda *_args, **_kwargs: True
+        self.adapter._media_plugin_context = business_job_context()
+        read_started = asyncio.Event()
+        async def interrupted_read(*_args, **_kwargs):
+            read_started.set()
+            await asyncio.Future()
+        with mock.patch.object(self.plugin.asyncio, "to_thread", side_effect=interrupted_read), mock.patch.object(
+            self.plugin, "_run_media", new_callable=mock.AsyncMock
+        ) as dispatch:
+            task = asyncio.create_task(self.adapter._handle_callback_query(update, None))
+            await read_started.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            dispatch.assert_not_awaited()
+        self.assertEqual(
+            self.adapter._business_action_receipt_store.claim(query.data, query.message.message_id),
+            "ready",
+        )
+
+    async def test_cancel_cancelled_before_command_task_starts_keeps_button_retryable(self):
+        update, query = callback_update(business_callback("cancel"))
+        self.adapter._is_callback_user_authorized = lambda *_args, **_kwargs: True
+        self.adapter._media_plugin_context = business_job_context()
+        with mock.patch.object(self.plugin, "render_job_cancelling_card", side_effect=asyncio.CancelledError), mock.patch.object(
+            self.plugin, "_run_media", new_callable=mock.AsyncMock
+        ) as dispatch:
+            with self.assertRaises(asyncio.CancelledError):
+                await self.adapter._handle_callback_query(update, None)
+            dispatch.assert_not_awaited()
+        self.assertEqual(
+            self.adapter._business_action_receipt_store.claim(query.data, query.message.message_id),
+            "ready",
+        )
+
+    async def test_cancel_cancelled_after_dispatch_never_replays_uncertain_command(self):
+        update, query = callback_update(business_callback("cancel"))
+        self.adapter._is_callback_user_authorized = lambda *_args, **_kwargs: True
+        self.adapter._media_plugin_context = business_job_context()
+        dispatched = asyncio.Event()
+        async def pending_cancel(*_args, **_kwargs):
+            dispatched.set()
+            await asyncio.Future()
+        with mock.patch.object(self.plugin, "_run_media", side_effect=pending_cancel) as dispatch:
+            task = asyncio.create_task(self.adapter._handle_callback_query(update, None))
+            await dispatched.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            await self.adapter._handle_callback_query(update, None)
+            dispatch.assert_awaited_once()
+        self.assertEqual(
+            self.adapter._business_action_receipt_store.claim(query.data, query.message.message_id),
+            "consumed",
+        )
+
+    def test_search_sessions_are_stored_once_and_old_callbacks_still_resolve(self):
+        path = pathlib.Path(self.temp_dir.name) / "normalized-actions.json"
+        page = {"source": "rezka", "session_id": "session-one", "results": [{"id": "r1", "title": "Unique payload marker"}]}
+        back = {"kind": "release-page", "payload": {"search_page": page}, "expires_at": "2099-01-01T00:00:00Z"}
+        actions = tuple(self.plugin.SearchAction(
+            f"Release {index}", "release-page",
+            {"result_id": str(index), "search_page": page, "release_back": back,
+             "combined_context": {"search_pages": [page], "back_action": back}},
+            "2099-01-01T00:00:00Z",
+        ) for index in range(12))
+        store = self.plugin.MediaActionStore(path)
+        tokens = store.create_many(actions)
+        raw = path.read_text()
+        self.assertEqual(raw.count("Unique payload marker"), 1)
+        restarted = self.plugin.MediaActionStore(path)
+        for token, action in zip(tokens, actions):
+            self.assertEqual(restarted.resolve(token), (action, False))
+        legacy_token = "legacy-token-1234"
+        path.write_text(json.dumps({"version": 1, "actions": {legacy_token: {
+            "action": {"label": actions[0].label, "kind": actions[0].kind,
+                       "payload": actions[0].payload, "expires_at": actions[0].expires_at},
+            "created_at": 1, "consumed": False,
+        }}}))
+        self.assertEqual(restarted.resolve(legacy_token), (actions[0], False))
+        restarted.create(actions[1])
+        self.assertEqual(restarted.resolve(legacy_token), (actions[0], False))
+        self.assertEqual(path.read_text().count("Unique payload marker"), 1)
+
+    def test_search_session_expiry_removes_unreferenced_snapshots(self):
+        path = pathlib.Path(self.temp_dir.name) / "session-expiry.json"
+        now = [100.0]
+        store = self.plugin.MediaActionStore(path, now=lambda: now[0])
+        expiring = self.plugin.SearchAction("Old", "release-page", {
+            "search_page": {"source": "rezka", "results": [{"title": "Old snapshot"}]},
+        }, "1970-01-01T00:03:20Z")
+        current = self.plugin.SearchAction("New", "release-page", {
+            "search_page": {"source": "rezka", "results": [{"title": "New snapshot"}]},
+        }, "2099-01-01T00:00:00Z")
+        old, new = store.create_many((expiring, current))
+        self.assertEqual(len(json.loads(path.read_text())["search_sessions"]), 2)
+        now[0] = 300.0
+        self.assertIsNone(store.resolve(old))
+        self.assertEqual(store.resolve(new), (current, False))
+        self.assertEqual(len(json.loads(path.read_text())["search_sessions"]), 1)
+        self.assertNotIn("Old snapshot", path.read_text())
+
+    def test_search_session_snapshots_do_not_alias_and_missing_refs_are_not_actions(self):
+        path = pathlib.Path(self.temp_dir.name) / "session-snapshots.json"
+        page = {"source": "rezka", "session_id": "same-session", "results": [{"title": "Original"}]}
+        action = self.plugin.SearchAction("Release", "release-page", {"search_page": page}, "2099-01-01T00:00:00Z")
+        store = self.plugin.MediaActionStore(path)
+        old = store.create(action)
+        page["results"][0]["title"] = "Next page"
+        new = store.create(action)
+        first = store.resolve(old)[0]
+        self.assertEqual(first.payload["search_page"]["results"][0]["title"], "Original")
+        first.payload["search_page"]["results"][0]["title"] = "Changed by renderer"
+        self.assertEqual(store.resolve(old)[0].payload["search_page"]["results"][0]["title"], "Original")
+        self.assertEqual(store.resolve(new)[0].payload["search_page"]["results"][0]["title"], "Next page")
+        data = json.loads(path.read_text())
+        data["search_sessions"] = {}
+        path.write_text(json.dumps(data))
+        self.assertIsNone(store.resolve(new))
+        self.assertIsNone(store.claim(new))
+
+    def test_unreadable_action_state_is_not_silently_replaced(self):
+        path = pathlib.Path(self.temp_dir.name) / "damaged-actions.json"
+        path.write_text("{damaged")
+        action = self.plugin.SearchAction("Release", "release-page", {}, "2099-01-01T00:00:00Z")
+        with self.assertRaises(json.JSONDecodeError):
+            self.plugin.MediaActionStore(path).create(action)
+        self.assertEqual(path.read_text(), "{damaged")
+
     def test_media_action_markup_groups_actions_in_compact_rows(self):
         actions = tuple(
             self.plugin.SearchAction(

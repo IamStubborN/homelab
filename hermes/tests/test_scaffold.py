@@ -68,7 +68,7 @@ class _ComposeContractBase:
         for profile, service in (("primary", primary), ("secondary", secondary)):
             mounts = "\n".join(service["volumes"])
             self.assertIn(
-                f"./profiles/{profile}/config/config.yaml:/etc/hermes-home/config.yaml:ro",
+                f"${{HERMES_{profile.upper()}_PROFILE_DIR:-./profiles/{profile}}}/config/config.yaml:/etc/hermes-home/config.yaml:ro",
                 mounts,
             )
             self.assertIn(
@@ -385,11 +385,11 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
 
     def test_named_volumes_and_private_networks_use_the_homelab_prefix(self):
         for key, volume in self.compose["volumes"].items():
-            self.assertEqual(volume["name"], f"homelab_{key}")
-            self.assertNotEqual(volume.get("external"), True)
+            self.assertTrue(volume["name"] == f"homelab_{key}" or volume["name"].endswith(f":-homelab_{key}}}"))
+            self.assertIn(volume.get("external", False), (False, "${HERMES_EXISTING_VOLUMES:-false}"))
         for key in ("primary-private", "secondary-private", "none"):
             network = self.compose["networks"][key]
-            self.assertEqual(network["name"], f"homelab_{key}")
+            self.assertTrue(network["name"] == f"homelab_{key}" or network["name"].endswith(f":-homelab_{key}}}"))
             self.assertNotEqual(network.get("external"), True)
         self.assertNotIn("hermes-home_", self.compose_text)
         self.assertIn(
@@ -457,7 +457,7 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
         self.assertNotIn(".agent-browser", broker_mounts)
         self.assertNotIn("/opt/data/browser_auth", broker_mounts)
         self.assertIn(
-            "./config/vaultwarden-login-allowlist.json:"
+            "${HERMES_VAULTWARDEN_ALLOWLIST_PATH:-./config/vaultwarden-login-allowlist.example.json}:"
             "/etc/hermes-home/vaultwarden-login-allowlist.json:ro",
             broker_mounts,
         )
@@ -487,7 +487,7 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
             primary["AGENT_BROWSER_ARGS"],
             "--disable-blink-features=AutomationControlled",
         )
-        self.assertEqual(primary["AGENT_BROWSER_RESTORE"], "primary")
+        self.assertEqual(primary["AGENT_BROWSER_RESTORE"], "${HERMES_PRIMARY_BROWSER_ID:-primary}")
         self.assertIn("Chrome/149", primary["AGENT_BROWSER_USER_AGENT"])
 
     def test_profiles_share_native_web_backends_on_an_internal_service_network(self):
@@ -546,7 +546,7 @@ class SkillContractTests(unittest.TestCase):
             self.assertIn("`web_search`", soul)
 
     def test_vaultwarden_login_allowlist_starts_empty(self):
-        policy = json.loads(read("config/vaultwarden-login-allowlist.json"))
+        policy = json.loads(read("config/vaultwarden-login-allowlist.example.json"))
         self.assertEqual(policy["domains"], [])
 
     def test_rezka_runtime_is_anonymous_without_vaultwarden_login(self):
@@ -1255,7 +1255,7 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertEqual(config["auxiliary"]["compression"]["model"], "gpt-6-luna")
             self.assertEqual(config["auxiliary"]["background_review"]["provider"], "openai-codex")
             self.assertEqual(config["auxiliary"]["background_review"]["model"], "gpt-6-luna")
-            self.assertEqual(config["agent"]["reasoning_effort"], "high")
+            self.assertEqual(config["agent"]["reasoning_effort"], "medium")
             self.assertEqual(config["agent"]["image_input_mode"], "text")
             self.assertIsNone(config["agent"]["reasoning_overrides"])
             self.assertFalse(config["approvals"]["destructive_slash_confirm"])

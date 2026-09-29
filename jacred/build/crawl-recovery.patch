@@ -1,0 +1,876 @@
+diff --git a/Application/Maintenance/ParseAllResumeService.cs b/Application/Maintenance/ParseAllResumeService.cs
+index 7bec66c..ffc813a 100644
+--- a/Application/Maintenance/ParseAllResumeService.cs
++++ b/Application/Maintenance/ParseAllResumeService.cs
+@@ -18,6 +18,10 @@ namespace JacRed.Application.Maintenance
+         public DateTime? cycleStartedAtUtc { get; set; }
+         public long? pagesCompleted { get; set; }
+         public long? pagesTotal { get; set; }
++        public int verifiedSucceeded { get; set; }
++        public int skipped { get; set; }
++        public int unverifiedSettled { get; set; }
++        public bool waitingForDependency { get; set; }
+     }
+ 
+     public sealed class ParseAllResumeService
+@@ -89,6 +93,8 @@ namespace JacRed.Application.Maintenance
+                 string.Equals(j.Tracker, starter.TrackerName, StringComparison.OrdinalIgnoreCase)
+                 && string.Equals(j.JobLabel, "ParseAllTask", StringComparison.OrdinalIgnoreCase));
+ 
++            var outcomes = ParseAllCycleStore.CountSettledOutcomes(
++                ParseAllCycleStore.LoadTaskParsePages(starter.TrackerName), cycle);
+             return new ParseAllResumeSnapshot
+             {
+                 tracker = starter.TrackerName,
+@@ -98,7 +104,11 @@ namespace JacRed.Application.Maintenance
+                 mapCount = mapCount,
+                 cycleStartedAtUtc = cycle?.StartedAtUtc,
+                 pagesCompleted = job?.PagesCompleted,
+-                pagesTotal = job?.PagesTotal
++                pagesTotal = job?.PagesTotal,
++                verifiedSucceeded = outcomes.succeeded,
++                skipped = outcomes.skipped,
++                unverifiedSettled = outcomes.unverified,
++                waitingForDependency = job?.WaitingForDependency ?? false
+             };
+         }
+     }
+diff --git a/Infrastructure/Networking/CloudflareClearance.cs b/Infrastructure/Networking/CloudflareClearance.cs
+index 03ede90..0ee7695 100644
+--- a/Infrastructure/Networking/CloudflareClearance.cs
++++ b/Infrastructure/Networking/CloudflareClearance.cs
+@@ -52,6 +52,7 @@ namespace JacRed.Infrastructure.Networking
+         static readonly AsyncLocal<bool> _crawlLane = new();
+ 
+         static Timer _idleTimer;
++        static readonly CrawlSolverAdmission _crawlAdmission = new();
+ 
+         /// <summary>
+         /// Route FlareSolverr calls to <c>flaresolverr.crawlUrl</c> (ParseAll / UpdateTasks / ParseLatest).
+@@ -86,6 +87,7 @@ namespace JacRed.Infrastructure.Networking
+         readonly struct FlareSolverrSettingsView
+         {
+             public readonly string Url;
++            public readonly bool IsCrawl;
+             public readonly int MaxTimeoutMs;
+             public readonly int SessionIdleMinutes;
+             public readonly int BrowserTimeoutRetries;
+@@ -101,6 +103,9 @@ namespace JacRed.Infrastructure.Networking
+             public FlareSolverrSettingsView(Models.AppConf.FlareSolverrSettings c, string url)
+             {
+                 Url = url;
++                IsCrawl = _crawlLane.Value || (!string.IsNullOrWhiteSpace(c.crawlUrl)
++                    && !string.Equals(c.crawlUrl, c.url, StringComparison.OrdinalIgnoreCase)
++                    && string.Equals(url, c.crawlUrl, StringComparison.OrdinalIgnoreCase));
+                 MaxTimeoutMs = c.maxTimeoutMs;
+                 SessionIdleMinutes = c.sessionIdleMinutes;
+                 BrowserTimeoutRetries = Math.Max(0, c.browserTimeoutRetries);
+@@ -350,6 +355,7 @@ namespace JacRed.Infrastructure.Networking
+                 TouchSession(conf, session);
+                 return null;
+             }
++            catch (SolverDependencyUnavailableException) { throw; }
+             catch (Exception ex)
+             {
+                 JacRedLog.Error(JacRedLogCategories.Host, $"FlareSolverr: {host}: {ex.GetType().Name}: {ex.Message}");
+@@ -606,6 +612,7 @@ namespace JacRed.Infrastructure.Networking
+                 session.ConsecutiveBrowserTimeouts = 0;
+                 await CreateSessionAsync(conf, session);
+             }
++            catch (SolverDependencyUnavailableException) { throw; }
+             catch (Exception ex)
+             {
+                 JacRedLog.Error(JacRedLogCategories.Host, $"FlareSolverr recycle {host}: {ex.GetType().Name}: {ex.Message}");
+@@ -774,6 +781,8 @@ namespace JacRed.Infrastructure.Networking
+                        || (root.Value<string>("message") ?? "").IndexOf("already exists", StringComparison.OrdinalIgnoreCase) >= 0);
+ 
+             session.Alive = ok;
++            if (!ok && conf.IsCrawl)
++                throw new SolverDependencyUnavailableException("Crawl browser session could not be created; retry this page later.");
+ 
+             if (ok)
+                 JacRedLog.Warning(JacRedLogCategories.Host, $"FlareSolverr: сессия {session.Name} создана");
+@@ -854,21 +863,94 @@ namespace JacRed.Infrastructure.Networking
+ 
+         #endregion
+ 
+-        static async Task<JObject> CallAsync(FlareSolverrSettingsView conf, Dictionary<string, object> payload, int timeoutMs)
++        static Task<JObject> CallAsync(FlareSolverrSettingsView conf, Dictionary<string, object> payload, int timeoutMs)
++            => CallSolverAsync(conf.Url, payload, timeoutMs, conf.IsCrawl);
++
++        internal static Task<JObject> CallSolverAsync(string solverUrl, Dictionary<string, object> payload,
++            int timeoutMs, bool crawl, Func<Task<JObject>> send = null, CrawlSolverAdmission admission = null)
+         {
+-            try
++            async Task<JObject> SendAsync()
+             {
+-                using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMilliseconds(timeoutMs) };
+-                using var content = new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json");
+-                using var response = await client.PostAsync(conf.Url, content);
++                try
++                {
++                    JObject result;
++                    if (send != null)
++                        result = await send();
++                    else
++                    {
++                        using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMilliseconds(timeoutMs) };
++                        using var content = new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json");
++                        using var response = await client.PostAsync(solverUrl, content);
++                        result = JObject.Parse(await response.Content.ReadAsStringAsync());
++                        // Solverr uses HTTP 500 for missing sessions too. Preserve
++                        // only those known lifecycle replies; 503 always backs off.
++                        bool recoverableSession = response.StatusCode == System.Net.HttpStatusCode.InternalServerError
++                            && IsRecoverableSessionMessage(result.Value<string>("message"));
++                        if (crawl && !response.IsSuccessStatusCode && !recoverableSession)
++                            response.EnsureSuccessStatusCode();
++                    }
+ 
+-                return JObject.Parse(await response.Content.ReadAsStringAsync());
+-            }
+-            catch (Exception ex)
+-            {
+-                JacRedLog.Error(JacRedLogCategories.Host, $"FlareSolverr недоступен: {ex.GetType().Name}: {ex.Message}");
+-                return null;
++                    if (crawl)
++                    {
++                        string status = result?.Value<string>("status");
++                        string message = result?.Value<string>("message") ?? "";
++                        bool sessionRecovery = IsRecoverableSessionMessage(message);
++                        if (string.IsNullOrWhiteSpace(status)
++                            || (!string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase)
++                                && (!sessionRecovery || IsDependencyFailureMessage(message))))
++                            throw new SolverDependencyUnavailableException("Crawl browser dependency could not complete the operation; retry this page later.");
++                        if (string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase)
++                            && payload.TryGetValue("cmd", out var command)
++                            && (Equals(command, "request.get") || Equals(command, "request.post")))
++                        {
++                            var solution = result["solution"] as JObject;
++                            var originStatus = solution?["status"];
++                            if (originStatus?.Type != JTokenType.Integer
++                                || originStatus.Value<int>() < 100 || originStatus.Value<int>() > 599
++                                || (originStatus.Value<int>() == 200 && solution["response"]?.Type != JTokenType.String))
++                                throw new SolverDependencyUnavailableException("Crawl browser returned a malformed solution; retry this page later.");
++                        }
++                    }
++                    return result;
++                }
++                catch (SolverDependencyUnavailableException) { throw; }
++                catch (Exception ex)
++                {
++                    // Do not include endpoint credentials, cookies or request payloads in logs.
++                    JacRedLog.Error(JacRedLogCategories.Host, $"FlareSolverr unavailable: {ex.GetType().Name}");
++                    if (crawl)
++                        throw new SolverDependencyUnavailableException("Crawl browser dependency is unavailable; retry this page later.", ex);
++                    return null;
++                }
+             }
++
++            // Keep the slot until the HTTP operation settles. Caller cancellation must
++            // not release it early while a browser request is still running remotely.
++            return crawl ? (admission ?? _crawlAdmission).RunAsync(SendAsync) : SendAsync();
++        }
++
++        static bool IsRecoverableSessionMessage(string message)
++        {
++            if (string.IsNullOrWhiteSpace(message))
++                return false;
++            return message.Contains("session doesn't exist", StringComparison.OrdinalIgnoreCase)
++                || message.Contains("session does not exist", StringComparison.OrdinalIgnoreCase)
++                || message.Contains("session not found", StringComparison.OrdinalIgnoreCase)
++                || message.Contains("session already exists", StringComparison.OrdinalIgnoreCase);
++        }
++
++        internal static bool IsDependencyFailureMessage(string message)
++        {
++            if (string.IsNullOrWhiteSpace(message))
++                return false;
++            return IsBrowserTimeoutMessage(message)
++                || message.Contains("Cannot fork", StringComparison.OrdinalIgnoreCase)
++                || message.Contains("can't start new thread", StringComparison.OrdinalIgnoreCase)
++                || message.Contains("Resource temporarily unavailable", StringComparison.OrdinalIgnoreCase)
++                || message.Contains("tab crashed", StringComparison.OrdinalIgnoreCase)
++                || message.Contains("chrome not reachable", StringComparison.OrdinalIgnoreCase)
++                || message.Contains("browser has been closed", StringComparison.OrdinalIgnoreCase)
++                || message.Contains("browser disconnected", StringComparison.OrdinalIgnoreCase);
+         }
+     }
+ }
+diff --git a/Infrastructure/Networking/CrawlSolverAdmission.cs b/Infrastructure/Networking/CrawlSolverAdmission.cs
+new file mode 100644
+index 0000000..1f32e76
+--- /dev/null
++++ b/Infrastructure/Networking/CrawlSolverAdmission.cs
+@@ -0,0 +1,42 @@
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++
++namespace JacRed.Infrastructure.Networking
++{
++    /// <summary>
++    /// Serializes crawl requests across tracker hosts and backs off a failing dependency.
++    /// Solver-side serialization is still required: a disconnected HTTP client cannot
++    /// establish that its remote browser has finished.
++    /// </summary>
++    internal sealed class CrawlSolverAdmission
++    {
++        readonly SemaphoreSlim gate = new(1, 1);
++        readonly Func<DateTime> utcNow;
++        readonly TimeSpan backoff;
++        DateTime retryAfter;
++
++        internal CrawlSolverAdmission(Func<DateTime> utcNow = null, TimeSpan? backoff = null)
++        {
++            this.utcNow = utcNow ?? (() => DateTime.UtcNow);
++            this.backoff = backoff ?? TimeSpan.FromSeconds(60);
++        }
++
++        internal async Task<T> RunAsync<T>(Func<Task<T>> operation)
++        {
++            await gate.WaitAsync();
++            try
++            {
++                if (utcNow() < retryAfter)
++                    throw new SolverDependencyUnavailableException("Crawl browser dependency is backing off; retry this page later.");
++                try { return await operation(); }
++                catch (SolverDependencyUnavailableException)
++                {
++                    retryAfter = utcNow() + backoff;
++                    throw;
++                }
++            }
++            finally { gate.Release(); }
++        }
++    }
++}
+diff --git a/Infrastructure/Networking/HttpClient.cs b/Infrastructure/Networking/HttpClient.cs
+index a79fe45..e0df4c6 100644
+--- a/Infrastructure/Networking/HttpClient.cs
++++ b/Infrastructure/Networking/HttpClient.cs
+@@ -142,6 +142,7 @@ namespace JacRed.Infrastructure.Networking
+ 
+                 return JsonConvert.DeserializeObject<T>(html);
+             }
++            catch (SolverDependencyUnavailableException) { throw; }
+             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+             {
+                 throw;
+@@ -277,6 +278,7 @@ namespace JacRed.Infrastructure.Networking
+                         }
+                     }
+                 }
++                catch (SolverDependencyUnavailableException) { throw; }
+                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                 {
+                     throw;
+diff --git a/Infrastructure/Networking/SolverDependencyUnavailableException.cs b/Infrastructure/Networking/SolverDependencyUnavailableException.cs
+new file mode 100644
+index 0000000..8219b62
+--- /dev/null
++++ b/Infrastructure/Networking/SolverDependencyUnavailableException.cs
+@@ -0,0 +1,11 @@
++using System;
++
++namespace JacRed.Infrastructure.Networking
++{
++    /// <summary>A crawl dependency failed; the current page has not been evaluated.</summary>
++    public sealed class SolverDependencyUnavailableException : Exception
++    {
++        public SolverDependencyUnavailableException(string message, Exception innerException = null)
++            : base(message, innerException) { }
++    }
++}
+diff --git a/Infrastructure/Trackers/Anibelka/AnibelkaSyncService.cs b/Infrastructure/Trackers/Anibelka/AnibelkaSyncService.cs
+index f5e5de1..f79aa18 100644
+--- a/Infrastructure/Trackers/Anibelka/AnibelkaSyncService.cs
++++ b/Infrastructure/Trackers/Anibelka/AnibelkaSyncService.cs
+@@ -210,7 +210,8 @@ namespace JacRed.Infrastructure.Trackers.Anibelka
+ 
+                         try
+                         {
+-                            await ParseSectionPageAsync(host, item.cat, item.val.page, ct);
++                            await TrackerSyncHelpers.RetryBrowserDependencyAsync(TrackerName,
++                                token => ParseSectionPageAsync(host, item.cat, item.val.page, token), ct);
+                             // Empty listings still count as done (Go markPageToday).
+                             ParseAllCycleStore.NoteAttempt(TrackerName, item.val, cycle, ok: true);
+                         }
+diff --git a/Infrastructure/Trackers/Kinozal/KinozalSyncService.cs b/Infrastructure/Trackers/Kinozal/KinozalSyncService.cs
+index 7da0a66..4a97119 100644
+--- a/Infrastructure/Trackers/Kinozal/KinozalSyncService.cs
++++ b/Infrastructure/Trackers/Kinozal/KinozalSyncService.cs
+@@ -420,13 +420,15 @@ namespace JacRed.Infrastructure.Trackers.Kinozal
+                         await TrackerSyncHelpers.YieldToHourlyParseAndThrottleAsync(
+                             _parseLock, TrackerName, AppInit.conf.Kinozal.parseDelay, ct);
+ 
+-                        bool res = await parsePage(item.cat, item.val.page, item.arg, ct);
++                        bool res = await TrackerSyncHelpers.RetryBrowserDependencyAsync(TrackerName,
++                            token => parsePage(item.cat, item.val.page, item.arg, token), ct);
+                         TrackerSyncHelpers.NoteRequest(TrackerName);
+-                        if (ParseAllCycleStore.NoteAttempt(TrackerName, item.val, cycle, res))
++                        ParseAllCycleStore.NoteAttempt(TrackerName, item.val, cycle, res);
++                        if (res)
+                             succeeded++;
+ 
+                         attempted++;
+-                        TrackerSyncHelpers.ReportProgress(TrackerName, "ParseAllTask", attempted, pending.Length, item.cat, item.val.page);
++                        TrackerSyncHelpers.ReportProgress(TrackerName, "ParseAllTask", succeeded, pending.Length, item.cat, item.val.page);
+                         ParseAllCycleStore.PersistAfterPageIfNeeded(CyclePath, cycle, TaskParsePath, taskParse, persistCycle: true, attempted, pending.Length);
+                         if (attempted == pending.Length || attempted % TrackerSyncHelpers.PersistEveryPages == 0)
+                             ParserLog.Write(TrackerName, $"ParseAllTask ok={succeeded}/{attempted}");
+diff --git a/Infrastructure/Trackers/NNMClub/NNMClubSyncService.cs b/Infrastructure/Trackers/NNMClub/NNMClubSyncService.cs
+index a93174b..f59a996 100644
+--- a/Infrastructure/Trackers/NNMClub/NNMClubSyncService.cs
++++ b/Infrastructure/Trackers/NNMClub/NNMClubSyncService.cs
+@@ -142,7 +142,8 @@ namespace JacRed.Infrastructure.Trackers.NNMClub
+                         await TrackerSyncHelpers.YieldToHourlyParseAndThrottleAsync(
+                             _parseLock, TrackerName, AppInit.conf.NNMClub.parseDelay, ct);
+ 
+-                        var status = await parsePage(item.cat, item.val.page, ct);
++                        var status = await TrackerSyncHelpers.RetryBrowserDependencyAsync(TrackerName,
++                            token => parsePage(item.cat, item.val.page, token), ct);
+                         TrackerSyncHelpers.NoteRequest(TrackerName);
+                         ParseAllCycleStore.NoteAttempt(TrackerName, item.val, cycle, NNMClubPortalPagination.ShouldSettleTask(status));
+ 
+diff --git a/Infrastructure/Trackers/ParseAllCycleStore.cs b/Infrastructure/Trackers/ParseAllCycleStore.cs
+index cfd7f11..e9bf2d3 100644
+--- a/Infrastructure/Trackers/ParseAllCycleStore.cs
++++ b/Infrastructure/Trackers/ParseAllCycleStore.cs
+@@ -107,6 +107,9 @@ namespace JacRed.Infrastructure.Trackers
+         public static void MarkDoneInCycle(TaskParse page, ParseAllCycleState cycle)
+         {
+             page.parseAllCycleId = cycle.CycleId;
++            page.parseAllSucceededCycleId = cycle.CycleId;
++            page.parseAllSkippedCycleId = null;
++            page.parseAllFailCount = 0;
+             page.updateTime = DateTime.Today;
+         }
+ 
+@@ -133,7 +136,9 @@ namespace JacRed.Infrastructure.Trackers
+                 return false;
+ 
+             page.parseAllFailCount = 0;
+-            MarkDoneInCycle(page, cycle);
++            page.parseAllCycleId = cycle.CycleId;
++            page.parseAllSkippedCycleId = cycle.CycleId;
++            page.parseAllSucceededCycleId = null;
+             ParserLog.Write(tracker, $"ParseAll skip slot page={page.page} after {DefaultFailBudget} failures");
+             return true;
+         }
+@@ -286,6 +291,22 @@ namespace JacRed.Infrastructure.Trackers
+             return (cycle, pending, mapCount);
+         }
+ 
++        public static (int succeeded, int skipped, int unverified) CountSettledOutcomes(
++            IEnumerable<TaskParse> pages, ParseAllCycleState cycle)
++        {
++            int succeeded = 0, skipped = 0, unverified = 0;
++            foreach (var page in pages.Where(p => !IsPendingInCycle(p, cycle)))
++            {
++                if (page.parseAllSucceededCycleId == cycle.CycleId)
++                    succeeded++;
++                else if (page.parseAllSkippedCycleId == cycle.CycleId)
++                    skipped++;
++                else
++                    unverified++;
++            }
++            return (succeeded, skipped, unverified);
++        }
++
+         public static bool HasPendingWork(string trackerSlug)
+         {
+             var (cycle, pending, _) = ReadCycleProgress(trackerSlug);
+diff --git a/Infrastructure/Trackers/TrackerSyncHelpers.cs b/Infrastructure/Trackers/TrackerSyncHelpers.cs
+index 8ff63a6..bc4d371 100644
+--- a/Infrastructure/Trackers/TrackerSyncHelpers.cs
++++ b/Infrastructure/Trackers/TrackerSyncHelpers.cs
+@@ -106,6 +106,7 @@ namespace JacRed.Infrastructure.Trackers
+         public string CancelReason;
+         public string CurrentCategory;
+         public int? CurrentPage;
++        public bool WaitingForDependency;
+     }
+ 
+     public static class TrackerSyncHelpers
+@@ -163,7 +164,8 @@ namespace JacRed.Infrastructure.Trackers
+                     PagesTotal = Interlocked.Read(ref j.PagesTotal),
+                     LastActivityUtcTicks = Interlocked.Read(ref j.LastActivityUtcTicks),
+                     CurrentCategory = j.CurrentCategory,
+-                    CurrentPage = j.CurrentPage
++                    CurrentPage = j.CurrentPage,
++                    WaitingForDependency = Volatile.Read(ref j.WaitingForDependency)
+                 })
+                 .ToList();
+ 
+@@ -301,6 +303,39 @@ namespace JacRed.Infrastructure.Trackers
+             await ThrottleAsync(trackerName, delayMs, cancellationToken).ConfigureAwait(false);
+         }
+ 
++        /// <summary>Retry the same page after a browser outage; callers retain their cycle and checkpoint.</summary>
++        internal static async Task<T> RetryBrowserDependencyAsync<T>(string trackerName,
++            Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken,
++            TimeSpan? retryDelay = null)
++        {
++            while (true)
++            {
++                cancellationToken.ThrowIfCancellationRequested();
++                try
++                {
++                    return await action(cancellationToken).ConfigureAwait(false);
++                }
++                catch (SolverDependencyUnavailableException)
++                {
++                    ActiveJobs.TryGetValue(JobKey(trackerName, "ParseAllTask"), out var job);
++                    if (job != null)
++                        Volatile.Write(ref job.WaitingForDependency, true);
++                    NoteJobActivity(job);
++                    JacRedLog.Warning(JacRedLogCategories.Trackers,
++                        $"{trackerName}: browser dependency unavailable; waiting before retrying the same page");
++                    try
++                    {
++                        await Task.Delay(retryDelay ?? TimeSpan.FromSeconds(60), cancellationToken).ConfigureAwait(false);
++                    }
++                    finally
++                    {
++                        if (job != null)
++                            Volatile.Write(ref job.WaitingForDependency, false);
++                    }
++                }
++            }
++        }
++
+         public static void NoteJobActivity(string trackerName, string jobLabel = "ParseAllTask")
+         {
+             if (string.IsNullOrWhiteSpace(trackerName))
+@@ -489,6 +524,11 @@ namespace JacRed.Infrastructure.Trackers
+                         JacRedLog.Warning(JacRedLogCategories.Trackers,
+                             FormatBackgroundCancelMessage(trackerName, jobLabel, job));
+                     }
++                    catch (SolverDependencyUnavailableException)
++                    {
++                        JacRedLog.Warning(JacRedLogCategories.Trackers,
++                            $"{trackerName}: {jobLabel} deferred: browser dependency unavailable; pending pages preserved for next scheduled resume");
++                    }
+                     catch (Exception ex)
+                     {
+                         JacRedLog.Error(JacRedLogCategories.Trackers,
+diff --git a/Infrastructure/Trackers/Ultradox/UltradoxSyncService.cs b/Infrastructure/Trackers/Ultradox/UltradoxSyncService.cs
+index c4f6982..12d5fdf 100644
+--- a/Infrastructure/Trackers/Ultradox/UltradoxSyncService.cs
++++ b/Infrastructure/Trackers/Ultradox/UltradoxSyncService.cs
+@@ -222,6 +222,7 @@ namespace JacRed.Infrastructure.Trackers.Ultradox
+                             .Select(v => (cat: t.Key, val: v)))
+                         .ToArray();
+                     int done = 0;
++                    int succeeded = 0;
+                     TrackerSyncHelpers.ReportProgress(TrackerName, "ParseAllTask", 0, pending.Length);
+ 
+                     foreach (var item in pending)
+@@ -237,13 +238,20 @@ namespace JacRed.Infrastructure.Trackers.Ultradox
+                         try
+                         {
+                             var (_, _, _, _, _, listingOk) =
+-                                await ParseSectionPageAsync(host, item.cat, types, item.val.page, ct);
++                                await TrackerSyncHelpers.RetryBrowserDependencyAsync(TrackerName,
++                                    token => ParseSectionPageAsync(host, item.cat, types, item.val.page, token), ct);
+                             ParseAllCycleStore.NoteAttempt(TrackerName, item.val, cycle, listingOk);
++                            if (listingOk)
++                                succeeded++;
+                         }
+                         catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                         {
+                             throw;
+                         }
++                        catch (SolverDependencyUnavailableException)
++                        {
++                            throw;
++                        }
+                         catch (Exception ex)
+                         {
+                             ParserLog.Write(TrackerName, $"ParseAllTask {item.cat} page={item.val.page} error: {ex.Message}");
+@@ -252,7 +260,7 @@ namespace JacRed.Infrastructure.Trackers.Ultradox
+ 
+                         TrackerSyncHelpers.NoteRequest(TrackerName);
+                         done++;
+-                        TrackerSyncHelpers.ReportProgress(TrackerName, "ParseAllTask", done, pending.Length, item.cat, item.val.page);
++                        TrackerSyncHelpers.ReportProgress(TrackerName, "ParseAllTask", succeeded, pending.Length, item.cat, item.val.page);
+                         ParseAllCycleStore.PersistAfterPageIfNeeded(CyclePath, cycle, TaskParsePath, taskParse, persistCycle: true, done, pending.Length);
+                     }
+                 }
+diff --git a/Models/TaskParse.cs b/Models/TaskParse.cs
+index b48af4e..4fd8382 100644
+--- a/Models/TaskParse.cs
++++ b/Models/TaskParse.cs
+@@ -1,4 +1,4 @@
+-﻿using System;
++using System;
+ 
+ namespace JacRed.Models.tParse
+ {
+@@ -18,6 +18,12 @@ namespace JacRed.Models.tParse
+         /// <summary>ParseAllTask cycle id when this page was last completed in a full crawl.</summary>
+         public string parseAllCycleId { get; set; }
+ 
++        /// <summary>Cycle whose successful listing parse was explicitly verified.</summary>
++        public string parseAllSucceededCycleId { get; set; }
++
++        /// <summary>Cycle settled after the page failure budget, not successful parsing.</summary>
++        public string parseAllSkippedCycleId { get; set; }
++
+         /// <summary>Consecutive ParseAllTask failures for this slot (reset on settle or skip).</summary>
+         public int parseAllFailCount { get; set; }
+ 
+diff --git a/tests/JacRed.Tests/Networking/CrawlSolverAdmissionTests.cs b/tests/JacRed.Tests/Networking/CrawlSolverAdmissionTests.cs
+new file mode 100644
+index 0000000..23cb78d
+--- /dev/null
++++ b/tests/JacRed.Tests/Networking/CrawlSolverAdmissionTests.cs
+@@ -0,0 +1,187 @@
++using JacRed.Infrastructure.Networking;
++using Newtonsoft.Json.Linq;
++using Xunit;
++
++namespace JacRed.Tests.Networking;
++
++public class CrawlSolverAdmissionTests
++{
++    [Fact]
++    public async Task DifferentHosts_CannotOverlapBrowserOperations()
++    {
++        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
++        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
++        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
++        var first = CloudflareClearance.CallSolverAsync("http://solver.test/v1", new() { ["url"] = "https://kinozal.test/" }, 1000, true, async () =>
++        {
++            firstStarted.SetResult();
++            await releaseFirst.Task;
++            return JObject.Parse("{\"status\":\"ok\"}");
++        });
++        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
++        var second = CloudflareClearance.CallSolverAsync("http://solver.test/v1", new() { ["url"] = "https://anibelka.test/" }, 1000, true, () =>
++        {
++            secondStarted.SetResult();
++            return Task.FromResult(JObject.Parse("{\"status\":\"ok\"}"));
++        });
++        try { Assert.False(secondStarted.Task.IsCompleted); }
++        finally
++        {
++            releaseFirst.TrySetResult();
++            await Task.WhenAll(first, second);
++        }
++    }
++}
++
++public class CrawlSolverFailureTests
++{
++    [Fact]
++    public async Task InteractiveRequestDoesNotWaitForCrawlSlot()
++    {
++        var admission = new CrawlSolverAdmission();
++        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
++        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
++        var crawl = CloudflareClearance.CallSolverAsync("http://solver.test/v1", new(), 1000, true, async () =>
++        {
++            started.SetResult();
++            await release.Task;
++            return JObject.Parse("{\"status\":\"ok\"}");
++        }, admission);
++        await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
++        try
++        {
++            var interactive = CloudflareClearance.CallSolverAsync("http://interactive.test/v1", new(), 1000, false,
++                () => Task.FromResult(JObject.Parse("{\"status\":\"ok\"}")), admission);
++            await interactive.WaitAsync(TimeSpan.FromSeconds(3));
++            Assert.False(crawl.IsCompleted);
++        }
++        finally { release.TrySetResult(); await crawl; }
++    }
++
++    [Fact]
++    public async Task UnavailableDependencyIsTyped_AndOtherHostsBackOffBeforeSending()
++    {
++        var now = DateTime.UtcNow;
++        var admission = new CrawlSolverAdmission(() => now);
++        await Assert.ThrowsAsync<SolverDependencyUnavailableException>(() =>
++            CloudflareClearance.CallSolverAsync("http://solver.test/v1", new(), 1000, true,
++                () => throw new System.Net.Http.HttpRequestException("refused"), admission));
++        int calls = 0;
++        Task<JObject> NextHost() => CloudflareClearance.CallSolverAsync("http://solver.test/v1", new(), 1000, true,
++            () => { calls++; return Task.FromResult(JObject.Parse("{\"status\":\"ok\"}")); }, admission);
++        await Assert.ThrowsAsync<SolverDependencyUnavailableException>(NextHost);
++        Assert.Equal(0, calls);
++        now += TimeSpan.FromSeconds(61);
++        Assert.Equal("ok", (await NextHost()).Value<string>("status"));
++        Assert.Equal(1, calls);
++    }
++
++    [Fact]
++    public async Task TimedOutBrowserRequestDoesNotBecomePageFailure()
++    {
++        var admission = new CrawlSolverAdmission();
++        await Assert.ThrowsAsync<SolverDependencyUnavailableException>(() =>
++            CloudflareClearance.CallSolverAsync("http://solver.test/v1", new(), 1000, true,
++                () => throw new TaskCanceledException("timeout"), admission));
++    }
++
++    [Theory]
++    [InlineData("Error: Cannot fork")]
++    [InlineData("can't start new thread")]
++    [InlineData("Resource temporarily unavailable")]
++    [InlineData("Timeout after 300 seconds")]
++    [InlineData("tab crashed")]
++    [InlineData("Failed to launch browser!")]
++    [InlineData("Unexpected browser driver failure")]
++    public async Task ExhaustedBrowserResponseIsTypedDependencyFailure(string message)
++    {
++        await Assert.ThrowsAsync<SolverDependencyUnavailableException>(() =>
++            CloudflareClearance.CallSolverAsync("http://solver.test/v1", new(), 1000, true,
++                () => Task.FromResult(new JObject { ["status"] = "error", ["message"] = message }), new()));
++    }
++
++    [Fact]
++    public async Task MalformedDependencyResponseDoesNotBecomePageFailure()
++    {
++        await Assert.ThrowsAsync<SolverDependencyUnavailableException>(() =>
++            CloudflareClearance.CallSolverAsync("http://solver.test/v1", new(), 1000, true,
++                () => Task.FromResult(new JObject()), new()));
++    }
++
++    [Fact]
++    public async Task MissingSessionStillReachesExistingSessionRecovery()
++    {
++        var result = await CloudflareClearance.CallSolverAsync("http://solver.test/v1", new(), 1000, true,
++            () => Task.FromResult(new JObject { ["status"] = "error", ["message"] = "Session not found" }), new());
++        Assert.Equal("Session not found", result.Value<string>("message"));
++    }
++
++    [Fact]
++    public async Task InteractiveFailureKeepsExistingNullContract()
++    {
++        Assert.Null(await CloudflareClearance.CallSolverAsync("http://interactive.test/v1", new(), 1000, false,
++            () => throw new System.Net.Http.HttpRequestException("refused")));
++    }
++}
++
++public class CrawlSolverHttpTests
++{
++    static async Task WithResponse(int status, string body, Func<string, Task> test)
++    {
++        var portProbe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
++        portProbe.Start();
++        int port = ((System.Net.IPEndPoint)portProbe.LocalEndpoint).Port;
++        portProbe.Stop();
++        using var server = new System.Net.HttpListener();
++        string endpoint = $"http://127.0.0.1:{port}/";
++        server.Prefixes.Add(endpoint);
++        server.Start();
++        var serve = Task.Run(async () =>
++        {
++            var context = await server.GetContextAsync();
++            context.Response.StatusCode = status;
++            context.Response.ContentType = "application/json";
++            var bytes = System.Text.Encoding.UTF8.GetBytes(body);
++            context.Response.ContentLength64 = bytes.Length;
++            await context.Response.OutputStream.WriteAsync(bytes);
++            context.Response.Close();
++        });
++        try { await test(endpoint); await serve.WaitAsync(TimeSpan.FromSeconds(5)); }
++        finally { server.Stop(); }
++    }
++
++    [Fact]
++    public async Task RealHttp500MissingSessionRemainsRecoverable()
++    {
++        await WithResponse(500, "{\"status\":\"error\",\"message\":\"The session doesn't exist.\"}", async endpoint =>
++        {
++            var result = await CloudflareClearance.CallSolverAsync(endpoint,
++                new() { ["cmd"] = "sessions.destroy" }, 2000, true, admission: new());
++            Assert.Equal("The session doesn't exist.", result.Value<string>("message"));
++        });
++    }
++
++    [Theory]
++    [InlineData(503, "{\"status\":\"error\",\"message\":\"Browser pool busy\"}")]
++    [InlineData(500, "{\"status\":\"error\",\"message\":\"Cannot fork\"}")]
++    [InlineData(200, "{\"status\":\"ok\"}")]
++    [InlineData(200, "{\"status\":\"ok\",\"solution\":{\"status\":200}}")]
++    [InlineData(200, "{\"status\":\"ok\",\"solution\":{\"status\":\"oops\",\"response\":\"html\"}}")]
++    public async Task RealHttpDependencyFailureCannotConsumePageBudget(int status, string body)
++    {
++        await WithResponse(status, body, endpoint => Assert.ThrowsAsync<SolverDependencyUnavailableException>(() =>
++            CloudflareClearance.CallSolverAsync(endpoint, new() { ["cmd"] = "request.get" }, 2000,
++                true, admission: new())));
++    }
++
++    [Fact]
++    public async Task RealOrigin404RemainsPageFailure()
++    {
++        await WithResponse(200, "{\"status\":\"ok\",\"solution\":{\"status\":404,\"response\":\"not found\"}}", async endpoint =>
++        {
++            var result = await CloudflareClearance.CallSolverAsync(endpoint, new() { ["cmd"] = "request.get" },
++                2000, true, admission: new());
++            Assert.Equal(404, result["solution"].Value<int>("status"));
++        });
++    }
++}
+diff --git a/tests/JacRed.Tests/Trackers/ParseAllCycleStoreTests.cs b/tests/JacRed.Tests/Trackers/ParseAllCycleStoreTests.cs
+index a1a559d..bcd6fa5 100644
+--- a/tests/JacRed.Tests/Trackers/ParseAllCycleStoreTests.cs
++++ b/tests/JacRed.Tests/Trackers/ParseAllCycleStoreTests.cs
+@@ -293,22 +293,42 @@ public class ParseAllCycleStoreTests : IDisposable
+     }
+ 
+     [Fact]
+-    public void NoteAttempt_SettlesAfterFailBudget()
++    public void NoteAttempt_BudgetSkipIsNotRecordedAsVerifiedSuccess()
+     {
+         var cycle = ParseAllCycleStore.CreateCycle("fp", 1);
+         var page = new TaskParse(7);
+-
+         Assert.False(ParseAllCycleStore.NoteAttempt("rutor", page, cycle, ok: false));
+-        Assert.True(ParseAllCycleStore.IsPendingInCycle(page, cycle));
+-        Assert.Equal(1, page.parseAllFailCount);
+-
+         Assert.False(ParseAllCycleStore.NoteAttempt("rutor", page, cycle, ok: false));
+-        Assert.Equal(2, page.parseAllFailCount);
+-
+         Assert.True(ParseAllCycleStore.NoteAttempt("rutor", page, cycle, ok: false));
+-        Assert.False(ParseAllCycleStore.IsPendingInCycle(page, cycle));
+-        Assert.Equal(0, page.parseAllFailCount);
+-        Assert.Equal(cycle.CycleId, page.parseAllCycleId);
++        var state = JObject.FromObject(page);
++        Assert.Equal(cycle.CycleId, (string)state["parseAllSkippedCycleId"]);
++        Assert.Null((string)state["parseAllSucceededCycleId"]);
++        Assert.Equal(default, page.updateTime);
++    }
++
++    [Fact]
++    public void SuccessfulPageGetsExplicitSuccessEvidence()
++    {
++        var cycle = ParseAllCycleStore.CreateCycle("fp", 1);
++        var page = new TaskParse(7);
++        ParseAllCycleStore.MarkDoneInCycle(page, cycle);
++        Assert.Equal(cycle.CycleId, (string)JObject.FromObject(page)["parseAllSucceededCycleId"]);
++    }
++
++    [Fact]
++    public void SettledOutcomesSeparateLegacyCompletionFromVerifiedSuccessAndSkip()
++    {
++        var cycle = ParseAllCycleStore.CreateCycle("fp", 4);
++        var succeeded = new TaskParse(0);
++        ParseAllCycleStore.MarkDoneInCycle(succeeded, cycle);
++        var skipped = new TaskParse(1);
++        for (int n = 0; n < ParseAllCycleStore.DefaultFailBudget; n++)
++            ParseAllCycleStore.NoteAttempt("rutor", skipped, cycle, false);
++        var legacy = new TaskParse(2) { parseAllCycleId = cycle.CycleId };
++        var pending = new TaskParse(3);
++        var counts = ParseAllCycleStore.CountSettledOutcomes(new[] { succeeded, skipped, legacy, pending }, cycle);
++        Assert.Equal((1, 1, 1), counts);
++        Assert.Equal(1, ParseAllCycleStore.CountPendingInCycle(new[] { succeeded, skipped, legacy, pending }, cycle));
+     }
+ 
+     [Fact]
+diff --git a/tests/JacRed.Tests/Trackers/TrackerSyncHelpersBackgroundTests.cs b/tests/JacRed.Tests/Trackers/TrackerSyncHelpersBackgroundTests.cs
+index f0140c4..4139fc3 100644
+--- a/tests/JacRed.Tests/Trackers/TrackerSyncHelpersBackgroundTests.cs
++++ b/tests/JacRed.Tests/Trackers/TrackerSyncHelpersBackgroundTests.cs
+@@ -3,12 +3,99 @@ using System.Diagnostics;
+ using System.Threading;
+ using System.Threading.Tasks;
+ using JacRed.Infrastructure.Trackers;
++using JacRed.Infrastructure.Networking;
++using JacRed.Models.tParse;
+ using Xunit;
+ 
+ namespace JacRed.Tests.Trackers;
+ 
+ public class TrackerSyncHelpersBackgroundTests
+ {
++    [Fact]
++    public async Task BrowserDependencyRetryRecoversTheSamePageWithoutConsumingAttempts()
++    {
++        var cycle = ParseAllCycleStore.CreateCycle("fp", 1);
++        var page = new TaskParse(7) { parseAllFailCount = 2 };
++        int calls = 0;
++        bool result = await TrackerSyncHelpers.RetryBrowserDependencyAsync("retry-test", ct =>
++        {
++            Assert.Equal(2, page.parseAllFailCount);
++            Assert.True(ParseAllCycleStore.IsPendingInCycle(page, cycle));
++            if (++calls == 1)
++                throw new SolverDependencyUnavailableException("unavailable");
++            return Task.FromResult(true);
++        }, CancellationToken.None, TimeSpan.FromMilliseconds(5));
++        ParseAllCycleStore.NoteAttempt("retry-test", page, cycle, result);
++        Assert.Equal(2, calls);
++        Assert.Equal(cycle.CycleId, page.parseAllSucceededCycleId);
++        Assert.Equal(0, page.parseAllFailCount);
++    }
++
++    [Fact]
++    public async Task BrowserDependencyBackoffCancelsWithoutRetryingOrCompletingPage()
++    {
++        using var cts = new CancellationTokenSource();
++        int calls = 0;
++        var task = TrackerSyncHelpers.RetryBrowserDependencyAsync<bool>("cancel-retry-test", ct =>
++        {
++            calls++;
++            cts.CancelAfter(20);
++            throw new SolverDependencyUnavailableException("unavailable");
++        }, cts.Token);
++        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
++        Assert.Equal(1, calls);
++    }
++
++    [Fact]
++    public async Task WaitingDependencyStatusClearsAndCancellationReleasesBackgroundGate()
++    {
++        var flag = new TrackerWorkFlag();
++        TrackerSyncHelpers.RunParseAllTaskInBackground("waiting-dependency-test", flag, false,
++            ct => TrackerSyncHelpers.RetryBrowserDependencyAsync<bool>("waiting-dependency-test",
++                _ => throw new SolverDependencyUnavailableException("unavailable"), ct),
++            maxDuration: TimeSpan.FromMilliseconds(500));
++        var watch = Stopwatch.StartNew();
++        bool waiting = false;
++        while (watch.Elapsed < TimeSpan.FromSeconds(3))
++        {
++            waiting = System.Linq.Enumerable.Any(TrackerSyncHelpers.GetActiveJobs(),
++                job => job.Tracker == "waiting-dependency-test" && job.WaitingForDependency);
++            if (waiting)
++                break;
++            await Task.Delay(5);
++        }
++        Assert.True(waiting);
++        Assert.True(flag.IsBusy);
++        Assert.True(await WaitForFlagFreeAsync(flag, TimeSpan.FromSeconds(3)));
++        Assert.DoesNotContain(TrackerSyncHelpers.GetActiveJobs(), job => job.Tracker == "waiting-dependency-test");
++    }
++
++    [Fact]
++    public async Task DependencyFailureLeavesPagePendingAndReleasesBackgroundGate()
++    {
++        var flag = new TrackerWorkFlag();
++        var cycle = ParseAllCycleStore.CreateCycle("fp", 1);
++        var page = new TaskParse(7) { parseAllFailCount = 2 };
++        using var persisted = new ManualResetEventSlim(false);
++        TrackerSyncHelpers.RunParseAllTaskInBackground("dependency-test", flag, false, async ct =>
++        {
++            try
++            {
++                await Task.FromException(new SolverDependencyUnavailableException("unavailable"));
++                ParseAllCycleStore.NoteAttempt("dependency-test", page, cycle, false);
++            }
++            finally
++            {
++                persisted.Set();
++            }
++        });
++        Assert.True(persisted.Wait(TimeSpan.FromSeconds(5)));
++        Assert.True(await WaitForFlagFreeAsync(flag, TimeSpan.FromSeconds(5)));
++        Assert.Equal(2, page.parseAllFailCount);
++        Assert.True(ParseAllCycleStore.IsPendingInCycle(page, cycle));
++        Assert.Null(page.parseAllSkippedCycleId);
++    }
++
+     [Fact]
+     public async Task RunInBackground_ReturnsOkImmediately_AndSecondCallIsWork()
+     {

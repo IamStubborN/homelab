@@ -2,6 +2,10 @@
 set -eu
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+if test "${1:-}" = --local-runtime; then
+    test "$#" -eq 2 || { echo "usage: $0 --local-runtime RECEIPT" >&2; exit 2; }
+    exec python3 "$root/scripts/local_runtime_contract.py" check "$2"
+fi
 : "${MEDIA_RELEASE_DIR:?MEDIA_RELEASE_DIR is required}"
 checker=${HERMES_CAPABILITY_CHECKER:-"$root/scripts/check-media-capabilities"}
 

@@ -20,8 +20,8 @@ healthy, verifies the mounted configs, and restores the previous configs if
 deployment fails:
 
 ```bash
-cd /home/operator/Projects/media-orchestrator
-HOMELAB_ROOT=/home/operator/Projects/homelab ./scripts/homelab.sh deploy-hermes-profiles
+cd /path/to/media-orchestrator
+HOMELAB_ROOT=/opt/homelab ./scripts/homelab.sh deploy-hermes-profiles
 ```
 
 For shared media skills, MCP schema, or CLI artifact changes, use the guarded
@@ -155,8 +155,8 @@ No Hermes image build is required.
 
 ## Configuration
 
-1. Replace `config/vaultwarden-server` with the HTTPS URL of the Vaultwarden deployment.
-2. Create `.env` from `.env.example` and set the numeric Telegram user/chat IDs and media network name.
+1. Keep the Vaultwarden server URL and login allowlist in ignored local files. Set `HERMES_VAULTWARDEN_SERVER_PATH` and `HERMES_VAULTWARDEN_ALLOWLIST_PATH` to those files. The tracked `.example` files are synthetic.
+2. Create `.env` from `.env.example` and set the numeric Telegram user/chat IDs, media network name, private profile paths, and existing named volume names. During an existing deployment cutover, set `HERMES_EXISTING_VOLUMES=true` so Compose reuses those volumes.
 3. Create each untracked file under `secrets/` from its `.example` counterpart, including `primary.vaultwarden_session`, `primary.vaultwarden_broker_token`, and the shared `tavily_api_key` and `exa_api_key`; keep ownership with deployment UID/GID `1000`, and use mode `0640`. The root bootstrap reads these mounted files and creates private, ephemeral runtime copies only for secrets needed after dropping to the image's unprivileged Hermes UID/GID `10000`.
 4. Ensure the external media and `agent-tools` networks exist, then run `docker compose pull` and `docker compose up -d`.
 

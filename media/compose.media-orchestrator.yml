@@ -12,8 +12,8 @@ x-service-environment: &service-environment
   MEDIA_LIFECYCLE_TOKEN_FILE: /run/secrets/media_lifecycle_token
   MEDIA_PRIMARY_WEBHOOK_HMAC_FILE: /run/secrets/media_primary_webhook_hmac
   MEDIA_SECONDARY_WEBHOOK_HMAC_FILE: /run/secrets/media_secondary_webhook_hmac
-  MEDIA_PRIMARY_WEBHOOK_URL: http://media-notifier-primary:8644/webhooks/media-notify
-  MEDIA_SECONDARY_WEBHOOK_URL: http://media-notifier-secondary:8644/webhooks/media-notify
+  MEDIA_PRIMARY_WEBHOOK_URL: ${MEDIA_PRIMARY_WEBHOOK_URL:-http://media-notifier-primary:8644/webhooks/media-notify}
+  MEDIA_SECONDARY_WEBHOOK_URL: ${MEDIA_SECONDARY_WEBHOOK_URL:-http://media-notifier-secondary:8644/webhooks/media-notify}
   MEDIA_LISTEN_ADDR: 0.0.0.0:8080
   MEDIA_PROWLARR_URL: http://prowlarr:9696
   MEDIA_PROWLARR_API_KEY_FILE: /run/secrets/media_prowlarr_api_key
@@ -385,7 +385,7 @@ services:
     healthcheck:
       # Match download/gluetun-watcher: the event loop must be alive, not just
       # that the Docker daemon answers `docker info`.
-      test: [CMD, pgrep, -f, "docker events.*container="]
+      test: [CMD, pgrep, -f, "docker events.*type=container"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -408,17 +408,17 @@ secrets:
   media_database_url:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_database_url
   media_primary_token:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_primary_token
+    file: ${MEDIA_PRIMARY_TOKEN_PATH:-${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_primary_token}
   media_secondary_token:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_secondary_token
+    file: ${MEDIA_SECONDARY_TOKEN_PATH:-${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_secondary_token}
   media_runner_token:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_runner_token
   media_lifecycle_token:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_lifecycle_token
   media_primary_webhook_hmac:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_primary_webhook_hmac
+    file: ${MEDIA_PRIMARY_WEBHOOK_HMAC_PATH:-${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_primary_webhook_hmac}
   media_secondary_webhook_hmac:
-    file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_secondary_webhook_hmac
+    file: ${MEDIA_SECONDARY_WEBHOOK_HMAC_PATH:-${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_secondary_webhook_hmac}
   media_prowlarr_api_key:
     file: ${MEDIA_SECRETS_DIR:?set MEDIA_SECRETS_DIR}/media_prowlarr_api_key
   media_tmdb_api_key:

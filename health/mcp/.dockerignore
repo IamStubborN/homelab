@@ -6,3 +6,6 @@ __pycache__
 .coverage
 htmlcov
 tests
+
+# Site-specific import code stays outside published images.
+health_mcp/ingest

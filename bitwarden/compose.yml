@@ -1,10 +1,10 @@
 # Vaultwarden (Bitwarden-compatible)
 # LAN:  https://bitwarden.${DOCKER_DOMAIN}
-# Public Send/links: https://host-3.example.invalid (Cloudflare Tunnel; no Access)
+# Public Send/links: https://bitwarden.example.test (Cloudflare Tunnel; no Access)
 #
 # Tunnel token: ignored bitwarden/secrets/tunnel.env (TUNNEL_TOKEN=...)
 # Create tunnel in Cloudflare Zero Trust → Networks → Tunnels → public
-# hostname host-3.example.invalid → http://bitwarden:80
+# hostname bitwarden.example.test → http://bitwarden:80
 
 services:
   bitwarden:
@@ -14,7 +14,7 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      DOMAIN: https://host-3.example.invalid
+      DOMAIN: ${BITWARDEN_PUBLIC_URL:-https://bitwarden.example.test}
       SIGNUPS_ALLOWED: "false"
       INVITATIONS_ALLOWED: "false"
       WEBSOCKET_ENABLED: "true"

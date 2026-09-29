@@ -34,7 +34,10 @@ def test_kyiv_dst_labels() -> None:
     assert kyiv_date_label(october) == "25.10"
 
 
-def test_generate_chart_tool_returns_png(store: WikiStore, identity: Identity) -> None:
+def test_generate_chart_tool_returns_png(
+    store: WikiStore, identity: Identity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("health_mcp.store.now_utc", lambda: datetime(2026, 8, 5, tzinfo=UTC))
     store.add_measurement(
         identity,
         kind="weight",

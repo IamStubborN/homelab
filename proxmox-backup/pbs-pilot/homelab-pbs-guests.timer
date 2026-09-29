@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly PBS guest recovery points (enable only after pilot acceptance)
+
+[Timer]
+OnCalendar=Sun *-*-* 04:30:00 UTC
+Persistent=true
+Unit=homelab-pbs-guests.service
+
+[Install]
+WantedBy=timers.target

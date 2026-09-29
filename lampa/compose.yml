@@ -78,6 +78,7 @@ services:
       - ./config/init.conf:/lampac/init.conf:ro
       - ./config/passwd:/lampac/passwd:ro
       - ./config/lampainit-invc.js:/lampac/module/LampaWeb/plugins/lampainit-invc.js:ro
+      - ./plugins:/lampac/wwwroot/plugins/homelab:ro
       - ./mods/Tracks:/lampac/mods/Tracks:ro
       - ./cache:/lampac/cache
       - ./database:/lampac/database

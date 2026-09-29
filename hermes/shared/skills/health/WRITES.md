@@ -21,6 +21,6 @@ skill.
 | --- | --- |
 | «Обед: борщ и хлеб, примерно 520 ккал» | `add_meal(description="борщ и хлеб", calories=520)` |
 | «Спал с 23:10 до 07:00, качество 4» | `add_sleep_record(start_time=<resolved RFC3339>, end_time=<resolved RFC3339>, quality=4)` |
-| «У Secondary болит голова, сила 6 из 10» | `add_symptom(person=secondary, description="головная боль", severity=6)` |
-| «Какие лекарства сейчас принимает Primary?» | `query_health_data(person=primary, section="medications")` |
-| «Какой сейчас профиль давления у Primary?» | read `/wiki/shared/health/generated/PRIMARY_CURRENT_PROFILE.md` via llm-wiki; do not open jsonl |
+| «У Secondary болит голова, сила 6 из 10» | `add_symptom(person=$HEALTH_SECONDARY_PERSON, description="головная боль", severity=6)` |
+| «Какие лекарства сейчас принимает Primary?» | `query_health_data(person=$HEALTH_PRIMARY_PERSON, section="medications")` |
+| «Какой сейчас профиль давления у Primary?» | read `/wiki/shared/health/generated/<uppercase HEALTH_PRIMARY_PERSON>_CURRENT_PROFILE.md` via llm-wiki; do not open jsonl |

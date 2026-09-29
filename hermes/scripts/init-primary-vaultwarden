@@ -5,14 +5,17 @@ cd "$(dirname "$0")/.."
 
 volume=${VAULTWARDEN_VOLUME:-homelab_hermes_primary_vaultwarden}
 tools_volume=${VAULTWARDEN_TOOLS_VOLUME:-homelab_vaultwarden_tools}
+server_path=${HERMES_VAULTWARDEN_SERVER_PATH:-"$PWD/config/vaultwarden-server.example"}
+session_file=${VAULTWARDEN_SESSION_FILE:-/run/hermes-home-secrets/primary.vaultwarden_session}
 
 docker run --rm -it \
     --pull always \
     -v "$volume:/opt/data/vaultwarden" \
     -v "$tools_volume:/opt/tools" \
     -v "$PWD/scripts/install_bitwarden_cli.py:/usr/local/bin/install-bitwarden-cli:ro" \
-    -v "$PWD/config/vaultwarden-server:/etc/hermes-home/vaultwarden-server:ro" \
+    -v "$server_path:/etc/hermes-home/vaultwarden-server:ro" \
     -v "$PWD/secrets:/run/hermes-home-secrets" \
+    -e VAULTWARDEN_SESSION_FILE="$session_file" \
     --entrypoint sh \
     python:latest -c '
         set -eu
@@ -28,18 +31,18 @@ docker run --rm -it \
             *"\"status\":\"unlocked\""*)
                 echo "Vaultwarden is already unlocked; locking before issuing a fresh session."
                 bw lock >/dev/null
-                bw unlock --raw > /run/hermes-home-secrets/primary.vaultwarden_session
+                bw unlock --raw > "$VAULTWARDEN_SESSION_FILE"
                 ;;
             *"\"status\":\"locked\""*)
-                bw unlock --raw > /run/hermes-home-secrets/primary.vaultwarden_session
+                bw unlock --raw > "$VAULTWARDEN_SESSION_FILE"
                 ;;
             *)
-                bw login --raw > /run/hermes-home-secrets/primary.vaultwarden_session
+                bw login --raw > "$VAULTWARDEN_SESSION_FILE"
                 ;;
         esac
-        test -s /run/hermes-home-secrets/primary.vaultwarden_session
-        chown 1000:1000 /run/hermes-home-secrets/primary.vaultwarden_session
-        chmod 0640 /run/hermes-home-secrets/primary.vaultwarden_session
+        test -s "$VAULTWARDEN_SESSION_FILE"
+        chown 1000:1000 "$VAULTWARDEN_SESSION_FILE"
+        chmod 0640 "$VAULTWARDEN_SESSION_FILE"
     '
 
 echo "Primary Vaultwarden session initialized."

@@ -14,8 +14,9 @@ STALE_NS='/var/run/docker/netns/stale'
 
 DOCKER_CALLS="$TMP/docker-calls"
 NETNS_STATE="$TMP/netns-state"
+PARENT_STATE="$TMP/parent-id"
 mkdir -p "$TMP/state"
-export DOCKER_CALLS NETNS_STATE TMP PARENT_ID OTHER_ID PARENT_SHORT PARENT_NS STALE_NS
+export DOCKER_CALLS NETNS_STATE PARENT_STATE TMP PARENT_ID OTHER_ID PARENT_SHORT PARENT_NS STALE_NS
 
 write_docker_mock() {
     mode=$1
@@ -28,6 +29,7 @@ flip_stale() {
     [ "\${FLIP_TO_STALE:-0}" = 1 ] && [ -f "\$TMP/seen_event" ]
 }
 
+current_parent_id=\$(cat "\$PARENT_STATE")
 case "\$1" in
     compose)
         if printf '%s\n' "\$*" | grep -Fq 'force-recreate'; then
@@ -39,16 +41,16 @@ case "\$1" in
         target=\$2
         if [ "\$#" -eq 2 ]; then
             case "\$target" in
-                gluetun-rezka|"$PARENT_ID"|download-runner) exit 0 ;;
+                gluetun-rezka|"\$current_parent_id"|download-runner) exit 0 ;;
                 *) exit 1 ;;
             esac
         fi
         case "\$*" in
             *'{{.Id}}'*)
-                printf '%s\n' "$PARENT_ID"
+                printf '%s\n' "\$current_parent_id"
                 ;;
             *'{{.Name}}'*)
-                if [ "\$target" = "$PARENT_ID" ] || [ "\$target" = gluetun-rezka ]; then
+                if [ "\$target" = "\$current_parent_id" ] || [ "\$target" = gluetun-rezka ]; then
                     printf '%s\n' '/gluetun-rezka'
                 else
                     printf '%s\n' "/\$target"
@@ -69,7 +71,7 @@ case "\$1" in
             *HostConfig.NetworkMode*)
                 if [ "\$target" = download-runner ]; then
                     if [ -f "\$NETNS_STATE" ] && [ "\$(cat "\$NETNS_STATE")" = matched ]; then
-                        printf 'container:$PARENT_ID\n'
+                        printf 'container:%s\n' "\$current_parent_id"
                     elif flip_stale; then
                         printf 'container:$OTHER_ID\n'
                     else
@@ -112,6 +114,10 @@ case "\$1" in
         esac
         ;;
     events)
+        if [ -n "\${NEW_PARENT_ID:-}" ]; then
+            printf '%s\n' "\$NEW_PARENT_ID" >"\$PARENT_STATE"
+            case "\$*" in *"container=$PARENT_ID"*) exit 0 ;; esac
+        fi
         if [ "$mode" = flip ]; then
             : >"\$TMP/seen_event"
         fi
@@ -151,6 +157,7 @@ run_watcher() {
     mock_mode=${1:-plain}
     : >"$DOCKER_CALLS"
     : >"$NETNS_STATE"
+    printf '%s\n' "$PARENT_ID" >"$PARENT_STATE"
     rm -f "$TMP/seen_event"
     write_docker_mock "$mock_mode"
     PATH="$TMP:$PATH" \
@@ -303,6 +310,32 @@ if grep -Fq 'start detected' "$TMP/output"; then
     exit 1
 fi
 
+# Recreating the parent changes its ID while the watcher stays running.
+NEW_PARENT_ID='eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+DEPENDENT_NETMODE="container:$PARENT_ID"
+DEPENDENT_SANDBOX="$PARENT_NS"
+DOCKER_EVENTS=$(printf '%s\n%s\n' "$NEW_PARENT_ID|gluetun-rezka|start" "$NEW_PARENT_ID|gluetun-rezka|start")
+FLIP_TO_STALE=0
+export NEW_PARENT_ID DEPENDENT_NETMODE DEPENDENT_SANDBOX DOCKER_EVENTS FLIP_TO_STALE
+run_watcher
+if [ "$(grep -Fc 'force-recreate' "$DOCKER_CALLS" || true)" -ne 1 ]; then
+    echo 'FAIL: replacement Rezka parent ID was not observed/reconciled exactly once' >&2
+    cat "$TMP/output" >&2
+    exit 1
+fi
+if ! grep -Fq "inspect $NEW_PARENT_ID --format {{index .Config.Labels" "$DOCKER_CALLS"; then
+    echo 'FAIL: replacement Rezka Compose metadata was not read' >&2
+    exit 1
+fi
+# Similarly named helpers must never trigger parent recovery, even if namespace is stale.
+DOCKER_EVENTS="$NEW_PARENT_ID|gluetun-rezka-helper|start"
+run_watcher
+if grep -Fq 'force-recreate' "$DOCKER_CALLS"; then
+    echo 'FAIL: similarly named helper triggered parent recovery' >&2
+    exit 1
+fi
+unset NEW_PARENT_ID
+
 # 6) Die while ready, then lifecycle flips to rotating within settle → skip start under ready
 cat >"$TMP/wget" <<'EOF'
 #!/bin/sh
@@ -364,5 +397,14 @@ if ! grep -Eq '(^| )restart gluetun-rezka($| )' "$DOCKER_CALLS"; then
     cat "$DOCKER_CALLS" >&2
     exit 1
 fi
+
+# Compose must recognize the event subscription's actual process command line.
+events_command=$(sed -n '/^events /{p;q;}' "$DOCKER_CALLS")
+sed -n 's/.*test: \[CMD, pgrep, -f, "\(.*\)"\].*/\1/p' "$ROOT/media/compose.media-orchestrator.yml" | while IFS= read -r health_pattern; do
+    if ! printf 'docker %s\n' "$events_command" | grep -Eq "$health_pattern"; then
+        echo 'FAIL: Compose healthcheck does not match the active event subscription' >&2
+        exit 1
+    fi
+done
 
 echo 'PASS: gluetun-rezka-watcher orphaned-netns, exec_start ignore, and die-settle rotate paths'

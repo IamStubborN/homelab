@@ -8,7 +8,7 @@ services:
     build:
       context: ./mcp
     # Python cashier. Do not reuse a leftover Rust family-health-service:local.
-    image: family-health-mcp:local
+    image: ${HEALTH_MCP_IMAGE:-family-health-mcp:local}
     container_name: health-service
     # Wiki writes + token files: UID 10000. Host API tokens must be
     # `10000:10000 0400` (`install -o 10000 -g 10000 -m 0400`).
@@ -19,6 +19,10 @@ services:
     environment:
       HEALTH_TOKEN_FILE_PRIMARY: /run/secrets/primary_health_api_token
       HEALTH_TOKEN_FILE_SECONDARY: /run/secrets/secondary_health_api_token
+      HEALTH_PRIMARY_PERSON: ${HEALTH_PRIMARY_PERSON:-primary}
+      HEALTH_SECONDARY_PERSON: ${HEALTH_SECONDARY_PERSON:-secondary}
+      HEALTH_PRIMARY_LABEL: ${HEALTH_PRIMARY_LABEL:-Primary}
+      HEALTH_SECONDARY_LABEL: ${HEALTH_SECONDARY_LABEL:-Secondary}
       HEALTH_LISTEN_ADDR: 0.0.0.0:8080
       WIKI_HEALTH_ROOT: /wiki/shared/health
       MPLCONFIGDIR: /tmp/matplotlib
@@ -54,6 +58,6 @@ networks:
 
 secrets:
   primary_health_api_token:
-    file: ./secrets/primary.health_api_token
+    file: ${HEALTH_PRIMARY_TOKEN_PATH:-./secrets/primary.health_api_token}
   secondary_health_api_token:
-    file: ./secrets/secondary.health_api_token
+    file: ${HEALTH_SECONDARY_TOKEN_PATH:-./secrets/secondary.health_api_token}

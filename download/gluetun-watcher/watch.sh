@@ -18,30 +18,21 @@ if ! docker compose version >/dev/null 2>&1; then
     exit 1
 fi
 
-# Resolve the parent to a full container ID once. Docker's events
-# --filter container=<name> prefix-matches names, so "gluetun" would also
-# match "gluetun-rezka" / "gluetun-watcher" and spuriously recreate qBit.
-resolve_parent_id() {
-    docker inspect "$PARENT" --format '{{.Id}}' 2>/dev/null
+# Container IDs change on Compose recreate. Subscribe by event type and match
+# exact actor names locally; name filters prefix-match unrelated containers.
+refresh_parent_identity() {
+    current_id=$(docker inspect "$PARENT" --format '{{.Id}}' 2>/dev/null) || return 1
+    printf '%s\n' "$current_id" | grep -Eq '^[0-9a-fA-F]{64}$' || return 1
+    current_name=$(docker inspect "$current_id" --format '{{.Name}}' 2>/dev/null | sed 's#^/##')
+    [ "$current_name" = "$PARENT" ] || return 1
+    PARENT_ID=$current_id
+    PARENT_ID_SHORT=$(printf '%.12s' "$PARENT_ID")
 }
 
-PARENT_ID=$(resolve_parent_id)
-if [ -z "$PARENT_ID" ]; then
-    log "FATAL: cannot resolve parent container id for $PARENT"
+if ! refresh_parent_identity; then
+    log "FATAL: cannot resolve exact parent identity for $PARENT"
     exit 1
 fi
-printf '%s\n' "$PARENT_ID" | grep -Eq '^[0-9a-fA-F]{64}$' || {
-    log "FATAL: parent container id is invalid for $PARENT"
-    exit 1
-}
-# Exact-name belt: reject if inspect name is not exactly $PARENT.
-parent_name=$(docker inspect "$PARENT_ID" --format '{{.Name}}' 2>/dev/null | sed 's#^/##')
-if [ "$parent_name" != "$PARENT" ]; then
-    log "FATAL: parent name mismatch: expected $PARENT, got ${parent_name:-unknown}"
-    exit 1
-fi
-
-PARENT_ID_SHORT=$(printf '%.12s' "$PARENT_ID")
 
 get_compose_metadata() {
     PROJECT=$(docker inspect "$PARENT_ID" \
@@ -203,6 +194,10 @@ refresh_dependents_if_needed() {
         sleep "$RECREATE_DEBOUNCE"
     fi
 
+    if ! refresh_parent_identity; then
+        log "WARNING: cannot resolve current $PARENT identity; skipping recovery"
+        return 1
+    fi
     log "Waiting for $PARENT healthy (${HEALTH_TIMEOUT}s)..."
     if ! wait_healthy; then
         log "WARNING: $PARENT not healthy after ${HEALTH_TIMEOUT}s, skipping"
@@ -229,18 +224,14 @@ sleep "$SETTLE_DELAY"
 log "Initial startup order check..."
 check_startup_order
 
-log "Watching docker events for exact parent id of $PARENT..."
+log "Watching docker start events for exact parent name $PARENT..."
 docker events \
-    --filter "container=$PARENT_ID" \
+    --filter type=container \
     --filter "event=start" \
-    --format '{{.Actor.ID}} {{.Action}}' | while IFS= read -r line; do
-    event_id=${line%% *}
-    action=${line#* }
-
+    --format '{{.Actor.ID}}|{{.Actor.Attributes.name}}|{{.Action}}' | while IFS='|' read -r _ container action; do
     # Docker may return exec_start health-check events for an event=start filter.
     [ "$action" = "start" ] || continue
-    # Exact ID match (filter should already be exact; keep as defense in depth).
-    [ "$event_id" = "$PARENT_ID" ] || continue
+    [ "$container" = "$PARENT" ] || continue
 
     refresh_dependents_if_needed
 done

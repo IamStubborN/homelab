@@ -1,11 +1,25 @@
 from __future__ import annotations
 
+import os
+import re
 from datetime import UTC, date, datetime
 from typing import Any, Final
 
-PERSONS: Final[frozenset[str]] = frozenset({"primary", "secondary"})
+def _person_id(key: str, default: str) -> str:
+    value = os.environ.get(key, default)
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", value):
+        raise SystemExit(f"invalid {key}")
+    return value
+
+
+PRIMARY_PERSON: Final[str] = _person_id("HEALTH_PRIMARY_PERSON", "primary")
+SECONDARY_PERSON: Final[str] = _person_id("HEALTH_SECONDARY_PERSON", "secondary")
+if PRIMARY_PERSON == SECONDARY_PERSON:
+    raise SystemExit("health person IDs must differ")
+
+PERSONS: Final[frozenset[str]] = frozenset({PRIMARY_PERSON, SECONDARY_PERSON})
 VIA_CHANNELS: Final[frozenset[str]] = frozenset(
-    {"hermes_primary", "hermes_secondary", "system"}
+    {f"hermes_{PRIMARY_PERSON}", f"hermes_{SECONDARY_PERSON}", "system"}
 )
 FACT_STATUSES: Final[frozenset[str]] = frozenset(
     {

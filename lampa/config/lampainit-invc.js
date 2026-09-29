@@ -5,20 +5,34 @@ var lampainit_invc = {};
   'use strict';
 
   var readyForPlugins = false;
+  var watchingPlayer = false;
+
+  function configureTorrentPlayer() {
+    var android = Lampa.Platform && Lampa.Platform.is('android');
+    if (android && Lampa.Params && Lampa.Params.select) {
+      Lampa.Params.select('player_torrent', {
+        inner: '#{settings_param_player_inner}', android: 'Android'
+      }, 'android');
+    }
+    // Browser/embedded players need HLS for codecs unsupported by WebView.
+    // Keep direct torrent streams for users choosing an external Android player.
+    Lampa.Storage.set('torrserver_gts', !android || Lampa.Storage.field('player_torrent') === 'inner');
+    if (!watchingPlayer && Lampa.Storage.listener) {
+      watchingPlayer = true;
+      Lampa.Storage.listener.follow('change', function (event) {
+        if (event.name === 'player_torrent') configureTorrentPlayer();
+      });
+    }
+  }
 
   function applyRuntimeSettings() {
     var origin = window.location.origin;
-    var useTorrserverGst = typeof Platform === 'undefined' ||
-      typeof Platform.is !== 'function' ||
-      !Platform.is('android');
 
     Lampa.Storage.set('torrserver_url', origin + '/torrserver');
     Lampa.Storage.set('internal_torrclient', true);
     Lampa.Storage.set('torrserver_use_link', 'one');
     Lampa.Storage.set('torrserver_savedb', true);
-    // Browser playback needs TorrServer's HLS transcoder for AC-3/E-AC-3;
-    // Android TV keeps the native/Vimu path instead.
-    Lampa.Storage.set('torrserver_gts', useTorrserverGst);
+    configureTorrentPlayer();
     // JacRed is the configured torrent backend. Do not overwrite its native
     // Lampa plugin with the legacy Prowlarr client settings.
     if (typeof Lampa.Storage.remove === 'function') {
@@ -30,44 +44,11 @@ var lampainit_invc = {};
     Lampa.Storage.set('parser_use', 'true');
     Lampa.Storage.set('parser_torrent_type', 'jackett');
     Lampa.Storage.set('parse_in_search', 'true');
-    Lampa.Storage.set('parse_timeout', '30');
-    Lampa.Storage.set('online_balanser', 'kinobase');
-    Lampa.Storage.set('video_quality_default', '2160');
-  }
-
-  function patchParser() {
-    var torrserverProxyOrigin = 'http://traefik';
-    var browserProxyOrigin = window.location.origin;
-
-    // Prowlarr may return Docker-internal download URLs. TorrServer runs in
-    // another network namespace, so expose those URLs through Traefik's
-    // internal Docker-DNS route before handing them to TorrServer.
-    if (Lampa.Parser && typeof Lampa.Parser.get === 'function' && !Lampa.Parser.__homelabTorrentParserPatched) {
-      var parserGet = Lampa.Parser.get;
-      Lampa.Parser.get = function patchedParserGet(params, oncomplete, onerror) {
-        return parserGet.call(this, params, function (data) {
-          if (data && Array.isArray(data.Results)) {
-            data.Results.forEach(function (item) {
-              if (typeof item.MagnetUri !== 'string' || item.MagnetUri.indexOf('://') === -1) return;
-
-              try {
-                var parsed = new URL(item.MagnetUri);
-                if (parsed.pathname.indexOf('/download') === -1) return;
-
-                var proxyPath = '/prowlarr' + parsed.pathname + parsed.search;
-                // TorrServer fetches MagnetUri from its VPN namespace. Link
-                // remains browser-safe for UI actions and previews.
-                item.MagnetUri = torrserverProxyOrigin + proxyPath;
-                item.Link = browserProxyOrigin + proxyPath;
-              } catch (error) {}
-            });
-          }
-
-          if (typeof oncomplete === 'function') oncomplete(data);
-        }, onerror);
-      };
-      Lampa.Parser.__homelabTorrentParserPatched = true;
-    }
+    // Set initial preferences without overwriting the user's later choices.
+    var defaults = {parse_timeout: '30', online_balanser: 'kinobase', video_quality_default: '2160'};
+    Object.keys(defaults).forEach(function (key) {
+      if (Lampa.Storage.get(key, '') === '') Lampa.Storage.set(key, defaults[key]);
+    });
   }
 
   function installPlugins() {
@@ -82,7 +63,7 @@ var lampainit_invc = {};
       // malformed marker `la,padocker` was never a valid URL match and could
       // not reliably clean stale installations.
       if (plugin.url.indexOf('stunnorm') === -1) return;
-      if (typeof Lampa.Plugins.remove === 'function') Lampa.Plugins.remove(plugin.url);
+      if (typeof Lampa.Plugins.remove === 'function') Lampa.Plugins.remove(plugin);
     });
 
     if (typeof Lampa.Plugins.save === 'function') Lampa.Plugins.save();
@@ -109,6 +90,12 @@ var lampainit_invc = {};
         status: 1,
         name: 'Онлайн',
         author: 'lampac'
+      },
+      {
+        url: origin + '/plugins/homelab/torrserver-audio.js',
+        status: 1,
+        name: 'TorrServer audio tracks',
+        author: 'Homelab'
       }
     ];
 
@@ -119,8 +106,7 @@ var lampainit_invc = {};
 
       if (!existing) {
         Lampa.Plugins.add(plugin);
-      } else {
-        existing.status = 1;
+      } else if (existing.status == 1) {
         if (typeof Lampa.Plugins.push === 'function') Lampa.Plugins.push(existing);
       }
     });
@@ -142,7 +128,6 @@ var lampainit_invc = {};
 
   lampainit_invc.appload = function appload() {
     applyRuntimeSettings();
-    patchParser();
 
     // The first hook runs before Lampa opens its IndexedDB. Defer all plugin
     // writes until appready, while still applying playback/storage settings.

@@ -4,7 +4,18 @@ set -eu
 
 umask 077
 
-INSTANCE_UUID="${INSTANCE_UUID:-00000000-0000-4000-8000-000000000000}"
+INSTANCE_UUID="${INSTANCE_UUID:-}"
+if [ -z "$INSTANCE_UUID" ]; then
+    printf "INSTANCE_UUID is required.\n" >&2
+    exit 78
+fi
+case "$INSTANCE_UUID" in
+    *[!0-9a-fA-F-]*) printf "Invalid INSTANCE_UUID.\n" >&2; exit 64 ;;
+esac
+case "$INSTANCE_UUID" in
+    ????????-????-????-????-????????????) ;;
+    *) printf "Invalid INSTANCE_UUID.\n" >&2; exit 64 ;;
+esac
 VPN_ID="${VPN_ID:-1}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
 MIN_RETRY_INTERVAL_SECONDS="${MIN_RETRY_INTERVAL_SECONDS:-3600}"

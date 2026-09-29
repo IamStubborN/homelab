@@ -1,0 +1,16 @@
+{
+  "repository": "/opt/homelab",
+  "volumes": [
+    "homelab_hermes_primary_profile",
+    "homelab_hermes_secondary_profile",
+    "homelab_hermes_primary_browser",
+    "homelab_hermes_secondary_browser",
+    "homelab_hermes_primary_memory",
+    "homelab_hermes_secondary_memory",
+    "homelab_hermes_primary_vaultwarden",
+    "homelab_media_notifier_primary",
+    "homelab_media_notifier_secondary",
+    "homelab_rezka_session_encrypted",
+    "homelab_gluetun_rezka_state"
+  ]
+}

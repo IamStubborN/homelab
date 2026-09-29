@@ -48,10 +48,10 @@ From your laptop, open an SSH tunnel, then run login on the Docker host:
 
 ```bash
 # Laptop (keep this session open):
-ssh -L 1455:127.0.0.1:1455 docker.example.invalid
+ssh -L 1455:127.0.0.1:1455 host-5.example.invalid.example.test
 
 # Docker host:
-cd /srv/homelab
+cd /opt/homelab
 docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser -codex-login
 ```
 

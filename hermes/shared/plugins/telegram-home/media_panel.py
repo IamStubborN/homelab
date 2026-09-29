@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import hashlib
 from html import escape
 import logging
+import os
 import re
 from typing import Iterable
 
@@ -85,7 +86,7 @@ _LIVE_JOB_STATES = {
     "publishing",
     "plex_pending",
 }
-_CANCELLABLE_JOB_STATES = {
+_CANCELLABLE_JOB_STATES = frozenset({
     "queued",
     "leased",
     "running",
@@ -93,8 +94,35 @@ _CANCELLABLE_JOB_STATES = {
     "publishing",
     "plex_pending",
     "needs_action",
+})
+_RETRYABLE_JOB_STATES = frozenset({"blocked_storage", "partial", "failed", "needs_action"})
+
+
+@dataclass(frozen=True)
+class JobAction:
+    states: frozenset[str]
+    label: str
+    question: str
+    footer: str
+    unavailable: str
+
+
+_JOB_ACTIONS = {
+    "cancel": JobAction(
+        _CANCELLABLE_JOB_STATES,
+        "✖️ Отменить",
+        "⚠️ <b>Отменить загрузку?</b>",
+        "Временные файлы удалятся позже.",
+        "ℹ️ <b>Отмена уже недоступна</b>",
+    ),
+    "retry": JobAction(
+        _RETRYABLE_JOB_STATES,
+        "🔁 Повторить",
+        "🔁 <b>Повторить загрузку?</b>",
+        "Будет создана новая попытка; предыдущая останется в истории.",
+        "ℹ️ <b>Повтор уже недоступен</b>",
+    ),
 }
-_RETRYABLE_JOB_STATES = {"blocked_storage", "partial", "failed", "needs_action"}
 
 _STATE_LABELS = {
     "queued": "в очереди",
@@ -288,7 +316,7 @@ def _plex_player_name(value: object) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     name = value.strip()
-    for suffix in (".local.example.com", ".local"):
+    for suffix in (os.environ.get("HOME_LOCAL_DNS_SUFFIX", ".local.example.test"), ".local"):
         if name.lower().endswith(suffix):
             name = name[: -len(suffix)]
             break
@@ -1409,22 +1437,22 @@ def _render_job_detail(
 ) -> MediaPanelCard:
     payload = _command_payload(ctx, "mcp__media_admin__media_job_get", {"job_id": job_id})
     return _render_job_payload(
-        ctx,
         payload,
         job_id,
         page,
         filter_code,
+        jobs=_sorted_jobs(ctx),
         state_override=state_override,
     )
 
 
 def _render_job_payload(
-    ctx,
     payload: dict,
     job_id: str,
     page: int,
     filter_code: str = "a",
     *,
+    jobs: list[dict] | tuple[dict, ...] = (),
     state_override: str | None = None,
 ) -> MediaPanelCard:
     state = state_override or str(payload.get("state") or "")
@@ -1478,20 +1506,12 @@ def _render_job_payload(
         lines.extend(
             ("", "Видео готово не полностью. Повтор загрузит только недостающие части.")
         )
-    actions = []
-    if state in _CANCELLABLE_JOB_STATES:
-        actions.append(_button(
-            "✖️ Отменить",
-            f"mp:{_job_route('job-cancel', job_id, page, filter_code)}",
-        ))
-    elif state in _RETRYABLE_JOB_STATES:
-        actions.append(_button(
-            "🔁 Повторить",
-            f"mp:{_job_route('job-retry', job_id, page, filter_code)}",
-        ))
-    jobs = _filtered_jobs(
-        _sorted_jobs(ctx) if ctx is not None else [], filter_code
-    )
+    actions = [
+        _button(rule.label, f"mp:{_job_route(f'job-{action}', job_id, page, filter_code)}")
+        for action, rule in _JOB_ACTIONS.items()
+        if state in rule.states
+    ]
+    jobs = _filtered_jobs(jobs, filter_code)
     jobs, page, _ = _page(jobs, page, _DOWNLOADS_PAGE_SIZE)
     routes = [
         _job_route("job", str(job["id"]), page, filter_code)
@@ -1515,11 +1535,11 @@ def _render_job_payload(
 
 
 def render_job_cancelling_card(
-    ctx, job_id: str, page: int = 1, filter_code: str = "a"
+    payload: dict, job_id: str, page: int = 1, filter_code: str = "a"
 ) -> MediaPanelCard:
-    """Render the regular job card with an immediate optimistic cancel state."""
-    return _render_job_detail(
-        ctx,
+    """Render an optimistic state from the already verified job snapshot."""
+    return _render_job_payload(
+        payload,
         job_id,
         page,
         filter_code,
@@ -1568,7 +1588,6 @@ def render_job_cancel_error_card(
         _render_job_detail(ctx, job_id, page, filter_code)
         if ctx is not None
         else _render_job_payload(
-            None,
             {"id": job_id, "state": "cancel_requested", "title": "Загрузка"},
             job_id,
             page,
@@ -1613,19 +1632,20 @@ def _business_action_callback(action: str, job_id: str, payload: dict) -> str:
     return f"ma:{action}:{job_id}:{generation}"
 
 
-def _render_job_cancel_confirmation(
-    ctx, job_id: str, page: int = 1, filter_code: str = "a"
+def _render_job_confirmation(
+    ctx, action: str, job_id: str, page: int = 1, filter_code: str = "a"
 ) -> MediaPanelCard:
+    rule = _JOB_ACTIONS[action]
     payload = _command_payload(ctx, "mcp__media_admin__media_job_get", {"job_id": job_id})
     state = str(payload.get("state") or "")
-    detail = _render_job_payload(ctx, payload, job_id, page, filter_code)
-    if state not in _CANCELLABLE_JOB_STATES:
+    detail = _render_job_payload(payload, job_id, page, filter_code, jobs=_sorted_jobs(ctx))
+    if state not in rule.states:
         return _job_card_overlay(
             detail,
-            "ℹ️ <b>Отмена уже недоступна</b>",
+            rule.unavailable,
             footer="Состояние загрузки изменилось.",
         )
-    confirm_route = f"mp:{_job_route('job-cancel', job_id, page, filter_code)}"
+    confirm_route = f"mp:{_job_route(f'job-{action}', job_id, page, filter_code)}"
     buttons = tuple(
         (
             _button(
@@ -1633,8 +1653,8 @@ def _render_job_cancel_confirmation(
                 f"mp:{_job_route('job', job_id, page, filter_code)}",
             ),
             _button(
-                "✖️ Отменить",
-                _business_action_callback("cancel", job_id, payload),
+                rule.label,
+                _business_action_callback(action, job_id, payload),
             ),
         )
         if any(button.callback_data == confirm_route for button in row)
@@ -1643,44 +1663,8 @@ def _render_job_cancel_confirmation(
     )
     return _job_card_overlay(
         detail,
-        "⚠️ <b>Отменить загрузку?</b>",
-        footer="Временные файлы удалятся позже.",
-        buttons=buttons,
-    )
-
-
-def _render_job_retry_confirmation(
-    ctx, job_id: str, page: int = 1, filter_code: str = "a"
-) -> MediaPanelCard:
-    payload = _command_payload(ctx, "mcp__media_admin__media_job_get", {"job_id": job_id})
-    state = str(payload.get("state") or "")
-    detail = _render_job_payload(ctx, payload, job_id, page, filter_code)
-    if state not in _RETRYABLE_JOB_STATES:
-        return _job_card_overlay(
-            detail,
-            "ℹ️ <b>Повтор уже недоступен</b>",
-            footer="Состояние загрузки изменилось.",
-        )
-    confirm_route = f"mp:{_job_route('job-retry', job_id, page, filter_code)}"
-    buttons = tuple(
-        (
-            _button(
-                "↩️ К задаче",
-                f"mp:{_job_route('job', job_id, page, filter_code)}",
-            ),
-            _button(
-                "🔁 Повторить",
-                _business_action_callback("retry", job_id, payload),
-            ),
-        )
-        if any(button.callback_data == confirm_route for button in row)
-        else row
-        for row in detail.buttons
-    )
-    return _job_card_overlay(
-        detail,
-        "🔁 <b>Повторить загрузку?</b>",
-        footer="Будет создана новая попытка; предыдущая останется в истории.",
+        rule.question,
+        footer=rule.footer,
         buttons=buttons,
     )
 
@@ -2042,16 +2026,18 @@ def render_media_panel_card(ctx, route: str) -> MediaPanelCard:
             )
         if route.startswith("job-cancel:"):
             parts = route.split(":")
-            return _render_job_cancel_confirmation(
+            return _render_job_confirmation(
                 ctx,
+                "cancel",
                 parts[1],
                 int(parts[2]) if len(parts) > 2 else 1,
                 parts[3] if len(parts) > 3 else "a",
             )
         if route.startswith("job-retry:"):
             parts = route.split(":")
-            return _render_job_retry_confirmation(
+            return _render_job_confirmation(
                 ctx,
+                "retry",
                 parts[1],
                 int(parts[2]) if len(parts) > 2 else 1,
                 parts[3] if len(parts) > 3 else "a",

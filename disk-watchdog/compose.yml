@@ -25,4 +25,4 @@ services:
 
 secrets:
   telegram_bot_token:
-    file: ../hermes/secrets/primary.telegram_token
+    file: ${HERMES_PRIMARY_TELEGRAM_TOKEN_PATH:-../hermes/secrets/primary.telegram_token}

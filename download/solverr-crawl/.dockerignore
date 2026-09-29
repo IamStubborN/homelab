@@ -1,0 +1,7 @@
+**
+!Dockerfile
+!.dockerignore
+!src/
+!src/*.py
+!src/engines/
+!src/engines/*.py

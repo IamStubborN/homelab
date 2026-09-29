@@ -118,7 +118,7 @@ services:
       - DNS_SERVER=on
       - DNS_UPSTREAM_RESOLVERS=cloudflare,google
       # Allow TorrServer's shared VPN namespace to reach Traefik on the LAN.
-      - FIREWALL_OUTBOUND_SUBNETS=${LAN_SUBNET:-192.0.2.17/24}
+      - FIREWALL_OUTBOUND_SUBNETS=${LAN_SUBNET:-192.0.2.0/24}
       - BLOCK_MALICIOUS=off
       - DNS_UPSTREAM_IPV6=off
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
@@ -361,9 +361,13 @@ services:
   # Dedicated browser pool for JacRed crawl/ParseAll work.
   solverr-crawl:
     container_name: solverr-crawl
-    image: ghcr.io/unseensnick/solverr:latest
+    build:
+      context: ./solverr-crawl
+    image: homelab/solverr-crawl:20260926-admission
     restart: unless-stopped
-    cpus: "0.75"
+    # The crawl pool yields to interactive services and the network gateway.
+    cpus: "0.5"
+    cpu_shares: 256
     init: true
     security_opt:
       - no-new-privileges:true
@@ -375,9 +379,10 @@ services:
       - TZ=${TIMEZONE:-UTC}
       - BROWSER_LOCALE=en-US
       - MAX_TIMEOUT_MS=300000
-      - SESSION_TTL_MINUTES=15
-      - SESSION_MAX=4
-      - REAPER_INTERVAL_SECONDS=30
+      # Idle retention only; these values do not limit active browser concurrency.
+      - SESSION_TTL_MINUTES=5
+      - SESSION_MAX=2
+      - REAPER_INTERVAL_SECONDS=15
     expose:
       - "8191"
     shm_size: 1gb          # Chrome 152 на 512 МБ shm падает — вероятная причина сбоев Xvfb
@@ -389,13 +394,13 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,size=1g   # Xvfb держит сокет и lock в /tmp; 256 МБ и noexec мешали
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8191/ >/dev/null || exit 1"]
+      test: ["CMD", "curl", "-fsS", "--max-time", "5", "http://127.0.0.1:8191/health"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 90s
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.enable=false"
       - "deunhealth.restart.on.unhealthy=true"
       - "traefik.enable=false"
     networks:
@@ -423,7 +428,7 @@ services:
       - ${HOMELAB_ROOT:-/opt/homelab}:${HOMELAB_ROOT:-/opt/homelab}:ro
     entrypoint: ["sh", "/watch.sh"]
     healthcheck:
-      test: [CMD, pgrep, -f, "docker events.*container="]
+      test: [CMD, pgrep, -f, "docker events.*type=container"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -450,7 +455,7 @@ services:
       - ${HOMELAB_ROOT:-/opt/homelab}:${HOMELAB_ROOT:-/opt/homelab}:ro
     entrypoint: ["sh", "/watch.sh"]
     healthcheck:
-      test: [CMD, pgrep, -f, "docker events.*container="]
+      test: [CMD, pgrep, -f, "docker events.*type=container"]
       interval: 30s
       timeout: 5s
       retries: 3

@@ -9,6 +9,16 @@ http:
       service: api@internal
       priority: 1
 
+    # Keep legacy TorrServer hashes on its existing route; numeric Lampac
+    # session IDs isolate simultaneous browser viewers.
+    lampa-gst-sessions:
+      rule: "Host(`lampa.${DOCKER_DOMAIN}`) && (PathRegexp(`^/gst/[0-9]{1,20}/`) || PathRegexp(`^/gst/(add|probe|start[.]m3u8|remove)$`) || Path(`/gst.js`))"
+      entryPoints: [https]
+      tls: {}
+      priority: 120
+      service: lampa@docker
+      middlewares: [lampa-forwarded@docker]
+
     homeassistant:
       rule: "Host(`homeassistant.${DOCKER_DOMAIN}`)"
       entryPoints:

@@ -1,7 +1,7 @@
 # OpenList
 
 Multi-storage file browser at `https://openlist.${DOCKER_DOMAIN}` (Traefik, no host ports).
-LAN-only on `*.docker.example.invalid` — primary file manager UI.
+LAN-only on `*.host-5.example.invalid.example.test` — primary file manager UI.
 
 ## Stack
 

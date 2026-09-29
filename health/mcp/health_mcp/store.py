@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from health_mcp.types import (
     MAX_CHART_POINTS,
     MAX_QUERY_LIMIT,
     MEASUREMENT_KINDS,
+    PERSONS,
     QUERY_SECTIONS,
     SECTION_TO_EVENT_TYPE,
     CashierError,
@@ -48,11 +50,17 @@ class WriteOutcome:
     outcome: str
     id: str | None = None
     existing_id: str | None = None
+    projection_pending: bool = False
 
-    def as_dict(self) -> dict[str, str]:
+    def as_dict(self) -> dict[str, str | bool]:
+        result: dict[str, str | bool] = {"outcome": self.outcome}
         if self.outcome == "duplicate":
-            return {"outcome": "duplicate", "existing_id": self.existing_id or ""}
-        return {"outcome": self.outcome, "id": self.id or ""}
+            result["existing_id"] = self.existing_id or ""
+        else:
+            result["id"] = self.id or ""
+        if self.projection_pending:
+            result["projection_pending"] = True
+        return result
 
 
 class WikiStore:
@@ -122,8 +130,7 @@ class WikiStore:
             )
             if outcome.outcome != "created":
                 raise CashierError("correction append failed")
-            generate.regenerate(self.root, self._active_ledger())
-        return WriteOutcome("updated", id=original["id"])
+            return self._with_projection(WriteOutcome("updated", id=original["id"]))
 
     def add_meal(
         self,
@@ -208,6 +215,7 @@ class WikiStore:
         started_at: str | None = None,
         status: str | None = None,
         confirmed: bool | None = None,
+        source_event_id: str | None = None,
     ) -> WriteOutcome:
         require_confirmation(confirmed)
         started = parse_optional_rfc3339(started_at, "started_at") or now_utc()
@@ -218,9 +226,10 @@ class WikiStore:
                 "dose": dose,
                 "schedule": schedule,
                 "started_at": format_rfc3339(started),
+                "source_event_id": validate_source_event_id(source_event_id),
             }
         )
-        return self._append("medication", event, "medication", dedup=False)
+        return self._append("medication", event, "medication", dedup=source_event_id is not None)
 
     def stop_medication(
         self,
@@ -261,8 +270,7 @@ class WikiStore:
                 }
             )
             self._append_locked("medication", resolved_person, event, "medication", dedup=False)
-            generate.regenerate(self.root, self._active_ledger())
-        return WriteOutcome("updated", id=self._root_id(events, current["id"]))
+            return self._with_projection(WriteOutcome("updated", id=self._root_id(events, current["id"])))
 
     def add_condition(
         self,
@@ -462,8 +470,19 @@ class WikiStore:
     ) -> WriteOutcome:
         with self._lock:
             outcome = self._append_locked(file_type, event["person"], event, event_type, dedup=dedup)
-            if outcome.outcome == "created":
-                generate.regenerate(self.root, self._active_ledger())
+            return self._with_projection(outcome)
+
+    def _with_projection(self, outcome: WriteOutcome) -> WriteOutcome:
+        # The journal write has committed. A rebuild failure must not turn it
+        # into a failed mutation that a caller retries as a new health event.
+        # Duplicate retries also rebuild, repairing a previous projection error.
+        try:
+            generate.regenerate(self.root, self._active_ledger())
+        except Exception as error:
+            logging.getLogger(__name__).warning(
+                "Health journal committed; projection rebuild pending (%s)", type(error).__name__
+            )
+            return replace(outcome, projection_pending=True)
         return outcome
 
     def _append_locked(
@@ -507,13 +526,13 @@ class WikiStore:
         if person:
             return self._read_file_locked(person, file_type)
         rows: list[dict[str, Any]] = []
-        for name in ("primary", "secondary"):
+        for name in PERSONS:
             rows.extend(self._read_file_locked(name, file_type))
         return rows
 
     def _active_ledger(self) -> dict[str, dict[str, list[dict[str, Any]]]]:
         ledger: dict[str, dict[str, list[dict[str, Any]]]] = {}
-        for person in ("primary", "secondary"):
+        for person in PERSONS:
             by_type: dict[str, list[dict[str, Any]]] = {}
             for file_type in JSONL_FILES:
                 by_type[file_type] = resolve_active(self._read_file_locked(person, file_type))
@@ -529,14 +548,16 @@ class WikiStore:
     def _active_by_id(self, events: list[dict[str, Any]], event_id: str) -> dict[str, Any] | None:
         if self._find_by_id(events, event_id) is None:
             return None
-        root = self._root_id(events, event_id)
+        by_id = {event["id"]: event for event in events}
+        roots: dict[str, str] = {}
+        root = _root_id(by_id, event_id, roots)
         for event in resolve_active(events):
-            if self._root_id(events, event["id"]) == root:
+            if _root_id(by_id, event["id"], roots) == root:
                 return event
         return None
 
     def _root_id(self, events: list[dict[str, Any]], event_id: str) -> str:
-        return _root_id(events, event_id)
+        return _root_id({event["id"]: event for event in events}, event_id)
 
 
 def resolve_active(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -548,8 +569,9 @@ def resolve_active(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     }
     leaves = [event for event in events if event["id"] not in superseded]
     grouped: dict[str, list[dict[str, Any]]] = {}
+    roots: dict[str, str] = {}
     for event in leaves:
-        grouped.setdefault(_root_id(events, event["id"]), []).append(event)
+        grouped.setdefault(_root_id(by_id, event["id"], roots), []).append(event)
     active: list[dict[str, Any]] = []
     for group in grouped.values():
         group.sort(key=lambda event: (event.get("created_at") or "", event["id"]))
@@ -557,13 +579,23 @@ def resolve_active(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return active
 
 
-def _root_id(events: list[dict[str, Any]], event_id: str) -> str:
-    by_id = {event["id"]: event for event in events}
+def _root_id(
+    by_id: dict[str, dict[str, Any]], event_id: str, roots: dict[str, str] | None = None
+) -> str:
+    roots = roots if roots is not None else {}
     current = event_id
     seen: set[str] = set()
     while current in by_id and by_id[current].get("corrects") and current not in seen:
+        if current in roots:
+            current = roots[current]
+            break
         seen.add(current)
         current = by_id[current]["corrects"]
+    # Preserve existing cycle handling without caching a start-dependent root.
+    if current not in seen:
+        for ancestor in seen:
+            roots[ancestor] = current
+        roots[event_id] = current
     return current
 
 

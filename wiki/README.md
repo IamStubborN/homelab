@@ -56,7 +56,7 @@ Before first deploy. Do **not** run this from a Worker.
 SSH check (path must exist only after this gate):
 
 ```bash
-ssh docker.example.invalid 'ls -la /mnt/internal/wiki'
+ssh host-5.example.invalid.example.test 'ls -la /mnt/internal/wiki'
 ```
 
 On host-5.example.invalid:
@@ -209,7 +209,7 @@ Headless authorize: <https://rclone.org/remote_setup/>.
    Alternative: SSH tunnel and answer `Y` in the container:
 
    ```bash
-   ssh -L 53682:127.0.0.1:53682 docker.example.invalid
+   ssh -L 53682:127.0.0.1:53682 host-5.example.invalid.example.test
    docker compose run --rm -it --user 10000:10000 -p 53682:53682 \
      --entrypoint rclone health-drive config
    ```

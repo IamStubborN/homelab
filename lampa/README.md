@@ -4,6 +4,27 @@ This module hosts the Lampa web client and Lampac NextGen online backend. The
 TorrServer module inside Lampac is deliberately disabled: torrent streaming
 uses the existing `torrserver` service from `download/compose.yml`.
 
+## Playback paths
+
+- Torrent search uses JacRed at the same-origin `/jacred` endpoint. The
+  bootstrap clears obsolete Prowlarr settings and uses an empty JacRed key;
+  it does not inject a Prowlarr API key.
+- Browser and embedded-player playback uses Lampac's own GStreamer module
+  (`localGST`). It reads the source from the external TorrServer at
+  `http://gluetun-torrserver:8090/stream/` and creates a separate numeric GST
+  session for each viewer. AVI is decoded and encoded to H.264; supported
+  MKV/WebM video codecs remain in copy mode unless explicitly configured otherwise.
+- External Android players receive the direct TorrServer stream. The external
+  TorrServer also has its own GStreamer backend (`externalTorrServer`); its GPU
+  configuration is independent of Lampac's. Enabling that backend does not give
+  Lampac access to the GPU.
+
+The Traefik file-provider `lampa-gst-sessions` route sends Lampac's session
+creation, numeric session, probe, heartbeat, removal, and plugin paths to
+`lampa@docker` with priority 120. Legacy TorrServer hash-based `/gst/` paths
+retain the priority-101 route to TorrServer. Do not redirect every `/gst/` path
+to a single backend.
+
 ## Runtime setup
 
 Create the ignored root-password file on the Docker host before starting the
@@ -31,15 +52,108 @@ https://lampa.${DOCKER_DOMAIN}/
 On first load the client is configured to use same-origin paths:
 
 - `/torrserver` → the existing TorrServer;
-- `/prowlarr` → the existing Prowlarr;
+- `/jacred` → JacRed torrent search;
 - `/online.js` → Lampac online and anime providers.
 
 The server-side bootstrap also enables Lampac's built-in Dorama section.
 
-The Prowlarr API key is injected into the live server-side bootstrap from the
-existing Prowlarr configuration. It is not stored in this repository or
-entered on the TV. The bootstrap also sets the parser mode and both local
-service URLs on every Lampa start.
+The bootstrap sets the parser mode and local service URLs on every Lampa start.
+
+## Intel runtime and updates
+
+`runtime/Dockerfile` extends `ghcr.io/lampac-nextgen/lampac:latest` with the Intel
+VA driver and VPL GPU runtime. Upstream includes the GStreamer QSV plugin and
+VPL dispatcher, but the inspected image lacks these driver/runtime packages.
+Lampac's hardware backend selects `qsvh264enc` after a successful startup probe;
+VA-API support in another container is not sufficient.
+
+The managed application and modules remain upstream. The image rebuilds
+`libe_sqlite3.so` with local symbol binding (`-Bsymbolic`) so a globally loaded
+system SQLite cannot interpose incompatible WAL callbacks. The build verifies
+the SQLite source ID and compile options against the bundled library and stops
+if upstream changes either; review the pinned amalgamation before updating it.
+The isolated native regression is in `runtime/tests/sqlite_interposition.py`.
+
+The Compose service exposes `/dev/dri/renderD128` and selects the `iHD` driver.
+The device must be readable and writable by Lampac's UID 1000 or one of its
+supplementary groups. The current deployment's render device is owned by UID
+1000; recheck permissions if the host changes.
+
+The derived image is also tagged `latest`, but upstream updates require an
+explicit rebuild. Use the [controlled update workflow](UPDATE.md) to stage a
+separately tagged candidate, check isolated startup, and retain a rollback
+checkpoint before applying it in an idle maintenance window. The CLI is manual;
+it does not detect viewers or schedule restarts. Watchtower is disabled for this
+service because it cannot rebuild a derived image. No automatic rebuild pipeline
+is installed.
+
+## Runtime safeguards and logs
+
+The browser GST plugin bounds recovery to 180 seconds, including hls.js loader
+retries. Init segments do not count as successful playback. A terminal error
+releases the owned server task and cancels its heartbeat, track probe and pending
+restoration. Explicit Lampa pauses survive recovery even at 0:00; the initial
+paused state of a video that has not started is not treated as a user pause.
+Task discovery records a validated redirect ID even when the manifest response
+fails. On release, its original in-flight lookup may finish within its 90-second
+deadline solely to remove that owned task; no new start request is issued.
+If a network failure hides the ID entirely, safe targeted removal is impossible
+and the backend's inactivity handling remains the fallback. Invalid GST
+manifests are reported as errors, never retried as native raw-video playback.
+Plugin changes require reloading the client, not restarting Lampac.
+
+`cpu_shares: 2048` gives playback relative CPU priority under contention.
+There is no hard CPU, memory, or PID cap without measurements of concurrent
+playback peaks. GST retains the existing 96 MiB forward and 32 MiB backward
+segment-cache budgets per session, and freezes pipelines after five inactive
+minutes. `maxTasks` stays at zero because a positive limit evicts an existing
+session. Software fallback uses `x264Ultrafast`; hardware encoding ignores
+this setting. These cache budgets do not bound all native or .NET memory.
+
+`serilog: true` writes structured errors, including GST task/segment context,
+to the private `logs/` bind mount. Lampac rolls files daily and retains 14 files.
+The host `lampac-logrotate.timer` checks `app-*.log` every minute and copies and
+truncates files larger than 10 MiB, keeping two archives per daily file with
+delayed compression. Only generated `app-*.log.[0-9]*` archive files older than
+14 days are expired, without following directory symlinks. This is approximately
+420 MiB before compression across 14 daily files, plus growth between checks;
+it is not a strict instantaneous quota. The private log directory is validated
+before installation, and the timer refuses a symlink at that path.
+Docker console logs use the `local` driver with three 10 MiB files.
+Treat logs as private runtime data: upstream errors can contain source URLs
+and viewer identifiers. Do not commit or publish them.
+
+The HTTP healthcheck requests `/version?type=hash` with a three-second timeout.
+It verifies the HTTP application, not GPU functionality or an individual stream.
+
+Before deployment, back up the current Compose/configuration and application
+state, create `logs/` with mode 0700 and ownership matching Lampac, verify the
+render-device permissions, and validate the complete Compose model with the
+deployment environment. Build first; recreate only `lampa` in an agreed playback
+window. Recreation interrupts its active GST sessions. Rebuilding the image
+alone does not change the running container. The host log policy and systemd
+units in this directory must be installed on the Docker host separately.
+
+Render the templates on the Docker host with `envsubst` (from `gettext-base`).
+Use that host's deployment directory and account; the values below are examples.
+Keep rendered files in `/etc`, outside the repository:
+
+```bash
+export HOMELAB_ROOT=/srv/homelab DEPLOY_USER=homelab
+export DEPLOY_GROUP="$(id -gn "$DEPLOY_USER")"
+test ! -L "$HOMELAB_ROOT/lampa/logs"
+sudo install -d -m 0700 -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" "$HOMELAB_ROOT/lampa/logs"
+test "$(readlink -f "$HOMELAB_ROOT/lampa/logs")" = "$HOMELAB_ROOT/lampa/logs"
+envsubst '${HOMELAB_ROOT} ${DEPLOY_USER} ${DEPLOY_GROUP}' < lampa/logrotate.conf.in |
+  sudo tee /etc/logrotate-lampac.conf >/dev/null
+envsubst '${HOMELAB_ROOT}' < lampa/lampac-logrotate.service.in |
+  sudo tee /etc/systemd/system/lampac-logrotate.service >/dev/null
+sudo install -m 0644 lampa/lampac-logrotate.timer /etc/systemd/system/
+sudo logrotate --debug --state /var/lib/logrotate/lampac.status /etc/logrotate-lampac.conf
+sudo systemd-analyze verify /etc/systemd/system/lampac-logrotate.service /etc/systemd/system/lampac-logrotate.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now lampac-logrotate.timer
+```
 
 ## Verification
 

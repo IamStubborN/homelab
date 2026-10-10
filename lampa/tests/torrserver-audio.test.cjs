@@ -39,6 +39,11 @@ function createVideo() {
     addEventListener: events.follow, removeEventListener: events.remove,
     fire: events.send,
     pause() { this.paused = true; },
+    play() {
+      this.paused = false;
+      this.fire('play');
+      if (!this.paused && this.readyState >= 3) this.fire('playing');
+    },
   };
 }
 
@@ -48,10 +53,32 @@ function harness(t, storage = new Map(), { android = false } = {}) {
   let audioMenu = [];
   let subtitles = [];
   let selectedSubtitle = -1;
+  let waiting = false;
   const pending = [];
   const requests = [];
   const timers = new Map();
   const loads = [];
+  const playingStates = [];
+  const hlsInstances = [];
+  class TestHls {
+    static Events = {
+      ERROR: 'error', MANIFEST_LOADING: 'manifestLoading',
+      FRAG_LOADING: 'fragLoading', FRAG_BUFFERED: 'fragBuffered',
+    };
+    static ErrorTypes = { NETWORK_ERROR: 'networkError' };
+    constructor(config) { this.config = config; this.listeners = new Map(); this.sources = []; this.stops = 0; }
+    on(event, callback, context) {
+      if (!this.listeners.has(event)) this.listeners.set(event, []);
+      this.listeners.get(event).push({ callback, context });
+    }
+    trigger(event, data = {}) {
+      for (const { callback, context } of this.listeners.get(event) || []) callback.call(context || this, event, data);
+    }
+    loadSource(url) { this.sources.push(url); }
+    startLoad(position) { this.startPosition = position; }
+    stopLoad() { this.stops++; }
+    destroy() {}
+  }
   let timerId = 0;
   const player = subscription(), playerVideo = subscription(), panel = subscription();
   const Lampa = {
@@ -66,8 +93,18 @@ function harness(t, storage = new Map(), { android = false } = {}) {
     PlayerVideo: {
       listener: playerVideo, video: () => video,
       destroy(savemeta) { selectedSubtitle = -1; subtitles = []; playerVideo.send('destroy', { savemeta }); },
-      url(url) { loads.push(url); video = createVideo(); video.readyState = 0; video.paused = true; },
-      pause: () => video.pause(), play: () => { video.paused = false; },
+      url(url) {
+        loads.push(url); video = createVideo(); video.readyState = 0; video.paused = true;
+        // Match native PlayerVideo: url/waiting set the loader; only playing
+        // clears it, and playpause refuses user input while it is set.
+        waiting = true;
+        video.addEventListener('playing', () => {
+          waiting = false;
+          playingStates.push({ muted: video.muted, currentTime: video.currentTime });
+        });
+      },
+      pause: () => video.pause(), play: () => video.play(),
+      playpause() { if (!waiting) video.paused ? video.play() : video.pause(); },
       subsview() {},
     },
     PlayerPanel: { listener: panel, setTracks: value => { audioMenu = value; }, setSubs: value => { subtitles = value; } },
@@ -82,12 +119,32 @@ function harness(t, storage = new Map(), { android = false } = {}) {
     setTimeout(fn, delay) { timers.set(++timerId, {fn, delay}); return timerId; },
     clearTimeout(id) { timers.delete(id); },
     window: {
+      Hls: TestHls,
       location: { origin: 'https://lampa.test', href: 'https://lampa.test/' },
       localStorage: browserStorage,
       fetch(url, options) {
         requests.push({url, options});
         if (/\/(?:heartbeat|remove)(?:\?|$)/.test(url)) return Promise.resolve({ok: true});
-        return new Promise(resolve => pending.push({ url, options, resolve }));
+        return new Promise((resolve, reject) => {
+          const signal = options?.signal;
+          const request = {
+            url, options,
+            resolve(response) {
+              signal?.removeEventListener('abort', abort);
+              resolve(response);
+            },
+          };
+          function abort() {
+            const index = pending.indexOf(request);
+            if (index !== -1) pending.splice(index, 1);
+            const error = new Error('The operation was aborted');
+            error.name = 'AbortError';
+            reject(error);
+          }
+          pending.push(request);
+          if (signal?.aborted) abort();
+          else signal?.addEventListener('abort', abort, { once: true });
+        });
       },
     },
   };
@@ -99,10 +156,36 @@ function harness(t, storage = new Map(), { android = false } = {}) {
     work = false;
     player.send('destroy');
   }
-  t.after(() => { destroy(); assert.equal(timers.size, 0, 'no pending plugin timers after destroy'); });
+  t.after(async () => {
+    for (const hls of hlsInstances) hls.destroy();
+    destroy();
+    await new Promise(setImmediate);
+    // Closing playback preserves only bounded ownership lookups: a late
+    // redirect can identify an already-created task that still needs removal.
+    const discoveries = pending.filter(item => new URL(item.url).pathname === '/gst/start.m3u8');
+    assert.equal(timers.size, discoveries.length, 'only pending ownership deadlines may survive close');
+    assert.ok([...timers.values()].every(timer => timer.delay === 90000), 'all surviving lookups are bounded to 90 seconds');
+    const before = requests.length;
+    for (const [id, timer] of [...timers]) {
+      timers.delete(id);
+      timer.fn();
+    }
+    await new Promise(setImmediate);
+    assert.ok(discoveries.every(item => item.options.signal.aborted), 'expired lookups must abort their requests');
+    assert.equal(requests.length, before, 'closed playback must not create new tasks or heartbeats');
+    assert.equal(pending.length, 0, 'no pending requests after ownership deadlines');
+    assert.equal(timers.size, 0, 'no pending plugin timers after ownership deadlines');
+  });
 
   return {
-    loads, storage, requests, destroy,
+    loads, storage, requests, destroy, playingStates,
+    createHls() {
+      const hls = new context.window.Hls({});
+      hls.media = video;
+      hlsInstances.push(hls);
+      return hls;
+    },
+    explicitPause() { video.pause(); playerVideo.send('pause'); },
     fireTimer(delay) {
       const timer = [...timers].find(([, value]) => value.delay === delay);
       assert.ok(timer, `timer ${delay} is scheduled`);
@@ -164,7 +247,18 @@ function harness(t, storage = new Map(), { android = false } = {}) {
       if (chosen) { chosen.mode = 'showing'; chosen.selected = true; }
       panel.send('subsview', { status: Boolean(chosen) });
     },
-    ready() { video.readyState = 1; video.fire('loadedmetadata'); video.fire('canplay'); },
+    ready() {
+      video.readyState = 3;
+      video.fire('loadedmetadata');
+      video.fire('canplay');
+      for (const [id, timer] of [...timers]) {
+        if (timer.delay !== 0) continue;
+        timers.delete(id);
+        timer.fn();
+      }
+    },
+    waiting: () => waiting,
+    userPlayPause: () => Lampa.PlayerVideo.playpause(),
     audioIndex: () => Number(new URL(work.url).searchParams.get('audio') || 0),
     subtitleTitle: () => subtitles.find(item => item.mode === 'showing')?.label ?? null,
     currentVideo: () => video,
@@ -180,6 +274,95 @@ async function selectFirstEpisode(h, subtitle = 'Russian') {
   h.emitSubtitles(firstEpisode);
   h.chooseSubtitle(subtitle);
 }
+
+test('HLS loader retries end at one terminal deadline and release the owned task', async t => {
+  const h = harness(t);
+  h.start(1, 'same-torrent', true);
+  await h.task('501');
+  const hls = h.createHls();
+  const errors = [];
+  hls.on('error', (name, error) => errors.push(error));
+  hls.trigger('manifestLoading');
+  hls.trigger('error', { type: 'networkError', details: 'manifestLoadTimeOut', fatal: false });
+  h.fireTimer(180000);
+  assert.equal(errors.at(-1).fatal, true);
+  assert.equal(hls.stops, 1);
+  assert.equal(h.requests.filter(r => new URL(r.url).pathname === '/gst/remove').length, 1);
+  assert.ok(h.pending.every(r => r.options.signal.aborted), 'terminal errors cancel track probes');
+});
+
+test('HLS init segments do not count as recovery and playable fragments do', t => {
+  const h = harness(t);
+  h.start(1, 'same-torrent', true);
+  const hls = h.createHls();
+  hls.trigger('manifestLoading');
+  hls.trigger('fragBuffered', { frag: { type: 'main', sn: 'initSegment' } });
+  h.fireTimer(180000);
+  assert.equal(hls.stops, 1, 'init segments leave the recovery deadline active');
+});
+
+test('HLS main fragment cancels the recovery deadline', t => {
+  const h = harness(t);
+  h.start(1, 'same-torrent', true);
+  const hls = h.createHls();
+  hls.trigger('manifestLoading');
+  hls.trigger('fragBuffered', { frag: { type: 'main', sn: 1 } });
+  assert.throws(() => h.fireTimer(180000), /timer 180000 is scheduled/);
+  assert.equal(hls.stops, 0);
+});
+
+test('fatal HLS retries are bounded and preserve an explicit pause at zero', t => {
+  const h = harness(t);
+  h.start(1, 'same-torrent', true);
+  h.explicitPause();
+  const hls = h.createHls();
+  const errors = [];
+  hls.on('error', (name, error) => errors.push(error));
+  const error = { type: 'networkError', details: 'manifestLoadError', fatal: true, response: { code: 503 } };
+  hls.trigger('error', { ...error });
+  assert.equal(errors.length, 0);
+  h.fireTimer(2000);
+  assert.equal(hls.sources.length, 1);
+  hls.media.play();
+  assert.equal(hls.media.paused, true, 'recovery must preserve the explicit pause at 0:00');
+  hls.trigger('error', { ...error });
+  h.fireTimer(4000);
+  hls.trigger('error', { ...error });
+  assert.equal(errors.length, 1, 'third fatal failure reaches the application');
+  assert.equal(hls.sources.length, 2);
+  assert.equal(hls.stops, 1);
+});
+
+test('invalid GST manifests report an error without the native raw-video fallback', t => {
+  const h = harness(t);
+  h.start(1, 'same-torrent', true);
+  const hls = h.createHls();
+  const errors = [];
+  hls.on('error', (name, error) => errors.push(error));
+  hls.trigger('error', { fatal: true, details: 'manifestParsingError', reason: 'no EXTM3U delimiter' });
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].reason, 'Invalid GST HLS manifest (no EXTM3U delimiter)');
+  assert.equal(hls.stops, 1);
+  assert.equal(hls.sources.length, 0);
+});
+
+test('paused audio replacement clears the native loader and can resume through the player controls', async t => {
+  const h = harness(t);
+  h.start();
+  await h.probe(firstEpisode);
+  Object.assign(h.currentVideo(), { currentTime: 30, paused: true, muted: false });
+  h.chooseAudio('Amediateka (Studio Band)');
+  assert.equal(h.waiting(), true);
+  h.ready();
+  assert.equal(h.currentVideo().currentTime, 30);
+  assert.equal(h.currentVideo().paused, true, 'a track change preserves the user pause');
+  assert.equal(h.currentVideo().muted, false, 'restore the original mute setting');
+  assert.equal(h.waiting(), false, 'a real playing event must clear the native loader before restoring pause');
+  assert.ok(h.playingStates.length, 'the replacement must become playable');
+  assert.ok(h.playingStates.every(state => state.muted && state.currentTime === 30), 'the paused handoff must stay silent at the saved position');
+  h.userPlayPause();
+  assert.equal(h.currentVideo().paused, false, 'native playpause must accept input after the track switch');
+});
 
 test('next episode restores audio by metadata after its index changes', async t => {
   const h = harness(t);
@@ -393,14 +576,28 @@ test('late task discovery removes its own stale ID without touching current play
   await h.probe(firstEpisode, true);
   const stale = h.pending.find(r => new URL(r.url).pathname === '/gst/start.m3u8');
   h.start(2, 'same-torrent', true);
+  assert.equal(stale.options.signal.aborted, false, 'keep the bounded lookup alive to discover its stale task ID');
   await h.probe(reorderedEpisode, true);
   await h.task('302', h.pending.find(r => r !== stale && new URL(r.url).pathname === '/gst/start.m3u8'));
   await h.task('301', stale);
-  assert.equal(stale.options.signal.aborted, true);
+  assert.equal(stale.options.signal.aborted, false, 'the completed lookup does not need cancellation');
   assert.equal(h.requests.filter(r => new URL(r.url).searchParams.get('id') === '301').length, 1);
   assert.equal(h.requests.filter(r => new URL(r.url).searchParams.get('id') === '302').length, 0);
   h.fireTimer(20000);
   assert.equal(new URL(h.requests.at(-1).url).pathname, '/gst/302/heartbeat');
+});
+
+test('closing before the ownership redirect removes the late-created task without restarting playback', async t => {
+  const h = harness(t);
+  h.start(1, 'same-torrent', true);
+  await h.probe(firstEpisode, true);
+  const discovery = h.pending.find(r => new URL(r.url).pathname === '/gst/start.m3u8');
+  h.destroy();
+  assert.equal(discovery.options.signal.aborted, false, 'ownership lookup survives close until its bounded deadline');
+  await h.task('401', discovery);
+  assert.equal(h.requests.filter(r => new URL(r.url).pathname === '/gst/remove' && new URL(r.url).searchParams.get('id') === '401').length, 1);
+  assert.equal(h.requests.filter(r => new URL(r.url).pathname === '/gst/start.m3u8').length, 1, 'closing must not issue a replacement start');
+  assert.equal(h.requests.filter(r => /\/heartbeat$/.test(new URL(r.url).pathname)).length, 0);
 });
 
 test('ownership discovery has its own 90-second abort deadline', async t => {
@@ -408,7 +605,7 @@ test('ownership discovery has its own 90-second abort deadline', async t => {
   h.start(1, 'same-torrent', true);
   const discovery = h.pending.find(r => new URL(r.url).pathname === '/gst/start.m3u8');
   const probe = h.pending.find(r => new URL(r.url).pathname === '/gst/probe');
-  h.fireTimer(15000);
+  h.fireTimer(90000);
   assert.equal(probe.options.signal.aborted, true);
   assert.equal(discovery.options.signal.aborted, false);
   h.fireTimer(90000);

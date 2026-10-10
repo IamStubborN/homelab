@@ -1,5 +1,5 @@
 global:
-  sendAnonymousUsage: false 
+  sendAnonymousUsage: false
 
 api:
   dashboard: true
@@ -24,11 +24,14 @@ certificatesResolvers:
       storage: acme.json
       caServer: https://acme-v02.api.letsencrypt.org/directory
       dnsChallenge:
-        provider: cloudflare        
+        provider: cloudflare
+        # Port 53 is intercepted on this network, including authoritative queries.
         resolvers:
-          - "1.1.1.1:53"
-          - "1.0.0.1:53"
+          - "9.9.9.9:9953"
+          - "149.112.112.112:9953"
+        propagation:
+          disableANSChecks: true
+          requireAllRNS: true
 
 log:
   level: "INFO"
-  

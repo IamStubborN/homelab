@@ -6,6 +6,8 @@ var lampainit_invc = {};
 
   var readyForPlugins = false;
   var watchingPlayer = false;
+  var torrentServerChecked = false;
+  var checkingTorrentServer = false;
 
   function configureTorrentPlayer() {
     var android = Lampa.Platform && Lampa.Platform.is('android');
@@ -23,6 +25,22 @@ var lampainit_invc = {};
         if (event.name === 'player_torrent') configureTorrentPlayer();
       });
     }
+    if (!android || Lampa.Storage.field('player_torrent') !== 'inner') {
+      torrentServerChecked = false;
+      return;
+    }
+    if (!readyForPlugins || torrentServerChecked || checkingTorrentServer ||
+        !Lampa.Torserver || typeof Lampa.Torserver.connected !== 'function') return;
+    torrentServerChecked = true;
+    if (Lampa.Torserver.gstWork && Lampa.Torserver.gstWork()) return;
+    // Saved torrent hashes skip Lampa's connection check. Discover GStreamer
+    // once before playback, without repeatedly clearing TorServer's requests.
+    checkingTorrentServer = true;
+    Lampa.Torserver.connected(function () {
+      checkingTorrentServer = false;
+    }, function () {
+      checkingTorrentServer = false;
+    });
   }
 
   function applyRuntimeSettings() {

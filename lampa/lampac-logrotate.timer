@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Lampac error log sizes every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Unit=lampac-logrotate.service
+
+[Install]
+WantedBy=timers.target

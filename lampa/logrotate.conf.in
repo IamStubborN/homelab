@@ -1,0 +1,10 @@
+${HOMELAB_ROOT}/lampa/logs/app-*.log {
+    su ${DEPLOY_USER} ${DEPLOY_GROUP}
+    size 10M
+    rotate 2
+    compress
+    delaycompress
+    copytruncate
+    missingok
+    notifempty
+}

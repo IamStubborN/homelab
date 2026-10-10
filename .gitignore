@@ -89,6 +89,7 @@ download/torrserver/*
 jacred/data/
 jacred/config/init.yaml
 jacred/config/init.yaml.bak*
+jacred/config/init.yaml.before-*
 # Legacy host-local configuration copies may contain API keys.
 jacred/init.yaml
 lampa/init.conf
@@ -117,6 +118,7 @@ zeroclaw/state/
 zeroclaw/tools/
 
 # Home Assistant runtime and sensitive storage
+homeassistant/config-backup-*.tar.gz
 homeassistant/config/.cloud/
 homeassistant/config/.storage/
 homeassistant/config/.cache/

@@ -18,7 +18,7 @@ with the documented Docker Compose or guarded media deployment commands.
 - qBittorrent and Prowlarr
 - Plex, Kavita, Samba, OpenList, Watchtower, DeUnhealth
 - Media Orchestrator with a dedicated Rezka VPN, managed by the root Compose project
-- KaraKeep, Freedium, Movie Tracker, Glance, Speedtest Tracker
+- KaraKeep, Freedium, Movie Tracker, Glance
 - Bitwarden (Vaultwarden), Mosquitto, RustDesk
 - OpenCode Go for household chat, NVIDIA embeddings for KaraKeep
 - Family Health Python MCP cashier (jsonl under `/mnt/internal/wiki/shared/health`)
@@ -47,7 +47,6 @@ Fill real values only in ignored local files:
 
 - `.env`
 - `glance/.env`
-- `speedtest-tracker/.env`
 - `traefik/secrets/cf_dns_api_token`
 - `download/secrets/protonvpn_wireguard_private_key`
 - `download/secrets/protonvpn_wireguard_private_key_torrserver`

@@ -46,9 +46,6 @@ pages:
                   - title: Home Assistant
                     url: https://homeassistant.${DOCKER_DOMAIN}/
                     icon: si:homeassistant
-                  - title: Speedtest
-                    url: https://speedtest.${DOCKER_DOMAIN}/
-                    icon: si:speedtest
 
               - title: Media
                 color: 42 72 43
@@ -254,88 +251,6 @@ pages:
                   </div>
 
           - type: custom-api
-            title: Internet Speed
-            title-url: ${SPEEDTEST_URL}
-            cache: 1h
-            url: ${SPEEDTEST_URL}/api/v1/results/latest
-            headers:
-              Authorization: Bearer ${SPEEDTEST_TRACKER_API_TOKEN}
-              Accept: application/json
-            subrequests:
-              stats:
-                url: ${SPEEDTEST_URL}/api/v1/stats
-                headers:
-                  Authorization: Bearer ${SPEEDTEST_TRACKER_API_TOKEN}
-                  Accept: application/json
-            template: |
-              {{ $stats := .Subrequest "stats" }}
-              {{ $downloadChange := percentChange (.JSON.Float "data.download_bits") ($stats.JSON.Float "data.download.avg_bits") }}
-              {{ $uploadChange := percentChange (.JSON.Float "data.upload_bits") ($stats.JSON.Float "data.upload.avg_bits") }}
-              {{ $pingChange := percentChange (.JSON.Float "data.ping") ($stats.JSON.Float "data.ping.avg") }}
-              <div class="speed-meta">{{ .JSON.String "data.data.server.location" }}, {{ .JSON.String "data.data.server.country" }} · {{ .JSON.String "data.data.interface.externalIp" }}</div>
-              <div class="speed-grid">
-                <div>
-                  <div class="size-small {{ if gt $downloadChange 0.0 }}color-positive{{ else if lt $downloadChange 0.0 }}color-negative{{ else }}color-primary{{ end }}">{{ $downloadChange | printf "%+.1f%%" }}</div>
-                  <div class="color-highlight size-h3">{{ .JSON.Float "data.download_bits" | mul 0.000001 | printf "%.1f" }}</div>
-                  <div class="size-h6">Mbps down</div>
-                </div>
-                <div>
-                  <div class="size-small {{ if gt $uploadChange 0.0 }}color-positive{{ else if lt $uploadChange 0.0 }}color-negative{{ else }}color-primary{{ end }}">{{ $uploadChange | printf "%+.1f%%" }}</div>
-                  <div class="color-highlight size-h3">{{ .JSON.Float "data.upload_bits" | mul 0.000001 | printf "%.1f" }}</div>
-                  <div class="size-h6">Mbps up</div>
-                </div>
-                <div>
-                  <div class="size-small {{ if gt $pingChange 0.0 }}color-negative{{ else if lt $pingChange 0.0 }}color-positive{{ else }}color-primary{{ end }}">{{ $pingChange | printf "%+.1f%%" }}</div>
-                  <div class="color-highlight size-h3">{{ .JSON.Float "data.ping" | printf "%.0f" }}</div>
-                  <div class="size-h6">ms ping</div>
-                </div>
-              </div>
-
-          - type: custom-api
-            title: VPN Speed
-            title-url: ${SPEEDTEST_VPN_PUBLIC_URL}
-            cache: 1h
-            url: ${SPEEDTEST_VPN_URL}/api/v1/results/latest
-            headers:
-              Authorization: Bearer ${SPEEDTEST_TRACKER_API_TOKEN}
-              Accept: application/json
-            subrequests:
-              vpnInfo:
-                url: ${GLUETUN_CONTROL_URL}/v1/publicip/ip
-                headers:
-                  Accept: application/json
-                  X-API-Key: ${GLUETUN_CONTROL_API_KEY}
-              vpnStats:
-                url: ${SPEEDTEST_VPN_URL}/api/v1/stats
-                headers:
-                  Authorization: Bearer ${SPEEDTEST_TRACKER_API_TOKEN}
-                  Accept: application/json
-            template: |
-              {{ $vpnInfo := .Subrequest "vpnInfo" }}
-              {{ $vpnStats := .Subrequest "vpnStats" }}
-              {{ $vpnDownloadChange := percentChange (.JSON.Float "data.download_bits") ($vpnStats.JSON.Float "data.download.avg_bits") }}
-              {{ $vpnUploadChange := percentChange (.JSON.Float "data.upload_bits") ($vpnStats.JSON.Float "data.upload.avg_bits") }}
-              {{ $vpnPingChange := percentChange (.JSON.Float "data.ping") ($vpnStats.JSON.Float "data.ping.avg") }}
-              <div class="speed-meta">{{ $vpnInfo.JSON.String "city" }}, {{ $vpnInfo.JSON.String "country" }} · {{ $vpnInfo.JSON.String "public_ip" }}</div>
-              <div class="speed-grid">
-                <div>
-                  <div class="size-small {{ if gt $vpnDownloadChange 0.0 }}color-positive{{ else if lt $vpnDownloadChange 0.0 }}color-negative{{ else }}color-primary{{ end }}">{{ $vpnDownloadChange | printf "%+.1f%%" }}</div>
-                  <div class="color-highlight size-h3">{{ .JSON.Float "data.download_bits" | mul 0.000001 | printf "%.1f" }}</div>
-                  <div class="size-h6">Mbps down</div>
-                </div>
-                <div>
-                  <div class="size-small {{ if gt $vpnUploadChange 0.0 }}color-positive{{ else if lt $vpnUploadChange 0.0 }}color-negative{{ else }}color-primary{{ end }}">{{ $vpnUploadChange | printf "%+.1f%%" }}</div>
-                  <div class="color-highlight size-h3">{{ .JSON.Float "data.upload_bits" | mul 0.000001 | printf "%.1f" }}</div>
-                  <div class="size-h6">Mbps up</div>
-                </div>
-                <div>
-                  <div class="size-small {{ if gt $vpnPingChange 0.0 }}color-negative{{ else if lt $vpnPingChange 0.0 }}color-positive{{ else }}color-primary{{ end }}">{{ $vpnPingChange | printf "%+.1f%%" }}</div>
-                  <div class="color-highlight size-h3">{{ .JSON.Float "data.ping" | printf "%.0f" }}</div>
-                  <div class="size-h6">ms ping</div>
-                </div>
-              </div>
-
-          - type: custom-api
             title: Media Queue
             cache: 1m
             # Activates once the media-orchestrator profile is deployed (see
@@ -381,10 +296,6 @@ pages:
                 url: https://quad9.net/
                 icon: si:quad9
                 timeout: 5s
-              - title: Speedtest Tracker
-                url: https://speedtest.${DOCKER_DOMAIN}/
-                icon: si:speedtest
-                timeout: 5s
               - title: Codex
                 url: https://status.openai.com/
                 check-url: https://status.openai.com/api/v2/status.json
@@ -419,7 +330,6 @@ pages:
               - linuxserver/docker-qbittorrent
               - Prowlarr/Prowlarr
               - karakeep-app/karakeep
-              - alexjustesen/speedtest-tracker
 
   - name: Lab
     width: wide
@@ -478,14 +388,6 @@ pages:
                 timeout: 5s
                 alt-status-codes:
                   - 302
-              - title: Speedtest Tracker
-                url: https://speedtest.${DOCKER_DOMAIN}/
-                icon: si:speedtest
-                timeout: 5s
-              - title: VPN Speedtest
-                url: https://speedtest-vpn.${DOCKER_DOMAIN}/
-                icon: si:speedtest
-                timeout: 5s
               - title: Media Preview
                 url: https://media-preview.${DOCKER_DOMAIN}/
                 icon: si:plex
@@ -516,9 +418,6 @@ pages:
                   - title: Freedium
                     url: https://freedium.${DOCKER_DOMAIN}/
                     icon: si:medium
-                  - title: VPN Speedtest
-                    url: https://speedtest-vpn.${DOCKER_DOMAIN}/
-                    icon: si:speedtest
                   - title: Media Preview
                     url: https://media-preview.${DOCKER_DOMAIN}/
                     icon: si:plex

@@ -4,7 +4,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly LOCAL_BACKUP_DIR=/var/lib/vz/dump
-readonly REMOTE_ROOT='gdrive:Homelab Backups/Proxmox'
+readonly REMOTE_ROOT='homelab-backups:Proxmox'
 readonly LOCK_FILE=/run/lock/homelab-google-drive-backup.lock
 readonly RCLONE_BIND=0.0.0.0
 

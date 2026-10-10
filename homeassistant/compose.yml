@@ -5,6 +5,9 @@ services:
     restart: unless-stopped
     privileged: true
     network_mode: host
+    # Keep HA responsive when browser crawlers or media workloads saturate the
+    # small Docker host. This is a relative scheduler weight, not a CPU cap.
+    cpu_shares: 8192
     environment:
       TZ: ${TIMEZONE:-UTC}
     labels:

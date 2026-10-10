@@ -1,0 +1,11 @@
+[Unit]
+Description=Bound Lampac error log sizes
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/test -d ${HOMELAB_ROOT}/lampa/logs
+ExecStartPre=/usr/bin/test ! -L ${HOMELAB_ROOT}/lampa/logs
+ExecStart=/usr/sbin/logrotate --state /var/lib/logrotate/lampac.status /etc/logrotate-lampac.conf
+ExecStartPost=/usr/bin/find ${HOMELAB_ROOT}/lampa/logs -maxdepth 1 -type f -name app-*.log.[0-9]* -mtime +14 -delete
+Nice=19
+IOSchedulingClass=idle

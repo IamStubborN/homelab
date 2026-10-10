@@ -43,11 +43,6 @@ services:
       - "traefik.http.routers.qbittorrent.service=qbittorrent"
       - "traefik.http.routers.qbittorrent.rule=Host(`qbittorrent.${DOCKER_DOMAIN}`)"
       - "traefik.http.services.qbittorrent.loadbalancer.server.port=8400"
-      - "traefik.http.routers.speedtest-vpn.tls=true"
-      - "traefik.http.routers.speedtest-vpn.entrypoints=http,https"
-      - "traefik.http.routers.speedtest-vpn.service=speedtest-vpn"
-      - "traefik.http.routers.speedtest-vpn.rule=Host(`speedtest-vpn.${DOCKER_DOMAIN}`)"
-      - "traefik.http.services.speedtest-vpn.loadbalancer.server.port=80"
       - "deunhealth.restart.on.unhealthy=true"
     networks:
       - proxy
@@ -169,6 +164,7 @@ services:
     image: homelab/torrserver-gst:MatriX.145
     network_mode: 'service:gluetun-torrserver'
     restart: unless-stopped
+    cpu_shares: 2048
     security_opt:
       - no-new-privileges:true
     depends_on:
@@ -198,6 +194,7 @@ services:
       - /dev/dri/renderD128:/dev/dri/renderD128
     volumes:
       - ./torrserver/config:/opt/ts/config
+      - ./torrserver/log:/opt/ts/log
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8090/echo >/dev/null || exit 1"]
       interval: 30s
@@ -417,7 +414,7 @@ services:
         condition: service_healthy
     environment:
       - PARENT_CONTAINER=gluetun
-      - DEPENDENT_CONTAINERS=qbittorrent speedtest-tracker-vpn
+      - DEPENDENT_CONTAINERS=qbittorrent
       - HEALTH_TIMEOUT=120
       - SETTLE_DELAY=10
     labels:

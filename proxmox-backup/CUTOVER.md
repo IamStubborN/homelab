@@ -6,12 +6,11 @@ reboot checks have passed. After the reported Plex outage, Plex and all 59
 containers were confirmed healthy. The user forbids further production downtime;
 no additional production stop or reboot is part of this cutover.
 
-The targeted actual-data app restoration passed all 31 SQLite and three
-PostgreSQL checks with the documented recovery-only `search_path` workaround.
-The complete final cloud-to-guests-to-apps pipeline still has no acceptance
-receipt. Keep replacement timers and quarterly freshness disabled until that
-full run succeeds, temporary guests/storage are cleaned up, and cutover is
-explicitly released. No additional cloud backup job is part of this checklist.
+The custom isolated restore validator was retired after its October 4 run failed
+on a PostgreSQL restore condition. Its earlier targeted checks do not establish
+complete recovery acceptance. Keep replacement timers disabled until a new
+recovery acceptance procedure is agreed and the cutover is explicitly released.
+No additional cloud backup job is part of this checklist.
 
 Fresh post-reboot small exports were uploaded and downloaded back for checksum
 and content validation: OPNsense `2026_09_25-20_59_44` (38,285 bytes) and host
@@ -24,8 +23,8 @@ small archives of each type are retained. See [README](README.md) for hashes.
 
 At 18:45 UTC on September 25:
 
-- Daily apps, weekly PBS guests, weekly PBS maintenance and quarterly restoration
-  timers were disabled and inactive, with no persistent timestamp files.
+- Daily apps, weekly PBS guests and weekly PBS maintenance timers were disabled
+  and inactive, with no persistent timestamp files.
 - Legacy full OPNsense and Docker timers were enabled. Their last persistent
   triggers were September 20 at 04:00 UTC and September 6 at 05:00 UTC. Their next
   occurrences are September 27 at 04:00 UTC and October 4 at 05:00 UTC.
@@ -45,8 +44,8 @@ At 18:45 UTC on September 25:
   timezone, plus up to five minutes of random delay.
 
 PBS guest, cloud and maintenance services must be ordered after
-`pve-guests.service` before activation. Daily apps, monitoring and restoration
-already have that ordering. `After=` prevents a boot-time persistent catch-up
+`pve-guests.service` before activation. Daily apps and monitoring already have
+that ordering. `After=` prevents a boot-time persistent catch-up
 from racing guest startup; it does not prove guest application readiness.
 
 ## Intended schedule
@@ -61,35 +60,31 @@ The first-occurrence column assumes activation before September 26 at 02:20 UTC.
 | Host configuration, retained | `homelab-backup-host-config.timer` | Sunday 03:30 | 06:30 / 05:30 | September 27, 06:30 Sofia |
 | Full OPNsense + Docker + cloud | `homelab-pbs-guests.timer` | Sunday 04:30 | 07:30 / 06:30 | September 27, 07:30 Sofia |
 | PBS GC + restic maintenance | `homelab-pbs-maintenance.timer` | Sunday 09:00 | 12:00 / 11:00 | September 27, 12:00 Sofia |
-| Complete isolated restoration | `homelab-restore-validation.timer` | Jan/Apr/Jul/Oct 15, 08:00, +0–10 min | 11:00 / 10:00 | October 15, 11:00 Sofia |
 | Failure/freshness monitor, retained | `homelab-backup-monitor.timer` | Hourly, +0–5 min | Every hour, +0–5 min | Next hour |
 
 Systemd's default timer accuracy can add roughly another minute of scheduling
 coalescing. These are target windows, not exact-second start promises.
 
 All heavy wrappers share one lock. Daily apps wait for it for up to five hours.
-Scheduled restoration (`--run`) queues for up to two hours and fails with an
-alertable result if that deadline expires; only its read-only preflight uses
-exit 75 when the lock is busy. Weekly guests and maintenance can skip with exit
+Weekly guests and maintenance can skip with exit
 75 if another pipeline still owns the lock. This avoids overlap but means a
 delayed Sunday backup can cause that week's maintenance to be skipped. Freshness
 monitoring detects missed recovery points; maintenance is intentionally
 failure-only. No independent cloud timer should be added: cloud copying belongs
 to each successful backup pipeline.
 
-## Execution after final isolated acceptance is released
+## Execution after recovery acceptance is agreed
 
 Production reboot checks are already complete; do not repeat them. Run the
 following on Proxmox as root only after acceptance is released. First inspect
 receipts, service results,
 guest health and the next trigger times again. A passing upload alone is not a
-passing restoration. The quarterly receipt must come from the complete validator.
+passing restoration. Do not use the retired custom validator as acceptance evidence.
 
 ```sh
-systemctl show homelab-restore-validation.service -p ActiveState -p Result
 systemctl list-jobs --no-pager
 systemctl show homelab-backup-apps.service homelab-pbs-guests.service \
-  homelab-pbs-maintenance.service homelab-restore-validation.service -p Id -p After
+  homelab-pbs-maintenance.service -p Id -p After
 
 python3 - <<'PY'
 from datetime import datetime, timezone
@@ -98,7 +93,6 @@ from pathlib import Path
 receipts = {
     'daily-apps': (Path('/var/lib/homelab-backup-monitor/apps-success.json'), 50),
     'weekly-guests': (Path('/var/lib/homelab-backup-monitor/guests-success.json'), 194),
-    'quarterly-restore': (Path('/var/lib/homelab-backup/restore-validation/last-success.json'), 2306),
 }
 now = datetime.now(timezone.utc)
 for name, (path, maximum_hours) in receipts.items():
@@ -138,10 +132,6 @@ jobs.update({
         'success_file': '/var/lib/homelab-backup-monitor/guests-success.json',
         'max_age_hours': 194,
     },
-    'quarterly-restore': {
-        'success_file': '/var/lib/homelab-backup/restore-validation/last-success.json',
-        'max_age_hours': 2306,
-    },
 })
 assert all(name in jobs for name in ('opnsense-config', 'host-config', 'pbs-maintenance'))
 temporary = path.with_suffix('.new')
@@ -151,7 +141,7 @@ temporary.replace(path)
 PY
 
 systemctl enable --now homelab-backup-apps.timer homelab-pbs-guests.timer \
-  homelab-pbs-maintenance.timer homelab-restore-validation.timer
+  homelab-pbs-maintenance.timer
 
 flock -u 9
 exec 9>&-
@@ -162,7 +152,7 @@ systemctl show homelab-backup-monitor.service -p Result
 ```
 
 Read back the next triggers, disabled legacy timers, enabled replacement timers,
-six monitor jobs and healthy monitor result. Update `monitor.example.json` and
+five monitor jobs and healthy monitor result. Update `monitor.example.json` and
 README to the applied state and synchronize source files only after this succeeds.
 Do not change receipt timestamps to suppress real failures or delete legacy
 archives during this cutover.

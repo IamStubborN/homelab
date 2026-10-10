@@ -16,7 +16,9 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 45 3 * * 0 /usr/local/bin/run-job.sh maintenance-check http://jacred:9117/cron/maintenance/Check?mode=report 60
 # Resume incomplete checkpoints once nightly; do not add a daytime resume loop.
-10 0 * * * /usr/local/bin/run-job.sh parseall-resume http://jacred:9117/cron/maintenance/ResumeParseAll 60
+10 0 * * 1-6 /usr/local/bin/run-job.sh parseall-resume http://jacred:9117/cron/maintenance/ResumeParseAll 60
+# Sunday resumes after the UTC backup window, not before it overnight.
+10 14 * * 0 /usr/local/bin/run-job.sh parseall-resume http://jacred:9117/cron/maintenance/ResumeParseAll 60
 # Tracker refreshes: cheap recent-page fetches keep daytime search reasonably fresh.
 20 0 * * * /usr/local/bin/run-job.sh rutracker-parse http://jacred:9117/cron/rutracker/parse 3600
 35 1 * * 3 /usr/local/bin/run-job.sh rutracker-UpdateTasksParse http://jacred:9117/cron/rutracker/UpdateTasksParse 60

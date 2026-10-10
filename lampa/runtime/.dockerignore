@@ -1,0 +1,4 @@
+**
+!Dockerfile
+!verify-sqlite-build.py
+!.dockerignore

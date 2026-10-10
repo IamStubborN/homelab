@@ -1,0 +1,14 @@
+[Unit]
+Description=Record Watchtower image history and print bounded retention plan
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+UMask=0077
+# Substitute absolute paths; keep state outside the Git checkout.
+# Default is observation + dry-run. Add --apply ONLY after parent/operator review.
+ExecStart=/usr/bin/python3 @SCRIPT@ run --state @STATE@
+TimeoutStartSec=10min
+StandardOutput=journal
+StandardError=journal

@@ -2,7 +2,7 @@
 # Run inside CT 101; caller holds the shared Proxmox backup lock.
 set -Eeuo pipefail
 umask 077
-export RESTIC_REPOSITORY='rclone:gdrive:Homelab Backups/Backups/PBS'
+export RESTIC_REPOSITORY='rclone:homelab-backups:Backups/PBS'
 export RESTIC_PASSWORD_FILE=/etc/homelab-backup/pbs-pilot/restic-password
 export RESTIC_CACHE_DIR=/var/cache/restic-pbs-cloud
 install -d -m 700 -o root -g root "$RESTIC_CACHE_DIR"

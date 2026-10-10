@@ -8,6 +8,9 @@ services:
     environment:
       - CF_API_EMAIL=${CF_API_EMAIL}
       - CF_DNS_API_TOKEN_FILE=/run/secrets/cf_dns_api_token
+      # Recursive resolvers can cache a missing challenge for the zone's 1800s TTL.
+      - CLOUDFLARE_PROPAGATION_TIMEOUT=2100
+      - CLOUDFLARE_POLLING_INTERVAL=10
     secrets:
       - cf_dns_api_token
     networks:

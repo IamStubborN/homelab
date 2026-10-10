@@ -35,12 +35,14 @@ the restic password independently of the failed host/Drive archive.
 - PVE storage ID: `pbs-pilot`; native token `pve@pbs!pve` has datastore-scoped
   administration rights. Daily application token `apps@pbs!daily` has backup
   rights; ownership controls access to its own groups.
-- Restic repository: `rclone:gdrive:Homelab Backups/Backups/PBS`, tag
+- Restic repository: `rclone:homelab-backups:Backups/PBS`, tag
   `pbs-datastore`. It contains only `/mnt/datastore/homelab` and
   `/etc/proxmox-backup`; recovery-test staging outside `homelab` is excluded.
 - Root-only secrets on PVE and CT 101: `/etc/homelab-backup/pbs-pilot/`
   (`pve-token`, `apps-token`, `restic-password`). PVE also has `fingerprint`.
   The existing rclone OAuth configuration was copied privately into CT 101.
+  The `homelab-backups:` alias pins the parent Drive folder by its ID; it uses
+  the same repository as the historical name-based path, without copying data.
   The recovery-kit owner must preserve the restic password independently.
 
 `cloud-backup.sh` is installed as `/usr/local/sbin/pbs-pilot-cloud-backup` inside

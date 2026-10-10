@@ -5,8 +5,184 @@
   function installGstAudio() {
     if (Lampa.HomelabGstAudio || !Lampa.Player || !Lampa.PlayerVideo || !Lampa.PlayerPanel) return;
     var active = null;
+    var pausedWork = null;
     var generation = 0;
     var preferenceKey = 'homelab_gst_track_preferences';
+
+    function installHlsResilience() {
+      var BaseHls = window.Hls;
+      if (!BaseHls || BaseHls.homelabResilience) return;
+
+      function policy(firstByte, total, retries) {
+        return {default: {
+          maxTimeToFirstByteMs: firstByte, maxLoadTimeMs: total,
+          timeoutRetry: {maxNumRetry: retries, retryDelayMs: 1000, maxRetryDelayMs: 4000},
+          errorRetry: {maxNumRetry: retries, retryDelayMs: 1000, maxRetryDelayMs: 4000}
+        }};
+      }
+
+      function HomelabHls(config) {
+        var work = Lampa.Player.playdata();
+        var source = masterUrl(work);
+        if (!source || source.origin !== window.location.origin) return new BaseHls(config);
+
+        config = Object.assign({}, config);
+        // Lampa uses obsolete/misspelled options and a single XHR timeout.
+        // Let the installed hls.js loader enforce its per-resource policies.
+        delete config.manifestLoadTimeout;
+        delete config.manifestLoadMaxRetryTimeout;
+        delete config.xhrSetup;
+        config.manifestLoadPolicy = policy(90000, 90000, 2);
+        config.playlistLoadPolicy = policy(30000, 60000, 2);
+        config.fragLoadPolicy = policy(30000, 120000, 3);
+        var hls = new BaseHls(config);
+        var listen = hls.on.bind(hls);
+        var destroy = hls.destroy.bind(hls);
+        var retries = 0;
+        var timer = null;
+        var deadlineTimer = null;
+        var terminated = false;
+        var lastError = null;
+        var disposed = false;
+        var handled = new WeakSet();
+        var cancelPauseRestore = function () {};
+
+        function clearDeadline() {
+          clearTimeout(deadlineTimer);
+          deadlineTimer = null;
+        }
+
+        function finishFailure() {
+          if (disposed || terminated) return;
+          terminated = true;
+          clearDeadline();
+          clearTimeout(timer);
+          timer = null;
+          hls.stopLoad();
+          cancelPauseRestore();
+          // Also cancel a pending track probe/restore: it must not restart a
+          // stream after the application has received a terminal error.
+          if (active && active.work === work) clear();
+        }
+
+        function beginDeadline() {
+          if (disposed || terminated || deadlineTimer !== null) return;
+          // One deadline includes loader retries and task recreation. Only a
+          // buffered main fragment proves recovery, not another manifest load.
+          deadlineTimer = setTimeout(function () {
+            deadlineTimer = null;
+            if (disposed || Lampa.Player.playdata() !== work) return;
+            finishFailure();
+            hls.trigger(BaseHls.Events.ERROR, Object.assign({}, lastError || {
+              type: BaseHls.ErrorTypes.NETWORK_ERROR,
+              details: 'manifestLoadTimeOut'
+            }, {fatal: true}));
+          }, 180000);
+        }
+
+        listen(BaseHls.Events.MANIFEST_LOADING, beginDeadline);
+        listen(BaseHls.Events.FRAG_LOADING, function (name, data) {
+          if (data.frag && data.frag.type === 'main') beginDeadline();
+        });
+        listen(BaseHls.Events.FRAG_BUFFERED, function (name, data) {
+          // Init data contains no playable frames. Nor can a late buffer event
+          // prove recovery while a fatal-error restart is still pending.
+          if (!terminated && timer === null && data.frag &&
+              data.frag.type === 'main' && data.frag.sn !== 'initSegment') {
+            clearDeadline();
+            clearTimeout(timer);
+            timer = null;
+            retries = 0;
+            lastError = null;
+          }
+        });
+        listen(BaseHls.Events.ERROR, function (name, data) {
+          if (data.type === BaseHls.ErrorTypes.NETWORK_ERROR &&
+              /^(manifest|level|frag)Load(Error|TimeOut)$/.test(data.details)) {
+            lastError = data;
+            beginDeadline();
+          }
+        });
+
+        function recover(data) {
+          if (handled.has(data)) return true;
+          if (disposed || terminated || Lampa.Player.playdata() !== work || !data.fatal ||
+              data.type !== BaseHls.ErrorTypes.NETWORK_ERROR) return false;
+          var status = data.response && (data.response.code || data.response.status) || 0;
+          if (status && status !== 404 && status !== 408 && status !== 429 && status < 500) return false;
+          if (!/^(manifest|level|frag)Load(Error|TimeOut)$/.test(data.details)) return false;
+          if (timer !== null) { handled.add(data); return true; }
+          if (retries >= 2) return false;
+          handled.add(data);
+          retries++;
+          var reload = /^manifest/.test(data.details) || status === 404;
+          console.warn('Homelab HLS recovery:', data.details, 'HTTP', status, 'attempt', retries);
+          timer = setTimeout(function () {
+            timer = null;
+            if (disposed || terminated || Lampa.Player.playdata() !== work) return;
+            var position = hls.media && hls.media.currentTime || 0;
+            // A not-yet-started video is initially paused too. An explicit
+            // Lampa pause must survive even before metadata or the first frame.
+            var paused = hls.media && hls.media.paused &&
+              (pausedWork === work || position > 0);
+            if (reload) {
+              cancelPauseRestore();
+              if (paused && hls.media) {
+                var media = hls.media;
+                var keepPaused = function () { media.pause(); cancelPauseRestore(); };
+                media.addEventListener('play', keepPaused, {once: true});
+                cancelPauseRestore = function () { media.removeEventListener('play', keepPaused); };
+              }
+              hls.config.startPosition = position;
+              source = masterUrl(work);
+              if (!source) return;
+              if (work.homelab_torrent_hash && source.pathname === '/gst/start.m3u8') {
+                source.searchParams.set('uid', newSessionId());
+                work.url = source.href;
+              }
+              hls.loadSource(source.href);
+              if (active && active.work === work) ownStream(active, source);
+            } else hls.startLoad(position);
+          }, retries * 2000);
+          return true;
+        }
+
+        // Internal controller listeners are already registered by BaseHls.
+        // Only defer the application's fatal-error UI while recovering.
+        hls.on = function (event, callback, context) {
+          if (event !== BaseHls.Events.ERROR) return listen(event, callback, context);
+          return listen(event, function (name, data) {
+            if (!recover(data)) {
+              if (data.fatal && Lampa.Player.playdata() === work) finishFailure();
+              // Lampa treats this exact reason as a raw-video URL and starts
+              // native playback. Our GST endpoint is always HLS: report the
+              // parse error instead of restarting a released task unbounded.
+              if (data.fatal && data.details === 'manifestParsingError' &&
+                  data.reason === 'no EXTM3U delimiter') {
+                data = Object.assign({}, data, {
+                  reason: 'Invalid GST HLS manifest (no EXTM3U delimiter)'
+                });
+              }
+              callback.call(context || hls, name, data);
+            }
+          }, context);
+        };
+        hls.destroy = function () {
+          disposed = true;
+          clearTimeout(timer);
+          clearDeadline();
+          cancelPauseRestore();
+          return destroy();
+        };
+        return hls;
+      }
+      Object.setPrototypeOf(HomelabHls, BaseHls);
+      HomelabHls.prototype = BaseHls.prototype;
+      HomelabHls.homelabResilience = true;
+      window.Hls = HomelabHls;
+    }
+
+    installHlsResilience();
     function newSessionId() {
       // Each replacement gets its own task: a slow obsolete request must not
       // finish later and dispose the current episode/audio task on the server.
@@ -61,15 +237,17 @@
     }
 
     function ownStream(state, url) {
+      if (state.streamUrl === url.href && state.releaseStream) return;
       if (state.releaseStream) state.releaseStream();
       // Legacy TorrServer tasks are shared: never claim or delete them.
       if (!state.work.homelab_torrent_hash || url.pathname !== '/gst/start.m3u8') return;
       var controller = new AbortController();
+      var discoveryController = new AbortController();
       var id = null;
       var closed = false;
       var removed = false;
       var heartbeatTimer;
-      var discoveryTimer = setTimeout(function () { controller.abort(); }, 90000);
+      var discoveryTimer = setTimeout(function () { discoveryController.abort(); }, 90000);
       function remove() {
         if (!id || removed) return;
         removed = true;
@@ -79,11 +257,19 @@
       }
       function release() {
         closed = true;
-        clearTimeout(discoveryTimer);
         clearTimeout(heartbeatTimer);
         controller.abort();
+        // An in-flight redirect can still reveal an already-created task.
+        // Keep that one bounded lookup alive, without issuing another start.
+        if (id) {
+          clearTimeout(discoveryTimer);
+          discoveryController.abort();
+        }
         remove();
-        if (state.releaseStream === release) state.releaseStream = null;
+        if (state.releaseStream === release) {
+          state.releaseStream = null;
+          state.streamUrl = null;
+        }
       }
       function heartbeat() {
         if (closed || active !== state || state.releaseStream !== release) return;
@@ -92,15 +278,16 @@
         heartbeatTimer = setTimeout(heartbeat, 20000);
       }
       state.releaseStream = release;
+      state.streamUrl = url.href;
       // The player and this request use the same unique UID; Lampac deduplicates
       // creation. Its redirect identifies exactly the task owned by this stream.
-      window.fetch(url.href, {signal: controller.signal, cache: 'no-store'}).then(function (response) {
-        if (!response.ok) throw new Error('Task discovery failed');
+      window.fetch(url.href, {signal: discoveryController.signal, cache: 'no-store'}).then(function (response) {
         var resolved = new URL(response.url);
         var match = /^\/gst\/(\d+)\/master\.m3u8$/.exec(resolved.pathname);
         if (resolved.origin !== url.origin || !match) throw new Error('Unexpected task redirect');
         id = match[1];
         if (closed || active !== state || state.releaseStream !== release) return remove();
+        if (!response.ok) throw new Error('Task discovery failed');
         heartbeatTimer = setTimeout(heartbeat, 20000);
       }).catch(function (error) {
         if (error.name !== 'AbortError') console.warn('Homelab GST task:', error.message);
@@ -108,9 +295,11 @@
     }
 
     function preparePlayback(event) {
+      installHlsResilience();
       var work = event.data;
       var original = masterUrl(work);
       if (!original) return;
+      pausedWork = null;
       // hls.js preserves EXT-X-MEDIA subtitles. Lampa's native parser can
       // reduce a muxed-audio master to its video-only variant on Safari.
       work.hls_type = 'hlsjs';
@@ -177,39 +366,51 @@
       ownStream(state, url);
       var video = Lampa.PlayerVideo.video();
       var timer;
+      var pauseTimer;
       var restored = false;
       function valid() { return active === state && Lampa.PlayerVideo.video() === video; }
       function cleanup(keepSnapshot) {
         clearTimeout(timer);
+        clearTimeout(pauseTimer);
+        video.muted = saved.muted;
         if (keepSnapshot !== true && state.pendingPlayback === saved) state.pendingPlayback = null;
         video.removeEventListener('loadedmetadata', restoreTime);
         video.removeEventListener('canplay', finish);
-        video.removeEventListener('play', keepPaused);
+        video.removeEventListener('playing', keepPaused);
         video.removeEventListener('error', cleanup);
         if (state.cancelRestore === cleanup) state.cancelRestore = null;
       }
-      function keepPaused() { if (valid() && saved.paused) video.pause(); }
+      function keepPaused() {
+        if (!valid() || !saved.paused) return;
+        video.removeEventListener('playing', keepPaused);
+        // Native PlayerVideo clears its loading flag only on actual playing.
+        // Restore pause after its play Promise updates the controls; the
+        // handoff stays muted so switching a paused track emits no sound.
+        pauseTimer = setTimeout(function () {
+          if (!valid()) return cleanup();
+          Lampa.PlayerVideo.pause();
+          cleanup();
+        }, 0);
+      }
       function restoreTime() {
         if (!valid()) return cleanup();
         video.volume = saved.volume;
-        video.muted = saved.muted;
+        video.muted = saved.paused ? true : saved.muted;
         video.playbackRate = saved.rate;
         if (!restored && video.readyState >= 1) {
           try { video.currentTime = saved.time; restored = true; } catch (error) {}
         }
-        keepPaused();
       }
       function finish() {
         if (!valid()) return cleanup();
         restoreTime();
-        if (saved.paused) Lampa.PlayerVideo.pause();
-        else Lampa.PlayerVideo.play();
-        cleanup();
+        Lampa.PlayerVideo.play();
+        if (!saved.paused) cleanup();
       }
       state.cancelRestore = cleanup;
       video.addEventListener('loadedmetadata', restoreTime);
       video.addEventListener('canplay', finish);
-      video.addEventListener('play', keepPaused);
+      video.addEventListener('playing', keepPaused);
       video.addEventListener('error', cleanup);
       timer = setTimeout(cleanup, 60000);
       // Restore playback after a manual choice or a remembered episode preference.
@@ -231,7 +432,7 @@
       probe.pathname = probe.pathname.replace(/(?:master|start)\.m3u8$/, 'probe');
       probe.searchParams.delete('audio');
       probe.searchParams.delete('seconds');
-      state.probeTimeout = setTimeout(function () { state.abort.abort(); }, 15000);
+      state.probeTimeout = setTimeout(function () { state.abort.abort(); }, 90000);
       window.fetch(probe.href, {signal: state.abort.signal}).then(function (response) {
         if (!response.ok) throw new Error('GStreamer track probe failed');
         return response.json();
@@ -298,9 +499,20 @@
       var selected = (active.subtitles || []).find(function (sub) { return sub.mode === 'showing'; });
       if (selected) remember(active, 'subtitles', identity(selected));
     });
+    Lampa.PlayerVideo.listener.follow('pause', function () {
+      var work = Lampa.Player.playdata();
+      if (masterUrl(work)) pausedWork = work;
+    });
+    Lampa.PlayerVideo.listener.follow('play', function () {
+      var video = Lampa.PlayerVideo.video();
+      if (pausedWork === Lampa.Player.playdata() && video && !video.paused) pausedWork = null;
+    });
     Lampa.Player.listener.follow('create', preparePlayback);
     Lampa.Player.listener.follow('ready', installCurrent);
-    Lampa.Player.listener.follow('destroy', clear);
+    Lampa.Player.listener.follow('destroy', function () {
+      pausedWork = null;
+      clear();
+    });
     Lampa.HomelabGstAudio = {installCurrent: installCurrent};
   }
 

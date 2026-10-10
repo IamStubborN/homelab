@@ -5,20 +5,26 @@ import sys
 import time
 
 PORT = 5555
-TIMEOUT = 5
+TIMEOUT = 2.5
+ATTEMPTS = 2
+RETRY_DELAY = 0.2
 
 
-def send_command(ip: str, cmd: int, msg: dict) -> dict:
-    sn = str(int(time.time() * 1000))
+def send_command_once(ip: str, cmd: int, msg: dict, sn: str) -> dict:
     payload = {"cmd": cmd, "pv": 0, "sn": sn, "msg": msg}
     data = (json.dumps(payload, separators=(",", ":")) + "\r\n").encode()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        deadline = time.monotonic() + TIMEOUT
         sock.settimeout(TIMEOUT)
         sock.connect((ip, PORT))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise socket.timeout('command deadline expired during connection')
+        sock.settimeout(remaining)
         sock.sendall(data)
-        deadline = time.time() + TIMEOUT
         buffer = b""
-        while time.time() < deadline:
+        while (remaining := deadline - time.monotonic()) > 0:
+            sock.settimeout(remaining)
             raw = sock.recv(4096)
             if not raw:
                 break
@@ -34,8 +40,27 @@ def send_command(ip: str, cmd: int, msg: dict) -> dict:
     return {}
 
 
+def send_command(ip: str, cmd: int, msg: dict) -> dict:
+    # CozyLife devices occasionally accept the TCP connection but drop the
+    # response. Bound each attempt across connect, send and receive so retries
+    # take at most two timeout budgets plus the short retry delay.
+    for attempt in range(ATTEMPTS):
+        sn = str(int(time.time() * 1000))
+        try:
+            response = send_command_once(ip, cmd, msg, sn)
+        except (OSError, json.JSONDecodeError):
+            response = {}
+        if response:
+            return response
+        if attempt + 1 < ATTEMPTS:
+            time.sleep(RETRY_DELAY)
+    return {}
+
+
 def query(ip: str) -> bool:
     state = send_command(ip, 2, {"attr": [0]})
+    if "1" not in state:
+        raise TimeoutError(f"no state response from {ip}:{PORT}")
     return bool(int(state.get("1", 0)))
 
 

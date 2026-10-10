@@ -7,27 +7,44 @@ These units upload verified backups to `Google Drive/Homelab Backups/Proxmox`.
 - Proxmox host configuration: weekly on Sunday at 03:30 UTC, keep 5 archives.
 
 Retention was increased to five on September 25. The legacy schedules and paths
-remain active while complete final PBS cloud-restoration acceptance is pending.
+remain active while recovery acceptance and schedule cutover are pending.
 Production OPNsense and Proxmox reboot checks have passed. A reported Plex outage
 after the Proxmox reboot was resolved; Plex and all 59 containers were verified
 healthy at the post-reboot checkpoint. No further production downtime is
-authorized. Activate replacement timers only after complete final isolated
-restoration succeeds and the cutover is explicitly released; preserve existing
-archives. Do not repeat production reboots as part of that remaining acceptance.
+authorized. Agree on a recovery acceptance procedure before activating replacement
+timers, and release the cutover explicitly; preserve existing archives. Do not
+repeat production reboots as part of that remaining acceptance.
 
-Targeted restoration of the actual daily app snapshot passed all 31 SQLite and
-three PostgreSQL checks, including native Plex validation and a documented
-recovery-only PostgreSQL `search_path` workaround. These results do not create
-a complete pipeline success receipt: the final cloud-to-guests-to-apps run is
-still pending. See [recovery validation](recovery/VALIDATION.md) and the
-[prepared cutover](CUTOVER.md).
+Earlier targeted restoration of the September 25 daily app snapshot passed 31
+SQLite and three PostgreSQL checks. The October 4 full isolated attempt failed
+on the PostgreSQL restore condition, and the custom validator was retired. No
+complete recovery acceptance receipt exists. The manual recovery guide is kept
+privately under `Homelab Backups/Recovery` on Drive; see the
+[prepared cutover](CUTOVER.md) for the remaining schedule transition.
 
 The Docker LXC bind mounts `/mnt/internal` and `/mnt/usb_drive` are excluded by
 Proxmox `vzdump`. A local guest archive is removed only after upload and remote
 size verification succeed. Failed jobs retain their local archive for recovery.
 
-The rclone configuration is stored only on the Proxmox host at
+The rclone configuration is stored privately on Proxmox and inside CT 101 at
 `/root/.config/rclone/rclone.conf` with mode `0600`; it is not committed.
+
+Backup writers, freshness checks and recovery use the dedicated
+`homelab-backups:` rclone alias on Proxmox and CT 101. It resolves directly to
+the verified Drive folder ID, not to a folder name. Keep the ID in private
+configuration. Provision the alias after authorizing `gdrive:`:
+
+```bash
+rclone config create homelab-backups alias remote "gdrive,root_folder_id=VERIFIED_FOLDER_ID:"
+rclone lsjson homelab-backups: --dirs-only
+```
+
+The original `gdrive:` remote is unchanged; do not set its global root folder
+because unrelated callers can still use full My Drive paths. Before switching
+any existing deployment, compare the archive IDs/sizes and restic repository
+ID through both routes. This changes addressing only, without moving or
+duplicating cloud data. Missing alias configuration must fail rather than
+falling back to name-based writes.
 
 ## Host recovery coverage and owner alerts
 
@@ -82,8 +99,8 @@ alone does not suppress those checks. Capacity checks remain active during
 cloud copying. Probe commands are bounded and never include credential URLs.
 
 The monitor checks archive presence/freshness and wrapper success, not the
-integrity of all historical cloud data. Periodic PBS/restic verification and
-isolated restoration remain separate requirements. One explicit setup message
+integrity of all historical cloud data. PBS/restic verification and manual
+recovery checks remain separate tasks. One explicit setup message
 was delivered to the verified private owner chat on September 25.
 
 The replacement schedule uses these completion receipts. Each receipt is
@@ -93,17 +110,16 @@ advanced only after its complete pipeline succeeds, not when it merely starts:
 | --- | --- | --- |
 | `daily-apps` | `/var/lib/homelab-backup-monitor/apps-success.json` | 50 hours |
 | `weekly-guests` | `/var/lib/homelab-backup-monitor/guests-success.json` | 194 hours |
-| `quarterly-restore` | `/var/lib/homelab-backup/restore-validation/last-success.json` | 2,306 hours |
 
 `completed_utc` is the required UTC timestamp. The initial daily receipt is
 `2026-09-25T17:36:28.089076+00:00`; the initial weekly receipt also records the
-actual guest snapshot IDs and their shared restic snapshot. Quarterly success
-requires the separate full restore validator. `pbs-maintenance` reports failures
-only. At final cutover, register these three receipt jobs and remove only the
+actual guest snapshot IDs and their shared restic snapshot. `pbs-maintenance`
+reports failures only. At final cutover, register these two receipt jobs and remove only the
 legacy `opnsense` and `docker` full-archive freshness jobs after disabling their
 old timers. Keep `opnsense-config`, `host-config`, the hourly monitor and all
-existing cloud archives. Receipt jobs and replacement timers are not yet active
-while complete final isolated restoration remains pending. Production reboot
+existing cloud archives. Receipt jobs and replacement timers are not yet active.
+The retired custom restore validator is not a cutover dependency; a replacement
+recovery acceptance procedure must be agreed separately. Production reboot
 checks have already passed.
 
 The latest small configuration recovery points were refreshed after the

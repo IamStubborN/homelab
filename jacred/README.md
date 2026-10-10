@@ -49,16 +49,12 @@ and does not justify a hard memory limit below playback demand.
 
 ## Background schedule
 
-The scheduler and both Speedtest Tracker applications use `Europe/Sofia` from
-the root `TIMEZONE` setting. Times below follow local daylight saving time;
-they are not fixed UTC times. The application checks Speedtest cron against
-`app.display_timezone`, even though the container OS clock displays UTC.
+The scheduler uses `Europe/Sofia` from the root `TIMEZONE` setting. Times
+below follow local daylight saving time; they are not fixed UTC times.
 
 | Task | Sofia local time |
 | --- | --- |
-| Direct speed test | Daily 23:00 |
-| VPN speed test | Daily 23:30 |
-| Resume incomplete JacRed cycles | Daily 00:10 |
+| Resume incomplete JacRed cycles | Monday–Saturday 00:10; Sunday 14:10 |
 | Rutor full-cycle start | Monday 01:00 |
 | NNMClub full-cycle start | Tuesday 01:00 |
 | Megapeer full-cycle start | Wednesday 01:00 |
@@ -71,7 +67,21 @@ jobs remain disabled, including Rutracker/Kinozal/Ultradox full-cycle starts,
 Kinozal incremental refresh, Cloudflare warmups, and archive backfills.
 JSON checkpoints still save every five minutes; logs rotate every 15 minutes.
 There are no tracker starts at 22:00–23:59 and no new Sunday full-cycle start.
-The 30-minute gap separates scheduled speed tests, not manual API runs.
+
+The HTTP runner skips new crawler submissions daily at **02:00–02:59 UTC**
+and on Sundays at **03:00–08:59 UTC**. These fixed UTC windows follow the
+backup timers, reserving the daily configuration/application-backup hour and
+additional time for weekly/monthly guest backups. Incremental refreshes retry
+at their next normal cron slot; skips do not change failure backoff. Saves,
+log rotation and the report-only maintenance check remain enabled. The Sunday
+resume was moved to 14:10 Sofia so it does not immediately start new work just
+before the weekly backup chain.
+
+This is a conservative schedule guard, **not active-backup detection**. Manual
+or delayed backups outside these windows are not covered, and an existing
+asynchronous crawl is not paused. No Docker socket, host credentials or SSH
+access is granted to the scheduler. Review these UTC windows when backup
+timers change.
 
 This is a start schedule, not a strict work window. `ParseAllTask` starts
 asynchronous work; existing cycles can continue into the daytime or backup
@@ -81,16 +91,47 @@ JacRed 3.15.1 also resumes pending work after application startup. Keep resource
 limits in place and measure actual overlap instead of assuming all crawling
 ends before the backup starts.
 
+### HTTP job outcomes
+
+`scheduler/run-job.sh` distinguishes protocol acknowledgements from crawler
+completion. `SUCCESS` (exit 0) clears crawler submission backoff only for an
+explicit positive response: `ok` / `scheduled`, Mazepa's `ok N`, Bitru's
+`saved N` with N > 0, Knaben's nonzero `fetched` with `failed=0`, all-True
+Rutor/Megapeer/Rutracker category reports, or Ultradox ParseLatest listing
+reports. Asynchronous acknowledgements do not prove ingestion completed.
+
+Transport errors, non-2xx HTTP, and explicit application errors (including
+login or missing configuration) return exit 1.
+Only crawler submission jobs accumulate backoff: 6, 12, then 24 hours, capped
+at 24 hours. Saves, maintenance and resume jobs do not acquire backoff.
+
+`UNKNOWN` (exit 2) leaves both the failure count and next-attempt timestamp
+unchanged. This includes any False or mixed True/False report, empty/HTML or
+unrecognized responses, Bitru `no items`, Knaben's all-zero counts or positive
+item failure count (including partially successful crawls), category
+reports without explicit results, and the structured ResumeParseAll report.
+`work`, `work_login`, `disabled`, `syncapi`, and `idle` are `SKIP` (exit 0),
+also preserving backoff. Unknown is neither a confirmed failure nor success;
+the next normal cron slot can retry once existing backoff has expired.
+
+These contracts were checked at JacRed revision
+`6c238d07df45ee84f1ae7baf5d491dbef2878fe7`. Rutor's False conflates failed
+fetches and unrecognized listings with potentially empty pages. Some endpoints
+also swallow internal errors and return `ok`; the scheduler cannot recover
+information absent from the HTTP response. Inspect application logs and crawl
+checkpoints for those cases. The runner does not log raw response bodies for
+unknown results.
+
 Deploy from the root Compose project after validating its full configuration:
 
 ```sh
 docker compose config --quiet
 docker compose build jacred-cron
-docker compose up -d --no-deps jacred-cron speedtest-tracker speedtest-tracker-vpn
+docker compose up -d --no-deps jacred-cron
 make check-runtime
 ```
 
 Do not restart JacRed or its browser dependencies for a schedule-only change.
 Before deployment retain the previous scheduler image and both source files
-for rollback. Verify the installed `/etc/crontabs/root`, cached Speedtest
-schedules/timezones, container health, and root-project ownership afterward.
+for rollback. Verify the installed `/etc/crontabs/root`, container health,
+and root-project ownership afterward.

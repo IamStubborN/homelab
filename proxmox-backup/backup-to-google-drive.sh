@@ -14,7 +14,7 @@ if ! flock -n 9; then
   exit 75
 fi
 
-for command in awk basename date find flock pvesm rclone rm sort stat tar vzdump zstd; do
+for command in awk basename date find flock mv pct pvesm rclone rm sort stat tar vzdump zstd; do
   command -v "${command}" >/dev/null || {
     echo "Required command is missing: ${command}" >&2
     exit 69
@@ -153,6 +153,7 @@ backup_docker() {
   (
     umask 022
     vzdump 300 --storage local --mode snapshot --compress zstd --remove 0 --tmpdir /var/tmp \
+      --exclude-path /var/lib/homelab-app-backup \
       --notes-template 'Docker LXC 300 full rootfs backup; external bind mounts excluded'
   )
   archive=$(latest_archive 'vzdump-lxc-300-*.tar.zst')
@@ -175,6 +176,49 @@ backup_host_config() {
   rm -f -- "${archive}"
 }
 
+upload_app_capture() {
+  local stage name stamp archive partial
+  stage=$1
+  name=${stage##*/}
+  [[ "${name}" =~ ^capture-[0-9]{8}T[0-9]{6}Z$ ]] || {
+    echo "Unexpected application capture name" >&2
+    exit 66
+  }
+  stamp=${name#capture-}
+  archive="${LOCAL_BACKUP_DIR}/apps-${stamp:0:4}_${stamp:4:2}_${stamp:6:2}-${stamp:9:2}_${stamp:11:2}_${stamp:13:2}.tar.zst"
+  partial="${archive}.partial"
+  chmod 700 -- "${LOCAL_BACKUP_DIR}"
+  if [[ ! -f "${archive}" ]]; then
+    trap 'rm -f -- "${partial}"' EXIT
+    pct exec 300 -- tar --numeric-owner -C "${stage}" -cf - . | zstd -T1 -3 -q -o "${partial}"
+    zstd -tq "${partial}"
+    mv -- "${partial}" "${archive}"
+    trap - EXIT
+  fi
+  zstd -tq "${archive}"
+  upload_file "${archive}" "${REMOTE_ROOT}/Docker/apps"
+  prune_remote "${REMOTE_ROOT}/Docker/apps" 'apps-*.tar.zst' 7
+  pct exec 300 -- /usr/local/sbin/homelab-app-data-backup complete "${stage}" >/dev/null
+  rm -f -- "${archive}"
+}
+
+backup_apps() {
+  local stage capture_day
+  stage=$(pct exec 300 -- /usr/local/sbin/homelab-app-data-backup prepare)
+  if [[ -n "${stage}" ]]; then
+    capture_day=${stage##*/}
+    capture_day=${capture_day#capture-}
+    capture_day=${capture_day:0:8}
+    upload_app_capture "${stage}"
+    # Catch up immediately after an outage instead of treating yesterday's
+    # retried upload as today's application backup.
+    [[ "${capture_day}" < "$(date -u '+%Y%m%d')" ]] || return 0
+  fi
+  stage="/var/lib/homelab-app-backup/capture-$(date -u '+%Y%m%dT%H%M%SZ')"
+  pct exec 300 -- nice -n 15 ionice -c 3 /usr/local/sbin/homelab-app-data-backup capture "${stage}"
+  upload_app_capture "${stage}"
+}
+
 case "${1:-}" in
   opnsense-config)
     backup_opnsense_config
@@ -188,6 +232,9 @@ case "${1:-}" in
   host-config)
     backup_host_config
     ;;
+  apps)
+    backup_apps
+    ;;
   upload-existing)
     [[ $# -eq 3 ]] || {
       echo "Usage: $0 upload-existing <opnsense|docker> <archive>" >&2
@@ -196,7 +243,7 @@ case "${1:-}" in
     upload_guest_archive "$2" "$3"
     ;;
   *)
-    echo "Usage: $0 <opnsense|opnsense-config|docker|host-config|upload-existing>" >&2
+    echo "Usage: $0 <opnsense|opnsense-config|docker|host-config|apps|upload-existing>" >&2
     exit 64
     ;;
 esac

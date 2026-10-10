@@ -51,48 +51,6 @@ def send(message):
     telegram("sendMessage", {"text": message, "disable_notification": False})
 
 
-def pbs_issues(settings):
-    probe = r'''
-import json,os,pathlib,subprocess,sys
-cloud=False
-for p in pathlib.Path('/proc').glob('[0-9]*/cmdline'):
-    try:
-        args=p.read_bytes().decode(errors='replace').split('\0')
-        if '/usr/local/sbin/pbs-pilot-cloud-backup' in args and pathlib.Path(args[0]).name in ('bash','sh'):
-            cloud=True
-    except OSError:
-        pass
-space=os.statvfs(sys.argv[1])
-used=100*(space.f_blocks-space.f_bavail)/space.f_blocks
-services=subprocess.run(['systemctl','is-active','proxmox-backup','proxmox-backup-proxy'],capture_output=True,text=True).stdout.splitlines()==['active','active']
-maintenance=None
-if services and not cloud:
-    info=json.loads(subprocess.check_output(['proxmox-backup-manager','datastore','show',sys.argv[2],'--output-format','json'],timeout=20))
-    maintenance=info.get('maintenance-mode')
-print(json.dumps({'used_percent':used,'services':services,'cloud_active':cloud,'maintenance':maintenance}))
-'''
-    try:
-        result = subprocess.run(
-            ["pct", "exec", str(settings["ctid"]), "--", "python3", "-c", probe,
-             settings["path"], settings["datastore"]],
-            capture_output=True, text=True, timeout=45, check=True,
-        )
-        health = json.loads(result.stdout)
-    except (subprocess.SubprocessError, ValueError):
-        return ["PBS: не удалось проверить состояние сервера и хранилища"]
-    issues = []
-    threshold = settings.get("max_used_percent", 90)
-    if health["used_percent"] >= threshold:
-        # Stable text avoids repeated alerts for every small percentage change.
-        issues.append(f"PBS: хранилище заполнено на {threshold}% или больше")
-    if not health["cloud_active"]:
-        if not health["services"]:
-            issues.append("PBS: службы резервного копирования не работают")
-        if health["maintenance"]:
-            issues.append("PBS: хранилище осталось в режиме обслуживания вне облачного копирования")
-    return issues
-
-
 def check():
     config = load(CONFIG / "monitor.json", {})
     records = load(STATE / "jobs.json", {})
@@ -134,8 +92,6 @@ def check():
                 timestamps.append(datetime.strptime(match[1], "%Y_%m_%d-%H_%M_%S").replace(tzinfo=timezone.utc))
         if not timestamps or (now - max(timestamps)).total_seconds() > job["max_age_hours"] * 3600:
             issues.append(f"{name}: свежая резервная копия отсутствует")
-    if config.get("pbs"):
-        issues.extend(pbs_issues(config["pbs"]))
     if issues != previous["issues"]:
         if issues:
             send("Бэкапы Homelab: требуется внимание.\n" + "\n".join(issues))

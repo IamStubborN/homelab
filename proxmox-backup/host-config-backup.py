@@ -21,9 +21,7 @@ PATHS = [
     "usr/local/libexec/homelab-opnsense-config-backup",
     "usr/local/libexec/homelab-host-config-backup",
     "usr/local/libexec/homelab-backup-monitor", "etc/homelab-backup/monitor.json",
-    "usr/local/sbin/homelab-backup-apps-to-pbs", "usr/local/sbin/homelab-pbs-cloud",
-    "usr/local/sbin/homelab-pbs-guests", "usr/local/sbin/proxmox-cpu-quiet.sh",
-    "usr/local/sbin/homelab-pbs-maintenance",
+    "usr/local/sbin/proxmox-cpu-quiet.sh",
     "etc/crontab", "etc/cron.d", "var/spool/cron/crontabs",
 ]
 COMMANDS = {

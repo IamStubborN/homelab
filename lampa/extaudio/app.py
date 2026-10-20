@@ -65,6 +65,23 @@ MAX_SUBTITLE_BYTES = 8 * 1024 * 1024
 MAX_FONT_BYTES = 32 * 1024 * 1024
 MAX_RAW_FETCHES = 2
 RAW_FETCH_SECONDS = 60
+# Embedded ASS is read from the video as it plays: each run copies one window
+# of the subtitle stream, reading ahead of playback at a bounded rate.
+# ffmpeg logs these when the torrent read fails; it may still exit cleanly.
+READ_FAILURE_RE = re.compile(rb"Error during demuxing|Read error|Stream ends prematurely|Connection|Input/output error", re.IGNORECASE)
+TEXT_SUBTITLE_CODECS = {"subrip", "ass", "ssa", "text"}  # what GST lists, in order
+ASS_CODECS = {"ass", "ssa"}
+SUB_WINDOW = 150
+SUB_LEAD = 60  # the next window starts once playback is this close to the end
+SUB_BACK = 10  # a seek starts this early to catch events already on screen
+SUB_READRATE = 2
+SUB_BURST = 30
+MAX_SUB_RUNS = 2
+SUB_IDLE_SECONDS = 60
+SUB_FORGET_SECONDS = 900
+MAX_SUB_TRACKS = 8
+MAX_SUB_LINES = 2000  # per response
+MAX_EMBEDDED_FONT_BYTES = 64 * 1024 * 1024
 RENDERER_DIR = os.environ.get("RENDERER_DIR", "/app/jassub")
 RENDERER_TYPES = {".js": "text/javascript", ".wasm": "application/wasm", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8"}
 # Demuxers ffmpeg may pick by content. Playlist formats (HLS, concat) are left
@@ -93,6 +110,7 @@ SEGMENT_RE = re.compile(r"^s(\d+)\.m4s$")
 COPY_CODECS = {"aac", "opus", "ac3", "eac3"}
 FILE_RE = re.compile(r"^(?:audio\.m3u8|init\.mp4|s\d{1,6}\.m4s)$")
 ROUTE_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(tracks|raw)|(\d{1,2})/(copy|aac)/([^/]+))$")
+EMBEDDED_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(embedded)|sub/(\d{1,2})|attachment/(\d{1,3}))$")
 RENDERER_RE = re.compile(r"^/extaudio/jassub/([a-z0-9-]+\.(?:js|wasm|woff2|txt))$")
 CONTENT_TYPES = {".m3u8": "application/vnd.apple.mpegurl", ".mp4": "audio/mp4", ".m4s": "video/iso.segment"}
 
@@ -107,6 +125,9 @@ _jobs_lock = threading.Lock()
 _job_slot = threading.Semaphore(1)
 _live = {}
 _live_changed = threading.Condition()
+_embedded_cache = {}
+_subs = {}
+_subs_lock = threading.Lock()
 
 
 def stream_url(torrent_hash, file_id):
@@ -386,25 +407,15 @@ def job_timeout(length):
     return min(JOB_MAX_SECONDS, JOB_BASE_SECONDS + length // MIN_SOURCE_RATE)
 
 
-def probe_audio(torrent_hash, file_id):
-    key = (torrent_hash, file_id)
+def cached_probe(cache, key, command, parse, timeout=PROBE_TIMEOUT_SECONDS):
     with _probe_lock:
-        if key in _probe_cache:
-            return _probe_cache[key]
+        if key in cache:
+            return cache[key]
         if time.monotonic() - _probe_failures.get(key, -PROBE_RETRY_SECONDS) < PROBE_RETRY_SECONDS:
             raise ProbeFailed()
-    command = [
-        "ffprobe", "-v", "error", *INPUT_OPTIONS, "-select_streams", "a",
-        "-show_entries", "stream=codec_name,channels,duration:stream_tags=title,language:format=duration",
-        "-of", "json", stream_url(torrent_hash, file_id),
-    ]
     try:
-        result = subprocess.run(command, capture_output=True, timeout=PROBE_TIMEOUT_SECONDS, check=True)
-        probe = json.loads(result.stdout.decode("utf-8"))
-        streams = probe.get("streams") or []
-        for item in streams:
-            # Matroska reports the duration on the container only.
-            item["duration"] = float(item.get("duration") or (probe.get("format") or {}).get("duration") or 0)
+        result = subprocess.run(command, capture_output=True, timeout=timeout, check=True)
+        value = parse(json.loads(result.stdout.decode("utf-8")))
     except subprocess.TimeoutExpired:
         raise  # A torrent that is still connecting is worth asking again.
     except (subprocess.SubprocessError, ValueError, OSError):
@@ -414,10 +425,27 @@ def probe_audio(torrent_hash, file_id):
             _probe_failures[key] = time.monotonic()
         raise
     with _probe_lock:
-        if len(_probe_cache) >= MAX_PROBES_CACHED:
-            _probe_cache.clear()
-        _probe_cache[key] = streams
+        while len(cache) >= MAX_PROBES_CACHED:
+            del cache[next(iter(cache))]  # the oldest; a playing file is probed again
+        cache[key] = value
+    return value
+
+
+def audio_streams(probe):
+    streams = probe.get("streams") or []
+    for item in streams:
+        # Matroska reports the duration on the container only.
+        item["duration"] = float(item.get("duration") or (probe.get("format") or {}).get("duration") or 0)
     return streams
+
+
+def probe_audio(torrent_hash, file_id):
+    command = [
+        "ffprobe", "-v", "error", *INPUT_OPTIONS, "-select_streams", "a",
+        "-show_entries", "stream=codec_name,channels,duration:stream_tags=title,language:format=duration",
+        "-of", "json", stream_url(torrent_hash, file_id),
+    ]
+    return cached_probe(_probe_cache, (torrent_hash, file_id), command, audio_streams)
 
 
 def external_tracks(torrent_hash, video_id, files):
@@ -439,6 +467,332 @@ def external_tracks(torrent_hash, video_id, files):
                 "channels": stream.get("channels") or 0,
             })
     return tracks
+
+
+def require_video_file(torrent_hash, file_id):
+    try:
+        files = torrent_files(torrent_hash)
+    except urllib.error.HTTPError as error:
+        error.close()
+        raise Rejected("unknown torrent") from None
+    if not any(item["id"] == file_id and split_name(item["path"])[2] in VIDEO_EXTENSIONS for item in files):
+        raise Rejected("not a video file of this torrent")
+
+
+def embedded_info(probe):
+    """Text subtitle streams in the order GST lists them, and font attachments."""
+    subtitles, fonts, total, number = [], [], 0, 0
+    for item in probe.get("streams") or []:
+        tags = item.get("tags") or {}
+        if item.get("codec_type") == "subtitle":
+            if item.get("codec_name") in TEXT_SUBTITLE_CODECS:
+                subtitles.append({
+                    "stream": number, "codec": item["codec_name"],
+                    "title": (tags.get("title") or "").strip(), "language": (tags.get("language") or "").strip(),
+                })
+            number += 1  # ffmpeg's 0:s:N counts image subtitles too
+        elif item.get("codec_type") == "attachment" and isinstance(item.get("index"), int):
+            size = int(item.get("extradata_size") or 0)
+            font = split_name(tags.get("filename") or "")[2] in FONT_EXTENSIONS or \
+                re.search(r"font|opentype|truetype", tags.get("mimetype") or "", re.IGNORECASE)
+            if font and 0 < size <= MAX_FONT_BYTES and total + size <= MAX_EMBEDDED_FONT_BYTES:
+                fonts.append(item["index"])
+                total += size
+    duration = float((probe.get("format") or {}).get("duration") or 0)
+    return {"subtitles": subtitles, "fonts": fonts, "duration": duration}
+
+
+def probe_embedded(torrent_hash, file_id):
+    key = (torrent_hash, file_id, "embedded")
+    with _probe_lock:
+        known = key in _embedded_cache
+    if not known:
+        require_video_file(torrent_hash, file_id)
+    command = [
+        "ffprobe", "-v", "error", *INPUT_OPTIONS,
+        "-show_entries", "stream=index,codec_type,codec_name,extradata_size:stream_tags=title,language,filename,mimetype"
+        ":format=duration",
+        "-of", "json", stream_url(torrent_hash, file_id),
+    ]
+    # A video that just started may need a while to fetch its header.
+    return cached_probe(_embedded_cache, key, command, embedded_info, timeout=3 * PROBE_TIMEOUT_SECONDS)
+
+
+def probed_embedded(torrent_hash, file_id):
+    """The cached probe; events and fonts are served only for probed files."""
+    with _probe_lock:
+        return _embedded_cache.get((torrent_hash, file_id, "embedded"))
+
+
+def attachment_path(torrent_hash, file_id, index):
+    return os.path.join(CACHE_DIR, f"{torrent_hash}-{file_id}-att", str(index))
+
+
+def fetch_attachment(torrent_hash, file_id, index):
+    """Extract a font attachment of the video into the cache. The caller holds
+    a _raw_fetches slot."""
+    path = attachment_path(torrent_hash, file_id, index)
+    if os.path.isfile(path):
+        return path
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    partial = f"{path}.{os.getpid()}-{threading.get_ident()}.part"
+    try:
+        # Attachments live in the header; -t 0 reads no media.
+        subprocess.run([
+            "nice", "-n", "10", "ffmpeg", "-nostdin", "-v", "error", f"-dump_attachment:{index}", partial,
+            *INPUT_OPTIONS, "-i", stream_url(torrent_hash, file_id), "-t", "0", "-f", "null", "-",
+        ], capture_output=True, timeout=RAW_FETCH_SECONDS, check=True)
+        if not 0 < os.path.getsize(partial) <= MAX_FONT_BYTES:
+            raise OSError("attachment too large or empty")
+        os.replace(partial, path)
+    finally:
+        try:
+            os.unlink(partial)
+        except FileNotFoundError:
+            pass
+    return path
+
+
+class SubtitleRun:
+    """One ffmpeg process copying a window of an embedded subtitle stream."""
+
+    def __init__(self, process, start, end, path):
+        self.process = process
+        self.start = start
+        self.end = end
+        self.path = path
+        self.began = time.monotonic()
+        self.head = []  # header lines until the first event
+        self.stopped = False
+
+    def reach(self, now):
+        """The furthest position the run can have read: its rate is bounded."""
+        return self.start + SUB_BURST + SUB_READRATE * (now - self.began)
+
+
+class SubtitleTrack:
+    """Events of one embedded ASS stream, collected from the windows read so far.
+    Viewers of one stream share it; two of them far apart take turns."""
+
+    serials = time.time_ns() // 1000 % 10**8  # unique across restarts too
+
+    def __init__(self, torrent_hash, file_id, stream, duration):
+        SubtitleTrack.serials += 1
+        self.serial = SubtitleTrack.serials  # a recreated track restarts its line numbers
+        self.source = stream_url(torrent_hash, file_id)
+        self.stream = stream
+        self.duration = duration or math.inf
+        self.directory = os.path.join(CACHE_DIR, f"{torrent_hash}-{file_id}-sub{stream}.tmp")
+        self.header = None
+        self.lines = []
+        self.known = set()
+        self.size = 0
+        self.done = []  # covered (start, end) windows, merged
+        self.run = None
+        self.started = 0
+        self.seen = time.monotonic()
+        self.failures = 0
+        self.failed_at = 0.0
+
+
+def subtitle_command(source, output, stream, start, end):
+    # -copyts keeps the video's timeline. -readrate paces only mapped streams,
+    # so the video is copied to nowhere: without it a stretch with no events
+    # would be read at the torrent's full speed.
+    return [
+        "nice", "-n", "10", "ffmpeg", "-nostdin", "-v", "error", *INPUT_OPTIONS,
+        "-reconnect", "1", "-reconnect_delay_max", "10",
+        "-readrate", str(SUB_READRATE), "-readrate_initial_burst", str(SUB_BURST),
+        "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-copyts", "-i", source,
+        "-map", f"0:s:{stream}", "-c:s", "copy", "-ignore_readorder", "1", "-flush_packets", "1",
+        "-f", "ass", output, "-map", "0:v:0?", "-c:v", "copy", "-f", "null", "-",
+    ]
+
+
+def covered_until(intervals, position):
+    return next((end for start, end in intervals if start <= position <= end), None)
+
+
+def add_covered(intervals, start, end):
+    merged = []
+    for first, last in sorted(intervals + [(start, end)]):
+        if merged and first <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], last))
+        else:
+            merged.append((first, last))
+    return merged
+
+
+def next_window(track, position, now):
+    """Where a run must start for playback at `position`, or None."""
+    run = track.run
+    end = covered_until(track.done, position)
+    if end is not None:
+        if end >= track.duration or end - position >= SUB_LEAD:
+            return None
+        if run and run.start <= end < run.end:
+            return None  # the next window is on its way
+        return end
+    if run and run.start <= position < run.end and position <= run.reach(now) + SUB_BACK:
+        return None
+    start = max(0.0, position - SUB_BACK)
+    return start if start < track.duration else None
+
+
+def stop_subtitle_run(track):
+    run, track.run = track.run, None
+    run.stopped = True
+    if run.process.poll() is None:
+        run.process.kill()
+
+
+def start_subtitle_run(track, start, now):
+    """Replace the track's run with one from `start`. The caller holds
+    _subs_lock. Return False while every slot serves a recent viewer."""
+    others = [other for other in _subs.values() if other.run and other is not track]
+    if len(others) >= MAX_SUB_RUNS:
+        oldest = min(others, key=lambda other: other.seen)
+        if now - oldest.seen < STALE_SECONDS:
+            return False
+        stop_subtitle_run(oldest)
+    if track.run:
+        stop_subtitle_run(track)
+    end = min(start + SUB_WINDOW, track.duration)
+    os.makedirs(track.directory, exist_ok=True)
+    path = os.path.join(track.directory, f"run{track.started}.ass")
+    track.started += 1
+    with open(f"{path}.log", "wb") as log:
+        process = subprocess.Popen(
+            subtitle_command(track.source, path, track.stream, start, end), stdout=subprocess.DEVNULL, stderr=log,
+        )
+    track.run = run = SubtitleRun(process, start, end, path)
+    threading.Thread(target=watch_subtitle_run, args=(track, run), daemon=True).start()
+    return True
+
+
+def end_header(track, run):
+    if run.head is not None and track.header is None and any(line.strip() == "[Events]" for line in run.head):
+        track.header = "\n".join(run.head).strip() + "\n"
+    run.head = None
+
+
+def take_lines(track, run, chunks, finished):
+    with _subs_lock:
+        for chunk in chunks:
+            line = chunk.decode("utf-8", "replace").rstrip("\r")
+            if line.startswith("Dialogue:"):
+                end_header(track, run)
+                # Windows overlap; the same event arrives again.
+                if line not in track.known and track.size < MAX_SUBTITLE_BYTES:
+                    track.known.add(line)
+                    track.lines.append(line)
+                    track.size += len(line)
+            elif run.head is not None:
+                run.head.append(line)
+        if finished:
+            end_header(track, run)
+
+
+def watch_subtitle_run(track, run):
+    process = run.process
+    pending = b""
+    source = None
+    try:
+        while True:
+            finished = process.poll() is not None
+            if source is None and os.path.exists(run.path):
+                source = open(run.path, "rb")
+            if source is not None:
+                *complete, pending = (pending + source.read()).split(b"\n")
+                if finished and pending:
+                    complete.append(pending)
+                take_lines(track, run, complete, finished)
+            if finished:
+                break
+            with _subs_lock:
+                if track.run is run and time.monotonic() - track.seen > SUB_IDLE_SECONDS:
+                    stop_subtitle_run(track)  # nobody plays this any more
+            time.sleep(0.5)
+        now = time.monotonic()
+        # A dropped connection can end ffmpeg cleanly before the window ends;
+        # other demuxer complaints (odd Matroska elements) still play fine.
+        with open(f"{run.path}.log", "rb") as log:
+            detail = log.read()
+        complete = process.returncode == 0 and not READ_FAILURE_RE.search(detail)
+        with _subs_lock:
+            if track.run is run:
+                track.run = None
+                if complete:
+                    track.done = add_covered(track.done, run.start, run.end)
+                    track.failures = 0
+                else:
+                    track.failures += 1
+                    track.failed_at = now
+        if (detail or not complete) and not run.stopped:
+            print(f"subtitles {track.directory} ended {process.returncode}: {detail[-500:].decode('utf-8', 'replace')}",
+                  file=sys.stderr, flush=True)
+    except Exception as error:
+        print(f"subtitles {track.directory} failed: {type(error).__name__} {error}", file=sys.stderr, flush=True)
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        with _subs_lock:
+            if track.run is run:
+                track.run = None
+    finally:
+        if source is not None:
+            source.close()
+        for path in (run.path, f"{run.path}.log"):
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+
+
+def forget_subtitles(now):
+    """Drop collected events nobody asked for lately. The caller holds _subs_lock."""
+    idle = sorted((track.seen, key) for key, track in _subs.items() if track.run is None)
+    for seen, key in idle:
+        if now - seen > SUB_FORGET_SECONDS or len(_subs) >= MAX_SUB_TRACKS:
+            shutil.rmtree(_subs.pop(key).directory, ignore_errors=True)
+
+
+def subtitle_events(torrent_hash, file_id, stream, position, offset, serial=None):
+    """Events collected so far from `offset` on; starts reading where playback is."""
+    info = probed_embedded(torrent_hash, file_id)
+    if not info or not any(item["stream"] == stream and item["codec"] in ASS_CODECS for item in info["subtitles"]):
+        raise Rejected("not an ASS stream of a probed video")
+    key = (torrent_hash, file_id, stream)
+    now = time.monotonic()
+    busy = False
+    with _subs_lock:
+        track = _subs.get(key)
+        if track is None:
+            forget_subtitles(now)
+            track = _subs[key] = SubtitleTrack(torrent_hash, file_id, stream, info["duration"])
+        track.seen = now
+        if now - track.failed_at > FAILURE_RESET_SECONDS:
+            track.failures = 0
+        start = next_window(track, position, now) if position is not None else None
+        if start is not None and track.failures < MAX_FAILURES and now >= track.failed_at + 2 * track.failures:
+            try:
+                busy = not start_subtitle_run(track, start, now)
+            except OSError as error:
+                print(f"subtitles {track.directory} failed to start: {error}", file=sys.stderr, flush=True)
+                track.failures += 1
+                track.failed_at = now
+        if serial != track.serial or offset > len(track.lines):
+            offset = 0  # the events were forgotten meanwhile; the client deduplicates
+        lines = track.lines[offset:offset + MAX_SUB_LINES]
+        return {
+            "track": track.serial,
+            "header": track.header if offset == 0 else None,
+            "lines": lines,
+            "next": offset + len(lines),
+            "more": offset + len(lines) < len(track.lines),
+            "busy": busy,
+            "failed": track.failures >= MAX_FAILURES or (track.header is None and bool(track.lines)),
+        }
 
 
 def remux_command(source, output, stream, codec):
@@ -936,6 +1290,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(502, {"error": "fetch failed"})
             finally:
                 _raw_fetches.release()
+        self.send_cached(path)
+
+    def send_cached(self, path):
         try:
             source = open(path, "rb")
         except FileNotFoundError:  # Evicted meanwhile; the client asks again.
@@ -952,6 +1309,66 @@ class Handler(BaseHTTPRequestHandler):
                 shutil.copyfileobj(source, self.wfile, 64 * 1024)
             except (BrokenPipeError, ConnectionResetError):
                 self.close_connection = True
+
+    def serve_embedded(self, torrent_hash, file_id, match, query):
+        if match.group(3):
+            if not _track_lookups.acquire(blocking=False):
+                return self.send_json(429, {"error": "busy"}, {"Retry-After": "5"})
+            try:
+                info = probe_embedded(torrent_hash, file_id)
+            except Rejected:
+                return self.send_json(404, {"error": "not found"})
+            except Exception:
+                return self.send_json(502, {"error": "probe failed"})
+            finally:
+                _track_lookups.release()
+            return self.send_json(200, {
+                "subtitles": info["subtitles"], "fonts": info["fonts"],
+                "renderer": "/extaudio/jassub/" if os.path.isfile(os.path.join(RENDERER_DIR, "jassub.js")) else None,
+            })
+        if not probed_embedded(torrent_hash, file_id):
+            # A restart or a full cache forgot the probe of a playing file.
+            if not _track_lookups.acquire(blocking=False):
+                return self.send_json(429, {"error": "busy"}, {"Retry-After": "5"})
+            try:
+                probe_embedded(torrent_hash, file_id)
+            except Rejected:
+                return self.send_json(404, {"error": "not found"})
+            except Exception:
+                return self.send_json(502, {"error": "probe failed"})
+            finally:
+                _track_lookups.release()
+        if match.group(4):
+            position = query.get("at", [""])[0]
+            offset = query.get("from", ["0"])[0]
+            serial = query.get("track", [""])[0]
+            if not re.fullmatch(r"\d{1,7}", offset) or (position and not re.fullmatch(r"\d{1,6}(?:\.\d{1,3})?", position)) \
+                    or (serial and not re.fullmatch(r"\d{1,9}", serial)):
+                return self.send_json(400, {"error": "bad position"})
+            try:
+                payload = subtitle_events(
+                    torrent_hash, file_id, int(match.group(4)), float(position) if position else None, int(offset),
+                    int(serial) if serial else None,
+                )
+            except Rejected:
+                return self.send_json(404, {"error": "not found"})
+            return self.send_json(200, payload)
+        index = int(match.group(5))
+        info = probed_embedded(torrent_hash, file_id)
+        if not info or index not in info["fonts"]:
+            return self.send_json(404, {"error": "not found"})
+        path = attachment_path(torrent_hash, file_id, index)
+        if not os.path.isfile(path):
+            if not _raw_fetches.acquire(timeout=RAW_FETCH_SECONDS):
+                return self.send_json(503, {"error": "busy"}, {"Retry-After": "2"})
+            try:
+                path = fetch_attachment(torrent_hash, file_id, index)
+            except Exception as error:
+                print(f"attachment {torrent_hash}/{file_id}/{index} failed: {type(error).__name__} {error}", file=sys.stderr, flush=True)
+                return self.send_json(502, {"error": "extract failed"})
+            finally:
+                _raw_fetches.release()
+        self.send_cached(path)
 
     def serve_renderer(self, name):
         try:
@@ -1012,6 +1429,9 @@ class Handler(BaseHTTPRequestHandler):
         renderer = RENDERER_RE.match(path)
         if renderer:
             return self.serve_renderer(renderer.group(1))
+        embedded = EMBEDDED_RE.match(path)
+        if embedded:
+            return self.serve_embedded(embedded.group(1).lower(), int(embedded.group(2)), embedded, query)
         match = ROUTE_RE.match(path)
         if not match:
             return self.send_json(404, {"error": "not found"})

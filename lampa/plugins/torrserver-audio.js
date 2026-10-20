@@ -466,6 +466,7 @@
       // The panel may keep this list into the next episode.
       if (active.subtitleList) {
         active.assItems = [];
+        active.embedded = null;
         withAss(active, active.subtitleList);
       }
       if (active.releaseStream) active.releaseStream();
@@ -831,6 +832,8 @@
     function hideAss(state) {
       state.assActive = null;
       state.assRequest = (state.assRequest || 0) + 1;
+      if (state.assStop) state.assStop();
+      state.assStop = null;
       if (!state.assInstance) return;
       try { state.assInstance.destroy(); } catch (error) {}
       state.assInstance = null;
@@ -845,16 +848,12 @@
       var request = state.assRequest;
       function cancelled() { return active !== state || state.assRequest !== request; }
       var base = new URL(state.assRenderer, window.location.href).href;
+      if (item.homelabAss.events) return showEmbeddedAss(state, item, video, base, cancelled);
       var content = fetchBytes(new URL(item.homelabAss.url, window.location.href).href, cancelled, 5);
       Promise.all([loadAssRenderer(base), content, fetchFonts(item.homelabAss.fonts, cancelled)]).then(function (results) {
         if (cancelled()) return;
         var Renderer = results[0];
-        state.assInstance = new Renderer({
-          video: video, subContent: decodeSubtitle(results[1]), fonts: results[2],
-          workerUrl: base + 'jassub-worker.js', wasmUrl: base + 'jassub-worker.wasm',
-          modernWasmUrl: base + 'jassub-worker-modern.wasm',
-          availableFonts: {'liberation sans': base + 'default.woff2'}
-        });
+        state.assInstance = new Renderer(rendererOptions(base, video, decodeSubtitle(results[1]), results[2]));
       }).catch(function (error) {
         if (active !== state || state.assRequest !== request) return;
         console.warn('Homelab ASS:', error && error.message);
@@ -863,10 +862,171 @@
       });
     }
 
+    function rendererOptions(base, video, content, fonts) {
+      return {
+        video: video, subContent: content, fonts: fonts,
+        workerUrl: base + 'jassub-worker.js', wasmUrl: base + 'jassub-worker.wasm',
+        modernWasmUrl: base + 'jassub-worker-modern.wasm',
+        availableFonts: {'liberation sans': base + 'default.woff2'}
+      };
+    }
+
+    function showEmbeddedAss(state, item, video, base, cancelled) {
+      // The sidecar reads the stream from the playback position as it plays;
+      // each poll reports where playback is and brings the events read since.
+      var url = new URL(item.homelabAss.events, window.location.href);
+      var fonts = fetchFonts(item.homelabAss.fonts, cancelled);
+      var offset = 0;
+      var track = null;
+      var seen = new Set();
+      var busy = false;
+      var again = false;
+      var queue = [];
+      var renderer = null;
+      var errors = 0;
+      var timer = null;
+      function fail(error) {
+        if (cancelled()) return;
+        console.warn('Homelab embedded ASS:', error && error.message);
+        hideAss(state);
+        fallBackToText(state, item);
+      }
+      function deliver() {
+        if (!renderer || !queue.length || cancelled()) return;
+        var lines = queue.splice(0, queue.length);
+        renderer.then(function (instance) {
+          if (!cancelled()) return instance.renderer.processData(lines.join('\n'));
+        }).catch(fail);
+      }
+      function schedule(delay) {
+        clearTimeout(timer);
+        timer = setTimeout(poll, delay);
+      }
+      function poll() {
+        clearTimeout(timer);
+        if (cancelled()) return;
+        // One request at a time: a seek during a request asks again after it.
+        if (busy) { again = true; return; }
+        busy = true;
+        again = false;
+        url.searchParams.set('at', Math.max(0, Number(video.currentTime) || 0).toFixed(1));
+        url.searchParams.set('from', String(offset));
+        if (track !== null) url.searchParams.set('track', String(track));
+        window.fetch(url.href, {cache: 'no-store'}).then(function (response) {
+          if (!response.ok) throw new Error('events: HTTP ' + response.status);
+          return response.json();
+        }).then(function (data) {
+          if (cancelled()) return;
+          busy = false;
+          if (data.failed) return fail(new Error('the sidecar could not read the subtitles'));
+          errors = 0;
+          // A restarted sidecar numbers its events anew; seen ones are skipped.
+          track = data.track;
+          offset = data.next;
+          (data.lines || []).forEach(function (line) {
+            // Overlapping windows and a forgotten track resend events.
+            if (!seen.has(line)) { seen.add(line); queue.push(line); }
+          });
+          if (!renderer && data.header) {
+            renderer = Promise.all([loadAssRenderer(base), fonts]).then(function (results) {
+              if (cancelled()) throw new Error('cancelled');
+              var Renderer = results[0];
+              state.assInstance = new Renderer(rendererOptions(base, video, data.header, results[1]));
+              var instance = state.assInstance;
+              return instance.ready.then(function () { return instance; });
+            });
+            renderer.catch(fail);
+          }
+          deliver();
+          schedule(data.more || again ? 0 : 3000);
+        }).catch(function (error) {
+          busy = false;
+          if (cancelled()) return;
+          if (++errors >= 5) return fail(error);
+          schedule(3000);
+        });
+      }
+      function seeking() {
+        // Ask for the new position at once instead of at the next poll.
+        if (busy) again = true;
+        else schedule(300);
+      }
+      video.addEventListener('seeking', seeking);
+      state.assStop = function () {
+        clearTimeout(timer);
+        video.removeEventListener('seeking', seeking);
+      };
+      poll();
+    }
+
+    function fallBackToText(state, item) {
+      state.embeddedBroken[item.homelabAss.stream] = true;
+      if (state.subtitleList) withAss(state, state.subtitleList);
+      Lampa.Noty.show('ASS-субтитры недоступны, показан простой текст');
+      var original = item.homelabOriginal;
+      if (!original || active !== state) return;
+      original.selected = true;
+      original.mode = 'showing';
+      Lampa.PlayerVideo.subsview(true);
+      // The menu's choice is remembered from this list.
+      if (state.subtitles) state.subtitles = state.subtitles.map(function (sub) { return sub === item ? original : sub; });
+    }
+
+    function defineMode(state, item) {
+      // Lampa's menu switches subtitles through `mode`, like hls.js tracks.
+      Object.defineProperty(item, 'mode', {
+        enumerable: true,
+        get: function () { return state.assActive === item ? 'showing' : 'disabled'; },
+        set: function (value) {
+          if (value === 'showing') {
+            // The replaced hls.js track must not draw its plain text too.
+            if (item.homelabOriginal && item.homelabOriginal.mode === 'showing') item.homelabOriginal.mode = 'disabled';
+            showAss(state, item);
+          } else if (state.assActive === item) hideAss(state);
+        }
+      });
+      return item;
+    }
+
+    function embeddedItems(state) {
+      var originals = state.hlsSubs || [];
+      var data = state.embedded;
+      // hls.js lists GST's text subtitles in file order; ASS ones are drawn
+      // by JASSUB instead when the sidecar's probe lines up with them.
+      if (!data || data.subtitles.length !== originals.length) return originals;
+      var aligned = data.subtitles.every(function (sub, i) {
+        return !sub.title || String(originals[i].label || '').trim() === sub.title;
+      });
+      if (!aligned) return originals;
+      var base = '/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + state.work.homelab_file_index + '/';
+      return originals.map(function (original, i) {
+        var sub = data.subtitles[i];
+        if ((sub.codec !== 'ass' && sub.codec !== 'ssa') || !Number.isInteger(sub.stream) || state.embeddedBroken[sub.stream]) return original;
+        if (original.homelabAss) return original;
+        var item = state.embeddedProxies[sub.stream];
+        if (!item) {
+          item = state.embeddedProxies[sub.stream] = defineMode(state, {
+            homelabAss: {
+              stream: sub.stream, events: base + 'sub/' + sub.stream,
+              fonts: (data.fonts || []).filter(Number.isInteger).map(function (id) {
+                return new URL(base + 'attachment/' + id, window.location.href).href;
+              })
+            }
+          });
+        }
+        // A reload brings new hls.js tracks; the item stays the same.
+        item.index = original.index;
+        item.label = original.label;
+        item.selected = original.selected;
+        item.homelabOriginal = original;
+        return item;
+      });
+    }
+
     function assItems(state, data) {
       var base = '/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/';
       return (data.subtitles || []).filter(function (sub) { return Number.isInteger(sub.file); }).map(function (sub, number) {
-        var item = {
+        return defineMode(state, {
           index: 1000 + number, label: (sub.title || 'ASS') + ' (ASS)', language: sub.language || '', external: true,
           homelabAss: {
             url: base + sub.file + '/raw',
@@ -874,23 +1034,18 @@
               return new URL(base + id + '/raw', window.location.href).href;
             })
           }
-        };
-        // Lampa's menu switches subtitles through `mode`, like hls.js tracks.
-        Object.defineProperty(item, 'mode', {
-          enumerable: true,
-          get: function () { return state.assActive === item ? 'showing' : 'disabled'; },
-          set: function (value) {
-            if (value === 'showing') showAss(state, item);
-            else if (state.assActive === item) hideAss(state);
-          }
         });
-        return item;
       });
     }
 
     function withAss(state, list) {
-      for (var i = list.length - 1; i >= 0; i--) if (list[i].homelabAss) list.splice(i, 1);
-      list.push.apply(list, state.assItems || []);
+      if (!state.hlsSubs) state.hlsSubs = list.filter(function (item) { return !item.homelabAss; });
+      var items = embeddedItems(state);
+      list.splice.apply(list, [0, list.length].concat(items, state.assItems || []));
+      // A plain-text track already showing switches to its drawn version.
+      items.forEach(function (item) {
+        if (item.homelabOriginal && item.homelabOriginal.mode === 'showing') item.mode = 'showing';
+      });
       return list;
     }
 
@@ -921,6 +1076,37 @@
       }
     }
 
+    function adoptSubtitles(state) {
+      if (state.subtitleList || !lastSubtitles || lastSubtitles.work !== state.work) return;
+      state.subtitleList = lastSubtitles.list;
+      state.hlsSubs = lastSubtitles.originals;
+    }
+
+    function embeddedSubtitles(state, work, revision) {
+      if (!work.homelab_torrent_hash || !Number.isInteger(work.homelab_file_index) || !assSupported()) return;
+      var url = new URL('/extaudio/' + encodeURIComponent(work.homelab_torrent_hash) + '/' + work.homelab_file_index + '/embedded', window.location.href);
+      function lookup(retry) {
+        return window.fetch(url.href, {signal: state.abort.signal}).then(function (response) {
+          // Shared with the external lookup's slots: ask once more.
+          if (response.status === 429 && retry) {
+            return new Promise(function (resolve) { setTimeout(resolve, 5000); }).then(function () { return lookup(false); });
+          }
+          if (!response.ok) throw new Error('embedded subtitle lookup: HTTP ' + response.status);
+          return response.json();
+        });
+      }
+      lookup(true).then(function (data) {
+        if (active !== state || generation !== revision || !data || typeof data.renderer !== 'string' || !Array.isArray(data.subtitles)) return;
+        if (!data.subtitles.some(function (sub) { return sub.codec === 'ass' || sub.codec === 'ssa'; })) return;
+        state.assRenderer = data.renderer;
+        state.embedded = data;
+        adoptSubtitles(state);
+        if (state.subtitleList) applySubtitles(state, withAss(state, state.subtitleList));
+      }).catch(function (error) {
+        if (error.name !== 'AbortError') console.warn('Homelab embedded ASS:', error.message);
+      });
+    }
+
     function installAss(state, data) {
       if (!data || typeof data.renderer !== 'string' || !Array.isArray(data.subtitles) || !data.subtitles.length) return;
       if (!assSupported()) return;
@@ -929,9 +1115,10 @@
       if (!state.assItems.length) return;
       // Embedded subtitles may have arrived before this player state, or may
       // never arrive; then the external ones form the menu on their own.
-      if (!state.subtitleList && lastSubtitles && lastSubtitles.work === state.work) state.subtitleList = lastSubtitles.list;
+      adoptSubtitles(state);
       if (!state.subtitleList) {
         state.subtitleList = [];
+        state.hlsSubs = [];
         Lampa.PlayerPanel.setSubs(state.subtitleList);
       }
       applySubtitles(state, withAss(state, state.subtitleList));
@@ -991,7 +1178,10 @@
       if (active && active.work === work && url) return;
       clear();
       if (!url || typeof window.fetch !== 'function' || typeof AbortController === 'undefined') return;
-      var state = active = {work: work, abort: new AbortController(), externalAbort: new AbortController(), previousTracks: work.voiceovers};
+      var state = active = {
+        work: work, abort: new AbortController(), externalAbort: new AbortController(), previousTracks: work.voiceovers,
+        embeddedProxies: {}, embeddedBroken: {}
+      };
       var stored = Lampa.Storage.get(preferenceKey, {});
       state.preferences = stored && stored[String(work.homelab_torrent_hash || work.torrent_hash)] || {};
       var revision = generation;
@@ -1048,6 +1238,7 @@
         lists.embedded = list;
         publish();
       }).catch(function () {}).finally(function () { clearTimeout(state.probeTimeout); });
+      embeddedSubtitles(state, work, revision);
       externalTracks(state, work).then(function (list) {
         clearTimeout(state.externalTimeout);
         if (active === state && generation === revision) installAss(state, state.externalData);
@@ -1060,9 +1251,13 @@
 
     Lampa.PlayerVideo.listener.follow('subs', function (event) {
       if (!Array.isArray(event.subs)) return;
-      lastSubtitles = {work: Lampa.Player.playdata(), list: event.subs};
+      // Lampa may send back the list it keeps, with drawn items already in it.
+      lastSubtitles = {work: Lampa.Player.playdata(), list: event.subs, originals: event.subs.map(function (sub) {
+        return sub.homelabOriginal || sub;
+      }).filter(function (sub) { return !sub.homelabAss; })};
       if (!active || Lampa.Player.playdata() !== active.work) return;
-      // The panel keeps this same array, so external items join its menu.
+      // The panel keeps this same array, so drawn items join or replace in its menu.
+      active.hlsSubs = lastSubtitles.originals;
       active.subtitleList = withAss(active, event.subs);
       // A reload (audio switch) may bring a new video element.
       var showing = active.assActive;

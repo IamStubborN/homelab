@@ -681,6 +681,201 @@ class CacheTests(unittest.TestCase):
         self.assertTrue(os.path.exists(new))
 
 
+class EmbeddedInfoTests(unittest.TestCase):
+    def test_lists_text_subtitles_by_their_ffmpeg_number_and_fonts_by_index(self):
+        probe = {"format": {"duration": "1420.5"}, "streams": [
+            {"index": 0, "codec_type": "video", "codec_name": "h264"},
+            {"index": 1, "codec_type": "subtitle", "codec_name": "hdmv_pgs_subtitle"},
+            {"index": 2, "codec_type": "subtitle", "codec_name": "ass", "tags": {"title": " Надписи ", "language": "rus"}},
+            {"index": 3, "codec_type": "subtitle", "codec_name": "subrip"},
+            {"index": 4, "codec_type": "attachment", "codec_name": "ttf", "extradata_size": 1000,
+             "tags": {"filename": "Font.TTF", "mimetype": "application/x-truetype-font"}},
+            {"index": 5, "codec_type": "attachment", "codec_name": "otf", "extradata_size": 900,
+             "tags": {"filename": "noext", "mimetype": "application/vnd.ms-opentype"}},
+            {"index": 6, "codec_type": "attachment", "extradata_size": 50, "tags": {"filename": "cover.jpg", "mimetype": "image/jpeg"}},
+            {"index": 7, "codec_type": "attachment", "extradata_size": app.MAX_FONT_BYTES + 1, "tags": {"filename": "huge.ttf"}},
+            {"index": 8, "codec_type": "attachment", "extradata_size": 0, "tags": {"filename": "empty.ttf"}},
+        ]}
+        self.assertEqual(app.embedded_info(probe), {
+            "subtitles": [
+                {"stream": 1, "codec": "ass", "title": "Надписи", "language": "rus"},
+                {"stream": 2, "codec": "subrip", "title": "", "language": ""},
+            ],
+            "fonts": [4, 5],
+            "duration": 1420.5,
+        })
+
+    def test_fonts_stop_at_the_total_limit(self):
+        size = app.MAX_EMBEDDED_FONT_BYTES // 2
+        probe = {"streams": [
+            {"index": index, "codec_type": "attachment", "extradata_size": size, "tags": {"filename": f"{index}.ttf"}}
+            for index in range(3)
+        ]}
+        with mock.patch.object(app, "MAX_FONT_BYTES", size):
+            self.assertEqual(app.embedded_info(probe)["fonts"], [0, 1])
+
+
+class SubtitleWindowTests(unittest.TestCase):
+    def track(self, duration=1000.0):
+        return app.SubtitleTrack(HASH, 13, 0, duration)
+
+    def run_at(self, start, end, began):
+        run = app.SubtitleRun(mock.Mock(), start, end, "x")
+        run.began = began
+        return run
+
+    def test_a_position_outside_every_window_starts_a_little_earlier(self):
+        self.assertEqual(app.next_window(self.track(), 300, 0), 290)
+        self.assertEqual(app.next_window(self.track(), 4, 0), 0)
+
+    def test_a_covered_position_waits_until_the_window_runs_low(self):
+        track = self.track()
+        track.done = [(100, 250)]
+        self.assertIsNone(app.next_window(track, 150, 0))
+        self.assertEqual(app.next_window(track, 200, 0), 250)
+        track.run = self.run_at(250, 400, 0)
+        self.assertIsNone(app.next_window(track, 200, 0), "the next window is already running")
+
+    def test_the_end_of_the_video_needs_no_more_windows(self):
+        track = self.track(duration=260)
+        track.done = [(100, 260)]
+        self.assertIsNone(app.next_window(track, 255, 0))
+
+    def test_a_running_window_serves_positions_it_will_soon_reach(self):
+        track = self.track()
+        track.run = self.run_at(100, 250, 0)
+        self.assertIsNone(app.next_window(track, 120, 0))
+        # After 10 s it has read at most 100 + 30 + 20 = 150 seconds.
+        self.assertIsNone(app.next_window(track, 155, 10))
+        self.assertEqual(app.next_window(track, 200, 10), 190, "a jump far ahead restarts there")
+        self.assertEqual(app.next_window(track, 50, 10), 40, "a seek back restarts")
+
+    def test_a_position_past_the_probed_end_needs_no_window(self):
+        self.assertIsNone(app.next_window(self.track(duration=100), 115, 0))
+
+    def test_windows_merge(self):
+        self.assertEqual(app.add_covered([(0, 150), (300, 450)], 140, 310), [(0, 450)])
+        self.assertEqual(app.add_covered([(300, 450)], 0, 150), [(0, 150), (300, 450)])
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class EmbeddedSubtitleTests(unittest.TestCase):
+    """Read events and fonts from a real Matroska file served over HTTP."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.source = tempfile.TemporaryDirectory()
+        events = "\n".join(
+            f"Dialogue: 0,0:{second // 60:02d}:{second % 60:02d}.00,0:{(second + 4) // 60:02d}:{(second + 4) % 60:02d}.00,"
+            f"Default,,0,0,0,,Line {second}"
+            for second in range(0, 120, 5)
+        )
+        subtitles = os.path.join(cls.source.name, "subs.ass")
+        with open(subtitles, "w") as output:
+            output.write(
+                "[Script Info]\nScriptType: v4.00+\nPlayResX: 640\nPlayResY: 360\n\n[V4+ Styles]\n"
+                "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
+                "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
+                "MarginR, MarginV, Encoding\nStyle: Default,Test Font,40,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+                "0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1\n\n[Events]\n"
+                "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" + events + "\n"
+            )
+        cls.font = os.path.join(cls.source.name, "Test.ttf")
+        with open(cls.font, "wb") as output:
+            output.write(b"\x00\x01\x00\x00font bytes" * 100)
+        path = os.path.join(cls.source.name, "video.mkv")
+        subprocess.run([
+            "ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=64x36:r=5:d=120",
+            "-i", subtitles, "-attach", cls.font, "-metadata:s:t", "mimetype=application/x-truetype-font",
+            "-map", "0:v", "-map", "1:s", "-c:v", "mpeg4", "-g", "10", "-c:s", "copy",
+            "-metadata:s:s:0", "title=Full", path,
+        ], check=True)
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), RangeHandler)
+        cls.server.path = path
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}/video.mkv"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.source.cleanup()
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        for name, value in (("stream_url", mock.Mock(return_value=self.url)), ("CACHE_DIR", self.directory.name),
+                            ("SUB_BURST", 300), ("require_video_file", mock.Mock())):
+            patcher = mock.patch.object(app, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        app._embedded_cache.clear()
+        app._subs.clear()
+        self.addCleanup(lambda: [app.stop_subtitle_run(track) for track in app._subs.values() if track.run])
+
+    def events(self, position, offset=0, wait=20):
+        deadline = time.monotonic() + wait
+        serial = app._subs[(HASH, 13, 0)].serial if (HASH, 13, 0) in app._subs else None
+        while True:
+            payload = app.subtitle_events(HASH, 13, 0, position, offset, serial)
+            track = app._subs[(HASH, 13, 0)]
+            if (payload["lines"] and track.run is None) or time.monotonic() > deadline:
+                return payload
+            time.sleep(0.2)
+
+    def test_reads_events_from_the_playback_position_onwards(self):
+        info = app.probe_embedded(HASH, 13)
+        self.assertEqual(info["subtitles"], [{"stream": 0, "codec": "ass", "title": "Full", "language": ""}])
+        self.assertEqual(len(info["fonts"]), 1)
+        first = self.events(60)
+        self.assertIn("[Events]", first["header"])
+        self.assertIn("Style: Default,Test Font", first["header"])
+        starts = [int(line.rsplit(" ", 1)[1]) for line in first["lines"]]
+        self.assertIn(50, starts)
+        self.assertEqual(starts[-1], 115)
+        self.assertTrue(all(start >= 40 for start in starts), starts)
+        self.assertEqual(app._subs[(HASH, 13, 0)].done, [(50.0, 120.0)])
+        # A seek back reads the beginning; overlapping events are not repeated.
+        more = self.events(3, first["next"])
+        self.assertIsNone(more["header"])
+        everything = first["lines"] + more["lines"]
+        self.assertEqual(len(everything), len(set(everything)))
+        self.assertEqual(len(everything), 24)
+
+    def test_a_window_without_events_still_counts_as_read(self):
+        app.probe_embedded(HASH, 13)
+        with mock.patch.object(app, "SUB_WINDOW", 3):
+            app.subtitle_events(HASH, 13, 0, 121.5, 0)  # 111.5–114.5 has no event start
+        track = app._subs[(HASH, 13, 0)]
+        deadline = time.monotonic() + 10
+        while track.run and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertEqual(track.failures, 0)
+        self.assertEqual(track.done, [(111.5, 114.5)])
+
+    def test_a_forgotten_track_resends_its_events_from_the_start(self):
+        app.probe_embedded(HASH, 13)
+        first = self.events(100)
+        app._subs.clear()
+        again = self.events(100, first["next"])
+        self.assertNotEqual(again["track"], first["track"])
+        self.assertIsNotNone(again["header"])
+        self.assertEqual(again["lines"], first["lines"])
+
+    def test_extracts_font_attachments(self):
+        info = app.probe_embedded(HASH, 13)
+        path = app.fetch_attachment(HASH, 13, info["fonts"][0])
+        with open(path, "rb") as extracted, open(self.font, "rb") as original:
+            self.assertEqual(extracted.read(), original.read())
+
+    def test_only_probed_ass_streams_are_read(self):
+        with self.assertRaises(app.Rejected):
+            app.subtitle_events(HASH, 13, 0, 10, 0)
+        app.probe_embedded(HASH, 13)
+        with self.assertRaises(app.Rejected):
+            app.subtitle_events(HASH, 13, 1, 10, 0)
+
+
 class HttpTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -713,6 +908,28 @@ class HttpTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertEqual(self.get(path)[0], 404)
+
+    def test_embedded_events_and_fonts_need_a_probed_video(self):
+        app._embedded_cache.clear()
+        app._embedded_cache[(HASH, 13, "embedded")] = {
+            "subtitles": [{"stream": 0, "codec": "subrip", "title": "", "language": ""}], "fonts": [3], "duration": 60.0,
+        }
+        self.addCleanup(app._embedded_cache.clear)
+        patcher = mock.patch.object(app, "probe_embedded", side_effect=app.Rejected("not a video"))
+        probe = patcher.start()
+        self.addCleanup(patcher.stop)
+        for path, status in (
+            (f"/extaudio/{HASH}/14/sub/0?at=10", 404),
+            (f"/extaudio/{HASH}/13/sub/0?at=10", 404),  # not ASS
+            (f"/extaudio/{HASH}/13/sub/0?at=-1", 400),
+            (f"/extaudio/{HASH}/13/sub/0?at=1&from=x", 400),
+            (f"/extaudio/{HASH}/13/attachment/4", 404),
+            (f"/extaudio/{HASH}/14/attachment/3", 404),
+            (f"/extaudio/{HASH}/13/attachment/..", 404),
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(self.get(path)[0], status)
+        self.assertEqual(probe.call_count, 2, "an unprobed file is probed again, as after a restart")
 
     def test_serves_ready_rendition_files(self):
         directory = app.rendition_dir(HASH, 1, 0, "copy")

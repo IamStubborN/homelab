@@ -48,12 +48,17 @@ function createVideo() {
 }
 
 class FakeAss {
-  constructor(options) { this.options = options; this.destroyed = false; FakeAss.instances.push(this); }
+  constructor(options) {
+    this.options = options; this.destroyed = false; this.events = [];
+    this.ready = Promise.resolve();
+    this.renderer = { processData: data => { this.events.push(...data.split('\n')); } };
+    FakeAss.instances.push(this);
+  }
   destroy() { this.destroyed = true; }
 }
 FakeAss.instances = [];
 
-function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {} } = {}) {
+function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null } = {}) {
   const notices = [];
   let work = false;
   let video = createVideo();
@@ -145,6 +150,15 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
         if (/^\/extaudio\/[^/]+\/\d+\/tracks$/.test(new URL(url).pathname)) {
           return Promise.resolve({ok: true, json: async () => ({tracks: external, ...(ass || {})})});
         }
+        if (/^\/extaudio\/[^/]+\/\d+\/embedded$/.test(new URL(url).pathname)) {
+          return Promise.resolve(embedded ? {ok: true, json: async () => embedded} : {ok: false, status: 404});
+        }
+        if (/^\/extaudio\/[^/]+\/\d+\/sub\/\d+$/.test(new URL(url).pathname)) {
+          const payload = events(new URL(url));
+          return Promise.resolve(payload ? {ok: true, json: async () => payload} : {ok: false, status: 502});
+        }
+        const fontMatch = /^\/extaudio\/[^/]+\/\d+\/attachment\/(\d+)$/.exec(new URL(url).pathname);
+        if (fontMatch) return Promise.resolve({ok: true, arrayBuffer: async () => new Uint8Array([Number(fontMatch[1])]).buffer});
         const rawMatch = /^\/extaudio\/[^/]+\/(\d+)\/raw$/.exec(new URL(url).pathname);
         if (rawMatch) {
           const bytes = raw[rawMatch[1]];
@@ -307,6 +321,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
     subtitleList: () => subtitles,
     currentVideo: () => video,
     replaceVideo() { video = createVideo(); },
+    timers,
   };
 }
 
@@ -1169,4 +1184,172 @@ test('ASS vector drawings never reach Lampa as subtitle text', async t => {
   assert.match(cleaned, /\n3 2 1 0\n/, 'a countdown is dialogue, not a drawing');
   assert.equal(results[1], cleaned, 'text responses are cleaned the same way');
   assert.equal(new TextDecoder().decode(results[2]), vtt, 'video fragments are untouched');
+});
+
+const signsAndFull = [
+  track('audio', 0, 'Japanese', 'ja'), track('subtitle', 0, 'Надписи'), track('subtitle', 1, 'SRT'), track('subtitle', 2, 'Полные'),
+];
+const embeddedLookup = {
+  renderer: '/extaudio/jassub/', fonts: [7, 9],
+  subtitles: [
+    { stream: 0, codec: 'ass', title: 'Надписи', language: 'rus' },
+    { stream: 2, codec: 'subrip', title: 'SRT', language: '' },
+    { stream: 3, codec: 'ass', title: 'Полные', language: 'rus' },
+  ],
+};
+const header = '[Script Info]\nScriptType: v4.00+\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n';
+const line = second => `Dialogue: 0,0:00:${String(second).padStart(2, '0')}.00,0:00:${String(second + 2).padStart(2, '0')}.00,Default,,0,0,0,,L${second}`;
+
+function eventServer(batches) {
+  const asked = [];
+  return {
+    asked,
+    respond(url) {
+      asked.push({ stream: url.pathname.split('/').pop(), at: url.searchParams.get('at'), from: Number(url.searchParams.get('from')) });
+      const from = Number(url.searchParams.get('from'));
+      const lines = batches.slice(0, asked.length).flat();
+      const track = Number(url.searchParams.get('track') || 1);
+      return { track: this.track ?? track, header: from === 0 ? header : null, lines: lines.slice(from), next: lines.length, more: false, failed: false };
+    },
+  };
+}
+
+async function pollTimer(h) {
+  h.fireTimer(3000);
+  await h.settle();
+}
+
+test('embedded ASS tracks are drawn by JASSUB from events read as playback goes', async t => {
+  FakeAss.instances.length = 0;
+  const server = eventServer([[line(1), line(3)], [line(3), line(5)]]);
+  const h = harness(t, new Map(), { embedded: embeddedLookup, events: url => server.respond(url) });
+  h.start(13, 'abc', true);
+  await h.probe(signsAndFull);
+  h.emitSubtitles(signsAndFull);
+  await h.settle();
+  assert.deepEqual(h.subtitleMenu(), ['Надписи', 'SRT', 'Полные'], 'labels stay as GST named them');
+  const [signs, srt, full] = h.subtitleList();
+  assert.ok(signs.homelabAss && full.homelabAss && !srt.homelabAss, 'only ASS streams are replaced');
+  h.video().currentTime = 61.25;
+  h.chooseSubtitle('Полные');
+  await h.settle();
+  assert.equal(h.subtitleTitle(), 'Полные');
+  assert.deepEqual(server.asked[0], { stream: '3', at: '61.3', from: 0 });
+  assert.equal(FakeAss.instances.length, 1);
+  const ass = FakeAss.instances[0];
+  assert.equal(ass.options.subContent, header);
+  assert.deepEqual(Array.from(ass.options.fonts, font => font[0]), [7, 9], 'fonts come from the attachments');
+  assert.deepEqual(ass.events, [line(1), line(3)]);
+  await pollTimer(h);
+  assert.equal(server.asked[1].from, 2);
+  assert.deepEqual(ass.events, [line(1), line(3), line(5)], 'a repeated event is not added twice');
+  h.video().fire('seeking');
+  h.fireTimer(300);
+  await h.settle();
+  assert.equal(server.asked.length, 3, 'a seek asks for the new position at once');
+  h.chooseSubtitle('SRT');
+  await h.settle();
+  assert.ok(ass.destroyed);
+  assert.equal(h.subtitleTitle(), 'SRT');
+  assert.ok(![...h.timers.values()].some(timer => timer.delay === 3000), 'polling stops with the track');
+});
+
+test('a plain-text track already showing switches to its drawn version', async t => {
+  FakeAss.instances.length = 0;
+  const server = eventServer([[line(1)]]);
+  const h = harness(t, new Map(), { embedded: embeddedLookup, events: url => server.respond(url) });
+  h.start(13, 'abc', true);
+  h.emitSubtitles(signsAndFull);
+  h.chooseSubtitle('Надписи');
+  await h.probe(signsAndFull);
+  await h.settle();
+  const signs = h.subtitleList()[0];
+  assert.ok(signs.homelabAss);
+  assert.equal(signs.mode, 'showing');
+  assert.equal(signs.homelabOriginal.mode, 'disabled', 'hls.js no longer loads the WebVTT version');
+  assert.equal(server.asked[0].stream, '0');
+});
+
+test('embedded ASS falls back to the plain-text track when the sidecar cannot read it', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), { embedded: embeddedLookup, events: () => ({ header: null, lines: [], next: 0, failed: true }) });
+  h.start(13, 'abc', true);
+  await h.probe(signsAndFull);
+  h.emitSubtitles(signsAndFull);
+  await h.settle();
+  h.chooseSubtitle('Полные');
+  await h.settle();
+  const full = h.subtitleList()[2];
+  assert.ok(!full.homelabAss, 'the broken drawn item leaves the menu');
+  assert.equal(h.subtitleTitle(), 'Полные', 'the plain-text track shows instead');
+  assert.match(h.notices.at(-1), /простой текст/);
+});
+
+test('embedded ASS stays plain text when the probe does not line up with the menu', async t => {
+  const h = harness(t, new Map(), { embedded: { ...embeddedLookup, subtitles: embeddedLookup.subtitles.slice(1) }, events: () => null });
+  h.start(13, 'abc', true);
+  await h.probe(signsAndFull);
+  h.emitSubtitles(signsAndFull);
+  await h.settle();
+  assert.ok(h.subtitleList().every(item => !item.homelabAss));
+  const renamed = harness(t, new Map(), { embedded: embeddedLookup, events: () => null });
+  renamed.start(13, 'abc', true);
+  await renamed.probe(signsAndFull);
+  renamed.emitSubtitles([track('subtitle', 0, 'Other'), track('subtitle', 1, 'SRT'), track('subtitle', 2, 'Полные')]);
+  await renamed.settle();
+  assert.ok(renamed.subtitleList().every(item => !item.homelabAss));
+});
+
+test('a seek during a request asks again once instead of starting a second poll loop', async t => {
+  FakeAss.instances.length = 0;
+  const server = eventServer([[line(1)], [line(3)], [line(5)]]);
+  const h = harness(t, new Map(), { embedded: embeddedLookup, events: url => server.respond(url) });
+  h.start(13, 'abc', true);
+  await h.probe(signsAndFull);
+  h.emitSubtitles(signsAndFull);
+  await h.settle();
+  h.chooseSubtitle('Полные');
+  h.video().fire('seeking');
+  h.video().fire('seeking');
+  await h.settle();
+  assert.equal(server.asked.length, 1);
+  const polls = () => [...h.timers.values()].filter(timer => timer.delay === 0 || timer.delay === 300 || timer.delay === 3000);
+  assert.equal(polls().length, 1, 'exactly one poll is scheduled');
+  assert.equal(polls()[0].delay, 0, 'the seek is asked about right after the request');
+  h.fireTimer(0);
+  await h.settle();
+  assert.equal(server.asked.length, 2);
+  assert.equal(polls().length, 1);
+});
+
+test('a restarted sidecar track resends events that are not drawn twice', async t => {
+  FakeAss.instances.length = 0;
+  const server = eventServer([[line(1), line(3)], [line(1), line(3), line(5)]]);
+  const h = harness(t, new Map(), { embedded: embeddedLookup, events: url => server.respond(url) });
+  h.start(13, 'abc', true);
+  await h.probe(signsAndFull);
+  h.emitSubtitles(signsAndFull);
+  await h.settle();
+  h.chooseSubtitle('Полные');
+  await h.settle();
+  server.track = 2;
+  await pollTimer(h);
+  assert.equal(server.asked[1].from, 2);
+  assert.deepEqual(FakeAss.instances[0].events, [line(1), line(3), line(5)]);
+});
+
+test('Lampa sending back its kept list does not make drawn items their own originals', async t => {
+  FakeAss.instances.length = 0;
+  const server = eventServer([[line(1)]]);
+  const h = harness(t, new Map(), { embedded: embeddedLookup, events: url => server.respond(url) });
+  h.start(13, 'abc', true);
+  await h.probe(signsAndFull);
+  h.emitSubtitles(signsAndFull);
+  await h.settle();
+  const list = h.subtitleList();
+  h.context.Lampa.PlayerVideo.listener.send('subs', { subs: list });
+  await h.settle();
+  assert.equal(list.length, 3);
+  assert.ok(list.every(item => item.homelabOriginal !== item));
+  assert.ok(!list[0].homelabOriginal.homelabAss);
 });

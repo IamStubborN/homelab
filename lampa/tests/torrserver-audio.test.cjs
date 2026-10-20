@@ -47,7 +47,7 @@ function createVideo() {
   };
 }
 
-function harness(t, storage = new Map(), { android = false, external = [], rendition = [] } = {}) {
+function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [] } = {}) {
   const notices = [];
   let work = false;
   let video = createVideo();
@@ -130,6 +130,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
     clearTimeout(id) { timers.delete(id); },
     window: {
       Hls: TestHls,
+      MediaSource: { isTypeSupported: type => mse.some(codec => type === `audio/mp4; codecs="${codec}"`) },
       location: { origin: 'https://lampa.test', href: 'https://lampa.test/' },
       localStorage: browserStorage,
       fetch(url, options) {
@@ -195,7 +196,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
   });
 
   return {
-    loads, storage, requests, destroy, playingStates, notices,
+    loads, storage, requests, destroy, playingStates, notices, context,
     settle: async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); },
     audioMenu: () => audioMenu,
     loaderInstances: TestLoader.instances,
@@ -681,7 +682,7 @@ test('Android external player bypasses HLS ownership and track interception afte
 const japaneseAAC = { Type: 'audio', Index: 0, Title: 'Japanese', Language: 'ja', Channels: 2, IsAAC: true };
 const anilibria = { file: 1, stream: 0, title: 'AniLibria.tv', location: 'Sound', language: 'rus', codec: 'aac', channels: 2 };
 const externalLabel = 'AniLibria.tv (внешняя)';
-const externalAudio = { key: '1:0', url: '/extaudio/abc/1/0/audio.m3u8', name: 'AniLibria.tv', language: 'rus' };
+const externalAudio = { key: '1:0', url: '/extaudio/abc/1/0/copy/audio.m3u8', codecs: 'mp4a.40.2', name: 'AniLibria.tv', language: 'rus' };
 
 test('external audio is offered with one embedded track and reuses the AAC task', async t => {
   const h = harness(t, new Map(), { external: [anilibria] });
@@ -825,7 +826,7 @@ test('external audio rewrites the master playlist and strips embedded audio from
   const manifest = load(hls.config.pLoader, { type: 'manifest' },
     '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.640033,mp4a.40.2",SUBTITLES="subs"\n/gst/1/video.m3u8?audio=0\n');
   assert.equal(manifest.data, '#EXTM3U\n' +
-    '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="homelab-external",NAME="AniLibria.tv",LANGUAGE="rus",DEFAULT=YES,AUTOSELECT=YES,URI="/extaudio/abc/1/0/audio.m3u8"\n' +
+    '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="homelab-external",NAME="AniLibria.tv",LANGUAGE="rus",DEFAULT=YES,AUTOSELECT=YES,URI="/extaudio/abc/1/0/copy/audio.m3u8"\n' +
     '#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.640033,mp4a.40.2",SUBTITLES="subs",AUDIO="homelab-external"\n/gst/1/video.m3u8?audio=0\n');
   const level = load(hls.config.pLoader, { type: 'level' }, '#EXTM3U\n');
   assert.equal(level.data, '#EXTM3U\n');
@@ -870,6 +871,84 @@ test('external audio handles a leading AUDIO attribute and rejects unsupported f
   const fragment = Buffer.concat([box('moof', box('mfhd', u32(0, 1)), absolute, traf(2, 0)), box('mdat', Buffer.from('x'))]);
   const error = load(hls.config.fLoader, { frag: { type: 'main', sn: 1 } }, exact(fragment));
   assert.equal(error.data, undefined, 'unsupported layouts fail instead of corrupting samples');
+});
+
+test('external audio copies codecs the browser decodes and encodes the rest', async t => {
+  const tracks = [
+    { ...anilibria, file: 1, codec: 'opus', title: 'Opus' },
+    { ...anilibria, file: 2, codec: 'ac3', title: 'AC3' },
+    { ...anilibria, file: 3, codec: 'dts', title: 'DTS' },
+  ];
+  const h = harness(t, new Map(), { external: tracks, mse: ['Opus'] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  assert.deepEqual(h.audioMenu().filter(item => item.external).map(item => [item.url, item.codecs]), [
+    ['/extaudio/abc/1/0/copy/audio.m3u8', 'Opus'],
+    ['/extaudio/abc/2/0/aac/audio.m3u8', 'mp4a.40.2'],
+    ['/extaudio/abc/3/0/aac/audio.m3u8', 'mp4a.40.2'],
+  ]);
+  h.chooseAudio('Opus (внешняя)');
+  await h.settle();
+  const hls = h.createHls();
+  let result = null;
+  new hls.config.pLoader({}).load({ type: 'manifest' }, {}, { onSuccess: response => { result = response; } });
+  h.loaderInstances.at(-1).callbacks.onSuccess({ data: '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.640033,mp4a.40.2"\n/v.m3u8\n' }, {}, { type: 'manifest' }, null);
+  assert.match(result.data, /CODECS="avc1\.640033,Opus",AUDIO="homelab-external"/);
+});
+
+test('an unsupported fragment layout falls back to the embedded track', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  const hls = h.createHls();
+  const errors = [];
+  hls.on('error', (name, data) => errors.push(data));
+  hls.trigger('error', { type: 'networkError', details: 'fragLoadError', fatal: false,
+    frag: { type: 'main' }, response: { code: 0, text: 'Homelab audio: Unsupported fragment layout' } });
+  assert.deepEqual(errors, [], 'the transform error is not retried or reported as a network failure');
+  h.fireTimer(0);
+  assert.equal(h.work().homelab_external_audio, undefined);
+  assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), ['Japanese']);
+  assert.equal(h.notices.at(-1), 'Внешняя озвучка не поддерживается для этого видео');
+});
+
+test('an unsupported fragment layout without an embedded track is reported as fatal', async t => {
+  const h = harness(t, new Map(), { external: [anilibria, { ...anilibria, file: 2, title: 'Second' }] });
+  h.start(13, 'abc', true);
+  const probe = h.pending.find(item => /\/probe$/.test(new URL(item.url).pathname));
+  h.pending.splice(h.pending.indexOf(probe), 1);
+  probe.resolve({ ok: false });
+  await h.settle();
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  const hls = h.createHls();
+  const errors = [];
+  hls.on('error', (name, data) => errors.push(data));
+  hls.trigger('error', { type: 'networkError', details: 'fragLoadError', fatal: false,
+    frag: { type: 'main' }, response: { code: 0, text: 'Homelab audio: Unsupported fragment layout' } });
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].fatal, true);
+});
+
+test('a busy external lookup is asked once more', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  const fetch = h.context.window.fetch;
+  let busy = true;
+  h.context.window.fetch = (url, options) => {
+    if (busy && /\/tracks$/.test(new URL(url).pathname)) { busy = false; h.requests.push({ url, options }); return Promise.resolve({ ok: false, status: 429 }); }
+    return fetch(url, options);
+  };
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  assert.deepEqual(h.audioMenu().map(item => item.label), []);
+  h.fireTimer(5000);
+  await h.settle();
+  assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', externalLabel]);
 });
 
 test('players without external audio keep default hls.js loaders', async t => {

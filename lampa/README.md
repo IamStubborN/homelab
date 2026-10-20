@@ -34,10 +34,19 @@ sidecar adds those files to browser playback without modifying Lampac:
 - `/extaudio/<hash>/<video file id>/tracks` lists audio files named after the
   video (`<stem>.mka` in any folder, or `<stem>.<label>.ac3`). It queries only
   the torrent being played and probes at most six candidate headers.
-- `/extaudio/<hash>/<file id>/<stream>/audio.m3u8` remuxes the selected file once
-  into fMP4 HLS. AAC is copied; other codecs are encoded to AAC. One job runs at
-  a time at low priority, so the playlist answers `503 Retry-After` until it is ready.
-  Results live in the ignored `extaudio-cache/` directory, which is limited to
+- `/extaudio/<hash>/<file id>/<stream>/<copy|aac>/audio.m3u8` remuxes the
+  selected file once into fMP4 HLS. The plugin asks for `copy` when the browser
+  decodes the codec itself (AAC everywhere, Opus in Chrome and Safari, AC-3 and
+  E-AC-3 in Safari). Anything else (FLAC, MP3, DTS, TrueHD, PCM, WMA and so on)
+  is encoded to AAC: about a minute of one core for a 24-minute stereo episode.
+- One job runs at a time at low priority, so the playlist answers
+  `503 Retry-After` until it is ready. A job's deadline grows with the file size
+  (`JOB_BASE_SECONDS` plus `MIN_SOURCE_KBPS`, at most `JOB_MAX_SECONDS`), and a job
+  nobody polls for `ABANDON_SECONDS` is stopped so it no longer pulls the torrent.
+- ffmpeg accepts only audio container formats (`INPUT_FORMATS` in `app.py`), so a
+  file disguised as a playlist cannot make it fetch other URLs. Track lookups
+  run at most two at a time, and a failed probe is not retried for 10 minutes.
+- Results live in the ignored `extaudio-cache/` directory, which is limited to
   1 GiB and 24 hours. Delete it at any time.
 - The plugin lists external tracks in the regular audio menu. When an external
   track is chosen, the video keeps using the same GST task. hls.js receives an
@@ -48,7 +57,10 @@ sidecar adds those files to browser playback without modifying Lampac:
 
 hls.js 1.4.7 stalls when one audio group mixes a muxed rendition with an
 external one. The master playlist therefore carries only the external
-rendition, and switching back to an embedded track reloads the player.
+rendition, and switching back to an embedded track reloads the player. The plugin also
+rewrites the variant's `CODECS` to the external codec, because hls.js creates the
+audio SourceBuffer from it. If a GST fragment layout cannot be stripped, the
+plugin falls back to the embedded track.
 
 ## Runtime setup
 

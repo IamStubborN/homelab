@@ -128,6 +128,19 @@
       return String(value || '').replace(/["\r\n]/g, ' ').trim();
     }
 
+    // hls.js 1.4 accepts these sample entries; the sidecar copies them only
+    // when the browser can decode them, and encodes anything else to AAC.
+    var COPY_CODECS = {aac: 'mp4a.40.2', opus: 'Opus', ac3: 'ac-3', eac3: 'ec-3'};
+    var AUDIO_CODEC = /^(mp4a|ac-3|ec-3|opus|flac|mp3)/i;
+
+    function externalMode(codec) {
+      if (codec === 'aac') return 'copy';
+      try {
+        return COPY_CODECS[codec] && window.MediaSource &&
+          window.MediaSource.isTypeSupported('audio/mp4; codecs="' + COPY_CODECS[codec] + '"') ? 'copy' : 'aac';
+      } catch (error) { return 'aac'; }
+    }
+
     function withExternalAudio(text, external) {
       var media = '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="homelab-external",NAME="' + (hlsQuoted(external.name) || 'External') + '"' +
         (hlsQuoted(external.language) ? ',LANGUAGE="' + hlsQuoted(external.language) + '"' : '') +
@@ -136,6 +149,12 @@
       return String(text).split(/\r?\n/).map(function (line) {
         if (line.indexOf('#EXT-X-STREAM-INF:') !== 0) return line;
         line = line.replace(/,AUDIO="[^"]*"/, '').replace(/:AUDIO="[^"]*",?/, ':') + ',AUDIO="homelab-external"';
+        // The audio SourceBuffer is created from CODECS, not from the init segment.
+        line = line.replace(/CODECS="([^"]*)"/, function (all, list) {
+          return 'CODECS="' + list.split(',').map(function (codec) { return codec.trim(); }).filter(function (codec) {
+            return codec && !AUDIO_CODEC.test(codec);
+          }).concat(external.codecs || COPY_CODECS.aac).join(',') + '"';
+        });
         if (inserted) return line;
         inserted = true;
         return media + '\n' + line;
@@ -197,6 +216,7 @@
         var lastError = null;
         var disposed = false;
         var handled = new WeakSet();
+        var abandoned = false;
         var cancelPauseRestore = function () {};
 
         function clearDeadline() {
@@ -258,6 +278,19 @@
 
         function recover(data) {
           if (handled.has(data)) return true;
+          if (!disposed && !terminated && data.response && /^Homelab audio:/.test(data.response.text || '')) {
+            // A loader transform failed; retrying the same bytes cannot help.
+            handled.add(data);
+            if (!abandoned && !embeddedFallback(work)) {
+              finishFailure();
+              hls.trigger(BaseHls.Events.ERROR, Object.assign({}, data, {fatal: true}));
+            } else if (!abandoned) {
+              abandoned = true;
+              hls.stopLoad();
+              setTimeout(function () { if (!disposed) abandonExternal(work); }, 0);
+            }
+            return true;
+          }
           if (disposed || terminated || Lampa.Player.playdata() !== work || !data.fatal ||
               data.type !== BaseHls.ErrorTypes.NETWORK_ERROR) return false;
           // Restarting the GST task cannot fix an external audio rendition.
@@ -505,6 +538,7 @@
       var url = masterUrl(state.work);
       if (!automatic) remember(state, 'audio', identity(track));
       if (!url || track === selectedTrack(state, url)) return cancelPreparation(state);
+      if (track.external && track.unsupported && automatic) return;
       if (track.external && !track.ready) return prepareExternal(state, track, automatic);
       cancelPreparation(state);
       if (state.cancelRestore) state.cancelRestore(true);
@@ -525,7 +559,7 @@
       }
       var embedded = track.external ? carrierTrack(state, url) : track;
       if (track.external) {
-        state.work.homelab_external_audio = {key: track.key, url: track.url, name: track.gstTitle, language: track.language};
+        state.work.homelab_external_audio = {key: track.key, url: track.url, codecs: track.codecs, name: track.gstTitle, language: track.language};
       } else delete state.work.homelab_external_audio;
       // An external rendition reuses the running task unless the embedded
       // track would need transcoding that the stripped video never plays.
@@ -604,7 +638,8 @@
     function prepareExternal(state, track, automatic) {
       if (state.preparing && state.preparing.track === track) return;
       cancelPreparation(state);
-      var preparing = state.preparing = {track: track, abort: new AbortController(), timer: null, deadline: Date.now() + 900000};
+      // The sidecar sizes its own deadline to the file; this only bounds polling.
+      var preparing = state.preparing = {track: track, abort: new AbortController(), timer: null, deadline: Date.now() + 14400000};
       if (!automatic && Lampa.Noty) Lampa.Noty.show('Готовлю озвучку: ' + track.label);
       function attempt() {
         if (state.preparing !== preparing) return;
@@ -630,6 +665,23 @@
       attempt();
     }
 
+    function embeddedFallback(work) {
+      var state = active;
+      var url = state && state.work === work && work.homelab_external_audio && masterUrl(work);
+      var carrier = url && carrierTrack(state, url);
+      return carrier && state.tracks.indexOf(carrier) !== -1 ? carrier : null;
+    }
+
+    function abandonExternal(work) {
+      var carrier = embeddedFallback(work);
+      if (!carrier) return;
+      var failed = selectedTrack(active, masterUrl(work));
+      if (failed) failed.unsupported = true;
+      console.warn('Homelab external audio: unsupported fragment layout');
+      if (Lampa.Noty) Lampa.Noty.show('Внешняя озвучка не поддерживается для этого видео');
+      selectTrack(active, carrier, true);
+    }
+
     function selectedTrack(state, url) {
       var external = state.work.homelab_external_audio;
       var index = Number(url.searchParams.get('audio') || 0);
@@ -649,11 +701,25 @@
     function externalTracks(state, work) {
       if (!work.homelab_torrent_hash || !Number.isInteger(work.homelab_file_index)) return Promise.resolve([]);
       var base = '/extaudio/' + encodeURIComponent(work.homelab_torrent_hash) + '/';
-      return window.fetch(new URL(base + work.homelab_file_index + '/tracks', window.location.href).href, {signal: state.externalAbort.signal})
-        .then(function (response) {
-          if (!response.ok) throw new Error('External audio lookup failed');
-          return response.json();
-        })
+      var signal = state.externalAbort.signal;
+      function lookup(retry) {
+        return window.fetch(new URL(base + work.homelab_file_index + '/tracks', window.location.href).href, {signal: signal})
+          .then(function (response) {
+            // The sidecar limits concurrent lookups; ask once more before giving up.
+            if (response.status === 429 && retry) return new Promise(function (resolve, reject) {
+              var timer = setTimeout(function () { resolve(lookup(false)); }, 5000);
+              signal.addEventListener('abort', function () {
+                clearTimeout(timer);
+                var error = new Error('The operation was aborted');
+                error.name = 'AbortError';
+                reject(error);
+              }, {once: true});
+            });
+            if (!response.ok) throw new Error('External audio lookup failed');
+            return response.json();
+          });
+      }
+      return lookup(true)
         .then(function (data) { return data.tracks || []; })
         .catch(function (error) {
           if (error.name === 'AbortError') throw error;
@@ -664,9 +730,11 @@
           return tracks.filter(function (track) {
             return Number.isInteger(track.file) && Number.isInteger(track.stream);
           }).map(function (track) {
-            var path = base + track.file + '/' + track.stream + '/audio.m3u8';
+            var mode = externalMode(track.codec);
             return {
-              external: true, key: track.file + ':' + track.stream, url: path,
+              external: true, key: track.file + ':' + track.stream,
+              url: base + track.file + '/' + track.stream + '/' + mode + '/audio.m3u8',
+              codecs: mode === 'copy' ? COPY_CODECS[track.codec] : COPY_CODECS.aac,
               language: track.language, gstTitle: track.title || '',
               label: (track.title || track.location || 'Audio') + ' (внешняя)',
               extra: {channels: track.channels}

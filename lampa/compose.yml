@@ -53,6 +53,45 @@ services:
       retries: 3
       start_period: 5s
 
+  lampa-extaudio:
+    build: ./extaudio
+    image: homelab/lampa-extaudio:latest
+    container_name: lampa-extaudio
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    # Remuxing is copy-only for AAC; the cap bounds transcoding other codecs.
+    cpus: 1.0
+    cpu_shares: 512
+    mem_limit: 256m
+    environment:
+      TORRSERVER_BASE: http://gluetun-torrserver:8090
+      CACHE_DIR: /cache
+      CACHE_MAX_MB: "1024"
+      CACHE_TTL_HOURS: "24"
+    volumes:
+      - ./extaudio-cache:/cache
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.lampa-extaudio.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/extaudio/`)"
+      - "traefik.http.routers.lampa-extaudio.entrypoints=http,https"
+      - "traefik.http.routers.lampa-extaudio.tls=true"
+      - "traefik.http.routers.lampa-extaudio.priority=100"
+      - "traefik.http.services.lampa-extaudio.loadbalancer.server.port=8080"
+    networks:
+      - proxy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:8080/extaudio/health"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
   lampa:
     build: ./runtime
     image: homelab/lampac-intel:latest

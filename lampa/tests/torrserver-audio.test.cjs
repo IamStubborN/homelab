@@ -47,7 +47,8 @@ function createVideo() {
   };
 }
 
-function harness(t, storage = new Map(), { android = false } = {}) {
+function harness(t, storage = new Map(), { android = false, external = [], rendition = [] } = {}) {
+  const notices = [];
   let work = false;
   let video = createVideo();
   let audioMenu = [];
@@ -60,7 +61,15 @@ function harness(t, storage = new Map(), { android = false } = {}) {
   const loads = [];
   const playingStates = [];
   const hlsInstances = [];
+  class TestLoader {
+    constructor(config) { this.config = config; TestLoader.instances.push(this); }
+    load(context, config, callbacks) { this.context = context; this.callbacks = callbacks; }
+    abort() {}
+    destroy() {}
+  }
+  TestLoader.instances = [];
   class TestHls {
+    static DefaultConfig = { loader: TestLoader };
     static Events = {
       ERROR: 'error', MANIFEST_LOADING: 'manifestLoading',
       FRAG_LOADING: 'fragLoading', FRAG_BUFFERED: 'fragBuffered',
@@ -107,6 +116,7 @@ function harness(t, storage = new Map(), { android = false } = {}) {
       playpause() { if (!waiting) video.paused ? video.play() : video.pause(); },
       subsview() {},
     },
+    Noty: { show: message => notices.push(message) },
     PlayerPanel: { listener: panel, setTracks: value => { audioMenu = value; }, setSubs: value => { subtitles = value; } },
   };
   const browserStorage = {
@@ -125,6 +135,13 @@ function harness(t, storage = new Map(), { android = false } = {}) {
       fetch(url, options) {
         requests.push({url, options});
         if (/\/(?:heartbeat|remove)(?:\?|$)/.test(url)) return Promise.resolve({ok: true});
+        if (/^\/extaudio\/[^/]+\/\d+\/tracks$/.test(new URL(url).pathname)) {
+          return Promise.resolve({ok: true, json: async () => ({tracks: external})});
+        }
+        if (/^\/extaudio\/.+\/audio\.m3u8$/.test(new URL(url).pathname)) {
+          const status = rendition.length ? rendition.shift() : 200;
+          return Promise.resolve({ok: status === 200, status});
+        }
         return new Promise((resolve, reject) => {
           const signal = options?.signal;
           const request = {
@@ -178,7 +195,10 @@ function harness(t, storage = new Map(), { android = false } = {}) {
   });
 
   return {
-    loads, storage, requests, destroy, playingStates,
+    loads, storage, requests, destroy, playingStates, notices,
+    settle: async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); },
+    audioMenu: () => audioMenu,
+    loaderInstances: TestLoader.instances,
     createHls() {
       const hls = new context.window.Hls({});
       hls.media = video;
@@ -656,4 +676,207 @@ test('Android external player bypasses HLS ownership and track interception afte
   h.start(2, 'same-torrent', true);
   assert.equal(new URL(h.work().url).pathname, '/gst/start.m3u8');
   assert.ok(h.requests.some(request => new URL(request.url).pathname === '/gst/probe'));
+});
+
+const japaneseAAC = { Type: 'audio', Index: 0, Title: 'Japanese', Language: 'ja', Channels: 2, IsAAC: true };
+const anilibria = { file: 1, stream: 0, title: 'AniLibria.tv', location: 'Sound', language: 'rus', codec: 'aac', channels: 2 };
+const externalLabel = 'AniLibria.tv (внешняя)';
+const externalAudio = { key: '1:0', url: '/extaudio/abc/1/0/audio.m3u8', name: 'AniLibria.tv', language: 'rus' };
+
+test('external audio is offered with one embedded track and reuses the AAC task', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  assert.ok(h.requests.some(r => new URL(r.url).pathname === '/extaudio/abc/13/tracks'));
+  assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', externalLabel]);
+  const before = h.work().url;
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  assert.deepEqual({ ...h.work().homelab_external_audio }, externalAudio);
+  assert.equal(h.work().url, before, 'the running GST task keeps serving video');
+  assert.equal(h.loads.at(-1), before);
+  assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), [externalLabel]);
+  assert.equal(h.requests.filter(r => new URL(r.url).pathname === '/gst/remove').length, 0);
+  h.ready();
+  h.chooseAudio('Japanese');
+  assert.equal(h.work().homelab_external_audio, undefined);
+  assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), ['Japanese']);
+});
+
+test('external audio moves the hidden embedded track to AAC to avoid transcoding', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  h.start(13, 'abc', true);
+  await h.probe([{ ...japaneseAAC, IsAAC: false }, { ...japaneseAAC, Index: 1, Title: 'English', Language: 'en' }]);
+  await h.task('311');
+  const uid = new URL(h.work().url).searchParams.get('uid');
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  assert.equal(h.audioIndex(), 1);
+  assert.notEqual(new URL(h.work().url).searchParams.get('uid'), uid);
+});
+
+test('a remembered external track is restored on the next episode', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  h.ready();
+  h.start(14, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  assert.deepEqual({ ...h.work().homelab_external_audio }, externalAudio);
+  assert.ok(h.requests.some(r => new URL(r.url).pathname === '/extaudio/abc/14/tracks'));
+});
+
+test('external audio keeps current audio playing until the rendition is ready', async t => {
+  const h = harness(t, new Map(), { external: [anilibria], rendition: [503, 429] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  const loads = h.loads.length;
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  assert.equal(h.work().homelab_external_audio, undefined);
+  assert.equal(h.loads.length, loads, 'playback is not reloaded while the sidecar prepares');
+  assert.deepEqual(h.notices, ['Готовлю озвучку: ' + externalLabel]);
+  h.fireTimer(2000);
+  await h.settle();
+  assert.equal(h.work().homelab_external_audio, undefined);
+  h.fireTimer(10000);
+  await h.settle();
+  assert.deepEqual({ ...h.work().homelab_external_audio }, externalAudio);
+  assert.equal(h.requests.filter(r => /audio\.m3u8$/.test(new URL(r.url).pathname)).length, 3);
+});
+
+test('a failed external rendition keeps the embedded track', async t => {
+  const h = harness(t, new Map(), { external: [anilibria], rendition: [502] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  assert.equal(h.work().homelab_external_audio, undefined);
+  assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), ['Japanese']);
+  assert.equal(h.notices.at(-1), 'Не удалось подготовить озвучку: ' + externalLabel);
+});
+
+test('choosing an embedded track cancels external preparation', async t => {
+  const h = harness(t, new Map(), { external: [anilibria], rendition: [503] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  h.chooseAudio('Japanese');
+  assert.throws(() => h.fireTimer(2000), /timer 2000 is scheduled/);
+  assert.equal(h.work().homelab_external_audio, undefined);
+});
+
+test('external audio lookup failure keeps embedded tracks working', async t => {
+  const h = harness(t);
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  assert.deepEqual(h.audioMenu().map(item => item.label), ['Dream Cast', 'Amediateka (Studio Band)', 'Japanese']);
+});
+
+function box(type, ...parts) {
+  const body = Buffer.concat(parts);
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(8 + body.length);
+  header.write(type, 4, 'latin1');
+  return Buffer.concat([header, body]);
+}
+const exact = bytes => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length);
+const u32 = (...values) => Buffer.concat(values.map(value => { const b = Buffer.alloc(4); b.writeUInt32BE(value >>> 0); return b; }));
+const trak = (id, handler) => box('trak', box('tkhd', u32(0, 0, 0, id, 0)), box('mdia', box('hdlr', u32(0, 0), Buffer.from(handler))));
+const trex = id => box('trex', u32(0, id, 1, 0, 0, 0));
+const traf = (id, offset) => box('traf', box('tfhd', u32(0x020000, id)), box('tfdt', u32(0, 0)), box('trun', u32(1, 1, offset)));
+const types = bytes => {
+  const found = [];
+  const walk = (start, end) => {
+    for (let offset = start; offset < end;) {
+      const size = bytes.readUInt32BE(offset);
+      const type = bytes.toString('latin1', offset + 4, offset + 8);
+      found.push(type);
+      if (['moov', 'trak', 'mdia', 'mvex', 'moof', 'traf'].includes(type)) walk(offset + 8, offset + size);
+      offset += size;
+    }
+  };
+  walk(0, bytes.length);
+  return found;
+};
+
+test('external audio rewrites the master playlist and strips embedded audio from main fragments', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  const hls = h.createHls();
+  const load = (Loader, context, data) => {
+    let result = null;
+    new Loader({}).load(context, {}, { onSuccess: response => { result = response; }, onError: error => { result = error; } });
+    h.loaderInstances.at(-1).callbacks.onSuccess({ data }, {}, context, null);
+    return result;
+  };
+
+  const manifest = load(hls.config.pLoader, { type: 'manifest' },
+    '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.640033,mp4a.40.2",SUBTITLES="subs"\n/gst/1/video.m3u8?audio=0\n');
+  assert.equal(manifest.data, '#EXTM3U\n' +
+    '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="homelab-external",NAME="AniLibria.tv",LANGUAGE="rus",DEFAULT=YES,AUTOSELECT=YES,URI="/extaudio/abc/1/0/audio.m3u8"\n' +
+    '#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.640033,mp4a.40.2",SUBTITLES="subs",AUDIO="homelab-external"\n/gst/1/video.m3u8?audio=0\n');
+  const level = load(hls.config.pLoader, { type: 'level' }, '#EXTM3U\n');
+  assert.equal(level.data, '#EXTM3U\n');
+
+  const init = Buffer.concat([box('ftyp', Buffer.from('isom')), box('moov', box('mvhd', u32(0)), trak(1, 'vide'), trak(2, 'soun'), box('mvex', trex(1), trex(2)))]);
+  const strippedInit = Buffer.from(load(hls.config.fLoader, { frag: { type: 'main', sn: 'initSegment' } }, exact(init)).data);
+  assert.deepEqual(types(strippedInit), ['ftyp', 'moov', 'mvhd', 'trak', 'tkhd', 'mdia', 'hdlr', 'mvex', 'trex']);
+
+  const audioTraf = traf(2, 0);
+  const fragment = Buffer.concat([box('moof', box('mfhd', u32(0, 1)), traf(1, 500), audioTraf), box('mdat', Buffer.from('samples'))]);
+  const stripped = Buffer.from(load(hls.config.fLoader, { frag: { type: 'main', sn: 7 } }, exact(fragment)).data);
+  assert.deepEqual(types(stripped), ['moof', 'mfhd', 'traf', 'tfhd', 'tfdt', 'trun', 'mdat']);
+  assert.equal(stripped.length, fragment.length - audioTraf.length);
+  const trun = stripped.indexOf('trun', 0, 'latin1') - 4;
+  assert.equal(stripped.readInt32BE(trun + 16), 500 - audioTraf.length, 'video samples still point into mdat');
+  assert.equal(stripped.toString('latin1', stripped.length - 7), 'samples');
+
+  const audio = exact(Buffer.from('external'));
+  assert.equal(load(hls.config.fLoader, { frag: { type: 'audio', sn: 0 } }, audio).data, audio);
+});
+
+test('external audio handles a leading AUDIO attribute and rejects unsupported fragment layouts', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  const hls = h.createHls();
+  const load = (Loader, context, data) => {
+    let result = null;
+    new Loader({}).load(context, {}, { onSuccess: response => { result = response; }, onError: error => { result = error; } });
+    h.loaderInstances.at(-1).callbacks.onSuccess({ data }, {}, context, null);
+    return result;
+  };
+  const manifest = load(hls.config.pLoader, { type: 'manifest' },
+    '#EXTM3U\n#EXT-X-STREAM-INF:AUDIO="old",BANDWIDTH=1\n/v.m3u8\n');
+  assert.match(manifest.data, /#EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO="homelab-external"\n/);
+
+  const init = Buffer.concat([box('ftyp', Buffer.from('isom')), box('moov', box('mvhd', u32(0)), trak(1, 'vide'), trak(2, 'soun'), box('mvex', trex(1), trex(2)))]);
+  load(hls.config.fLoader, { frag: { type: 'main', sn: 'initSegment' } }, exact(init));
+  const absolute = box('traf', box('tfhd', u32(0x000001, 1, 0, 0)), box('trun', u32(1, 1, 500)));
+  const fragment = Buffer.concat([box('moof', box('mfhd', u32(0, 1)), absolute, traf(2, 0)), box('mdat', Buffer.from('x'))]);
+  const error = load(hls.config.fLoader, { frag: { type: 'main', sn: 1 } }, exact(fragment));
+  assert.equal(error.data, undefined, 'unsupported layouts fail instead of corrupting samples');
+});
+
+test('players without external audio keep default hls.js loaders', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  const hls = h.createHls();
+  assert.equal(hls.config.pLoader, undefined);
+  assert.equal(hls.config.fLoader, undefined);
 });

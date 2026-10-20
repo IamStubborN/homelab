@@ -25,6 +25,31 @@ creation, numeric session, probe, heartbeat, removal, and plugin paths to
 retain the priority-101 route to TorrServer. Do not redirect every `/gst/` path
 to a single backend.
 
+## External audio tracks
+
+Some torrents keep voice-overs in separate files, for example
+`Sound/<episode>.mka`. GStreamer reads one file, so the `lampa-extaudio`
+sidecar adds those files to browser playback without modifying Lampac:
+
+- `/extaudio/<hash>/<video file id>/tracks` lists audio files named after the
+  video (`<stem>.mka` in any folder, or `<stem>.<label>.ac3`). It queries only
+  the torrent being played and probes at most six candidate headers.
+- `/extaudio/<hash>/<file id>/<stream>/audio.m3u8` remuxes the selected file once
+  into fMP4 HLS. AAC is copied; other codecs are encoded to AAC. One job runs at
+  a time at low priority, so the playlist answers `503 Retry-After` until it is ready.
+  Results live in the ignored `extaudio-cache/` directory, which is limited to
+  1 GiB and 24 hours. Delete it at any time.
+- The plugin lists external tracks in the regular audio menu. When an external
+  track is chosen, the video keeps using the same GST task. hls.js receives an
+  `EXT-X-MEDIA` audio rendition, and the plugin removes the embedded audio track
+  from GST init and media segments so the main buffer is video-only. The plugin
+  switches the hidden embedded track to AAC when one exists, to avoid
+  transcoding. The choice is remembered per torrent, like embedded tracks.
+
+hls.js 1.4.7 stalls when one audio group mixes a muxed rendition with an
+external one. The master playlist therefore carries only the external
+rendition, and switching back to an embedded track reloads the player.
+
 ## Runtime setup
 
 Create the ignored root-password file on the Docker host before starting the
@@ -161,4 +186,12 @@ sudo systemctl enable --now lampac-logrotate.timer
 curl -fsS "https://lampa.${DOCKER_DOMAIN}/version?type=hash"
 curl -fsS "https://lampa.${DOCKER_DOMAIN}/torrserver/echo"
 curl -fsS "https://lampa.${DOCKER_DOMAIN}/online.js" | head
+curl -fsS "https://lampa.${DOCKER_DOMAIN}/extaudio/health"
+```
+
+Tests:
+
+```bash
+node --test lampa/tests/
+(cd lampa/extaudio && python3 -m unittest -q test_app)
 ```

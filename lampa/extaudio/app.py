@@ -670,8 +670,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", cache)
         for name, value in (extra or {}).items():
             self.send_header(name, value)
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # hls.js aborts requests on every seek; that is not an error.
+            self.close_connection = True
 
     def send_json(self, status, payload, extra=None):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

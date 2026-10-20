@@ -897,6 +897,21 @@ test('external audio copies codecs the browser decodes and encodes the rest', as
   assert.match(result.data, /CODECS="avc1\.640033,Opus",AUDIO="homelab-external"/);
 });
 
+test('a diagnostics flag sends every external track through the encoder', async t => {
+  const tracks = [
+    { ...anilibria, file: 1, codec: 'aac', title: 'AAC' },
+    { ...anilibria, file: 2, codec: 'opus', title: 'Opus' },
+  ];
+  const h = harness(t, new Map([['homelab_extaudio_encode', '1']]), { external: tracks, mse: ['Opus'] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  assert.deepEqual(h.audioMenu().filter(item => item.external).map(item => [item.url, item.codecs]), [
+    ['/extaudio/abc/1/0/aac/audio.m3u8', 'mp4a.40.2'],
+    ['/extaudio/abc/2/0/aac/audio.m3u8', 'mp4a.40.2'],
+  ]);
+});
+
 test('encoded external audio tells the sidecar where playback is', async t => {
   const h = harness(t, new Map(), { external: [{ ...anilibria, codec: 'dts', title: 'DTS' }] });
   h.start(13, 'abc', true);

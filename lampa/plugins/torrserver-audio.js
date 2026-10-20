@@ -133,7 +133,14 @@
     var COPY_CODECS = {aac: 'mp4a.40.2', opus: 'Opus', ac3: 'ac-3', eac3: 'ec-3'};
     var AUDIO_CODEC = /^(mp4a|ac-3|ec-3|opus|flac|mp3)/i;
 
+    function forceEncode() {
+      // Diagnostics only: localStorage.homelab_extaudio_encode = '1' sends every
+      // external track through the live encoder.
+      try { return window.localStorage.getItem('homelab_extaudio_encode') === '1'; } catch (error) { return false; }
+    }
+
     function externalMode(codec) {
+      if (forceEncode()) return 'aac';
       if (codec === 'aac') return 'copy';
       try {
         return COPY_CODECS[codec] && window.MediaSource &&

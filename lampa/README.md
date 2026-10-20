@@ -52,6 +52,12 @@ sidecar adds those files to browser playback without modifying Lampac:
   minutes) ahead of playback and resumes in batches, so the torrent is read
   only as far as someone watches. Multichannel audio becomes standard 5.1:
   Chrome rejects the `5.1(side)` layout that AC-3 and DTS decode to.
+  Each track keeps up to two runs, so two viewers at different positions do
+  not restart each other; a third position replaces the least recently used
+  run, and at most two runs encode at once across all tracks.
+- To check the encoder in a browser that could copy the codec, run
+  `localStorage.homelab_extaudio_encode = '1'` in the Lampa page and reopen
+  the episode. Remove the key to go back to copying.
 - ffmpeg accepts only audio container formats (`INPUT_FORMATS` in `app.py`), so a
   file disguised as a playlist cannot make it fetch other URLs. Track lookups
   run at most two at a time, and a probe that fails (other than a timeout) is

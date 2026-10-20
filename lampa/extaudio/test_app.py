@@ -183,7 +183,7 @@ class LiveEncodeTests(unittest.TestCase):
         self.rendition = app.LiveRendition(HASH, 1, 0, {"channels": 6, "duration": 40.0})
         self.rendition.source = self.url
         os.makedirs(self.rendition.directory)
-        self.addCleanup(lambda: [app.stop_run(item) for item in list(app._live.values())])
+        self.addCleanup(lambda: [app.stop_run(*pair) for pair in app.running()])
         app._live[(HASH, 1, 0)] = self.rendition
 
     def segment(self, index, rendition=None):
@@ -214,10 +214,11 @@ class LiveEncodeTests(unittest.TestCase):
         self.assertTrue(app.live_file(rendition, last, 30))
         self.assertEqual(self.segment(last, rendition), last * app.SEGMENT_SAMPLES)
         deadline = time.monotonic() + 10
-        while rendition.process is not None and time.monotonic() < deadline:
+        run = rendition.runs[0]
+        while rendition.runs and time.monotonic() < deadline:
             time.sleep(0.1)
         # The encoder's priming frame spills into one tiny unlisted segment.
-        self.assertGreaterEqual(rendition.head, rendition.count)
+        self.assertGreaterEqual(run.head, rendition.count)
         self.assertEqual(rendition.failures, 0)
 
     def test_an_older_request_does_not_fight_the_newest(self):
@@ -228,7 +229,19 @@ class LiveEncodeTests(unittest.TestCase):
         results.append(app.live_file(self.rendition, 1, 20))
         older.join()
         self.assertEqual(results, [True, True])
-        self.assertLessEqual(self.rendition.runs, 2)
+        self.assertLessEqual(self.rendition.started, 2)
+
+    def test_two_viewers_keep_their_own_runs(self):
+        long = app.LiveRendition(HASH, 3, 0, {"channels": 2, "duration": 600.0})
+        os.makedirs(long.directory)
+        app._live[(HASH, 3, 0)] = long
+        self.server.delay = 0.002
+        self.addCleanup(setattr, self.server, "delay", 0)
+        # 40 s of audio: viewers past the end are served padding, which is enough here.
+        for index in (1, 50, 2, 51, 3, 52):
+            self.assertTrue(app.live_file(long, index, 30), index)
+        self.assertEqual(long.started, 2, "each viewer keeps its run")
+        self.assertEqual(sorted(run.start for run in long.runs), [0, 49])
 
     def test_the_dropped_warmup_segment_restarts_the_encoder(self):
         self.assertTrue(app.live_file(self.rendition, 4, 30))
@@ -238,41 +251,47 @@ class LiveEncodeTests(unittest.TestCase):
 
     def test_a_failing_source_is_not_restarted_in_a_loop(self):
         self.rendition.source = "http://127.0.0.1:9/missing.mka"
-        self.assertIsNone(app.live_file(self.rendition, 2, 20))
-        self.assertEqual(self.rendition.runs, app.MAX_FAILURES)
+        results = [app.live_file(self.rendition, 2, 4) for _ in range(5)]
+        self.assertIsNone(results[-1])
+        self.assertEqual(self.rendition.started, app.MAX_FAILURES)
 
     def test_encoder_pauses_far_ahead_of_playback(self):
         self.server.delay = 0.03  # about 0.5 MB/s, like a torrent still downloading
         self.addCleanup(setattr, self.server, "delay", 0)
         with mock.patch.object(app, "LIVE_AHEAD", 2):
             self.assertTrue(app.live_file(self.rendition, 1, 30))
+            run = self.rendition.runs[0]
             deadline = time.monotonic() + 10
-            while not self.rendition.paused and time.monotonic() < deadline:
+            while not run.paused and time.monotonic() < deadline:
                 time.sleep(0.1)
-            self.assertTrue(self.rendition.paused)
-            self.assertLessEqual(self.rendition.head, 1 + 2 + 2)
+            self.assertTrue(run.paused)
+            self.assertLessEqual(run.head, 1 + 2 + 2)
             self.assertTrue(app.live_file(self.rendition, 3, 30))
-            self.assertFalse(self.rendition.paused and self.rendition.head <= 4)
+            self.assertFalse(run.paused and run.head <= 4)
 
 
 class CoverageTests(unittest.TestCase):
-    def rendition(self, start, head, warmup):
-        rendition = app.LiveRendition(HASH, 1, 0, {"duration": 600.0})
-        rendition.process, rendition.start, rendition.head, rendition.warmup = mock.Mock(), start, head, warmup
-        return rendition
+    def run_at(self, start, head, warmup):
+        run = app.Run(mock.Mock(), start, warmup, start)
+        run.head = head
+        return run
 
     def test_a_run_covers_only_segments_it_will_still_write(self):
-        rendition = self.rendition(10, 20, 10)
-        self.assertEqual(
-            [index for index in range(5, 30) if rendition.covers(index)],
-            list(range(20, 20 + app.LIVE_REACH + 1)),
-        )
-        self.assertFalse(self.rendition(10, 10, 10).covers(10), "the dropped warm-up segment")
-        self.assertTrue(self.rendition(0, 0, None).covers(0))
-        self.assertTrue(self.rendition(10, 20, 10).covers(None), "init comes from any run")
-        idle = self.rendition(10, 20, 10)
-        idle.process = None
-        self.assertFalse(idle.covers(20))
+        run = self.run_at(10, 20, 10)
+        self.assertEqual([index for index in range(5, 30) if run.covers(index)], list(range(20, 20 + app.LIVE_REACH + 1)))
+        self.assertEqual([index for index in range(5, 30) if run.owns(index)], list(range(11, 20 + app.LIVE_REACH + 1)))
+        self.assertFalse(self.run_at(10, 10, 10).covers(10), "the dropped warm-up segment")
+        self.assertTrue(self.run_at(0, 0, None).covers(0))
+
+    def test_requests_go_to_the_run_at_their_position(self):
+        rendition = app.LiveRendition(HASH, 1, 0, {"duration": 600.0})
+        early, late = self.run_at(0, 10, None), self.run_at(50, 60, 50)
+        rendition.runs = [early, late]
+        self.assertIs(rendition.owner(5), early)
+        self.assertIs(rendition.owner(55), late)
+        self.assertIsNone(rendition.owner(30))
+        late.seen += 1
+        self.assertIs(rendition.owner(None), late, "init comes from any run")
 
 
 class RunSlotTests(unittest.TestCase):
@@ -282,15 +301,16 @@ class RunSlotTests(unittest.TestCase):
 
     def running(self, key, seen_ago, paused=False):
         rendition = app.LiveRendition(HASH, key, 0, {"duration": 60.0})
-        rendition.process = mock.Mock(**{"poll.return_value": None})
-        rendition.paused = paused
-        rendition.seen = time.monotonic() - seen_ago
+        run = app.Run(mock.Mock(**{"poll.return_value": None}), 0, None, 0)
+        run.paused = paused
+        run.seen = time.monotonic() - seen_ago
+        rendition.runs.append(run)
         app._live[(HASH, key, 0)] = rendition
         return rendition
 
     def test_a_stale_active_run_yields_its_slot(self):
         stale, busy = self.running(1, 60), self.running(2, 1)
-        stale_process, busy_process = stale.process, busy.process
+        stale_process, busy_process = stale.runs[0].process, busy.runs[0].process
         new = app.LiveRendition(HASH, 3, 0, {"duration": 60.0})
         with mock.patch.object(app.subprocess, "Popen"), mock.patch.object(app.threading, "Thread"), \
                 tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "CACHE_DIR", directory):
@@ -298,12 +318,67 @@ class RunSlotTests(unittest.TestCase):
             self.assertTrue(app.start_run(new, 5))
         stale_process.kill.assert_called_once()
         busy_process.kill.assert_not_called()
-        self.assertIsNone(stale.process)
+        self.assertEqual(stale.runs, [])
 
     def test_two_watched_runs_keep_their_slots(self):
         self.running(1, 1), self.running(2, 1)
         new = app.LiveRendition(HASH, 3, 0, {"duration": 60.0})
-        self.assertFalse(app.start_run(new, 5))
+        self.assertIsNone(app.start_run(new, 5))
+
+    def start(self, rendition, index):
+        with mock.patch.object(app.subprocess, "Popen"), mock.patch.object(app.threading, "Thread"), \
+                tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "CACHE_DIR", directory):
+            rendition.directory = app.rendition_dir(HASH, 1, 0, "aac")
+            return app.start_run(rendition, index)
+
+    def test_a_viewer_seeking_again_replaces_its_own_run_at_once(self):
+        rendition = self.running(1, 3)
+        newer = app.Run(mock.Mock(**{"poll.return_value": None}), 40, 40, 41)
+        rendition.runs.append(newer)
+        older = rendition.runs[0]
+        self.assertIsNotNone(self.start(rendition, 80))
+        older.process.kill.assert_called_once()
+        self.assertEqual([run.start for run in rendition.runs], [40, 79])
+
+    def test_a_seek_does_not_take_the_run_of_a_buffered_viewer(self):
+        rendition = self.running(1, 5, paused=True)
+        buffered = rendition.runs[0]
+        left = app.Run(mock.Mock(**{"poll.return_value": None}), 40, 40, 41)
+        rendition.runs.append(left)
+        self.assertIsNotNone(self.start(rendition, 80))
+        buffered.process.kill.assert_not_called()
+        left.process.kill.assert_called_once()
+
+    def test_a_run_is_kept_when_no_new_run_can_start(self):
+        rendition = self.running(1, 5, paused=True)
+        rendition.runs.append(app.Run(mock.Mock(**{"poll.return_value": None}), 40, 40, 41))
+        rendition.runs[1].paused = True
+        self.running(2, 1), self.running(3, 1)
+        self.assertIsNone(self.start(rendition, 80))
+        self.assertEqual(len(rendition.runs), 2)
+        for run in rendition.runs:
+            run.process.kill.assert_not_called()
+
+    def test_a_missing_init_resumes_a_paused_run(self):
+        rendition = self.running(1, 1, paused=True)
+        with tempfile.TemporaryDirectory() as directory:
+            rendition.directory = directory
+            self.assertFalse(app.live_file(rendition, None, 0.05))
+        rendition.runs[0].process.send_signal.assert_called_once_with(app.signal.SIGCONT)
+        self.assertFalse(rendition.runs[0].paused)
+
+    def test_a_third_position_replaces_the_least_recent_run(self):
+        rendition = self.running(1, 5, paused=True)
+        older = rendition.runs[0]
+        newer = app.Run(mock.Mock(**{"poll.return_value": None}), 40, 40, 41)
+        newer.paused = True
+        rendition.runs.append(newer)
+        with mock.patch.object(app.subprocess, "Popen"), mock.patch.object(app.threading, "Thread"), \
+                tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "CACHE_DIR", directory):
+            rendition.directory = app.rendition_dir(HASH, 1, 0, "aac")
+            self.assertIsNotNone(app.start_run(rendition, 80))
+        older.process.kill.assert_called_once()
+        self.assertEqual([run.start for run in rendition.runs], [40, 79])
 
 
 class ProbeTests(unittest.TestCase):
@@ -508,7 +583,7 @@ class HttpTests(unittest.TestCase):
         ensure.assert_called_once_with(HASH, 1, 0, "copy", app.JOB_WAIT_SECONDS, 5000)
 
     def test_encoded_playlist_is_immediate_and_starts_at_the_position(self):
-        rendition = mock.Mock(count=1000, process=None)
+        rendition = mock.Mock(count=1000, **{"owner.return_value": None})
         def create(torrent_hash, file_id, stream):
             directory = app.rendition_dir(torrent_hash, file_id, stream, "aac")
             os.makedirs(directory, exist_ok=True)

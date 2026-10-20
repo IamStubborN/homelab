@@ -58,6 +58,7 @@ LIVE_REACH = 5  # a request this close to the encoder waits instead of seeking
 LIVE_AHEAD = int(os.environ.get("LIVE_AHEAD_SEGMENTS", "50"))  # pause ~5 min ahead
 MAX_ACTIVE_RUNS = 2
 MAX_RUNS = 4
+RUNS_PER_RENDITION = 2  # two viewers of one track at different positions
 STALE_SECONDS = 10  # an active run nobody asked for this long yields its slot
 MAX_FAILURES = 3
 FAILURE_RESET_SECONDS = 60
@@ -312,8 +313,30 @@ def ensure_rendition(torrent_hash, file_id, stream, mode, wait, length=0):
     return True, None
 
 
+class Run:
+    """One ffmpeg process encoding a rendition from `start` onwards."""
+
+    def __init__(self, process, start, warmup, requested):
+        self.process = process
+        self.start = self.head = start
+        self.warmup = warmup
+        self.paused = False
+        self.requested = requested
+        self.seen = time.monotonic()
+
+    def owns(self, index):
+        """Whether a request for `index` belongs to this run's viewer."""
+        first = self.start + 1 if self.warmup == self.start else self.start
+        return first <= index <= self.head + LIVE_REACH
+
+    def covers(self, index):
+        """Whether this run will still write segment `index`. A missing segment
+        behind the head (dropped warm-up, evicted) will not come."""
+        return self.owns(index) and index >= self.head
+
+
 class LiveRendition:
-    """An AAC rendition encoded from the playback position on demand."""
+    """An AAC rendition encoded from playback positions on demand."""
 
     def __init__(self, torrent_hash, file_id, stream, info):
         self.source = stream_url(torrent_hash, file_id)
@@ -321,24 +344,17 @@ class LiveRendition:
         self.channels = info.get("channels") or 2
         self.count = math.ceil(info["duration"] * SAMPLE_RATE / SEGMENT_SAMPLES)
         self.directory = rendition_dir(torrent_hash, file_id, stream, "aac")
-        self.process = None
-        self.start = self.head = 0
-        self.warmup = None
-        self.paused = False
+        self.runs = []
         self.requested = 0
-        self.ticket = 0  # only the newest request may move the encoder
         self.seen = time.monotonic()
-        self.runs = 0
+        self.started = 0
         self.failures = 0
         self.failed_at = 0.0
 
-    def covers(self, index):
-        """Whether the current run will produce segment `index` soon."""
-        if self.process is None or index is None:
-            return self.process is not None
-        # A missing segment behind the head (dropped warm-up, evicted) will not come.
-        first = max(self.head, self.start + 1 if self.warmup == self.start else self.start)
-        return first <= index <= self.head + LIVE_REACH
+    def owner(self, index):
+        """The run serving `index` (any run for init.mp4), most recent first."""
+        runs = [run for run in self.runs if index is None or run.owns(index)]
+        return max(runs, key=lambda run: run.seen) if runs else None
 
 
 def live_playlist(count):
@@ -428,35 +444,48 @@ def live_rendition(torrent_hash, file_id, stream):
     return rendition
 
 
-def stop_run(rendition):
-    process = rendition.process
-    rendition.process = None
-    rendition.paused = False
-    if process and process.poll() is None:
-        process.send_signal(signal.SIGCONT)
-        process.kill()
+def stop_run(rendition, run):
+    if run in rendition.runs:
+        rendition.runs.remove(run)
+    run.paused = False
+    if run.process.poll() is None:
+        run.process.send_signal(signal.SIGCONT)
+        run.process.kill()
+
+
+def running():
+    return [(rendition, run) for rendition in _live.values() for run in rendition.runs]
 
 
 def start_run(rendition, index):
-    """Start encoding at `index`; the caller holds _live_changed."""
-    others = [item for item in _live.values() if item is not rendition and item.process]
-    active = [item for item in others if not item.paused]
+    """Start encoding at `index` and return the run, or None without a free
+    slot. The caller holds _live_changed."""
+    victim = None
+    if len(rendition.runs) >= RUNS_PER_RENDITION:
+        # A paused run belongs to a viewer with a full buffer; a run still
+        # building its lead is usually a position someone just seeked away from.
+        victim = min(rendition.runs, key=lambda run: (run.paused, run.seen))
+    active = [pair for pair in running() if not pair[1].paused and pair[1] is not victim]
+    stale = None
     if len(active) >= MAX_ACTIVE_RUNS:
-        # A rendition nobody asked for lately (a track switched away from)
-        # yields its slot instead of blocking the new one until abandoned.
-        stale = min(active, key=lambda item: item.seen)
-        if time.monotonic() - stale.seen < STALE_SECONDS:
-            return False
-        stop_run(stale)
-        others.remove(stale)
-    if len(others) >= MAX_RUNS:
-        stop_run(min(others, key=lambda item: (not item.paused, item.seen)))
-    stop_run(rendition)
+        # A run nobody asked for lately (a track switched away from, a
+        # position seeked away from) yields its slot.
+        stale = min(active, key=lambda pair: pair[1].seen)
+        if time.monotonic() - stale[1].seen < STALE_SECONDS:
+            return None
+    # Stop runs only once the new one is sure to start.
+    if victim is not None:
+        stop_run(rendition, victim)
+    if stale is not None:
+        stop_run(*stale)
+    pairs = running()
+    if len(pairs) >= MAX_RUNS:
+        stop_run(*min(pairs, key=lambda pair: (not pair[1].paused, pair[1].seen)))
     # The first segment of a run starts with the encoder's priming frame, so
     # a run starts one segment early and drops it.
     start = max(index - 1, 0)
-    run_dir = f"{rendition.directory}.run{rendition.runs}.tmp"
-    rendition.runs += 1
+    run_dir = f"{rendition.directory}.run{rendition.started}.tmp"
+    rendition.started += 1
     shutil.rmtree(run_dir, ignore_errors=True)
     os.makedirs(run_dir)
     log = open(os.path.join(run_dir, "ffmpeg.log"), "wb")
@@ -465,15 +494,18 @@ def start_run(rendition, index):
             live_command(rendition.source, run_dir, rendition.stream, rendition.channels, start, rendition.count),
             stdout=subprocess.DEVNULL, stderr=log,
         )
+    except OSError:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise
     finally:
         log.close()
-    rendition.process, rendition.start, rendition.head, rendition.paused = process, start, start, False
-    rendition.warmup = start if index > 0 else None
-    threading.Thread(target=watch_run, args=(rendition, process, run_dir, rendition.warmup), daemon=True).start()
-    return True
+    run = Run(process, start, start if index > 0 else None, index)
+    rendition.runs.append(run)
+    threading.Thread(target=watch_run, args=(rendition, run, run_dir), daemon=True).start()
+    return run
 
 
-def collect_segments(rendition, process, run_dir, warmup):
+def collect_segments(rendition, run, run_dir):
     finished = sorted(
         (int(match.group(1)), name) for name in os.listdir(run_dir) if (match := SEGMENT_RE.match(name))
     )
@@ -488,38 +520,41 @@ def collect_segments(rendition, process, run_dir, warmup):
     for index, name in finished:
         path = os.path.join(run_dir, name)
         target = os.path.join(rendition.directory, name)
-        if index != warmup and not os.path.isfile(target):
+        if index != run.warmup and not os.path.isfile(target):
             with open(path, "rb") as source:
                 write_atomically(target, with_decode_time(source.read(), index))
         os.remove(path)
         with _live_changed:
-            if rendition.process is process:
-                rendition.head = max(rendition.head, index + 1)
+            run.head = max(run.head, index + 1)
+            if run in rendition.runs:
                 rendition.failures = 0
             _live_changed.notify_all()
 
 
-def watch_run(rendition, process, run_dir, warmup):
+def watch_run(rendition, run, run_dir):
+    process = run.process
     try:
         while True:
             finished = process.poll() is not None
-            collect_segments(rendition, process, run_dir, warmup)
+            collect_segments(rendition, run, run_dir)
             if finished:
                 break
             with _live_changed:
-                if rendition.process is process:
-                    if time.monotonic() - rendition.seen > ABANDON_SECONDS:
-                        stop_run(rendition)
-                    elif not rendition.paused and rendition.head - rendition.requested > LIVE_AHEAD:
+                if run in rendition.runs:
+                    idle = time.monotonic() - run.seen
+                    if idle > ABANDON_SECONDS or (idle > STALE_SECONDS and len(rendition.runs) > 1):
+                        # Nobody watches here any more, or a seek left this run behind.
+                        stop_run(rendition, run)
+                    elif not run.paused and run.head - run.requested > LIVE_AHEAD:
                         # Stop reading the torrent until playback catches up.
                         process.send_signal(signal.SIGSTOP)
-                        rendition.paused = True
+                        run.paused = True
                         _live_changed.notify_all()
             time.sleep(0.25)
         with _live_changed:
             # A dropped connection can also end ffmpeg cleanly, before the grid ends.
-            failed = process.returncode != -signal.SIGKILL and rendition.head < rendition.count
-            if failed and rendition.process is process:
+            failed = process.returncode != -signal.SIGKILL and run.head < rendition.count
+            if failed and run in rendition.runs:
                 rendition.failures += 1
                 rendition.failed_at = time.monotonic()
         if failed:
@@ -527,16 +562,15 @@ def watch_run(rendition, process, run_dir, warmup):
                 detail = log.read()[-500:].decode("utf-8", "replace")
             print(f"live encode {rendition.directory} stopped early: {process.returncode} {detail}", file=sys.stderr, flush=True)
     except Exception as error:
-        if rendition.process is process:  # A replaced run may lose its directory.
+        if run in rendition.runs:  # A stopped run may lose its directory.
             print(f"live encode {rendition.directory} failed: {type(error).__name__} {error}", file=sys.stderr, flush=True)
         if process.poll() is None:
             process.send_signal(signal.SIGCONT)
             process.kill()
     finally:
         with _live_changed:
-            if rendition.process is process:
-                rendition.process = None
-                rendition.paused = False
+            if run in rendition.runs:
+                rendition.runs.remove(run)
             _live_changed.notify_all()
         shutil.rmtree(run_dir, ignore_errors=True)
 
@@ -547,32 +581,37 @@ def live_file(rendition, index, wait):
     name = "init.mp4" if index is None else f"s{index}.m4s"
     path = os.path.join(rendition.directory, name)
     deadline = time.monotonic() + wait
+    started = False
     with _live_changed:
         rendition.seen = time.monotonic()
-        rendition.ticket += 1
-        ticket = rendition.ticket
         if index is not None:
             rendition.requested = index
         target = rendition.requested if index is None else index
-        if rendition.paused and rendition.process and rendition.head - target <= LIVE_AHEAD // 2:
-            # Resume in batches once playback has used half of the lead.
-            rendition.process.send_signal(signal.SIGCONT)
-            rendition.paused = False
-        while not os.path.isfile(path):
+        while True:
             now = time.monotonic()
+            exists = os.path.isfile(path)
+            run = rendition.owner(index)
+            if run is not None:
+                run.seen = now
+                if index is not None:
+                    run.requested = index
+                # Resume in batches once playback has used half of the lead,
+                # or at once when the file is missing (init.mp4 after eviction).
+                if run.paused and (not exists or (index is not None and run.head - index <= LIVE_AHEAD // 2)):
+                    run.process.send_signal(signal.SIGCONT)
+                    run.paused = False
+            if exists:
+                return True
             if now - rendition.failed_at > FAILURE_RESET_SECONDS:
                 rendition.failures = 0
             if rendition.failures >= MAX_FAILURES:
                 return None
-            if rendition.covers(index):
-                if rendition.paused:
-                    rendition.process.send_signal(signal.SIGCONT)
-                    rendition.paused = False
-            elif ticket == rendition.ticket and now >= rendition.failed_at + 2 * rendition.failures:
-                # Older requests (a seek hls.js already abandoned, another
-                # viewer) wait instead of fighting over the encoder.
+            covered = run is not None and (index is None or run.covers(index))
+            # Each request starts at most one run, so waiting requests (a seek
+            # hls.js abandoned, another viewer) never take turns replacing runs.
+            if not covered and not started and now >= rendition.failed_at + 2 * rendition.failures:
                 try:
-                    start_run(rendition, target)
+                    started = start_run(rendition, target) is not None
                 except OSError as error:
                     print(f"live encode {rendition.directory} failed to start: {error}", file=sys.stderr, flush=True)
                     rendition.failures += 1
@@ -581,7 +620,6 @@ def live_file(rendition, index, wait):
             if remaining <= 0:
                 return False
             _live_changed.wait(min(remaining, 1))
-    return True
 
 
 def directory_size(path):
@@ -674,8 +712,12 @@ class Handler(BaseHTTPRequestHandler):
                 with _live_changed:
                     rendition.requested = index
                     rendition.seen = time.monotonic()
-                    if rendition.process is None:
-                        start_run(rendition, index)
+                    if rendition.owner(index) is None:
+                        try:
+                            start_run(rendition, index)
+                        except OSError as error:
+                            # The segment request retries; the playlist is still valid.
+                            print(f"live encode {rendition.directory} failed to start: {error}", file=sys.stderr, flush=True)
             return self.serve_file(os.path.join(directory, name), name)
         index = None if name == "init.mp4" else int(name[1:-4])
         if index is not None and index >= rendition.count:

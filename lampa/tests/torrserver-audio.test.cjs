@@ -47,7 +47,13 @@ function createVideo() {
   };
 }
 
-function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [] } = {}) {
+class FakeAss {
+  constructor(options) { this.options = options; this.destroyed = false; FakeAss.instances.push(this); }
+  destroy() { this.destroyed = true; }
+}
+FakeAss.instances = [];
+
+function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {} } = {}) {
   const notices = [];
   let work = false;
   let video = createVideo();
@@ -125,11 +131,11 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
     removeItem: key => storage.delete(key),
   };
   const context = {
-    Lampa, URL, AbortController, console, localStorage: browserStorage,
+    Lampa, URL, AbortController, console, localStorage: browserStorage, TextDecoder, TextEncoder, Worker: class {},
     setTimeout(fn, delay) { timers.set(++timerId, {fn, delay}); return timerId; },
     clearTimeout(id) { timers.delete(id); },
     window: {
-      Hls: TestHls,
+      Hls: TestHls, HomelabJassub: FakeAss,
       MediaSource: { isTypeSupported: type => mse.some(codec => type === `audio/mp4; codecs="${codec}"`) },
       location: { origin: 'https://lampa.test', href: 'https://lampa.test/' },
       localStorage: browserStorage,
@@ -137,7 +143,12 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
         requests.push({url, options});
         if (/\/(?:heartbeat|remove)(?:\?|$)/.test(url)) return Promise.resolve({ok: true});
         if (/^\/extaudio\/[^/]+\/\d+\/tracks$/.test(new URL(url).pathname)) {
-          return Promise.resolve({ok: true, json: async () => ({tracks: external})});
+          return Promise.resolve({ok: true, json: async () => ({tracks: external, ...(ass || {})})});
+        }
+        const rawMatch = /^\/extaudio\/[^/]+\/(\d+)\/raw$/.exec(new URL(url).pathname);
+        if (rawMatch) {
+          const bytes = raw[rawMatch[1]];
+          return Promise.resolve({ok: Boolean(bytes), status: bytes ? 200 : 502, arrayBuffer: async () => bytes.buffer});
         }
         if (/^\/extaudio\/.+\/audio\.m3u8$/.test(new URL(url).pathname)) {
           const status = rendition.length ? rendition.shift() : 200;
@@ -228,6 +239,16 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       player.send('start', work);
       player.send('ready', work);
     },
+    startWithSubtitles(tracks, file = 1, hash = 'same-torrent') {
+      // Lampa may report subtitles before the player is ready.
+      destroy();
+      work = { torrent_hash: hash, url: `https://lampa.test/torrserver/gst/${hash}/master.m3u8?index=${file}&audio=0` };
+      video = createVideo();
+      player.send('create', {data: work});
+      player.send('start', work);
+      this.emitSubtitles(tracks);
+      player.send('ready', work);
+    },
     work: () => work,
     pending,
     async probe(tracks, lampac = false) {
@@ -282,7 +303,10 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
     userPlayPause: () => Lampa.PlayerVideo.playpause(),
     audioIndex: () => Number(new URL(work.url).searchParams.get('audio') || 0),
     subtitleTitle: () => subtitles.find(item => item.mode === 'showing')?.label ?? null,
+    subtitleMenu: () => Array.from(subtitles, item => item.label),
+    subtitleList: () => subtitles,
     currentVideo: () => video,
+    replaceVideo() { video = createVideo(); },
   };
 }
 
@@ -979,11 +1003,170 @@ test('a busy external lookup is asked once more', async t => {
   assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', externalLabel]);
 });
 
-test('players without external audio keep default hls.js loaders', async t => {
+test('players without external audio keep default playlist loaders', async t => {
   const h = harness(t, new Map(), { external: [anilibria] });
   h.start(13, 'abc', true);
   await h.probe([japaneseAAC]);
   const hls = h.createHls();
   assert.equal(hls.config.pLoader, undefined);
-  assert.equal(hls.config.fLoader, undefined);
+  // Only the subtitle cleanup wraps fragments; main fragments pass unchanged.
+  let data = null;
+  new hls.config.fLoader({}).load({ frag: { type: 'main', sn: 1 } }, {}, { onSuccess: response => { data = response.data; } });
+  const payload = new Uint8Array([1, 2, 3]).buffer;
+  h.loaderInstances.at(-1).callbacks.onSuccess({ data: payload }, {}, { frag: { type: 'main' } }, null);
+  assert.equal(data, payload);
+});
+
+const yakusub = { file: 25, title: 'YakuSub Studio', location: 'YakuSub Studio', language: '', fonts: [37, 38] };
+const assLookup = { subtitles: [yakusub], renderer: '/extaudio/jassub/' };
+const assText = '[Script Info]\nTitle: Тест\n';
+
+test('external ASS subtitles join the menu and render through JASSUB', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), { ass: assLookup, raw: { 25: new TextEncoder().encode(assText), 37: new TextEncoder().encode('font37'), 38: new TextEncoder().encode('font38') } });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  assert.deepEqual(h.subtitleMenu(), ['YakuSub Studio (ASS)'], 'external subtitles form the menu without embedded ones');
+  h.emitSubtitles(firstEpisode);
+  assert.deepEqual(h.subtitleMenu(), ['надписи', 'English', 'Russian', 'YakuSub Studio (ASS)']);
+  h.chooseSubtitle('YakuSub Studio (ASS)');
+  await h.settle();
+  assert.equal(FakeAss.instances.length, 1);
+  const options = FakeAss.instances[0].options;
+  assert.equal(options.subContent, assText);
+  assert.equal(options.video, h.video());
+  assert.deepEqual(Array.from(options.fonts, font => new TextDecoder().decode(font)), ['font37', 'font38'], 'fonts arrive as bytes');
+  assert.equal(options.workerUrl, 'https://lampa.test/extaudio/jassub/jassub-worker.js');
+  assert.equal(h.subtitleTitle(), 'YakuSub Studio (ASS)');
+  h.chooseSubtitle('English');
+  assert.ok(FakeAss.instances[0].destroyed, 'another subtitle removes the ASS layer');
+  h.chooseSubtitle('YakuSub Studio (ASS)');
+  await h.settle();
+  h.destroy();
+  assert.ok(FakeAss.instances[1].destroyed, 'closing the player removes the ASS layer');
+});
+
+test('a remembered ASS choice returns on the next episode', async t => {
+  FakeAss.instances.length = 0;
+  const storage = new Map();
+  const first = harness(t, storage, { ass: assLookup, raw: { 25: new TextEncoder().encode(assText) } });
+  first.start(13, 'abc', true);
+  await first.probe([japaneseAAC]);
+  await first.settle();
+  first.chooseSubtitle('YakuSub Studio (ASS)');
+  await first.settle();
+  first.start(14, 'abc', true);
+  await first.probe([japaneseAAC]);
+  first.emitSubtitles(firstEpisode);
+  await first.settle();
+  assert.equal(first.subtitleTitle(), 'YakuSub Studio (ASS)');
+  assert.equal(FakeAss.instances.length, 2);
+  assert.ok(FakeAss.instances[0].destroyed && !FakeAss.instances[1].destroyed);
+});
+
+test('ASS subtitles without a BOM fall back to Windows-1251', async t => {
+  FakeAss.instances.length = 0;
+  const cp1251 = Uint8Array.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]); // «Привет»
+  const h = harness(t, new Map(), { ass: assLookup, raw: { 25: cp1251 } });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  h.chooseSubtitle('YakuSub Studio (ASS)');
+  await h.settle();
+  assert.equal(FakeAss.instances[0].options.subContent, 'Привет');
+});
+
+test('a failed ASS download is reported and leaves subtitles off', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), { ass: assLookup });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  h.chooseSubtitle('YakuSub Studio (ASS)');
+  await h.settle();
+  assert.equal(FakeAss.instances.length, 0);
+  assert.equal(h.subtitleTitle(), null);
+  assert.deepEqual(h.notices, ['Не удалось показать ASS-субтитры']);
+});
+
+test('ASS items join subtitles reported before the player was ready', async t => {
+  const h = harness(t, new Map(), { ass: assLookup, raw: { 25: new TextEncoder().encode(assText) } });
+  h.startWithSubtitles(firstEpisode, 13, 'abc');
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  assert.deepEqual(h.subtitleMenu(), ['надписи', 'English', 'Russian', 'YakuSub Studio (ASS)']);
+});
+
+test('a pending ASS download is dropped after another choice or closing', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), { ass: assLookup, raw: { 25: new TextEncoder().encode(assText) } });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  h.emitSubtitles(firstEpisode);
+  await h.settle();
+  h.chooseSubtitle('YakuSub Studio (ASS)');
+  h.chooseSubtitle('English');
+  await h.settle();
+  assert.equal(FakeAss.instances.length, 0, 'switching away cancels the pending renderer');
+  h.chooseSubtitle('YakuSub Studio (ASS)');
+  h.destroy();
+  await h.settle();
+  assert.equal(FakeAss.instances.length, 0, 'closing cancels the pending renderer');
+});
+
+test('ASS items leave the menu with their episode', async t => {
+  const h = harness(t, new Map(), { ass: assLookup, raw: { 25: new TextEncoder().encode(assText) } });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  const panelList = h.subtitleList();
+  assert.deepEqual(Array.from(panelList, item => item.label), ['YakuSub Studio (ASS)']);
+  h.destroy();
+  assert.equal(panelList.length, 0, 'the list the panel kept loses its ASS items');
+});
+
+test('ASS rendering follows a new video element after a reload', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), { ass: assLookup, raw: { 25: new TextEncoder().encode(assText) } });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  h.emitSubtitles(firstEpisode);
+  await h.settle();
+  h.chooseSubtitle('YakuSub Studio (ASS)');
+  await h.settle();
+  h.replaceVideo();
+  h.emitSubtitles(firstEpisode);
+  await h.settle();
+  assert.equal(FakeAss.instances.length, 2);
+  assert.ok(FakeAss.instances[0].destroyed);
+  assert.equal(FakeAss.instances[1].options.video, h.video());
+});
+
+test('ASS vector drawings never reach Lampa as subtitle text', async t => {
+  const h = harness(t);
+  h.start();
+  await h.probe(firstEpisode);
+  const hls = h.createHls();
+  const vtt = [
+    'WEBVTT', 'X-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:0', '',
+    '00:00:01.000 --> 00:00:01.040', 'm 345 192 b 374 189 398 163 402 134 l 978 135 977 577 345 577', '',
+    '00:00:01.000 --> 00:00:01.040', 'Имя  Неизвестно', '', 'Хозяин:  Никто', '',
+    '00:00:02.000 --> 00:00:03.000', '604 403 615 395 631 412 l 743 411 b 753 402', 'КРИСТАЛЛЫ ОПЫТА: 3/100', '',
+    '00:00:04.000 --> 00:00:05.000', 'Серия 12', '',
+    '00:00:06.000 --> 00:00:07.000', '3 2 1 0', '',
+  ].join('\n');
+  const results = [];
+  for (const [type, data] of [['subtitle', new TextEncoder().encode(vtt).buffer], ['subtitle', vtt], ['main', new TextEncoder().encode(vtt).buffer]]) {
+    new hls.config.fLoader({}).load({ frag: { type, sn: 1 } }, {}, { onSuccess: response => results.push(response.data) });
+    h.loaderInstances.at(-1).callbacks.onSuccess({ data }, {}, { frag: { type } }, null);
+  }
+  const cleaned = new TextDecoder().decode(results[0]);
+  assert.doesNotMatch(cleaned, /345 192|604 403/);
+  assert.match(cleaned, /00:00:02\.000 --> 00:00:03\.000\nКРИСТАЛЛЫ ОПЫТА: 3\/100/);
+  assert.match(cleaned, /Имя  Неизвестно/);
+  assert.match(cleaned, /Серия 12/);
+  assert.match(cleaned, /\n3 2 1 0\n/, 'a countdown is dialogue, not a drawing');
+  assert.equal(results[1], cleaned, 'text responses are cleaned the same way');
+  assert.equal(new TextDecoder().decode(results[2]), vtt, 'video fragments are untouched');
 });

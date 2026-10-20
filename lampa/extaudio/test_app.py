@@ -30,9 +30,9 @@ FILES = [
 
 class CandidateTests(unittest.TestCase):
     def test_matches_audio_files_named_after_the_video(self):
-        self.assertEqual(app.external_candidates(FILES, 13), [
-            {"id": 1, "location": "Sound"},
-            {"id": 20, "location": "Studio Band"},
+        self.assertEqual([(item["id"], item["location"]) for item in app.external_candidates(FILES, 13)], [
+            (1, "Sound"),
+            (20, "Studio Band"),
         ])
 
     def test_unknown_video_has_no_candidates(self):
@@ -44,12 +44,71 @@ class CandidateTests(unittest.TestCase):
                 raise subprocess.CalledProcessError(1, "ffprobe")
             return [{"codec_name": "aac", "channels": 2, "tags": {"title": "AniLibria.tv", "language": "rus"}}]
 
-        with mock.patch.object(app, "torrent_files", return_value=FILES), \
-                mock.patch.object(app, "probe_audio", side_effect=probe):
-            self.assertEqual(app.external_tracks(HASH, 13), [{
+        with mock.patch.object(app, "probe_audio", side_effect=probe):
+            self.assertEqual(app.external_tracks(HASH, 13, FILES), [{
                 "file": 1, "stream": 0, "title": "AniLibria.tv", "location": "Sound",
                 "language": "rus", "codec": "aac", "channels": 2,
             }])
+
+
+SUB_FILES = [
+    {"id": 13, "path": "Show/Show - 01.mkv", "length": 10**9},
+    {"id": 14, "path": "Show/Show - 02.mkv", "length": 10**9},
+    {"id": 25, "path": "Show/YakuSub Studio/Show - 01.ass", "length": 55679},
+    {"id": 26, "path": "Show/YakuSub Studio/Show - 02.ass", "length": 53489},
+    {"id": 27, "path": "Show/Subs/Show - 01.rus.ssa", "length": 1000},
+    {"id": 28, "path": "Show/Subs/Show - 01.srt", "length": 1000},
+    {"id": 37, "path": "Show/YakuSub Studio/Шрифты/FrizQuadrataC.otf", "length": 22368},
+    {"id": 38, "path": "Show/YakuSub Studio/Шрифты/ariblk.ttf", "length": 119876},
+    {"id": 40, "path": "Show/Fonts/Shared.ttf", "length": 1000},
+    {"id": 41, "path": "Show/Fonts/huge.ttf", "length": 10**9},
+    {"id": 42, "path": "Show/Extras/notes.otf", "length": 1000},
+]
+
+
+class SubtitleTests(unittest.TestCase):
+    def test_subtitles_named_after_the_video_come_with_their_fonts(self):
+        self.assertEqual(app.external_subtitles(SUB_FILES, 13), [
+            {"file": 27, "title": "Subs", "location": "Subs / rus", "language": "rus", "fonts": [40, 38, 37]},
+            {"file": 25, "title": "YakuSub Studio", "location": "YakuSub Studio", "language": "", "fonts": [38, 37]},
+        ])
+        self.assertEqual(app.external_subtitles(SUB_FILES, 99), [])
+
+    def fake_stream(self, body, delay=0):
+        def urlopen(url, timeout):
+            source = __import__("io").BytesIO(body)
+            response = mock.MagicMock()
+            def read(size):
+                time.sleep(delay)
+                return source.read(size)
+            response.__enter__.return_value.read.side_effect = read
+            return response
+        return mock.patch.object(app.urllib.request, "urlopen", side_effect=urlopen)
+
+    def test_raw_files_are_limited_to_subtitles_and_fonts(self):
+        with mock.patch.object(app, "torrent_files", return_value=SUB_FILES), \
+                tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "CACHE_DIR", directory):
+            for file_id in (13, 28, 41, 99):
+                with self.assertRaises(app.Rejected, msg=file_id):
+                    app.fetch_raw(HASH, file_id)
+
+    def test_raw_files_are_fetched_once(self):
+        body = b"[Script Info]" + b"x" * (1000 - 13)
+        with mock.patch.object(app, "torrent_files", return_value=SUB_FILES) as files, self.fake_stream(body) as urlopen, \
+                tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "CACHE_DIR", directory):
+            path = app.fetch_raw(HASH, 27)
+            self.assertEqual(app.fetch_raw(HASH, 27), path)
+            with open(path, "rb") as cached:
+                self.assertEqual(cached.read(), body)
+        self.assertEqual((files.call_count, urlopen.call_count), (1, 1))
+
+    def test_truncated_or_oversized_raw_files_are_not_cached(self):
+        for body in (b"short", b"x" * 2000):
+            with mock.patch.object(app, "torrent_files", return_value=SUB_FILES), self.fake_stream(body), \
+                    tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "CACHE_DIR", directory):
+                with self.assertRaises(OSError):
+                    app.fetch_raw(HASH, 27)
+                self.assertEqual(os.listdir(os.path.join(directory, f"{HASH}-27-raw")), [])
 
 
 class RemuxTests(unittest.TestCase):
@@ -631,9 +690,57 @@ class HttpTests(unittest.TestCase):
 
     def test_tracks_endpoint(self):
         tracks = [{"file": 1, "stream": 0, "title": "AniLibria.tv"}]
-        with mock.patch.object(app, "external_tracks", return_value=tracks):
+        with mock.patch.object(app, "torrent_files", return_value=SUB_FILES), \
+                mock.patch.object(app, "external_tracks", return_value=tracks), \
+                tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "RENDERER_DIR", directory):
+            open(os.path.join(directory, "jassub.js"), "w").close()
             status, _, body = self.get(f"/extaudio/{HASH}/13/tracks")
-        self.assertEqual((status, json.loads(body)), (200, {"tracks": tracks}))
+        payload = json.loads(body)
+        self.assertEqual((status, payload["tracks"], payload["renderer"]), (200, tracks, "/extaudio/jassub/"))
+        self.assertEqual([item["file"] for item in payload["subtitles"]], [27, 25])
+
+    def test_raw_endpoint(self):
+        files = [*SUB_FILES, *({"id": 50 + n, "path": f"Show/Fonts/f{n}.ttf", "length": 1000} for n in range(10))]
+        real_urlopen = urllib.request.urlopen
+        def urlopen(url, timeout):
+            if url.startswith(self.base):
+                return real_urlopen(url, timeout=timeout)
+            response = mock.MagicMock()
+            source = __import__("io").BytesIO(b"x" * 1000)
+            def read(size):
+                time.sleep(0.05)
+                return source.read(size)
+            response.__enter__.return_value.read.side_effect = read
+            return response
+        with mock.patch.object(app, "torrent_files", return_value=files), \
+                mock.patch.object(app.urllib.request, "urlopen", side_effect=urlopen), \
+                tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "CACHE_DIR", directory):
+            # JASSUB requests every font at once and never retries.
+            results = [None] * 12
+            def fetch(slot, file_id):
+                results[slot] = self.get(f"/extaudio/{HASH}/{file_id}/raw")
+            threads = [threading.Thread(target=fetch, args=(slot, file_id))
+                       for slot, file_id in enumerate([*range(50, 60), 40, 27])]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual([result[0] for result in results], [200] * 12)
+            self.assertEqual(results[0][1]["Content-Type"], "application/octet-stream")
+            self.assertEqual(len(results[0][2]), 1000)
+            with mock.patch.object(app, "torrent_files", side_effect=AssertionError("cached files skip lookups")):
+                self.assertEqual(self.get(f"/extaudio/{HASH}/27/raw")[0], 200)
+            self.assertEqual(self.get(f"/extaudio/{HASH}/13/raw")[0], 404)
+
+    def test_renderer_files_are_served_with_their_types(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "RENDERER_DIR", directory):
+            for name in ("jassub.js", "jassub-worker.wasm"):
+                with open(os.path.join(directory, name), "wb") as target:
+                    target.write(b"x")
+            self.assertEqual(self.get("/extaudio/jassub/jassub-worker.wasm")[1]["Content-Type"], "application/wasm")
+            self.assertEqual(self.get("/extaudio/jassub/jassub.js")[1]["Content-Type"], "text/javascript")
+            self.assertEqual(self.get("/extaudio/jassub/missing.js")[0], 404)
+            self.assertEqual(self.get("/extaudio/jassub/..%2Fapp.py")[0], 404)
 
     def test_track_lookups_are_bounded(self):
         for _ in range(app.MAX_TRACK_LOOKUPS):

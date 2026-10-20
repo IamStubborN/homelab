@@ -184,6 +184,42 @@
       });
     }
 
+    // ASS signs drawn with vector shapes ({\p1}m 345 192 b ...) lose their
+    // tags in Lampac's WebVTT and would show up as rows of coordinates.
+    var DRAWING = /^\s*(?:[mnlbspc]\s+)*-?\d+(?:\.\d+)?(?:\s+(?:[mnlbspc]|-?\d+(?:\.\d+)?))+\s*$/i;
+
+    function isDrawing(line) {
+      // A countdown ("3 2 1 0") has numbers but no move/line/curve command.
+      return DRAWING.test(line) && /(?:^|\s)[mlb](?:\s|$)/i.test(line) && (line.match(/-?\d+(?:\.\d+)?/g) || []).length >= 4;
+    }
+
+    function withoutDrawings(text) {
+      return text.split(/\r?\n\r?\n/).filter(function (block) {
+        var lines = block.split(/\r?\n/);
+        var timing = lines.findIndex(function (line) { return line.indexOf('-->') !== -1; });
+        if (timing === -1) return true;
+        var payload = lines.slice(timing + 1).filter(function (line) { return line.trim(); });
+        return !payload.length || !payload.every(isDrawing);
+      }).map(function (block) {
+        var lines = block.split(/\r?\n/);
+        var timing = lines.findIndex(function (line) { return line.indexOf('-->') !== -1; });
+        return timing === -1 ? block : lines.filter(function (line, index) { return index <= timing || !isDrawing(line); }).join('\n');
+      }).join('\n\n');
+    }
+
+    function subtitleLoader(BaseLoader) {
+      return transformingLoader(BaseLoader, function (context, response) {
+        var frag = context.frag;
+        if (!frag || frag.type !== 'subtitle' || typeof TextDecoder === 'undefined') return response;
+        try {
+          var text = typeof response.data === 'string' ? response.data : new TextDecoder('utf-8').decode(response.data);
+          if (!/\d+\s+-?\d+\s+[lb]\s/i.test(text)) return response;
+          var cleaned = withoutDrawings(text);
+          return Object.assign({}, response, {data: typeof response.data === 'string' ? cleaned : new TextEncoder().encode(cleaned).buffer});
+        } catch (error) { return response; }
+      });
+    }
+
     function installHlsResilience() {
       var BaseHls = window.Hls;
       if (!BaseHls || BaseHls.homelabResilience) return;
@@ -213,6 +249,7 @@
         if (work.homelab_external_audio) {
           externalAudioLoaders(config, config.loader || BaseHls.DefaultConfig.loader, work.homelab_external_audio);
         }
+        config.fLoader = subtitleLoader(config.fLoader || config.loader || BaseHls.DefaultConfig.loader);
         var hls = new BaseHls(config);
         var listen = hls.on.bind(hls);
         var destroy = hls.destroy.bind(hls);
@@ -425,6 +462,12 @@
     function clear() {
       generation++;
       if (!active) return;
+      hideAss(active);
+      // The panel may keep this list into the next episode.
+      if (active.subtitleList) {
+        active.assItems = [];
+        withAss(active, active.subtitleList);
+      }
       if (active.releaseStream) active.releaseStream();
       active.abort.abort();
       active.externalAbort.abort();
@@ -713,6 +756,187 @@
       return embedded.filter(function (track) { return track.aac; })[0] || current || {index: index};
     }
 
+    var assModule = null;
+    var assImport;
+    var lastSubtitles = null;
+
+    function assSupported() {
+      if (window.HomelabJassub) return true;
+      if (assImport === undefined) {
+        // A Function keeps engines without dynamic import able to parse the plugin.
+        try { assImport = new Function('url', 'return import(url)'); } catch (error) { assImport = null; }
+      }
+      return Boolean(assImport && typeof TextDecoder !== 'undefined' && typeof Worker !== 'undefined' &&
+        typeof WebAssembly === 'object' && window.HTMLCanvasElement &&
+        typeof window.HTMLCanvasElement.prototype.transferControlToOffscreen === 'function');
+    }
+
+    function loadAssRenderer(base) {
+      if (window.HomelabJassub) return Promise.resolve(window.HomelabJassub);
+      if (!assModule) {
+        assModule = Promise.resolve().then(function () { return assImport(base + 'jassub.js'); }).then(function (module) {
+          return module.default;
+        }, function (error) { assModule = null; throw error; });
+      }
+      return assModule;
+    }
+
+    function decodeSubtitle(buffer) {
+      var bytes = new Uint8Array(buffer);
+      if (bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le').decode(bytes);
+      if (bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be').decode(bytes);
+      // Russian releases without a BOM are often still Windows-1251.
+      try { return new TextDecoder('utf-8', {fatal: true}).decode(bytes); }
+      catch (error) { return new TextDecoder('windows-1251').decode(bytes); }
+    }
+
+    function fetchBytes(url, cancelled, attempts) {
+      return window.fetch(url).then(function (response) {
+        // The sidecar answers 503 while its download slots are busy.
+        if ((response.status === 503 || response.status === 429) && attempts > 1 && !cancelled()) {
+          var delay = Math.min(10, Number(response.headers && response.headers.get('Retry-After')) || 2) * 1000;
+          return new Promise(function (resolve) { setTimeout(resolve, delay); }).then(function () {
+            if (cancelled()) throw new Error('cancelled');
+            return fetchBytes(url, cancelled, attempts - 1);
+          });
+        }
+        if (!response.ok) throw new Error('download failed: ' + response.status);
+        return response.arrayBuffer();
+      });
+    }
+
+    function fetchFonts(urls, cancelled) {
+      // JASSUB would request every font at once and never retry; two at a
+      // time with retries gets them all. A font that still fails falls back.
+      var fonts = [];
+      var next = 0;
+      function worker() {
+        if (next >= urls.length || cancelled()) return Promise.resolve();
+        var url = urls[next++];
+        return fetchBytes(url, cancelled, 5).then(function (buffer) {
+          fonts.push(new Uint8Array(buffer));
+        }, function (error) {
+          if (!cancelled()) console.warn('Homelab ASS font:', url, error && error.message);
+        }).then(worker);
+      }
+      // A stalled torrent must not hold the subtitles back for minutes.
+      var timer;
+      var deadline = new Promise(function (resolve) { timer = setTimeout(resolve, 30000); });
+      return Promise.race([Promise.all([worker(), worker()]), deadline]).then(function () {
+        clearTimeout(timer);
+        return fonts.slice();
+      });
+    }
+
+    function hideAss(state) {
+      state.assActive = null;
+      state.assRequest = (state.assRequest || 0) + 1;
+      if (!state.assInstance) return;
+      try { state.assInstance.destroy(); } catch (error) {}
+      state.assInstance = null;
+    }
+
+    function showAss(state, item) {
+      var video = Lampa.PlayerVideo.video();
+      if (state.assActive === item && state.assVideo === video) return;
+      hideAss(state);
+      state.assActive = item;
+      state.assVideo = video;
+      var request = state.assRequest;
+      function cancelled() { return active !== state || state.assRequest !== request; }
+      var base = new URL(state.assRenderer, window.location.href).href;
+      var content = fetchBytes(new URL(item.homelabAss.url, window.location.href).href, cancelled, 5);
+      Promise.all([loadAssRenderer(base), content, fetchFonts(item.homelabAss.fonts, cancelled)]).then(function (results) {
+        if (cancelled()) return;
+        var Renderer = results[0];
+        state.assInstance = new Renderer({
+          video: video, subContent: decodeSubtitle(results[1]), fonts: results[2],
+          workerUrl: base + 'jassub-worker.js', wasmUrl: base + 'jassub-worker.wasm',
+          modernWasmUrl: base + 'jassub-worker-modern.wasm',
+          availableFonts: {'liberation sans': base + 'default.woff2'}
+        });
+      }).catch(function (error) {
+        if (active !== state || state.assRequest !== request) return;
+        console.warn('Homelab ASS:', error && error.message);
+        hideAss(state);
+        Lampa.Noty.show('Не удалось показать ASS-субтитры');
+      });
+    }
+
+    function assItems(state, data) {
+      var base = '/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/';
+      return (data.subtitles || []).filter(function (sub) { return Number.isInteger(sub.file); }).map(function (sub, number) {
+        var item = {
+          index: 1000 + number, label: (sub.title || 'ASS') + ' (ASS)', language: sub.language || '', external: true,
+          homelabAss: {
+            url: base + sub.file + '/raw',
+            fonts: (sub.fonts || []).filter(Number.isInteger).map(function (id) {
+              return new URL(base + id + '/raw', window.location.href).href;
+            })
+          }
+        };
+        // Lampa's menu switches subtitles through `mode`, like hls.js tracks.
+        Object.defineProperty(item, 'mode', {
+          enumerable: true,
+          get: function () { return state.assActive === item ? 'showing' : 'disabled'; },
+          set: function (value) {
+            if (value === 'showing') showAss(state, item);
+            else if (state.assActive === item) hideAss(state);
+          }
+        });
+        return item;
+      });
+    }
+
+    function withAss(state, list) {
+      for (var i = list.length - 1; i >= 0; i--) if (list[i].homelabAss) list.splice(i, 1);
+      list.push.apply(list, state.assItems || []);
+      return list;
+    }
+
+    function applySubtitles(state, list) {
+      // Native TextTrack accessors live on the prototype; hls.js uses own
+      // accessors. Keep either real object so its playback setter stays intact.
+      var subtitles = list.filter(function (sub) {
+        return sub.index !== -1 && (!sub.kind || sub.kind === 'subtitles' || sub.kind === 'captions') &&
+          ['disabled', 'hidden', 'showing'].indexOf(sub.mode) !== -1;
+      });
+      if (!subtitles.length) return;
+      state.subtitles = subtitles;
+      var preference = state.preferences.subtitles || state.restoreSubtitle;
+      if (preference) {
+        var selected = matchingTrack(subtitles, preference);
+        subtitles.forEach(function (sub) {
+          if (sub === selected) return;
+          sub.selected = false;
+          sub.mode = 'disabled';
+        });
+        // Leave a showing track alone: re-enabling would restart its renderer.
+        if (selected) {
+          selected.selected = true;
+          if (selected.mode !== 'showing') selected.mode = 'showing';
+        }
+        Lampa.PlayerVideo.subsview(Boolean(selected));
+        delete state.restoreSubtitle;
+      }
+    }
+
+    function installAss(state, data) {
+      if (!data || typeof data.renderer !== 'string' || !Array.isArray(data.subtitles) || !data.subtitles.length) return;
+      if (!assSupported()) return;
+      state.assRenderer = data.renderer;
+      state.assItems = assItems(state, data);
+      if (!state.assItems.length) return;
+      // Embedded subtitles may have arrived before this player state, or may
+      // never arrive; then the external ones form the menu on their own.
+      if (!state.subtitleList && lastSubtitles && lastSubtitles.work === state.work) state.subtitleList = lastSubtitles.list;
+      if (!state.subtitleList) {
+        state.subtitleList = [];
+        Lampa.PlayerPanel.setSubs(state.subtitleList);
+      }
+      applySubtitles(state, withAss(state, state.subtitleList));
+    }
+
     function externalTracks(state, work) {
       if (!work.homelab_torrent_hash || !Number.isInteger(work.homelab_file_index)) return Promise.resolve([]);
       var base = '/extaudio/' + encodeURIComponent(work.homelab_torrent_hash) + '/';
@@ -735,7 +959,10 @@
           });
       }
       return lookup(true)
-        .then(function (data) { return data.tracks || []; })
+        .then(function (data) {
+          state.externalData = data;
+          return data.tracks || [];
+        })
         .catch(function (error) {
           if (error.name === 'AbortError') throw error;
           console.warn('Homelab external audio:', error.message);
@@ -823,6 +1050,7 @@
       }).catch(function () {}).finally(function () { clearTimeout(state.probeTimeout); });
       externalTracks(state, work).then(function (list) {
         clearTimeout(state.externalTimeout);
+        if (active === state && generation === revision) installAss(state, state.externalData);
         if (!list.length) return;
         lists.external = list;
         publish();
@@ -831,26 +1059,15 @@
     }
 
     Lampa.PlayerVideo.listener.follow('subs', function (event) {
+      if (!Array.isArray(event.subs)) return;
+      lastSubtitles = {work: Lampa.Player.playdata(), list: event.subs};
       if (!active || Lampa.Player.playdata() !== active.work) return;
-      // Native TextTrack accessors live on the prototype; hls.js uses own
-      // accessors. Keep either real object so its playback setter stays intact.
-      var subtitles = (event.subs || []).filter(function (sub) {
-        return sub.index !== -1 && (!sub.kind || sub.kind === 'subtitles' || sub.kind === 'captions') &&
-          ['disabled', 'hidden', 'showing'].indexOf(sub.mode) !== -1;
-      });
-      if (!subtitles.length) return;
-      active.subtitles = subtitles;
-      var preference = active.preferences.subtitles || active.restoreSubtitle;
-      if (preference) {
-        var selected = matchingTrack(subtitles, preference);
-        subtitles.forEach(function (sub) {
-          sub.selected = false;
-          sub.mode = 'disabled';
-        });
-        if (selected) { selected.selected = true; selected.mode = 'showing'; }
-        Lampa.PlayerVideo.subsview(Boolean(selected));
-        delete active.restoreSubtitle;
-      }
+      // The panel keeps this same array, so external items join its menu.
+      active.subtitleList = withAss(active, event.subs);
+      // A reload (audio switch) may bring a new video element.
+      var showing = active.assActive;
+      if (showing && active.assVideo !== Lampa.PlayerVideo.video()) showAss(active, showing);
+      applySubtitles(active, event.subs);
     });
     Lampa.PlayerPanel.listener.follow('subsview', function (event) {
       if (!active || Lampa.Player.playdata() !== active.work) return;

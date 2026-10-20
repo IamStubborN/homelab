@@ -78,6 +78,29 @@ rewrites the variant's `CODECS` to the external codec, because hls.js creates th
 audio SourceBuffer from it. If a GST fragment layout cannot be stripped, the
 plugin falls back to the embedded track.
 
+## External ASS subtitles
+
+Lampa draws subtitles as plain text in one box at the bottom, and Lampac turns
+embedded ASS into WebVTT, so styled signs lose their font and position.
+External `.ass`/`.ssa` files named after the video (for example
+`YakuSub Studio/<video stem>.ass`) are rendered properly instead:
+
+- `/extaudio/<hash>/<file id>/tracks` also lists those files as `subtitles`,
+  each with the fonts the release ships next to or below it (else any `fonts`
+  or `шрифты` folder below the video).
+- `/extaudio/<hash>/<file id>/raw` returns the bytes of a subtitle (up to
+  8 MiB) or font (up to 32 MiB) file of that torrent and caches them. Other
+  files are refused.
+- The image bundles [JASSUB](https://github.com/ThaUnknown/jassub) (libass in
+  WebAssembly), pinned in `extaudio/jassub/package-lock.json`, and serves it at
+  `/extaudio/jassub/`. It needs Chrome 80 or Safari 17 or newer.
+- The plugin adds `<group> (ASS)` items to the subtitle menu. Choosing one
+  draws the file over the video with its own fonts; the choice is remembered
+  per torrent. The encoding is detected from the BOM, then UTF-8, then
+  Windows-1251.
+
+Embedded ASS still goes through Lampac as plain text.
+
 ## Runtime setup
 
 Create the ignored root-password file on the Docker host before starting the

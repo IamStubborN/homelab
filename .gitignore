@@ -194,6 +194,9 @@ homeassistant/config/.ha_run.lock
 notes.txt
 package-lock.json
 package.json
+# Pinned build inputs for the Lampa ASS renderer are real sources.
+!lampa/extaudio/jassub/package.json
+!lampa/extaudio/jassub/package-lock.json
 .claude/
 
 # Top-level service folders not included by root compose.yml

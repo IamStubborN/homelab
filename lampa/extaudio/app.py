@@ -41,6 +41,16 @@ AUDIO_EXTENSIONS = {
     ".thd", ".truehd", ".mlp", ".flac", ".mp3", ".mp2", ".mpa", ".opus", ".ogg", ".oga",
     ".wav", ".w64", ".wma", ".ape", ".wv", ".tta", ".aiff", ".aif", ".caf",
 }
+SUBTITLE_EXTENSIONS = {".ass", ".ssa"}
+FONT_EXTENSIONS = {".ttf", ".otf", ".ttc", ".woff", ".woff2"}
+FONT_DIR_RE = re.compile(r"font|шрифт", re.IGNORECASE)
+MAX_FONTS = 32
+MAX_SUBTITLE_BYTES = 8 * 1024 * 1024
+MAX_FONT_BYTES = 32 * 1024 * 1024
+MAX_RAW_FETCHES = 2
+RAW_FETCH_SECONDS = 60
+RENDERER_DIR = os.environ.get("RENDERER_DIR", "/app/jassub")
+RENDERER_TYPES = {".js": "text/javascript", ".wasm": "application/wasm", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8"}
 # Demuxers ffmpeg may pick by content. Playlist formats (HLS, concat) are left
 # out so a crafted torrent file cannot make ffmpeg fetch other URLs.
 INPUT_FORMATS = (
@@ -66,13 +76,15 @@ SEGMENT_RE = re.compile(r"^s(\d+)\.m4s$")
 # Codecs the plugin may ask to copy when the browser can decode them in MSE.
 COPY_CODECS = {"aac", "opus", "ac3", "eac3"}
 FILE_RE = re.compile(r"^(?:audio\.m3u8|init\.mp4|s\d{1,6}\.m4s)$")
-ROUTE_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(tracks)|(\d{1,2})/(copy|aac)/([^/]+))$")
+ROUTE_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(tracks|raw)|(\d{1,2})/(copy|aac)/([^/]+))$")
+RENDERER_RE = re.compile(r"^/extaudio/jassub/([a-z0-9-]+\.(?:js|wasm|woff2|txt))$")
 CONTENT_TYPES = {".m3u8": "application/vnd.apple.mpegurl", ".mp4": "audio/mp4", ".m4s": "video/iso.segment"}
 
 _probe_cache = {}
 _probe_failures = {}
 _probe_lock = threading.Lock()
 _track_lookups = threading.Semaphore(MAX_TRACK_LOOKUPS)
+_raw_fetches = threading.Semaphore(MAX_RAW_FETCHES)
 _jobs = {}
 _jobs_lock = threading.Lock()
 # One remux at a time keeps the shared Docker host responsive.
@@ -116,8 +128,8 @@ def split_name(path):
     return directory, stem, extension.lower()
 
 
-def external_candidates(files, video_id):
-    """Audio files named after the video, e.g. `Sound/<video stem>.mka`."""
+def external_candidates(files, video_id, extensions=AUDIO_EXTENSIONS):
+    """Files named after the video, e.g. `Sound/<video stem>.mka`."""
     video = next((item for item in files if item["id"] == video_id), None)
     if not video:
         return []
@@ -127,14 +139,17 @@ def external_candidates(files, video_id):
     for item in files:
         directory, candidate_stem, extension = split_name(item["path"])
         name = candidate_stem.casefold()
-        if extension not in AUDIO_EXTENSIONS or not (name == stem or name.startswith(stem + ".")):
+        if extension not in extensions or not (name == stem or name.startswith(stem + ".")):
             continue
         if directory.startswith(video_dir + "/"):
             directory = directory[len(video_dir) + 1:]
         elif directory == video_dir:
             directory = ""
         suffix = candidate_stem[len(video_stem) + 1:] if name != stem else ""
-        candidates.append({"id": item["id"], "location": " / ".join(part for part in (directory.replace("/", " / "), suffix) if part)})
+        candidates.append({
+            "id": item["id"], "path": item["path"], "suffix": suffix,
+            "location": " / ".join(part for part in (directory.replace("/", " / "), suffix) if part),
+        })
     return sorted(candidates, key=lambda item: item["location"].casefold())[:MAX_CANDIDATES]
 
 
@@ -150,6 +165,86 @@ def require_audio_file(torrent_hash, file_id):
         if item["id"] == file_id and split_name(item["path"])[2] in AUDIO_EXTENSIONS:
             return item.get("length", 0)
     raise Rejected("not an audio file of this torrent")
+
+
+def subtitle_fonts(files, subtitle_path, video_path):
+    """Fonts a release ships for its subtitles: next to or below the subtitle
+    file, else in a fonts folder anywhere below the video."""
+    def below(directory, root):
+        return directory == root or directory.startswith(root + "/")
+    fonts = [item for item in files if split_name(item["path"])[2] in FONT_EXTENSIONS]
+    near = [item for item in fonts if below(split_name(item["path"])[0], split_name(subtitle_path)[0])]
+    if not near:
+        root = split_name(video_path)[0]
+        near = [
+            item for item in fonts
+            if below(split_name(item["path"])[0], root) and FONT_DIR_RE.search(item["path"][len(root):])
+        ]
+    near = [item for item in near if 0 < item["length"] <= MAX_FONT_BYTES]
+    return [item["id"] for item in sorted(near, key=lambda item: item["path"].casefold())[:MAX_FONTS]]
+
+
+def external_subtitles(files, video_id):
+    video = next((item for item in files if item["id"] == video_id), None)
+    if not video:
+        return []
+    subtitles = []
+    for candidate in external_candidates(files, video_id, SUBTITLE_EXTENSIONS):
+        directory = split_name(candidate["path"])[0]
+        subtitles.append({
+            "file": candidate["id"],
+            # A folder name is usually the group (`YakuSub Studio/`); a
+            # suffix is usually a language (`<stem>.rus.ass`).
+            "title": directory.rpartition("/")[2] or candidate["suffix"] or "ASS",
+            "location": candidate["location"],
+            "language": candidate["suffix"] if re.fullmatch(r"[a-z]{2,3}", candidate["suffix"], re.IGNORECASE) else "",
+            "fonts": subtitle_fonts(files, candidate["path"], video["path"]),
+        })
+    return subtitles
+
+
+def raw_path(torrent_hash, file_id):
+    return os.path.join(CACHE_DIR, f"{torrent_hash}-{file_id}-raw", "data")
+
+
+def fetch_raw(torrent_hash, file_id):
+    """Download a subtitle or font file of this torrent into the cache and
+    return its path. The caller holds a _raw_fetches slot."""
+    path = raw_path(torrent_hash, file_id)
+    if os.path.isfile(path):  # Another request fetched it meanwhile.
+        return path
+    try:
+        files = torrent_files(torrent_hash)
+    except urllib.error.HTTPError as error:
+        error.close()
+        raise Rejected("unknown torrent") from None
+    item = next((item for item in files if item["id"] == file_id), None)
+    extension = item and split_name(item["path"])[2]
+    limit = MAX_SUBTITLE_BYTES if extension in SUBTITLE_EXTENSIONS else MAX_FONT_BYTES if extension in FONT_EXTENSIONS else 0
+    if not limit or not 0 < item["length"] <= limit:
+        raise Rejected("not a subtitle or font file of this torrent")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    partial = f"{path}.{os.getpid()}-{threading.get_ident()}.part"
+    deadline = time.monotonic() + RAW_FETCH_SECONDS
+    size = 0
+    try:
+        # Streamed to disk, so large fonts never sit in memory.
+        with urllib.request.urlopen(stream_url(torrent_hash, file_id), timeout=10) as response, \
+                open(partial, "wb") as target:
+            while chunk := response.read(64 * 1024):
+                size += len(chunk)
+                if size > limit or time.monotonic() > deadline:
+                    raise OSError("raw file too large or too slow")
+                target.write(chunk)
+        if size != item["length"]:
+            raise OSError("raw file truncated")
+        os.replace(partial, path)
+    finally:
+        try:
+            os.unlink(partial)
+        except FileNotFoundError:
+            pass
+    return path
 
 
 def job_timeout(length):
@@ -190,9 +285,9 @@ def probe_audio(torrent_hash, file_id):
     return streams
 
 
-def external_tracks(torrent_hash, video_id):
+def external_tracks(torrent_hash, video_id, files):
     tracks = []
-    for candidate in external_candidates(torrent_files(torrent_hash), video_id):
+    for candidate in external_candidates(files, video_id):
         try:
             streams = probe_audio(torrent_hash, candidate["id"])
         except (ProbeFailed, subprocess.SubprocessError, ValueError, OSError):
@@ -690,6 +785,47 @@ class Handler(BaseHTTPRequestHandler):
         cache = "no-store" if name == "audio.m3u8" else "private, max-age=3600"
         self.send_bytes(200, body, CONTENT_TYPES[os.path.splitext(name)[1]], cache)
 
+    def serve_raw(self, torrent_hash, file_id):
+        path = raw_path(torrent_hash, file_id)
+        if not os.path.isfile(path):  # Only checked files are ever cached.
+            # JASSUB asks for every font at once and never retries, so wait
+            # for a download slot instead of refusing.
+            if not _raw_fetches.acquire(timeout=RAW_FETCH_SECONDS):
+                return self.send_json(503, {"error": "busy"}, {"Retry-After": "2"})
+            try:
+                path = fetch_raw(torrent_hash, file_id)
+            except Rejected:
+                return self.send_json(404, {"error": "not found"})
+            except Exception as error:
+                print(f"raw {torrent_hash}/{file_id} failed: {type(error).__name__} {error}", file=sys.stderr, flush=True)
+                return self.send_json(502, {"error": "fetch failed"})
+            finally:
+                _raw_fetches.release()
+        try:
+            source = open(path, "rb")
+        except FileNotFoundError:  # Evicted meanwhile; the client asks again.
+            return self.send_json(503, {"error": "busy"}, {"Retry-After": "1"})
+        with source:
+            self.send_response(200)
+            # Bytes as stored: the plugin detects the subtitle encoding itself.
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(os.fstat(source.fileno()).st_size))
+            self.send_header("Cache-Control", "private, max-age=86400")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            try:
+                self.end_headers()
+                shutil.copyfileobj(source, self.wfile, 64 * 1024)
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+
+    def serve_renderer(self, name):
+        try:
+            with open(os.path.join(RENDERER_DIR, name), "rb") as source:
+                body = source.read()
+        except FileNotFoundError:
+            return self.send_json(404, {"error": "not found"})
+        self.send_bytes(200, body, RENDERER_TYPES[os.path.splitext(name)[1]], "public, max-age=86400")
+
     def serve_live(self, torrent_hash, file_id, stream, name, query):
         directory = rendition_dir(torrent_hash, file_id, stream, "aac")
         if name == "audio.m3u8":
@@ -738,15 +874,25 @@ class Handler(BaseHTTPRequestHandler):
         path, query = split.path, urllib.parse.parse_qs(split.query)
         if path == "/extaudio/health":
             return self.send_json(200, {"ok": True})
+        renderer = RENDERER_RE.match(path)
+        if renderer:
+            return self.serve_renderer(renderer.group(1))
         match = ROUTE_RE.match(path)
         if not match:
             return self.send_json(404, {"error": "not found"})
         torrent_hash, file_id = match.group(1).lower(), int(match.group(2))
+        if match.group(3) == "raw":
+            return self.serve_raw(torrent_hash, file_id)
         if match.group(3):
             if not _track_lookups.acquire(blocking=False):
                 return self.send_json(429, {"error": "busy"}, {"Retry-After": "5"})
             try:
-                return self.send_json(200, {"tracks": external_tracks(torrent_hash, file_id)})
+                files = torrent_files(torrent_hash)
+                return self.send_json(200, {
+                    "tracks": external_tracks(torrent_hash, file_id, files),
+                    "subtitles": external_subtitles(files, file_id),
+                    "renderer": "/extaudio/jassub/" if os.path.isfile(os.path.join(RENDERER_DIR, "jassub.js")) else None,
+                })
             except urllib.error.HTTPError as error:
                 error.close()
                 return self.send_json(404 if error.code == 404 else 502, {"error": "track lookup failed"})

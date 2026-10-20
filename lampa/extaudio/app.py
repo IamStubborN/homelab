@@ -336,7 +336,8 @@ class LiveRendition:
         """Whether the current run will produce segment `index` soon."""
         if self.process is None or index is None:
             return self.process is not None
-        first = self.start + 1 if self.warmup == self.start else self.start
+        # A missing segment behind the head (dropped warm-up, evicted) will not come.
+        first = max(self.head, self.start + 1 if self.warmup == self.start else self.start)
         return first <= index <= self.head + LIVE_REACH
 
 

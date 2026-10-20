@@ -255,6 +255,26 @@ class LiveEncodeTests(unittest.TestCase):
             self.assertFalse(self.rendition.paused and self.rendition.head <= 4)
 
 
+class CoverageTests(unittest.TestCase):
+    def rendition(self, start, head, warmup):
+        rendition = app.LiveRendition(HASH, 1, 0, {"duration": 600.0})
+        rendition.process, rendition.start, rendition.head, rendition.warmup = mock.Mock(), start, head, warmup
+        return rendition
+
+    def test_a_run_covers_only_segments_it_will_still_write(self):
+        rendition = self.rendition(10, 20, 10)
+        self.assertEqual(
+            [index for index in range(5, 30) if rendition.covers(index)],
+            list(range(20, 20 + app.LIVE_REACH + 1)),
+        )
+        self.assertFalse(self.rendition(10, 10, 10).covers(10), "the dropped warm-up segment")
+        self.assertTrue(self.rendition(0, 0, None).covers(0))
+        self.assertTrue(self.rendition(10, 20, 10).covers(None), "init comes from any run")
+        idle = self.rendition(10, 20, 10)
+        idle.process = None
+        self.assertFalse(idle.covers(20))
+
+
 class RunSlotTests(unittest.TestCase):
     def setUp(self):
         app._live.clear()

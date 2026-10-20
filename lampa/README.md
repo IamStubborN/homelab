@@ -34,18 +34,28 @@ sidecar adds those files to browser playback without modifying Lampac:
 - `/extaudio/<hash>/<video file id>/tracks` lists audio files named after the
   video (`<stem>.mka` in any folder, or `<stem>.<label>.ac3`). It queries only
   the torrent being played and probes at most six candidate headers.
-- `/extaudio/<hash>/<file id>/<stream>/<copy|aac>/audio.m3u8` remuxes the
-  selected file once into fMP4 HLS. The plugin asks for `copy` when the browser
-  decodes the codec itself (AAC everywhere, Opus in Chrome and Safari, AC-3 and
-  E-AC-3 in Safari). Anything else (FLAC, MP3, DTS, TrueHD, PCM, WMA and so on)
-  is encoded to AAC: about a minute of one core for a 24-minute stereo episode.
-- One job runs at a time at low priority, so the playlist answers
-  `503 Retry-After` until it is ready. A job's deadline grows with the file size
-  (`JOB_BASE_SECONDS` plus `MIN_SOURCE_KBPS`, at most `JOB_MAX_SECONDS`), and a job
-  nobody polls for `ABANDON_SECONDS` is stopped so it no longer pulls the torrent.
+- `/extaudio/<hash>/<file id>/<stream>/copy/audio.m3u8` copies the selected
+  file once into fMP4 HLS. The plugin asks for `copy` when the browser decodes
+  the codec itself (AAC everywhere, Opus in Chrome and Safari, AC-3 and E-AC-3
+  in Safari). One copy job runs at a time at low priority, so the playlist
+  answers `503 Retry-After` until it is ready. A job's deadline grows with the
+  file size (`JOB_BASE_SECONDS` plus `MIN_SOURCE_KBPS`, at most
+  `JOB_MAX_SECONDS`), and a job nobody polls for `ABANDON_SECONDS` is stopped.
+- `/extaudio/<hash>/<file id>/<stream>/aac/audio.m3u8?at=<seconds>` encodes
+  anything else (FLAC, MP3, DTS, TrueHD, PCM, WMA, AC-3 in Chrome and so on) to
+  AAC on demand, the way Jellyfin does. The playlist covers the whole duration
+  at once; ffmpeg starts at the playback position and restarts at a seek.
+  Segments are 281 AAC frames (about 6 s) on a fixed grid, and the sidecar
+  writes each segment's absolute time, so segments from different runs line up.
+  A run starts one segment early and drops it, because an AAC encoder's first
+  frame is priming. ffmpeg pauses once it is `LIVE_AHEAD_SEGMENTS` (about five
+  minutes) ahead of playback and resumes in batches, so the torrent is read
+  only as far as someone watches. Multichannel audio becomes standard 5.1:
+  Chrome rejects the `5.1(side)` layout that AC-3 and DTS decode to.
 - ffmpeg accepts only audio container formats (`INPUT_FORMATS` in `app.py`), so a
   file disguised as a playlist cannot make it fetch other URLs. Track lookups
-  run at most two at a time, and a failed probe is not retried for 10 minutes.
+  run at most two at a time, and a probe that fails (other than a timeout) is
+  not retried for 10 minutes.
 - Results live in the ignored `extaudio-cache/` directory, which is limited to
   1 GiB and 24 hours. Delete it at any time.
 - The plugin lists external tracks in the regular audio menu. When an external

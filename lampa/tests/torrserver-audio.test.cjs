@@ -196,7 +196,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
   });
 
   return {
-    loads, storage, requests, destroy, playingStates, notices, context,
+    loads, storage, requests, destroy, playingStates, notices, context, video: () => video,
     settle: async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); },
     audioMenu: () => audioMenu,
     loaderInstances: TestLoader.instances,
@@ -895,6 +895,19 @@ test('external audio copies codecs the browser decodes and encodes the rest', as
   new hls.config.pLoader({}).load({ type: 'manifest' }, {}, { onSuccess: response => { result = response; } });
   h.loaderInstances.at(-1).callbacks.onSuccess({ data: '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.640033,mp4a.40.2"\n/v.m3u8\n' }, {}, { type: 'manifest' }, null);
   assert.match(result.data, /CODECS="avc1\.640033,Opus",AUDIO="homelab-external"/);
+});
+
+test('encoded external audio tells the sidecar where playback is', async t => {
+  const h = harness(t, new Map(), { external: [{ ...anilibria, codec: 'dts', title: 'DTS' }] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  h.video().currentTime = 754.6;
+  h.chooseAudio('DTS (внешняя)');
+  await h.settle();
+  const prepared = h.requests.filter(r => /audio\.m3u8/.test(r.url)).map(r => new URL(r.url).pathname + new URL(r.url).search);
+  assert.deepEqual(prepared, ['/extaudio/abc/1/0/aac/audio.m3u8?at=754']);
+  assert.equal(h.work().homelab_external_audio.url, '/extaudio/abc/1/0/aac/audio.m3u8?at=754');
 });
 
 test('an unsupported fragment layout falls back to the embedded track', async t => {

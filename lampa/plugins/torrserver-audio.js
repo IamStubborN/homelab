@@ -559,7 +559,7 @@
       }
       var embedded = track.external ? carrierTrack(state, url) : track;
       if (track.external) {
-        state.work.homelab_external_audio = {key: track.key, url: track.url, codecs: track.codecs, name: track.gstTitle, language: track.language};
+        state.work.homelab_external_audio = {key: track.key, url: externalUrl(track, saved.time), codecs: track.codecs, name: track.gstTitle, language: track.language};
       } else delete state.work.homelab_external_audio;
       // An external rendition reuses the running task unless the embedded
       // track would need transcoding that the stripped video never plays.
@@ -626,6 +626,14 @@
       Lampa.PlayerPanel.setTracks(state.tracks);
     }
 
+    // Encoded renditions start at the playback position, so tell the sidecar
+    // where playback is. Copied renditions are whole files.
+    function externalUrl(track, time) {
+      if (!track.live) return track.url;
+      if (time === undefined) time = Number(Lampa.PlayerVideo.video().currentTime) || 0;
+      return track.url + '?at=' + Math.floor(time);
+    }
+
     function cancelPreparation(state) {
       if (!state.preparing) return;
       state.preparing.abort.abort();
@@ -643,7 +651,7 @@
       if (!automatic && Lampa.Noty) Lampa.Noty.show('Готовлю озвучку: ' + track.label);
       function attempt() {
         if (state.preparing !== preparing) return;
-        window.fetch(new URL(track.url, window.location.href).href, {signal: preparing.abort.signal, cache: 'no-store'}).then(function (response) {
+        window.fetch(new URL(externalUrl(track), window.location.href).href, {signal: preparing.abort.signal, cache: 'no-store'}).then(function (response) {
           if (state.preparing !== preparing) return;
           if (response.ok) {
             state.preparing = null;
@@ -734,7 +742,7 @@
             return {
               external: true, key: track.file + ':' + track.stream,
               url: base + track.file + '/' + track.stream + '/' + mode + '/audio.m3u8',
-              codecs: mode === 'copy' ? COPY_CODECS[track.codec] : COPY_CODECS.aac,
+              codecs: mode === 'copy' ? COPY_CODECS[track.codec] : COPY_CODECS.aac, live: mode === 'aac',
               language: track.language, gstTitle: track.title || '',
               label: (track.title || track.location || 'Audio') + ' (внешняя)',
               extra: {channels: track.channels}

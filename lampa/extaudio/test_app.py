@@ -1,5 +1,8 @@
 import json
 import os
+import re
+import shutil
+import struct
 import subprocess
 import tempfile
 import threading
@@ -7,7 +10,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
 import app
@@ -50,31 +53,54 @@ class CandidateTests(unittest.TestCase):
 
 
 class RemuxTests(unittest.TestCase):
-    def test_aac_is_copied_at_low_priority(self):
-        for mode in ("copy", "aac"):
-            command = app.remux_command("src", "/out", 1, "aac", 2, mode)
+    def test_browser_codecs_are_copied_at_low_priority(self):
+        for codec in ("aac", "opus", "ac3", "eac3"):
+            command = app.remux_command("src", "/out", 1, codec)
             self.assertEqual(command[:4], ["nice", "-n", "10", "ffmpeg"])
             self.assertIn("0:a:1", command)
             self.assertEqual(command[command.index("-c:a") + 1], "copy")
-
-    def test_other_codecs_are_encoded_to_aac(self):
-        command = app.remux_command("src", "/out", 0, "ac3", 6, "aac")
-        self.assertEqual(command[command.index("-c:a") + 1:command.index("-c:a") + 4], ["aac", "-b:a", "384k"])
-
-    def test_browser_codecs_are_copied_on_request(self):
-        for codec in ("opus", "ac3", "eac3"):
-            command = app.remux_command("src", "/out", 0, codec, 6, "copy")
-            self.assertEqual(command[command.index("-c:a") + 1], "copy")
         with self.assertRaises(ValueError):
-            app.remux_command("src", "/out", 0, "dts", 6, "copy")
+            app.remux_command("src", "/out", 0, "dts")
 
     def test_inputs_cannot_be_playlists(self):
-        command = app.remux_command("src", "/out", 0, "aac", 2, "copy")
-        formats = command[command.index("-format_whitelist") + 1].split(",")
-        self.assertNotIn("hls", formats)
-        self.assertNotIn("concat", formats)
-        self.assertEqual(command[command.index("-protocol_whitelist") + 1], "http,tcp")
-        self.assertLess(command.index("-format_whitelist"), command.index("-i"))
+        for command in (app.remux_command("src", "/out", 0, "aac"), app.live_command("src", "/out", 0, 2, 0, 10)):
+            formats = command[command.index("-format_whitelist") + 1].split(",")
+            self.assertNotIn("hls", formats)
+            self.assertNotIn("concat", formats)
+            self.assertEqual(command[command.index("-protocol_whitelist") + 1], "http,tcp")
+            self.assertLess(command.index("-format_whitelist"), command.index("-i"))
+
+    def test_live_encode_starts_on_the_segment_grid(self):
+        command = app.live_command("src", "/out", 1, 6, 20, 30)
+        remaining = f"{10 * app.SEGMENT_SECONDS:.6f}"
+        self.assertEqual(command[command.index("-ss") + 1], f"{20 * app.SEGMENT_SECONDS:.6f}")
+        self.assertEqual(command[command.index("-start_number") + 1], "20")
+        self.assertEqual(command[command.index("-af") + 1], f"aformat=channel_layouts=5.1,apad=whole_dur={remaining}")
+        self.assertEqual(command[command.index("-t") + 1], remaining)
+        self.assertEqual(command[command.index("-b:a") + 1], "384k")
+        stereo = app.live_command("src", "/out", 0, 2, 0, 30)
+        self.assertNotIn("aformat", stereo[stereo.index("-af") + 1])
+        self.assertEqual(stereo[stereo.index("-b:a") + 1], "192k")
+
+    def test_live_playlist_lists_whole_segments(self):
+        playlist = app.live_playlist(3).splitlines()
+        self.assertEqual(playlist[-1], "#EXT-X-ENDLIST")
+        self.assertEqual([line for line in playlist if line.startswith("s")], ["s0.m4s", "s1.m4s", "s2.m4s"])
+        self.assertEqual(playlist[-3], f"#EXTINF:{app.SEGMENT_SECONDS:.6f},")
+
+    def test_segments_are_placed_on_the_absolute_timeline(self):
+        def box(kind, body):
+            return struct.pack(">I4s", 8 + len(body), kind) + body
+
+        for version, field in ((0, struct.pack(">I", 0)), (1, struct.pack(">Q", 0))):
+            tfdt = box(b"tfdt", bytes([version, 0, 0, 0]) + field)
+            segment = box(b"moof", box(b"mfhd", b"\0" * 8) + box(b"traf", box(b"tfhd", b"\0" * 8) + tfdt)) + box(b"mdat", b"x")
+            patched = app.with_decode_time(segment, 7)
+            self.assertEqual(len(patched), len(segment))
+            value = patched[segment.index(b"tfdt") + 8:segment.index(b"tfdt") + 8 + len(field)]
+            self.assertEqual(int.from_bytes(value, "big"), 7 * app.SEGMENT_SAMPLES)
+        with self.assertRaises(ValueError):
+            app.with_decode_time(box(b"mdat", b"x"), 1)
 
     def test_timeout_grows_with_file_size(self):
         self.assertEqual(app.job_timeout(0), app.JOB_BASE_SECONDS)
@@ -93,6 +119,171 @@ class RemuxTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError) as raised:
             app.run_command(["sh", "-c", "echo broken >&2; exit 3"], job)
         self.assertEqual(raised.exception.stderr, b"broken\n")
+
+
+class RangeHandler(BaseHTTPRequestHandler):
+    """Serves one file with byte ranges, like TorrServer's /stream/."""
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        with open(self.server.path, "rb") as source:
+            data = source.read()
+        match = re.match(r"bytes=(\d+)-(\d*)", self.headers.get("Range", ""))
+        start = int(match.group(1)) if match else 0
+        end = int(match.group(2)) if match and match.group(2) else len(data) - 1
+        self.send_response(206 if match else 200)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if match:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+        self.end_headers()
+        try:
+            for offset in range(start, end + 1, 16384):
+                self.wfile.write(data[offset:min(offset + 16384, end + 1)])
+                time.sleep(getattr(self.server, "delay", 0))
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class LiveEncodeTests(unittest.TestCase):
+    """Encode a real file served over HTTP, as TorrServer would."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.source = tempfile.TemporaryDirectory()
+        path = os.path.join(cls.source.name, "audio.mka")
+        subprocess.run([
+            "ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "sine=f=440:d=40:r=48000",
+            "-af", "pan=5.1(side)|c0=c0|c1=c0|c2=c0|c3=c0|c4=c0|c5=c0", "-c:a", "ac3", path,
+        ], check=True)
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), RangeHandler)
+        cls.server.path = path
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}/audio.mka"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.source.cleanup()
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        patcher = mock.patch.object(app, "stream_url", return_value=self.url)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(app, "CACHE_DIR", self.directory.name)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        app._live.clear()
+        self.rendition = app.LiveRendition(HASH, 1, 0, {"channels": 6, "duration": 40.0})
+        self.rendition.source = self.url
+        os.makedirs(self.rendition.directory)
+        self.addCleanup(lambda: [app.stop_run(item) for item in list(app._live.values())])
+        app._live[(HASH, 1, 0)] = self.rendition
+
+    def segment(self, index, rendition=None):
+        with open(os.path.join((rendition or self.rendition).directory, f"s{index}.m4s"), "rb") as segment:
+            data = segment.read()
+        offset = data.index(b"tfdt")
+        size = 8 if data[offset + 4] else 4
+        return int.from_bytes(data[offset + 8:offset + 8 + size], "big")
+
+    def test_segments_from_any_position_share_one_timeline(self):
+        self.assertTrue(app.live_file(self.rendition, 4, 30))
+        self.assertTrue(app.live_file(self.rendition, None, 5))
+        self.assertEqual(self.segment(4), 4 * app.SEGMENT_SAMPLES)
+        self.assertFalse(os.path.exists(os.path.join(self.rendition.directory, "s3.m4s")), "warm-up segment is dropped")
+        self.assertTrue(app.live_file(self.rendition, 0, 30), "a seek back restarts the encoder")
+        self.assertEqual(self.segment(0), 0)
+        layout = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "stream=channel_layout", "-of", "csv=p=0",
+             os.path.join(self.rendition.directory, "init.mp4")], capture_output=True, check=True,
+        ).stdout.strip()
+        self.assertEqual(layout, b"5.1")
+
+    def test_audio_is_padded_to_the_last_listed_segment(self):
+        rendition = app.LiveRendition(HASH, 2, 0, {"channels": 2, "duration": 47.0})  # longer than the audio
+        os.makedirs(rendition.directory)
+        app._live[(HASH, 2, 0)] = rendition
+        last = rendition.count - 1
+        self.assertTrue(app.live_file(rendition, last, 30))
+        self.assertEqual(self.segment(last, rendition), last * app.SEGMENT_SAMPLES)
+        deadline = time.monotonic() + 10
+        while rendition.process is not None and time.monotonic() < deadline:
+            time.sleep(0.1)
+        # The encoder's priming frame spills into one tiny unlisted segment.
+        self.assertGreaterEqual(rendition.head, rendition.count)
+        self.assertEqual(rendition.failures, 0)
+
+    def test_an_older_request_does_not_fight_the_newest(self):
+        results = []
+        older = threading.Thread(target=lambda: results.append(app.live_file(self.rendition, 6, 20)))
+        older.start()
+        time.sleep(0.3)
+        results.append(app.live_file(self.rendition, 1, 20))
+        older.join()
+        self.assertEqual(results, [True, True])
+        self.assertLessEqual(self.rendition.runs, 2)
+
+    def test_the_dropped_warmup_segment_restarts_the_encoder(self):
+        self.assertTrue(app.live_file(self.rendition, 4, 30))
+        started = time.monotonic()
+        self.assertTrue(app.live_file(self.rendition, 3, 30))
+        self.assertLess(time.monotonic() - started, 10)
+
+    def test_a_failing_source_is_not_restarted_in_a_loop(self):
+        self.rendition.source = "http://127.0.0.1:9/missing.mka"
+        self.assertIsNone(app.live_file(self.rendition, 2, 20))
+        self.assertEqual(self.rendition.runs, app.MAX_FAILURES)
+
+    def test_encoder_pauses_far_ahead_of_playback(self):
+        self.server.delay = 0.03  # about 0.5 MB/s, like a torrent still downloading
+        self.addCleanup(setattr, self.server, "delay", 0)
+        with mock.patch.object(app, "LIVE_AHEAD", 2):
+            self.assertTrue(app.live_file(self.rendition, 1, 30))
+            deadline = time.monotonic() + 10
+            while not self.rendition.paused and time.monotonic() < deadline:
+                time.sleep(0.1)
+            self.assertTrue(self.rendition.paused)
+            self.assertLessEqual(self.rendition.head, 1 + 2 + 2)
+            self.assertTrue(app.live_file(self.rendition, 3, 30))
+            self.assertFalse(self.rendition.paused and self.rendition.head <= 4)
+
+
+class RunSlotTests(unittest.TestCase):
+    def setUp(self):
+        app._live.clear()
+        self.addCleanup(app._live.clear)
+
+    def running(self, key, seen_ago, paused=False):
+        rendition = app.LiveRendition(HASH, key, 0, {"duration": 60.0})
+        rendition.process = mock.Mock(**{"poll.return_value": None})
+        rendition.paused = paused
+        rendition.seen = time.monotonic() - seen_ago
+        app._live[(HASH, key, 0)] = rendition
+        return rendition
+
+    def test_a_stale_active_run_yields_its_slot(self):
+        stale, busy = self.running(1, 60), self.running(2, 1)
+        stale_process, busy_process = stale.process, busy.process
+        new = app.LiveRendition(HASH, 3, 0, {"duration": 60.0})
+        with mock.patch.object(app.subprocess, "Popen"), mock.patch.object(app.threading, "Thread"), \
+                tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "CACHE_DIR", directory):
+            new.directory = app.rendition_dir(HASH, 3, 0, "aac")
+            self.assertTrue(app.start_run(new, 5))
+        stale_process.kill.assert_called_once()
+        busy_process.kill.assert_not_called()
+        self.assertIsNone(stale.process)
+
+    def test_two_watched_runs_keep_their_slots(self):
+        self.running(1, 1), self.running(2, 1)
+        new = app.LiveRendition(HASH, 3, 0, {"duration": 60.0})
+        self.assertFalse(app.start_run(new, 5))
 
 
 class ProbeTests(unittest.TestCase):
@@ -292,9 +483,31 @@ class HttpTests(unittest.TestCase):
         files = [dict(item, length=5000) for item in FILES]
         with mock.patch.object(app, "torrent_files", return_value=files), \
                 mock.patch.object(app, "ensure_rendition", return_value=(False, None)) as ensure:
-            status, headers, _ = self.get(f"/extaudio/{HASH}/1/0/aac/audio.m3u8")
+            status, headers, _ = self.get(f"/extaudio/{HASH}/1/0/copy/audio.m3u8")
         self.assertEqual((status, headers["Retry-After"]), (503, "2"))
-        ensure.assert_called_once_with(HASH, 1, 0, "aac", app.JOB_WAIT_SECONDS, 5000)
+        ensure.assert_called_once_with(HASH, 1, 0, "copy", app.JOB_WAIT_SECONDS, 5000)
+
+    def test_encoded_playlist_is_immediate_and_starts_at_the_position(self):
+        rendition = mock.Mock(count=1000, process=None)
+        def create(torrent_hash, file_id, stream):
+            directory = app.rendition_dir(torrent_hash, file_id, stream, "aac")
+            os.makedirs(directory, exist_ok=True)
+            with open(os.path.join(directory, "audio.m3u8"), "w") as playlist:
+                playlist.write("#EXTM3U\n")
+            return rendition
+
+        with mock.patch.object(app, "torrent_files", return_value=FILES), \
+                mock.patch.object(app, "live_rendition", side_effect=create), \
+                mock.patch.object(app, "start_run") as start:
+            status, _, body = self.get(f"/extaudio/{HASH}/1/0/aac/audio.m3u8?at=600")
+        self.assertEqual((status, body), (200, b"#EXTM3U\n"))
+        start.assert_called_once_with(rendition, 600 * app.SAMPLE_RATE // app.SEGMENT_SAMPLES)
+
+    def test_encoded_segments_need_a_checked_playlist(self):
+        with mock.patch.object(app, "live_rendition") as live:
+            self.assertEqual(self.get(f"/extaudio/{HASH}/1/0/aac/s3.m4s")[0], 404)
+            self.assertEqual(self.get(f"/extaudio/{HASH}/1/0/aac/init.mp4")[0], 404)
+        live.assert_not_called()
 
     def test_only_audio_files_of_a_known_torrent_are_remuxed(self):
         unknown = urllib.error.HTTPError("url", 404, "Not Found", {}, None)

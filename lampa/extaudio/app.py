@@ -41,6 +41,22 @@ AUDIO_EXTENSIONS = {
     ".thd", ".truehd", ".mlp", ".flac", ".mp3", ".mp2", ".mpa", ".opus", ".ogg", ".oga",
     ".wav", ".w64", ".wma", ".ape", ".wv", ".tta", ".aiff", ".aif", ".caf",
 }
+VIDEO_EXTENSIONS = {
+    ".mkv", ".mp4", ".m4v", ".avi", ".ts", ".m2ts", ".mts", ".webm", ".mov", ".wmv", ".mpg", ".mpeg", ".vob",
+}
+# Release tags whose numbers are not episode numbers.
+NOISE_RE = re.compile(
+    r"\[[0-9a-f]{8}\]|(?<![a-z0-9])(?:\d{3,4}p|[xh]\.?26[45]|hevc|avc|aac|e?-?ac-?3|dts|flac|opus|"
+    r"[257]\.[01]|(?:19|20)\d\d|10bit|8bit|hi10p?|web-?dl|webrip|bdrip|bdremux|hdtv|uhd|hdr10?|\d+x\d+)(?![a-z0-9])",
+    re.IGNORECASE,
+)
+SEASON_RE = re.compile(
+    r"(?:^|[/\s._\[(-])(?:season[\s._]*(\d{1,2})|s(\d{1,2})(?:e\d|[/\s._\])-]|$)|(\d{1,2})[\s._-]*сезон|сезон[\s._-]*(\d{1,2}))",
+    re.IGNORECASE,
+)
+CHANNELS_RE = re.compile(r"(?<![a-z0-9])\d{1,2}ch(?![a-z0-9])", re.IGNORECASE)
+# Folders of music and extras that may number their files like episodes.
+SKIP_DIR_RE = re.compile(r"(?:^|/)(?:ost|soundtracks?|music|bonus|extras?|specials?|cd\s?\d+|scans?)(?:/|$)", re.IGNORECASE)
 SUBTITLE_EXTENSIONS = {".ass", ".ssa"}
 FONT_EXTENSIONS = {".ttf", ".otf", ".ttc", ".woff", ".woff2"}
 FONT_DIR_RE = re.compile(r"font|шрифт", re.IGNORECASE)
@@ -128,29 +144,148 @@ def split_name(path):
     return directory, stem, extension.lower()
 
 
+def numbers(stem):
+    stem = re.sub(r"(?<=\d)v\d\b", "", NOISE_RE.sub(" ", stem), flags=re.IGNORECASE)  # 05v2 is episode 5
+    return [int(value) for value in re.findall(r"\d+", stem)]
+
+
+def name_shape(stem):
+    return re.sub(r"\d+", "#", NOISE_RE.sub(" ", stem)).casefold()
+
+
+def season(path):
+    """The season a path names (`Season 2/`, `S02E01`, `2 сезон`), or None.
+    The deepest mention wins: `Show S1-S3/Season 2/` is season 2."""
+    found = [
+        match for match in SEASON_RE.finditer(path)
+        if not (match.group(0).endswith("-") and re.match(r"s?\d", path[match.end():], re.IGNORECASE))  # S1-S3
+    ]
+    return int(next(group for group in found[-1].groups() if group)) if found else None
+
+
+def below_common(path, other_dir):
+    """`path` without the folders it shares with `other_dir`: a torrent root
+    such as `Show S1-S3/` names no season of its own."""
+    parts, other = path.split("/"), other_dir.split("/") if other_dir else []
+    shared = 0
+    while shared < min(len(parts) - 1, len(other)) and parts[shared] == other[shared]:
+        shared += 1
+    return "/".join(parts[shared:])
+
+
+def episode_numbers(items):
+    """Map each file to its episode: the number position, counted from the
+    end, that best tells these files apart. Files sharing a value (NCOP1 next
+    to episode 1) are left out."""
+    if len(items) < 2:
+        return {}
+    lists = {item["id"]: numbers(split_name(item["path"])[1]) for item in items}
+    best, best_values = 0, {}
+    for index in range(1, max(len(values) for values in lists.values()) + 1):
+        values = {key: found[-index] for key, found in lists.items() if len(found) >= index}
+        counts = {}
+        for value in values.values():
+            counts[value] = counts.get(value, 0) + 1
+        unique = {key: value for key, value in values.items() if counts[value] == 1}
+        if len(unique) > best:
+            best, best_values = len(unique), unique
+    return best_values if best >= 2 and best * 2 >= len(items) else {}
+
+
+def named_after(stem, candidate_stem, longer_stems):
+    """The label after `stem` when `candidate_stem` is named after it
+    (`<stem>`, `<stem>.rus`, `<stem> [Dub]`), else None. `Shrek 2` is not
+    `Shrek` with a label, and a longer video name that also fits wins."""
+    match = re.match(re.escape(stem), candidate_stem, re.IGNORECASE)
+    if not match:
+        return None
+    rest = candidate_stem[match.end():]
+    if rest and (rest[0].isalnum() or re.match(r"[\s._-]*\d", CHANNELS_RE.sub(" ", NOISE_RE.sub(" ", rest)))):
+        return None
+    folded = candidate_stem.casefold()
+    if any(folded.startswith(other) for other in longer_stems):
+        return None
+    return rest.strip(" ._-")
+
+
 def external_candidates(files, video_id, extensions=AUDIO_EXTENSIONS):
-    """Files named after the video, e.g. `Sound/<video stem>.mka`."""
+    """Files for this video, folder by folder: files named after it; else, in
+    a folder with one file per episode (of the video's season), the one with
+    the video's episode number, else the one in the video's position. The only
+    video of a torrent (a film) takes every file; a lone video among others
+    only the files beside it. Named files sort first."""
     video = next((item for item in files if item["id"] == video_id), None)
     if not video:
         return []
     video_dir, video_stem, _ = split_name(video["path"])
-    stem = video_stem.casefold()
-    candidates = []
+    all_videos = [
+        item for item in files
+        if split_name(item["path"])[2] in VIDEO_EXTENSIONS and not re.search(r"(?:^|/)sample", item["path"], re.IGNORECASE)
+    ]
+    longer = [
+        split_name(item["path"])[1].casefold() for item in all_videos
+        if len(split_name(item["path"])[1]) > len(video_stem) and item["id"] != video_id
+    ]
+    folders = {}
     for item in files:
-        directory, candidate_stem, extension = split_name(item["path"])
-        name = candidate_stem.casefold()
-        if extension not in extensions or not (name == stem or name.startswith(stem + ".")):
+        directory, _, extension = split_name(item["path"])
+        if extension in extensions:
+            folders.setdefault(directory, []).append(item)
+    videos = sorted((item for item in all_videos if split_name(item["path"])[0] == video_dir), key=lambda item: item["path"].casefold())
+    # Extras (NCOP1, Trailer) are named differently; episodes share a shape.
+    peers = [item for item in videos if name_shape(split_name(item["path"])[1]) == name_shape(video_stem)]
+    if len(peers) < 2:
+        peers = videos
+    video_episodes = episode_numbers(peers)
+    torrent_seasons = {season(item["path"]) for item in all_videos} - {None}
+    skipped_here = SKIP_DIR_RE.search(video_dir)
+    found = []  # (rule, item, label)
+    for directory, items in folders.items():
+        items.sort(key=lambda item: item["path"].casefold())
+        video_season = season(below_common(video["path"], directory))
+        folder_season = season(below_common(directory + "/", video_dir))
+        if folder_season is not None and video_season is not None and folder_season != video_season:
             continue
+        named = [(item, named_after(video_stem, split_name(item["path"])[1], longer)) for item in items]
+        named = [(0, item, label) for item, label in named if label is not None]
+        if named:
+            found.extend(named)
+            continue
+        if SKIP_DIR_RE.search(directory) and not skipped_here:
+            continue
+        if folder_season is None and video_season not in (None, 1) and len(torrent_seasons) > 1:
+            # Flat folders usually number episodes across seasons; trust
+            # only files that name the video's season themselves.
+            items = [item for item in items if season(split_name(item["path"])[1]) == video_season]
+        if not items:
+            continue
+        if len(all_videos) == 1:
+            found.extend((3, item, "") for item in items)
+        elif len(videos) == 1:
+            # A lone video among others (an OVA, a folder per episode)
+            # takes only audio kept beside it.
+            if directory == video_dir or directory.startswith(video_dir + "/"):
+                found.extend((3, item, "") for item in items)
+        elif episodes := episode_numbers(items):
+            if video_id in video_episodes:
+                found.extend((1, item, "") for item in items if episodes.get(item["id"]) == video_episodes[video_id])
+        elif len(items) == len(peers) and video in peers:
+            found.append((2, items[peers.index(video)], ""))
+    candidates = []
+    for rule, item, label in found:
+        directory = split_name(item["path"])[0]
         if directory.startswith(video_dir + "/"):
             directory = directory[len(video_dir) + 1:]
         elif directory == video_dir:
             directory = ""
-        suffix = candidate_stem[len(video_stem) + 1:] if name != stem else ""
-        candidates.append({
-            "id": item["id"], "path": item["path"], "suffix": suffix,
-            "location": " / ".join(part for part in (directory.replace("/", " / "), suffix) if part),
-        })
-    return sorted(candidates, key=lambda item: item["location"].casefold())[:MAX_CANDIDATES]
+        candidates.append((rule, {
+            "id": item["id"], "path": item["path"], "suffix": label,
+            "location": " / ".join(part for part in (directory.replace("/", " / "), label) if part),
+        }))
+    candidates.sort(key=lambda pair: (pair[0], pair[1]["location"].casefold()))
+    if len(candidates) > MAX_CANDIDATES:
+        print(f"{len(candidates) - MAX_CANDIDATES} external candidates for {video['path']!r} not probed", file=sys.stderr, flush=True)
+    return [candidate for _, candidate in candidates[:MAX_CANDIDATES]]
 
 
 def require_audio_file(torrent_hash, file_id):

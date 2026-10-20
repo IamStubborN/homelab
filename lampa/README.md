@@ -31,9 +31,27 @@ Some torrents keep voice-overs in separate files, for example
 `Sound/<episode>.mka`. GStreamer reads one file, so the `lampa-extaudio`
 sidecar adds those files to browser playback without modifying Lampac:
 
-- `/extaudio/<hash>/<video file id>/tracks` lists audio files named after the
-  video (`<stem>.mka` in any folder, or `<stem>.<label>.ac3`). It queries only
-  the torrent being played and probes at most six candidate headers.
+- `/extaudio/<hash>/<video file id>/tracks` lists the video's audio files,
+  folder by folder, from the first rule that matches:
+  1. named after the video: `<stem>.mka` in any folder, `<stem>.<label>.ac3`
+     or `<stem> [Dub].mka`;
+  2. in a folder with one file per episode, the file with the video's episode
+     number, taken from the number that tells the folder's files apart
+     (`[AniLibria] Show - 03.mka`, `Show.S01E03.ac3`); release tags such as
+     `1080p`, `x264` or a year are ignored, and extras like `NCOP1` do not
+     count as episodes;
+  3. in an unnumbered folder with as many files as episodes, the file in the
+     video's position.
+
+  A film (the only video in the torrent, samples aside) takes every audio
+  file; a lone video among others (an OVA, a folder per episode) only the
+  audio beside it. `Shrek 2.mka` is not a labelled track of `Shrek`. Rules 2
+  and 3 skip folders of another season (`Season 2/`, `S02`, `2 сезон`); for
+  season 2 and later, a folder without a season keeps only files that name
+  it, since such folders usually number episodes across seasons. They also
+  skip `OST`, `Music`, `Bonus`, `Extras`, `Specials`, `CD1` and `Scans`
+  folders unless the video itself is in one. Lookups query only the torrent
+  being played and probe at most six candidates, named files first.
 - `/extaudio/<hash>/<file id>/<stream>/copy/audio.m3u8` copies the selected
   file once into fMP4 HLS. The plugin asks for `copy` when the browser decodes
   the codec itself (AAC everywhere, Opus in Chrome and Safari, AC-3 and E-AC-3

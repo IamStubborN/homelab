@@ -35,6 +35,101 @@ class CandidateTests(unittest.TestCase):
             (20, "Studio Band"),
         ])
 
+    def matches(self, paths, video, extensions=app.AUDIO_EXTENSIONS):
+        files = [{"id": number, "path": path} for number, path in enumerate(paths)]
+        return [paths[item["id"]] for item in app.external_candidates(files, paths.index(video), extensions)]
+
+    EPISODES = [f"Show [1080p]/Show - {number:02d} [1080p] [ABCD1234].mkv" for number in range(1, 13)]
+
+    def test_folders_named_differently_match_by_episode_number(self):
+        dub = [f"Show [1080p]/RUS Sound/AniLibria/[AniLibria] Show - {number:02d}.mka" for number in range(1, 13)]
+        self.assertEqual(self.matches(self.EPISODES + dub, self.EPISODES[2]), [dub[2]])
+        seasons = [f"S/Show.S01E{number:02d}.2160p.WEB-DL.H265.mkv" for number in range(1, 9)]
+        studio = [f"S/Rus Sound/Studio/Show.S01E{number:02d}.ac3" for number in range(1, 9)]
+        self.assertEqual(self.matches(seasons + studio, seasons[2]), [studio[2]])
+        sequel = [f"R/Re Zero 2nd Season - {number:02d}.mkv" for number in range(1, 5)]
+        sequel_dub = [f"R/Rus/Re Zero 2 - {number:02d} [Dub].mka" for number in range(1, 5)]
+        self.assertEqual(self.matches(sequel + sequel_dub, sequel[2]), [sequel_dub[2]])
+
+    def test_a_partial_dub_matches_only_its_episodes(self):
+        dub = [f"Show [1080p]/Sound/Dub/Ep{number}.mka" for number in (1, 2, 3, 5)]
+        self.assertEqual(self.matches(self.EPISODES + dub, self.EPISODES[2]), [dub[2]])
+        self.assertEqual(self.matches(self.EPISODES + dub, self.EPISODES[3]), [])
+
+    def test_extras_do_not_hide_episode_one(self):
+        extras = ["Show [1080p]/NCOP1.mkv", "Show [1080p]/NCED1.mkv"]
+        dub = [f"Show [1080p]/RUS/[Dub] Show - {number:02d}.mka" for number in range(1, 13)]
+        self.assertEqual(self.matches(self.EPISODES + extras + dub, self.EPISODES[0]), [dub[0]])
+
+    def test_unnumbered_folders_match_by_position(self):
+        paths = [f"X/{name}.mkv" for name in "abc"] + [f"X/Snd/{name}-rus.mka" for name in "xyz"]
+        self.assertEqual(self.matches(paths, "X/b.mkv"), ["X/Snd/y-rus.mka"])
+
+    def test_a_season_range_in_the_root_does_not_hide_seasons(self):
+        for root in ("Show S1-S3", "[S1-Raws] Show", "Show.S01-S02.1080p", "Show 1-2 сезон"):
+            videos = [f"{root}/Season {season}/Show - {number:02d}.mkv" for season in (1, 2) for number in range(1, 4)]
+            dub = [f"{root}/RUS Sound/Season {season}/Show - {number:02d}.mka" for season in (1, 2) for number in range(1, 4)]
+            self.assertEqual(self.matches(videos + dub, videos[4]), [dub[4]], root)
+
+    def test_a_single_season_torrent_matches_unseasoned_audio(self):
+        videos = [f"Show.S02.1080p/Show.S02E{number:02d}.1080p.mkv" for number in range(1, 4)]
+        dub = [f"Show.S02.1080p/RUS/Show.{number:02d}.ac3" for number in range(1, 4)]
+        self.assertEqual(self.matches(videos + dub, videos[1]), [dub[1]])
+        self.assertEqual(app.season("Show S2 - 02.mkv"), 2)
+        self.assertIsNone(app.season("Show S1-S3/x.mkv"))  # a range names no one season
+
+    def test_channel_layouts_are_labels(self):
+        for suffix, label in ((" 5.1", "5.1"), (".2ch", "2ch"), (".6ch", "6ch"), (" 2.0", "2.0")):
+            paths = ["F/Film (2001).mkv", "F/Other.mkv", f"F/Rus/Film (2001){suffix}.ac3"]
+            files = [{"id": number, "path": path} for number, path in enumerate(paths)]
+            self.assertEqual([item["suffix"] for item in app.external_candidates(files, 0)], [label])
+        self.assertIsNone(app.named_after("Film", "Film 2.ac3", []))
+
+    def test_music_folders_are_not_dubs(self):
+        music = [f"Show [1080p]/OST/{number:02d} Track.flac" for number in range(1, 13)]
+        self.assertEqual(self.matches(self.EPISODES + music, self.EPISODES[2]), [])
+
+    def test_a_film_takes_every_audio_file(self):
+        paths = ["M/Movie.2019.1080p.mkv", "M/Rus Sound/Movie.Rus.DUB.ac3", "M/Rus Sound/Movie.Rus.AVO.dts"]
+        self.assertEqual(sorted(self.matches(paths, paths[0])), sorted(paths[1:]))
+
+    def test_other_seasons_never_lend_their_episodes(self):
+        videos = [f"Show/Season {season}/Show S0{season}E{number:02d}.mkv" for season in (1, 2) for number in range(1, 4)]
+        named = [f"Show/RUS Sound/Season {season}/Show S0{season}E{number:02d}.mka" for season in (1, 2) for number in range(1, 4)]
+        self.assertEqual(self.matches(videos + named, videos[1]), [named[1]])
+        absolute = [f"Show/RUS Dub/[Dub] Show - {number:02d}.mka" for number in range(1, 7)]
+        self.assertEqual(self.matches(videos + absolute, videos[1]), [absolute[1]], "season 1 counts from 1")
+        self.assertEqual(self.matches(videos + absolute, videos[4]), [], "season 2 cannot trust absolute numbers")
+
+    def test_a_lone_video_among_others_is_not_a_film(self):
+        paths = self.EPISODES + ["Show [1080p]/OVA/Show OVA.mkv"] + [f"Show [1080p]/RUS Sound/Show - {number:02d}.mka" for number in range(1, 13)]
+        self.assertEqual(self.matches(paths, "Show [1080p]/OVA/Show OVA.mkv"), [])
+        folders = [f"Show/Episode {number:02d}/video.mkv" for number in range(1, 4)] + [f"Show/Episode {number:02d}/rus.mka" for number in range(1, 4)]
+        self.assertEqual(self.matches(folders, "Show/Episode 02/video.mkv"), ["Show/Episode 02/rus.mka"])
+
+    def test_a_sequel_is_not_a_labelled_track(self):
+        paths = ["Shrek/Shrek.mkv", "Shrek/Shrek 2.mkv", "Shrek/RUS/Shrek.mka", "Shrek/RUS/Shrek 2.mka", "Shrek/RUS/Shrek.Dub.mka"]
+        self.assertEqual(self.matches(paths, "Shrek/Shrek.mkv"), ["Shrek/RUS/Shrek.mka", "Shrek/RUS/Shrek.Dub.mka"])
+        self.assertEqual(self.matches(paths, "Shrek/Shrek 2.mkv"), ["Shrek/RUS/Shrek 2.mka"])
+        recap = self.EPISODES + ["Show [1080p]/Sound/Show - 01 [1080p] [ABCD1234].5.mka"]
+        self.assertEqual(self.matches(recap, self.EPISODES[0]), [])
+
+    def test_named_files_survive_the_probe_limit(self):
+        dubs = [f"Show [1080p]/{letter}/[{letter}] Show - {number:02d}.mka" for letter in "ABCDEFG" for number in range(1, 13)]
+        named = "Show [1080p]/Z/Show - 02 [1080p] [ABCD1234].Kansai.mka"
+        found = self.matches(self.EPISODES + dubs + [named], self.EPISODES[1])
+        self.assertEqual(found[0], named)
+        self.assertEqual(len(found), app.MAX_CANDIDATES)
+
+    def test_versioned_episodes_keep_their_number(self):
+        videos = [f"Show/Show - {number:02d}.mkv" for number in (1, 2, 3, 4)] + ["Show/Show - 05v2.mkv"]
+        dub = [f"Show/RUS/[Dub] Show - {number:02d}.mka" for number in range(1, 6)]
+        self.assertEqual(self.matches(videos + dub, "Show/Show - 05v2.mkv"), [dub[4]])
+
+    def test_specials_find_their_own_folder(self):
+        paths = [f"Show/Specials/Show SP{number}.mkv" for number in (1, 2)] + [f"Show/RUS Sound/Specials/SP{number} dub.mka" for number in (1, 2)]
+        self.assertEqual(self.matches(paths, "Show/Specials/Show SP2.mkv"), ["Show/RUS Sound/Specials/SP2 dub.mka"])
+
     def test_unknown_video_has_no_candidates(self):
         self.assertEqual(app.external_candidates(FILES, 99), [])
 

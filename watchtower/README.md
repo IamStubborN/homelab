@@ -91,8 +91,9 @@ already deleted in a subsequently approved apply run.
 
 ## Nightly schedule
 
-All times are `Europe/Sofia` and are written with that zone, so daylight
-saving time does not move one job into another's window.
+All times are `Europe/Sofia`, the timezone of both Proxmox and the Docker
+guest. Timers also name the zone, so daylight saving time does not move one
+job into another's window.
 
 | Time | Job |
 | --- | --- |

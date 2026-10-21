@@ -151,6 +151,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
           return Promise.resolve({ok: true, json: async () => ({tracks: external, ...(ass || {})})});
         }
         if (/^\/extaudio\/[^/]+\/\d+\/embedded$/.test(new URL(url).pathname)) {
+          if (typeof embedded === 'function') return Promise.resolve(embedded());
           return Promise.resolve(embedded ? {ok: true, json: async () => embedded} : {ok: false, status: 404});
         }
         if (/^\/extaudio\/[^/]+\/\d+\/sub\/\d+$/.test(new URL(url).pathname)) {
@@ -1352,4 +1353,18 @@ test('Lampa sending back its kept list does not make drawn items their own origi
   assert.equal(list.length, 3);
   assert.ok(list.every(item => item.homelabOriginal !== item));
   assert.ok(!list[0].homelabOriginal.homelabAss);
+});
+
+test('embedded ASS is looked up again while TorrServer still fetches the torrent', async t => {
+  const answers = [{ ok: false, status: 503 }, { ok: true, json: async () => embeddedLookup }];
+  const h = harness(t, new Map(), { embedded: () => answers.shift(), events: () => null });
+  h.start(13, 'abc', true);
+  h.emitSubtitles(signsAndFull);
+  assert.ok(!h.requests.some(request => /\/embedded$/.test(request.url)), 'asked only once GST has opened the file');
+  await h.probe(signsAndFull);
+  await h.settle();
+  assert.ok(h.subtitleList().every(item => !item.homelabAss));
+  h.fireTimer(5000);
+  await h.settle();
+  assert.ok(h.subtitleList()[0].homelabAss);
 });

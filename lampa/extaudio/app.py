@@ -139,6 +139,10 @@ class Rejected(Exception):
     """A request for a file this service must not touch."""
 
 
+class NotReady(Exception):
+    """TorrServer has not loaded the torrent's file list yet."""
+
+
 class ProbeFailed(Exception):
     """A recent probe of this file failed; it is not retried yet."""
 
@@ -475,6 +479,8 @@ def require_video_file(torrent_hash, file_id):
     except urllib.error.HTTPError as error:
         error.close()
         raise Rejected("unknown torrent") from None
+    if not files:
+        raise NotReady()  # a torrent that just woke up is still fetching its metadata
     if not any(item["id"] == file_id and split_name(item["path"])[2] in VIDEO_EXTENSIONS for item in files):
         raise Rejected("not a video file of this torrent")
 
@@ -1316,6 +1322,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(429, {"error": "busy"}, {"Retry-After": "5"})
             try:
                 info = probe_embedded(torrent_hash, file_id)
+            except NotReady:
+                return self.send_json(503, {"error": "preparing"}, {"Retry-After": "3"})
             except Rejected:
                 return self.send_json(404, {"error": "not found"})
             except Exception:
@@ -1332,6 +1340,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(429, {"error": "busy"}, {"Retry-After": "5"})
             try:
                 probe_embedded(torrent_hash, file_id)
+            except NotReady:
+                return self.send_json(503, {"error": "preparing"}, {"Retry-After": "3"})
             except Rejected:
                 return self.send_json(404, {"error": "not found"})
             except Exception:

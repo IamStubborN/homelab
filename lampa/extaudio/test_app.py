@@ -931,6 +931,13 @@ class HttpTests(unittest.TestCase):
                 self.assertEqual(self.get(path)[0], status)
         self.assertEqual(probe.call_count, 2, "an unprobed file is probed again, as after a restart")
 
+    def test_a_torrent_without_its_file_list_yet_is_asked_again(self):
+        app._embedded_cache.clear()
+        with mock.patch.object(app, "torrent_files", return_value=[]):
+            status, headers, _ = self.get(f"/extaudio/{HASH}/13/embedded")
+        self.assertEqual(status, 503)
+        self.assertEqual(headers["Retry-After"], "3")
+
     def test_serves_ready_rendition_files(self):
         directory = app.rendition_dir(HASH, 1, 0, "copy")
         os.makedirs(directory)

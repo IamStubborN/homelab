@@ -1085,17 +1085,26 @@
     function embeddedSubtitles(state, work, revision) {
       if (!work.homelab_torrent_hash || !Number.isInteger(work.homelab_file_index) || !assSupported()) return;
       var url = new URL('/extaudio/' + encodeURIComponent(work.homelab_torrent_hash) + '/' + work.homelab_file_index + '/embedded', window.location.href);
-      function lookup(retry) {
-        return window.fetch(url.href, {signal: state.abort.signal}).then(function (response) {
-          // Shared with the external lookup's slots: ask once more.
-          if (response.status === 429 && retry) {
-            return new Promise(function (resolve) { setTimeout(resolve, 5000); }).then(function () { return lookup(false); });
+      var signal = state.abort.signal;
+      function lookup(attempts) {
+        return window.fetch(url.href, {signal: signal}).then(function (response) {
+          // Busy lookup slots (429) or a torrent still fetching its file list (503).
+          if ((response.status === 429 || response.status === 503) && attempts > 1) {
+            return new Promise(function (resolve, reject) {
+              var timer = setTimeout(function () { resolve(lookup(attempts - 1)); }, 5000);
+              signal.addEventListener('abort', function () {
+                clearTimeout(timer);
+                var error = new Error('The operation was aborted');
+                error.name = 'AbortError';
+                reject(error);
+              }, {once: true});
+            });
           }
           if (!response.ok) throw new Error('embedded subtitle lookup: HTTP ' + response.status);
           return response.json();
         });
       }
-      lookup(true).then(function (data) {
+      lookup(4).then(function (data) {
         if (active !== state || generation !== revision || !data || typeof data.renderer !== 'string' || !Array.isArray(data.subtitles)) return;
         if (!data.subtitles.some(function (sub) { return sub.codec === 'ass' || sub.codec === 'ssa'; })) return;
         state.assRenderer = data.renderer;
@@ -1237,8 +1246,9 @@
       }).then(function (list) {
         lists.embedded = list;
         publish();
+        // GST has opened the file by now, so TorrServer knows the torrent.
+        if (active === state && generation === revision) embeddedSubtitles(state, work, revision);
       }).catch(function () {}).finally(function () { clearTimeout(state.probeTimeout); });
-      embeddedSubtitles(state, work, revision);
       externalTracks(state, work).then(function (list) {
         clearTimeout(state.externalTimeout);
         if (active === state && generation === revision) installAss(state, state.externalData);

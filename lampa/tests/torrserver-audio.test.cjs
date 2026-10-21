@@ -1054,7 +1054,8 @@ test('external ASS subtitles join the menu and render through JASSUB', async t =
   const options = FakeAss.instances[0].options;
   assert.equal(options.subContent, assText);
   assert.equal(options.video, h.video());
-  assert.deepEqual(Array.from(options.fonts, font => new TextDecoder().decode(font)), ['font37', 'font38'], 'fonts arrive as bytes');
+  assert.deepEqual(Array.from(options.fonts.slice(0, 2), font => new TextDecoder().decode(font)), ['font37', 'font38'], 'fonts arrive as bytes');
+  assert.equal(options.fonts[2], 'https://lampa.test/extaudio/jassub/default.woff2', 'the fallback font loads up front');
   assert.equal(options.workerUrl, 'https://lampa.test/extaudio/jassub/jassub-worker.js');
   assert.equal(h.subtitleTitle(), 'YakuSub Studio (ASS)');
   h.chooseSubtitle('English');
@@ -1241,7 +1242,7 @@ test('embedded ASS tracks are drawn by JASSUB from events read as playback goes'
   assert.equal(FakeAss.instances.length, 1);
   const ass = FakeAss.instances[0];
   assert.equal(ass.options.subContent, header);
-  assert.deepEqual(Array.from(ass.options.fonts, font => font[0]), [7, 9], 'fonts come from the attachments');
+  assert.deepEqual(Array.from(ass.options.fonts.slice(0, 2), font => font[0]), [7, 9], 'fonts come from the attachments');
   assert.deepEqual(ass.events, [line(1), line(3)]);
   assert.deepEqual(ass.renders, [], 'a playing video redraws with its next frame');
   Object.assign(h.video(), { paused: true, currentTime: 62.5, videoWidth: 1920, videoHeight: 1080 });
@@ -1395,6 +1396,7 @@ test('Windows fonts a release does not attach are drawn with metric-compatible s
   assert.equal(ass.options.availableFonts['comic relief bold'], 'https://lampa.test/extaudio/jassub/comic-relief-bold.ttf');
   assert.equal(ass.options.availableFonts['tinos'], 'https://lampa.test/extaudio/jassub/tinos-regular.ttf');
   assert.deepEqual(Array.from(ass.options.fonts).filter(font => typeof font === 'string'), [
+    'https://lampa.test/extaudio/jassub/default.woff2',
     'https://lampa.test/extaudio/jassub/comic-relief-regular.ttf', 'https://lampa.test/extaudio/jassub/comic-relief-bold.ttf',
   ], 'a stand-in the styles use loads up front; one only in \\fn tags waits until asked');
 });

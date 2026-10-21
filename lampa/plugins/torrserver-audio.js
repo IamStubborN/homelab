@@ -884,9 +884,10 @@
 
     function rendererOptions(base, video, content, fonts) {
       content = standInFonts(content);
-      // Stand-ins the styles use load up front: JASSUB does not redraw a
-      // paused frame after a font it fetched on demand arrives.
-      fonts = fonts.slice();
+      // The fallback and the stand-ins the styles use load up front: JASSUB
+      // fetches the rest on demand, and libass skips an event without a font
+      // (even a drawn mask) in the frames drawn meanwhile.
+      fonts = fonts.concat(base + 'default.woff2');
       Object.keys(FONT_STAND_INS).forEach(function (name) {
         var standIn = FONT_STAND_INS[name];
         if (new RegExp('^Style:[^,]*,\\s*' + standIn[0] + '\\s*,', 'im').test(content)) {

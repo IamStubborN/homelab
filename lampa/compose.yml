@@ -85,6 +85,7 @@ services:
       - "traefik.http.routers.lampa-extaudio.entrypoints=http,https"
       - "traefik.http.routers.lampa-extaudio.tls=true"
       - "traefik.http.routers.lampa-extaudio.priority=100"
+      - "traefik.http.routers.lampa-extaudio.observability.accessLogs=true"
       - "traefik.http.services.lampa-extaudio.loadbalancer.server.port=8080"
     networks:
       - proxy
@@ -120,6 +121,7 @@ services:
       - "traefik.http.routers.lampa.entrypoints=http,https"
       - "traefik.http.routers.lampa.rule=Host(`lampa.${DOCKER_DOMAIN}`)"
       - "traefik.http.routers.lampa.middlewares=lampa-forwarded"
+      - "traefik.http.routers.lampa.observability.accessLogs=true"
       - "traefik.http.middlewares.lampa-forwarded.headers.customRequestHeaders.xscheme=https"
       - "traefik.http.middlewares.lampa-forwarded.headers.customRequestHeaders.xhost=lampa.${DOCKER_DOMAIN}"
       - "traefik.http.services.lampa.loadbalancer.server.port=9118"

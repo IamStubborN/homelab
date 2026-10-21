@@ -5,11 +5,17 @@ api:
   dashboard: true
   debug: false
 
+# Routers write access logs only when they opt in with their own
+# observability.accessLogs (Lampa, to trace which stream a viewer played).
 entryPoints:
   http:
     address: ":80"
+    observability:
+      accessLogs: false
   https:
     address: ":443"
+    observability:
+      accessLogs: false
 
 providers:
   docker:
@@ -35,3 +41,14 @@ certificatesResolvers:
 
 log:
   level: "INFO"
+
+accessLog:
+  format: json
+  fields:
+    names:
+      ClientAddr: drop
+      ClientHost: drop
+      ClientPort: drop
+      ClientUsername: drop
+    headers:
+      defaultMode: drop

@@ -230,6 +230,17 @@ Docker console logs use the `local` driver with three 10 MiB files.
 Treat logs as private runtime data: upstream errors can contain source URLs
 and viewer identifiers. Do not commit or publish them.
 
+Lampac itself logs no requests. Traefik writes JSON access logs only for the
+`lampa`, `lampa-extaudio` and `lampa-gst-sessions` routers, without client
+addresses or headers, so `docker logs traefik` shows which online stream or GST
+session a viewer played. They share Traefik's three 10 MiB console log files,
+which hold roughly days of playback, not a fixed period.
+
+`init.conf` disables VeoVeo: its upstream host `api.rstprgapipt.com` no longer
+resolves. Lampac rereads `init.conf` when the file changes, but it is mounted as
+a single file and `git pull` replaces it, so recreate `lampa` to apply a pulled
+change.
+
 The HTTP healthcheck requests `/version?type=hash` with a three-second timeout.
 It verifies the HTTP application, not GPU functionality or an individual stream.
 

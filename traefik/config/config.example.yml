@@ -18,6 +18,8 @@ http:
       priority: 120
       service: lampa@docker
       middlewares: [lampa-forwarded@docker]
+      observability:
+        accessLogs: true
 
     homeassistant:
       rule: "Host(`homeassistant.${DOCKER_DOMAIN}`)"

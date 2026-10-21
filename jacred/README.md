@@ -149,3 +149,11 @@ Do not restart JacRed or its browser dependencies for a schedule-only change.
 Before deployment retain the previous scheduler image and both source files
 for rollback. Verify the installed `/etc/crontabs/root`, container health,
 and root-project ownership afterward.
+
+## LostFilm
+
+LostFilm needs the browser session cookie of a LostFilm account. Run
+`jacred/set-lostfilm-cookie.sh` from a workstation: it reads the cookie without
+echo, sends it over SSH stdin into the private `init.yaml`, moves `lostfilm`
+from `disable_trackers` to `synctrackers`, and hot-reloads JacRed. Without a
+valid cookie every episode logs `expand failed (no magnets)`.

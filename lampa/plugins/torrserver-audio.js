@@ -475,6 +475,7 @@
       cancelPreparation(active);
       clearTimeout(active.probeTimeout);
       clearTimeout(active.externalTimeout);
+      clearTimeout(active.externalRetry);
       if (active.cancelRestore) active.cancelRestore();
       if (active.work.voiceovers === active.tracks) {
         if (active.previousTracks === undefined) delete active.work.voiceovers;
@@ -1402,17 +1403,18 @@
       applySubtitles(state, withAss(state, state.subtitleList));
     }
 
+    var EXTERNAL_LOOKUPS = 12;
+
     function externalTracks(state, work) {
       if (!work.homelab_torrent_hash || !Number.isInteger(work.homelab_file_index)) return Promise.resolve([]);
       var base = '/extaudio/' + encodeURIComponent(work.homelab_torrent_hash) + '/';
       var signal = state.externalAbort.signal;
-      function lookup(attempts) {
+      function lookup(retry) {
         return window.fetch(new URL(base + work.homelab_file_index + '/tracks', window.location.href).href, {signal: signal})
           .then(function (response) {
-            // Busy lookup slots (429) or an audio file TorrServer has not
-            // fetched far enough to read yet (503).
-            if ((response.status === 429 || response.status === 503) && attempts > 1) return new Promise(function (resolve, reject) {
-              var timer = setTimeout(function () { resolve(lookup(attempts - 1)); }, 5000);
+            // The sidecar limits concurrent lookups; ask once more before giving up.
+            if (response.status === 429 && retry) return new Promise(function (resolve, reject) {
+              var timer = setTimeout(function () { resolve(lookup(false)); }, 5000);
               signal.addEventListener('abort', function () {
                 clearTimeout(timer);
                 var error = new Error('The operation was aborted');
@@ -1424,7 +1426,7 @@
             return response.json();
           });
       }
-      return lookup(12)
+      return lookup(true)
         .then(function (data) {
           state.externalData = data;
           return data.tracks || [];
@@ -1469,8 +1471,8 @@
       probe.searchParams.delete('audio');
       probe.searchParams.delete('seconds');
       state.probeTimeout = setTimeout(function () { state.abort.abort(); }, 90000);
-      // Twelve lookups, each up to the sidecar's 10 s probe and a 5 s pause.
-      state.externalTimeout = setTimeout(function () { state.externalAbort.abort(); }, 200000);
+      // The first answer can include a 10 s probe for each audio file.
+      state.externalTimeout = setTimeout(function () { state.externalAbort.abort(); }, 60000);
       var embedded = window.fetch(probe.href, {signal: state.abort.signal}).then(function (response) {
         if (!response.ok) throw new Error('GStreamer track probe failed');
         return response.json();
@@ -1520,13 +1522,27 @@
         // GST has opened the file by now, so TorrServer knows the torrent.
         if (active === state && generation === revision) embeddedSubtitles(state, work, revision);
       }).catch(function () {}).finally(function () { clearTimeout(state.probeTimeout); });
-      externalTracks(state, work).then(function (list) {
-        clearTimeout(state.externalTimeout);
-        if (active === state && generation === revision) installAss(state, state.externalData);
-        if (!list.length) return;
-        lists.external = list;
-        publish();
-      }).catch(function () {});
+      // The sidecar answers with the audio files it could read in time and
+      // marks the rest pending; those are asked for again in the background.
+      function lookupExternal(attempts) {
+        externalTracks(state, work).then(function (list) {
+          clearTimeout(state.externalTimeout);
+          if (active !== state || generation !== revision) return;
+          if (attempts === EXTERNAL_LOOKUPS) installAss(state, state.externalData);
+          if (state.externalData && state.externalData.pending && attempts > 1) {
+            state.externalRetry = setTimeout(function () { lookupExternal(attempts - 1); }, 5000);
+          }
+          var keys = function (tracks) { return tracks.map(function (track) { return track.key; }).join(); };
+          if (!list.length || keys(list) === keys(lists.external)) return;
+          // Known tracks keep their objects: a preparation in progress and the
+          // ready/unsupported marks belong to them.
+          lists.external = list.map(function (track) {
+            return lists.external.find(function (known) { return known.key === track.key; }) || track;
+          });
+          publish();
+        }).catch(function () {});
+      }
+      lookupExternal(EXTERNAL_LOOKUPS);
       ownStream(state, url);
     }
 

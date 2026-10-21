@@ -141,21 +141,22 @@ class CandidateTests(unittest.TestCase):
             return [{"codec_name": "aac", "channels": 2, "tags": {"title": "AniLibria.tv", "language": "rus"}}]
 
         with mock.patch.object(app, "probe_audio", side_effect=probe):
-            self.assertEqual(app.external_tracks(HASH, 13, FILES), [{
+            self.assertEqual(app.external_tracks(HASH, 13, FILES), ([{
                 "file": 1, "stream": 0, "title": "AniLibria.tv", "location": "Sound",
                 "language": "rus", "codec": "aac", "channels": 2,
-            }])
+            }], False))
 
 
-    def test_a_file_still_downloading_makes_the_lookup_wait_instead_of_omitting_it(self):
+    def test_a_file_still_downloading_is_reported_as_pending_next_to_the_tracks_read(self):
         def probe(torrent_hash, file_id):
             if file_id == 20:
                 raise subprocess.TimeoutExpired("ffprobe", 10)
             return [{"codec_name": "aac", "channels": 2, "tags": {"title": "AniLibria.tv", "language": "rus"}}]
 
         with mock.patch.object(app, "probe_audio", side_effect=probe):
-            with self.assertRaises(app.NotReady):
-                app.external_tracks(HASH, 13, FILES)
+            tracks, pending = app.external_tracks(HASH, 13, FILES)
+        self.assertEqual([track["file"] for track in tracks], [1])
+        self.assertTrue(pending)
 
 
 SUB_FILES = [
@@ -1181,12 +1182,12 @@ class HttpTests(unittest.TestCase):
     def test_tracks_endpoint(self):
         tracks = [{"file": 1, "stream": 0, "title": "AniLibria.tv"}]
         with mock.patch.object(app, "torrent_files", return_value=SUB_FILES), \
-                mock.patch.object(app, "external_tracks", return_value=tracks), \
+                mock.patch.object(app, "external_tracks", return_value=(tracks, True)), \
                 tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "RENDERER_DIR", directory):
             open(os.path.join(directory, "jassub.js"), "w").close()
             status, _, body = self.get(f"/extaudio/{HASH}/13/tracks")
         payload = json.loads(body)
-        self.assertEqual((status, payload["tracks"], payload["renderer"]), (200, tracks, "/extaudio/jassub/"))
+        self.assertEqual((status, payload["tracks"], payload["pending"], payload["renderer"]), (200, tracks, True, "/extaudio/jassub/"))
         self.assertEqual([item["file"] for item in payload["subtitles"]], [27, 25])
 
     def test_raw_endpoint(self):

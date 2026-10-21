@@ -489,15 +489,15 @@ def probe_audio(torrent_hash, file_id):
 
 
 def external_tracks(torrent_hash, video_id, files):
+    """Tracks of the release's audio files, and whether some file could not be
+    read in time because TorrServer has not fetched its head yet."""
     tracks = []
     unread = False
     for candidate in external_candidates(files, video_id):
         try:
             streams = probe_audio(torrent_hash, candidate["id"])
         except subprocess.TimeoutExpired:
-            # TorrServer has not fetched the file's head yet; an answer
-            # without it would leave the player on the embedded audio.
-            unread = True
+            unread = True  # not cached as a failure: asking again may read it
             continue
         except (ProbeFailed, subprocess.SubprocessError, ValueError, OSError):
             continue
@@ -512,9 +512,7 @@ def external_tracks(torrent_hash, video_id, files):
                 "codec": stream.get("codec_name") or "",
                 "channels": stream.get("channels") or 0,
             })
-    if unread:
-        raise NotReady()
-    return tracks
+    return tracks, unread
 
 
 def require_video_file(torrent_hash, file_id):
@@ -1648,13 +1646,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(429, {"error": "busy"}, {"Retry-After": "5"})
             try:
                 files = torrent_files(torrent_hash)
+                tracks, pending = external_tracks(torrent_hash, file_id, files)
                 return self.send_json(200, {
-                    "tracks": external_tracks(torrent_hash, file_id, files),
+                    "tracks": tracks,
+                    # The player asks again for the files not read yet.
+                    "pending": pending,
                     "subtitles": external_subtitles(files, file_id),
                     "renderer": "/extaudio/jassub/" if os.path.isfile(os.path.join(RENDERER_DIR, "jassub.js")) else None,
                 })
-            except NotReady:
-                return self.send_json(503, {"error": "preparing"}, {"Retry-After": "5"})
             except urllib.error.HTTPError as error:
                 error.close()
                 return self.send_json(404 if error.code == 404 else 502, {"error": "track lookup failed"})

@@ -782,6 +782,7 @@ test('a remembered external track is restored on the next episode', async t => {
 });
 
 test('an external audio file still downloading is asked for until the sidecar reads it', async t => {
+  FakeAss.instances.length = 0;
   const storage = new Map();
   const h = harness(t, storage, { external: [anilibria] });
   h.start(13, 'abc', true);
@@ -792,13 +793,18 @@ test('an external audio file still downloading is asked for until the sidecar re
   const fetch = h.context.window.fetch;
   let unread = 3;
   h.context.window.fetch = (url, options) => {
-    if (unread && /\/14\/tracks$/.test(new URL(url).pathname)) { unread--; h.requests.push({ url, options }); return Promise.resolve({ ok: false, status: 503 }); }
+    if (unread && /\/14\/tracks$/.test(new URL(url).pathname)) {
+      unread--;
+      h.requests.push({ url, options });
+      return Promise.resolve({ ok: true, json: async () => ({ tracks: [], pending: true, ...assLookup }) });
+    }
     return fetch(url, options);
   };
   h.start(14, 'abc', true);
   await h.probe([japaneseAAC]);
   await h.settle();
   assert.equal(h.work().homelab_external_audio, undefined, 'nothing to restore yet');
+  assert.ok(h.subtitleMenu().includes('YakuSub Studio: полные (внешние)'), 'external subtitles do not wait for the audio');
   for (let i = 0; i < 3; i++) { h.fireTimer(5000); await h.settle(); }
   assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', externalLabel]);
   assert.equal(h.work().homelab_external_audio.name, 'AniLibria.tv', 'the remembered voice-over returns once it is read');
@@ -1635,7 +1641,7 @@ test('a drawn embedded track chosen by its new label returns on the next episode
   assert.equal(h.subtitleTitle(), 'Русские: полные');
 });
 
-test('external audio that arrives after embedded subtitles is still offered and restored', async t => {
+test('external audio that arrives after embedded subtitles is still offered', async t => {
   const storage = new Map();
   const h = harness(t, storage, { external: [anilibria], ass: assLookup, embedded: embeddedLookup, events: () => null });
   const fetch = h.context.window.fetch;

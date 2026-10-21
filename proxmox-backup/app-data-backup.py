@@ -38,7 +38,7 @@ VOLUMES = tuple(filter(None, os.environ.get("HOMELAB_BACKUP_VOLUMES", ",".join(B
 SKIP_DIR_NAMES = {".git", "node_modules", "__pycache__", ".cache", ".npm",
                   "cache", "Cache", "Caches", "logs", "Logs", "log"}
 SKIP_PREFIXES = (
-    "backups", "jacred/data", "freedium/data/postgres", "freedium/data/redis",
+    "backups", "jacred/data", "lampa/extaudio-cache", "freedium/data/postgres", "freedium/data/redis",
     "karakeep/data/meilisearch", "wiki/syncthing/home/config/index-v2",
     "plex/config/Library/Application Support/Plex Media Server/Media",
     "plex/config/Library/Application Support/Plex Media Server/Metadata",

@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import re
@@ -780,14 +781,21 @@ class EmbeddedSubtitleTests(unittest.TestCase):
                 "0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1\n\n[Events]\n"
                 "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" + events + "\n"
             )
+        srt = os.path.join(cls.source.name, "subs.srt")
+        with open(srt, "w") as output:
+            output.write("".join(
+                f"{number + 1}\n00:{second // 60:02d}:{second % 60:02d},000 --> 00:{second // 60:02d}:{second % 60:02d},900\n"
+                f"<i>Plain {second}</i>\n\n"
+                for number, second in enumerate(range(2, 120, 10))
+            ))
         cls.font = os.path.join(cls.source.name, "Test.ttf")
         with open(cls.font, "wb") as output:
             output.write(b"\x00\x01\x00\x00font bytes" * 100)
         path = os.path.join(cls.source.name, "video.mkv")
         subprocess.run([
             "ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=64x36:r=5:d=120",
-            "-i", subtitles, "-attach", cls.font, "-metadata:s:t", "mimetype=application/x-truetype-font",
-            "-map", "0:v", "-map", "1:s", "-c:v", "mpeg4", "-g", "10", "-c:s", "copy",
+            "-i", subtitles, "-i", srt, "-attach", cls.font, "-metadata:s:t", "mimetype=application/x-truetype-font",
+            "-map", "0:v", "-map", "1:s", "-map", "2:s", "-c:v", "mpeg4", "-g", "10", "-c:s", "copy",
             "-metadata:s:s:0", "title=Full", path,
         ], check=True)
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), RangeHandler)
@@ -825,7 +833,10 @@ class EmbeddedSubtitleTests(unittest.TestCase):
 
     def test_reads_events_from_the_playback_position_onwards(self):
         info = app.probe_embedded(HASH, 13)
-        self.assertEqual(info["subtitles"], [{"stream": 0, "codec": "ass", "title": "Full", "language": ""}])
+        self.assertEqual(info["subtitles"], [
+            {"stream": 0, "codec": "ass", "title": "Full", "language": ""},
+            {"stream": 1, "codec": "subrip", "title": "", "language": ""},
+        ])
         self.assertEqual(len(info["fonts"]), 1)
         first = self.events(60)
         self.assertIn("[Events]", first["header"])
@@ -864,16 +875,151 @@ class EmbeddedSubtitleTests(unittest.TestCase):
 
     def test_extracts_font_attachments(self):
         info = app.probe_embedded(HASH, 13)
-        path = app.fetch_attachment(HASH, 13, info["fonts"][0])
+        with mock.patch.object(app, "keep_font") as keep:
+            path = app.fetch_attachment(HASH, 13, info["fonts"][0])
         with open(path, "rb") as extracted, open(self.font, "rb") as original:
             self.assertEqual(extracted.read(), original.read())
+        keep.assert_called_once_with(path)
 
-    def test_only_probed_ass_streams_are_read(self):
+    def test_text_subtitles_are_converted_to_ass(self):
+        app.probe_embedded(HASH, 13)
+        deadline = time.monotonic() + 20
+        while True:
+            payload = app.subtitle_events(HASH, 13, 1, 30, 0)
+            if (payload["lines"] and app._subs[(HASH, 13, 1)].run is None) or time.monotonic() > deadline:
+                break
+            time.sleep(0.2)
+        self.assertEqual(payload["header"], app.CONVERTED_HEADER)
+        self.assertIn("Dialogue: 0,0:00:32.00,0:00:32.90,Default,,0,0,0,,{\\i1}Plain 32{\\i0}", payload["lines"])
+        self.assertFalse(payload["failed"])
+
+    def test_only_probed_text_streams_are_read(self):
         with self.assertRaises(app.Rejected):
             app.subtitle_events(HASH, 13, 0, 10, 0)
         app.probe_embedded(HASH, 13)
         with self.assertRaises(app.Rejected):
-            app.subtitle_events(HASH, 13, 1, 10, 0)
+            app.subtitle_events(HASH, 13, 2, 10, 0)
+
+
+def font(families, weight=400, italic=False, cyrillic=True, padding=0, glyphs=500):
+    """A minimal TrueType font: a name table (Windows UTF-16 and Mac Roman
+    family names), an OS/2 and a maxp table, padded to a size."""
+    records, strings = [], b""
+    for family in families:
+        for platform, encoding, text in ((3, 1, family.encode("utf-16-be")), (1, 0, family.encode("mac_roman"))):
+            records.append(struct.pack(">6H", platform, encoding, 0, 1, len(text), len(strings)))
+            strings += text
+    name = struct.pack(">3H", 0, len(records), 6 + 12 * len(records)) + b"".join(records) + strings
+    os2 = bytearray(78)
+    struct.pack_into(">H", os2, 4, weight)
+    struct.pack_into(">I", os2, 42, 1 << 9 if cyrillic else 0)
+    struct.pack_into(">H", os2, 62, 1 if italic else 0)
+    tables = [(b"OS/2", bytes(os2)), (b"maxp", struct.pack(">IH", 0x00005000, glyphs)), (b"name", name)]
+    offset = 12 + 16 * len(tables)
+    head, body = struct.pack(">IHHHH", 0x00010000, len(tables), 0, 0, 0), b""
+    for tag, data in tables:
+        head += struct.pack(">4sIII", tag, 0, offset + len(body), len(data))
+        body += data
+    return head + body + bytes(padding)
+
+
+def collection(*fonts):
+    """A TrueType collection of fonts built by font()."""
+    head = struct.pack(">4sII", b"ttcf", 0x00010000, len(fonts))
+    start = len(head) + 4 * len(fonts)
+    offsets, body = [], b""
+    for data in fonts:
+        offsets.append(start + len(body))
+        # Table offsets count from the start of the file.
+        count = struct.unpack_from(">H", data, 4)[0]
+        moved = bytearray(data)
+        for number in range(count):
+            record = 12 + 16 * number
+            struct.pack_into(">I", moved, record + 8, struct.unpack_from(">I", data, record + 8)[0] + start + len(body))
+        body += bytes(moved)
+    return head + struct.pack(f">{len(offsets)}I", *offsets) + body
+
+
+class FontLibraryTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.library = os.path.join(self.directory.name, "library")
+        os.mkdir(self.library)
+        patcher = mock.patch.object(app, "FONT_LIBRARY_DIR", self.library)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        app._library.update(faces={}, index=None)
+
+    def keep(self, data, name="font"):
+        path = os.path.join(self.directory.name, name)
+        with open(path, "wb") as output:
+            output.write(data)
+        app.keep_font(path)
+
+    def test_reads_family_names_weight_slant_and_cyrillic(self):
+        def faces(data):
+            return app.font_faces(io.BytesIO(data))
+        self.assertEqual(faces(font(["Tahoma"], weight=700, italic=True, cyrillic=False, glyphs=900)), [
+            {"families": ["tahoma"], "weight": 700, "italic": True, "cyrillic": False, "glyphs": 900},
+        ])
+        self.assertEqual([face["families"] for face in faces(collection(font(["MS Gothic"]), font(["MS PGothic"])))],
+                         [["ms gothic"], ["ms pgothic"]])
+        self.assertEqual(faces(b"wOF2" + bytes(100)), [])
+        self.assertEqual(faces(b"\x00\x01\x00\x00\x00\x09"), [], "a truncated font is not a font")
+
+    def test_keeps_each_font_once_and_nothing_else(self):
+        self.keep(font(["Viking"]))
+        self.keep(font(["Viking"]), "again")
+        self.keep(b"not a font")
+        self.keep(font(["Times New Roman"], glyphs=80), "subset")
+        self.keep(collection(font(["MS Gothic"])), "ttc")
+        self.assertEqual(sorted(os.path.splitext(name)[1] for name in os.listdir(self.library)), [".ttc", ".ttf"])
+
+    def test_the_library_has_a_size_limit(self):
+        with mock.patch.object(app, "FONT_LIBRARY_MAX_BYTES", 1500):
+            self.keep(font(["One"], padding=1000))
+            self.keep(font(["Two"], padding=1000))
+        self.assertEqual(len(os.listdir(self.library)), 1)
+
+    def test_nothing_is_kept_without_a_library(self):
+        with mock.patch.object(app, "FONT_LIBRARY_DIR", ""):
+            self.keep(font(["Viking"]))
+            self.assertEqual(app.library_index(), {"fonts": {}, "families": {}})
+        self.assertEqual(os.listdir(self.library), [])
+
+    def test_index_maps_jassub_keys_to_the_best_version(self):
+        def name(data):
+            for item in os.listdir(self.library):
+                with open(os.path.join(self.library, item), "rb") as source:
+                    if source.read() == data:
+                        return item
+        regular = font(["Impact"], padding=100)
+        latin = font(["Impact"], cyrillic=False, padding=5000)
+        bold = font(["Impact"], weight=700)
+        italic = font(["Impact"], italic=True, padding=9000)
+        black = font(["Arial Black"], weight=900)
+        for number, data in enumerate((regular, latin, bold, italic, black)):
+            self.keep(data, str(number))
+        index = app.library_index()
+        self.assertEqual(index["fonts"]["impact"], name(regular), "upright with Cyrillic before a bigger font")
+        self.assertEqual(index["fonts"]["impact regular"], name(regular))
+        self.assertEqual(index["fonts"]["impact bold"], name(bold))
+        self.assertEqual(index["fonts"]["arial black"], name(black))
+        self.assertEqual(index["families"]["impact"], [name(regular), name(bold)])
+        self.assertEqual(index["families"]["arial black"], [name(black)])
+
+    def test_index_follows_files_added_and_removed(self):
+        self.keep(font(["Tahoma"]))
+        self.assertIn("tahoma", app.library_index()["fonts"])
+        # Fonts copied in by hand count too.
+        with open(os.path.join(self.library, "0" * 32 + ".ttf"), "wb") as output:
+            output.write(font(["Georgia"]))
+        os.unlink(os.path.join(self.library, app.library_index()["fonts"]["tahoma"]))
+        self.assertEqual(set(app.library_index()["families"]), {"georgia"})
+        with open(os.path.join(self.library, "0" * 32 + ".ttf"), "wb") as output:
+            output.write(font(["Verdana"], padding=10))  # rewritten in place
+        self.assertEqual(set(app.library_index()["families"]), {"verdana"})
 
 
 class HttpTests(unittest.TestCase):
@@ -920,7 +1066,7 @@ class HttpTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         for path, status in (
             (f"/extaudio/{HASH}/14/sub/0?at=10", 404),
-            (f"/extaudio/{HASH}/13/sub/0?at=10", 404),  # not ASS
+            (f"/extaudio/{HASH}/13/sub/1?at=10", 404),  # no such stream
             (f"/extaudio/{HASH}/13/sub/0?at=-1", 400),
             (f"/extaudio/{HASH}/13/sub/0?at=1&from=x", 400),
             (f"/extaudio/{HASH}/13/attachment/4", 404),
@@ -1060,6 +1206,20 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(self.get("/extaudio/jassub/jassub.js")[1]["Content-Type"], "text/javascript")
             self.assertEqual(self.get("/extaudio/jassub/missing.js")[0], 404)
             self.assertEqual(self.get("/extaudio/jassub/..%2Fapp.py")[0], 404)
+
+    def test_library_fonts_and_their_index(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "FONT_LIBRARY_DIR", directory):
+            app._library.update(faces={}, index=None)
+            name = "a" * 32 + ".ttf"
+            with open(os.path.join(directory, name), "wb") as output:
+                output.write(font(["Trebuchet MS"]))
+            status, _, body = self.get("/extaudio/fonts/index.json")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["fonts"]["trebuchet ms"], name)
+            self.assertEqual(self.get("/extaudio/fonts/" + name)[2], font(["Trebuchet MS"]))
+            for path in ("/extaudio/fonts/" + "b" * 32 + ".ttf", "/extaudio/fonts/..%2Fapp.py", "/extaudio/fonts/x.ttf"):
+                with self.subTest(path=path):
+                    self.assertEqual(self.get(path)[0], 404)
 
     def test_track_lookups_are_bounded(self):
         for _ in range(app.MAX_TRACK_LOOKUPS):

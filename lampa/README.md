@@ -117,7 +117,18 @@ External `.ass`/`.ssa` files named after the video (for example
   per torrent. The encoding is detected from the BOM, then UTF-8, then
   Windows-1251.
 
-Embedded ASS still goes through Lampac as plain text.
+Embedded text subtitles are drawn the same way. `/extaudio/<hash>/<file
+id>/embedded` lists the text streams and font attachments; `sub/<n>` reads a
+stream from the playback position as it plays. SRT is converted to ASS with a
+fixed `Default` style (GST's WebVTT of some SRT streams comes out empty).
+
+Fonts a release attaches or ships are also copied once, by content hash, into
+`extaudio-fonts/` (ignored; `FONT_LIBRARY_DIR`, capped by
+`FONT_LIBRARY_MAX_MB`). A release that names a font without attaching it gets
+it from there (`/extaudio/fonts/index.json`), before a metric-compatible
+stand-in. Fonts copied in by hand count too when named `<32 hex>.ttf|otf|ttc`.
+Create the directory as the Docker user before the first start, or Docker
+creates it owned by root.
 
 ## Runtime setup
 

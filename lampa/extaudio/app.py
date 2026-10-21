@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """External torrent audio tracks as HLS renditions for Lampa's browser player."""
 
+import hashlib
+import io
 import json
 import math
 import os
@@ -83,6 +85,33 @@ MAX_SUB_TRACKS = 8
 MAX_SUB_LINES = 2000  # per response
 MAX_EMBEDDED_FONT_BYTES = 64 * 1024 * 1024
 RENDERER_DIR = os.environ.get("RENDERER_DIR", "/app/jassub")
+# Fonts releases attach, kept for releases that name them without attaching.
+FONT_LIBRARY_DIR = os.environ.get("FONT_LIBRARY_DIR", "")
+FONT_LIBRARY_MAX_BYTES = int(os.environ.get("FONT_LIBRARY_MAX_MB", "2048")) * 1024 * 1024
+# Fewer glyphs is a subset a release made for its own lines: it would replace
+# a full stand-in in every other release.
+MIN_LIBRARY_GLYPHS = 200
+LIBRARY_NAME_RE = re.compile(r"^[0-9a-f]{32}\.(?:ttf|otf|ttc)$")
+FONTS_RE = re.compile(r"^/extaudio/fonts/(?:(index\.json)|([0-9a-f]{32}\.(?:ttf|otf|ttc)))$")
+# JASSUB's names for CSS weights 100-1000; it looks fonts up as "family weight".
+WEIGHT_NAMES = ["thin", "extralight", "light", "regular", "medium", "semibold", "bold", "extrabold", "black", "ultrablack"]
+# Text subtitles are converted for JASSUB; ffmpeg names their style Default
+# and scales <font size> to PlayResY 288.
+CONVERTED_HEADER = """[Script Info]
+ScriptType: v4.00+
+PlayResX: 384
+PlayResY: 288
+ScaledBorderAndShadow: yes
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, \
+StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,17,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0.9,0.4,2,20,20,14,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
 RENDERER_TYPES = {
     ".js": "text/javascript", ".wasm": "application/wasm", ".woff2": "font/woff2", ".ttf": "font/ttf",
     ".txt": "text/plain; charset=utf-8",
@@ -131,6 +160,8 @@ _live_changed = threading.Condition()
 _embedded_cache = {}
 _subs = {}
 _subs_lock = threading.Lock()
+_library = {"faces": {}, "index": None}
+_library_lock = threading.Lock()
 
 
 def stream_url(torrent_hash, file_id):
@@ -407,6 +438,8 @@ def fetch_raw(torrent_hash, file_id):
             os.unlink(partial)
         except FileNotFoundError:
             pass
+    if extension in FONT_EXTENSIONS:
+        keep_font(path)
     return path
 
 
@@ -559,7 +592,138 @@ def fetch_attachment(torrent_hash, file_id, index):
             os.unlink(partial)
         except FileNotFoundError:
             pass
+    keep_font(path)
     return path
+
+
+def font_faces(source):
+    """Family names, weight, slant, Cyrillic coverage and glyph count of each
+    face of a TrueType/OpenType font or collection in a seekable file; []
+    for anything else. Reads only the tables it needs."""
+    def read(offset, length):
+        source.seek(offset)
+        data = source.read(length)
+        if len(data) != length:
+            raise struct.error("truncated")
+        return data
+    try:
+        tag = read(0, 4)
+        if tag == b"ttcf":
+            count = min(struct.unpack(">I", read(8, 4))[0], 64)
+            starts = struct.unpack(f">{count}I", read(12, 4 * count))
+        elif tag in (b"\x00\x01\x00\x00", b"OTTO", b"true"):
+            starts = (0,)
+        else:
+            return []
+        faces = []
+        for start in starts:
+            count = struct.unpack(">H", read(start + 4, 2))[0]
+            directory = read(start + 12, 16 * count)
+            tables = {}
+            for number in range(count):
+                tag, _, offset, length = struct.unpack_from(">4sIII", directory, 16 * number)
+                tables[tag] = (offset, length)
+            families = set()
+            if b"name" in tables:
+                offset, length = tables[b"name"]
+                table = read(offset, min(length, 1024 * 1024))
+                count, strings = struct.unpack_from(">HH", table, 2)
+                for number in range(count):
+                    platform, encoding, _, name, length, at = struct.unpack_from(">6H", table, 6 + 12 * number)
+                    if name not in (1, 16) or (platform == 1 and encoding != 0):
+                        continue
+                    text = table[strings + at:strings + at + length]
+                    families.add(text.decode("mac_roman" if platform == 1 else "utf-16-be", "replace").strip().lower())
+            families.discard("")
+            weight, italic, cyrillic, glyphs = 400, False, False, 0
+            if b"OS/2" in tables:
+                table = read(tables[b"OS/2"][0], 64)
+                weight = struct.unpack_from(">H", table, 4)[0]
+                cyrillic = bool(struct.unpack_from(">I", table, 42)[0] & 1 << 9)
+                italic = bool(struct.unpack_from(">H", table, 62)[0] & 1)
+            if b"maxp" in tables:
+                glyphs = struct.unpack(">H", read(tables[b"maxp"][0] + 4, 2))[0]
+            if families:
+                faces.append({"families": sorted(families), "weight": weight, "italic": italic,
+                              "cyrillic": cyrillic, "glyphs": glyphs})
+        return faces
+    except struct.error:
+        return []
+
+
+def keep_font(path):
+    """Copy a font a release ships into the library, once per content."""
+    if not FONT_LIBRARY_DIR:
+        return
+    try:
+        with open(path, "rb") as source:
+            data = source.read(MAX_FONT_BYTES + 1)
+        faces = font_faces(io.BytesIO(data))
+        if len(data) > MAX_FONT_BYTES or not any(face["glyphs"] >= MIN_LIBRARY_GLYPHS for face in faces):
+            return
+        extension = ".ttc" if data[:4] == b"ttcf" else ".otf" if data[:4] == b"OTTO" else ".ttf"
+        target = os.path.join(FONT_LIBRARY_DIR, hashlib.sha256(data).hexdigest()[:32] + extension)
+        if os.path.exists(target) or directory_size(FONT_LIBRARY_DIR) + len(data) > FONT_LIBRARY_MAX_BYTES:
+            return
+        partial = f"{target}.{os.getpid()}-{threading.get_ident()}.part"
+        try:
+            with open(partial, "wb") as output:
+                output.write(data)
+            os.replace(partial, target)
+        finally:
+            try:
+                os.unlink(partial)
+            except FileNotFoundError:
+                pass
+    except OSError as error:
+        print(f"font library: {path} not kept: {error}", file=sys.stderr, flush=True)
+
+
+def library_index():
+    """JASSUB's availableFonts keys mapped to library files, and the files a
+    style naming a family preloads."""
+    # A file copied in by hand may change under the same name.
+    files = {}
+    try:
+        for entry in os.scandir(FONT_LIBRARY_DIR) if FONT_LIBRARY_DIR else ():
+            if LIBRARY_NAME_RE.match(entry.name) and entry.is_file():
+                stat = entry.stat()
+                files[entry.name] = (stat.st_size, stat.st_mtime_ns)
+    except OSError as error:
+        print(f"font library: {error}", file=sys.stderr, flush=True)
+    with _library_lock:
+        faces = _library["faces"]
+        if _library["index"] is not None and files == {name: item[0] for name, item in faces.items()}:
+            return _library["index"]
+        for name in [name for name, item in faces.items() if files.get(name) != item[0]]:
+            del faces[name]
+        for name, stamp in files.items():
+            if name in faces:
+                continue
+            found = []
+            if stamp[0] <= MAX_FONT_BYTES:
+                try:
+                    with open(os.path.join(FONT_LIBRARY_DIR, name), "rb") as source:
+                        found = font_faces(source)
+                except OSError:
+                    pass
+            faces[name] = (stamp, [dict(face, size=stamp[0]) for face in found if face["glyphs"] >= MIN_LIBRARY_GLYPHS])
+        candidates, family_names = {}, set()
+        for name, (_, items) in faces.items():
+            for face in items:
+                weight = WEIGHT_NAMES[min(max(math.ceil(face["weight"] / 100) - 1, 0), len(WEIGHT_NAMES) - 1)]
+                family_names.update(face["families"])
+                for family in face["families"]:
+                    # Upright before italic, then the weight closest to regular,
+                    # Cyrillic before Latin-only, then the fullest version.
+                    upright = not face["italic"]
+                    candidates.setdefault(f"{family} {weight}", []).append((upright, 0, face["cyrillic"], face["size"], name))
+                    candidates.setdefault(family, []).append(
+                        (upright, -abs(face["weight"] - 400), face["cyrillic"], face["size"], name))
+        fonts = {key: max(ranks)[-1] for key, ranks in candidates.items()}
+        families = {family: list(dict.fromkeys((fonts[family], fonts.get(f"{family} bold", fonts[family])))) for family in family_names}
+        _library["index"] = {"fonts": fonts, "families": families}
+        return _library["index"]
 
 
 class SubtitleRun:
@@ -580,16 +744,17 @@ class SubtitleRun:
 
 
 class SubtitleTrack:
-    """Events of one embedded ASS stream, collected from the windows read so far.
+    """Events of one embedded text stream, collected from the windows read so far.
     Viewers of one stream share it; two of them far apart take turns."""
 
     serials = time.time_ns() // 1000 % 10**8  # unique across restarts too
 
-    def __init__(self, torrent_hash, file_id, stream, duration):
+    def __init__(self, torrent_hash, file_id, stream, duration, codec="ass"):
         SubtitleTrack.serials += 1
         self.serial = SubtitleTrack.serials  # a recreated track restarts its line numbers
         self.source = stream_url(torrent_hash, file_id)
         self.stream = stream
+        self.codec = codec
         self.duration = duration or math.inf
         self.directory = os.path.join(CACHE_DIR, f"{torrent_hash}-{file_id}-sub{stream}.tmp")
         self.header = None
@@ -604,16 +769,16 @@ class SubtitleTrack:
         self.failed_at = 0.0
 
 
-def subtitle_command(source, output, stream, start, end):
+def subtitle_command(source, output, stream, start, end, codec="ass"):
     # -copyts keeps the video's timeline. -readrate paces only mapped streams,
     # so the video is copied to nowhere: without it a stretch with no events
-    # would be read at the torrent's full speed.
+    # would be read at the torrent's full speed. Other text formats become ASS.
     return [
         "nice", "-n", "10", "ffmpeg", "-nostdin", "-v", "error", *INPUT_OPTIONS,
         "-reconnect", "1", "-reconnect_delay_max", "10",
         "-readrate", str(SUB_READRATE), "-readrate_initial_burst", str(SUB_BURST),
         "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-copyts", "-i", source,
-        "-map", f"0:s:{stream}", "-c:s", "copy", "-ignore_readorder", "1", "-flush_packets", "1",
+        "-map", f"0:s:{stream}", "-c:s", "copy" if codec in ASS_CODECS else "ass", "-ignore_readorder", "1", "-flush_packets", "1",
         "-f", "ass", output, "-map", "0:v:0?", "-c:v", "copy", "-f", "null", "-",
     ]
 
@@ -672,7 +837,7 @@ def start_subtitle_run(track, start, now):
     track.started += 1
     with open(f"{path}.log", "wb") as log:
         process = subprocess.Popen(
-            subtitle_command(track.source, path, track.stream, start, end), stdout=subprocess.DEVNULL, stderr=log,
+            subtitle_command(track.source, path, track.stream, start, end, track.codec), stdout=subprocess.DEVNULL, stderr=log,
         )
     track.run = run = SubtitleRun(process, start, end, path)
     threading.Thread(target=watch_subtitle_run, args=(track, run), daemon=True).start()
@@ -680,8 +845,11 @@ def start_subtitle_run(track, start, now):
 
 
 def end_header(track, run):
-    if run.head is not None and track.header is None and any(line.strip() == "[Events]" for line in run.head):
-        track.header = "\n".join(run.head).strip() + "\n"
+    if run.head is not None and track.header is None:
+        if track.codec not in ASS_CODECS:
+            track.header = CONVERTED_HEADER
+        elif any(line.strip() == "[Events]" for line in run.head):
+            track.header = "\n".join(run.head).strip() + "\n"
     run.head = None
 
 
@@ -769,8 +937,9 @@ def forget_subtitles(now):
 def subtitle_events(torrent_hash, file_id, stream, position, offset, serial=None):
     """Events collected so far from `offset` on; starts reading where playback is."""
     info = probed_embedded(torrent_hash, file_id)
-    if not info or not any(item["stream"] == stream and item["codec"] in ASS_CODECS for item in info["subtitles"]):
-        raise Rejected("not an ASS stream of a probed video")
+    codec = next((item["codec"] for item in (info or {}).get("subtitles", []) if item["stream"] == stream), None)
+    if codec is None:
+        raise Rejected("not a text subtitle stream of a probed video")
     key = (torrent_hash, file_id, stream)
     now = time.monotonic()
     busy = False
@@ -778,7 +947,7 @@ def subtitle_events(torrent_hash, file_id, stream, position, offset, serial=None
         track = _subs.get(key)
         if track is None:
             forget_subtitles(now)
-            track = _subs[key] = SubtitleTrack(torrent_hash, file_id, stream, info["duration"])
+            track = _subs[key] = SubtitleTrack(torrent_hash, file_id, stream, info["duration"], codec)
         track.seen = now
         if now - track.failed_at > FAILURE_RESET_SECONDS:
             track.failures = 0
@@ -1442,6 +1611,14 @@ class Handler(BaseHTTPRequestHandler):
         renderer = RENDERER_RE.match(path)
         if renderer:
             return self.serve_renderer(renderer.group(1))
+        fonts = FONTS_RE.match(path)
+        if fonts:
+            if fonts.group(1):
+                return self.send_json(200, library_index())
+            path = os.path.join(FONT_LIBRARY_DIR, fonts.group(2))
+            if not FONT_LIBRARY_DIR or not os.path.isfile(path):
+                return self.send_json(404, {"error": "not found"})
+            return self.send_cached(path)
         embedded = EMBEDDED_RE.match(path)
         if embedded:
             return self.serve_embedded(embedded.group(1).lower(), int(embedded.group(2)), embedded, query)

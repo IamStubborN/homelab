@@ -98,6 +98,7 @@ lampa/config/passwd
 lampa/cache/
 lampa/database/
 lampa/extaudio-cache/
+lampa/extaudio-fonts/
 plex/config/
 plex/media-preview-generator/
 media/release/

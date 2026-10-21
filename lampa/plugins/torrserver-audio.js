@@ -867,10 +867,10 @@
       state.assSeeked = function () { video.removeEventListener('seeked', seeked); };
       if (item.homelabAss.events) return showEmbeddedAss(state, item, video, base, cancelled);
       var content = fetchBytes(new URL(item.homelabAss.url, window.location.href).href, cancelled, 5);
-      Promise.all([loadAssRenderer(base), content, fetchFonts(item.homelabAss.fonts, cancelled)]).then(function (results) {
+      Promise.all([loadAssRenderer(base), content, fetchFonts(item.homelabAss.fonts, cancelled), fontLibrary(base)]).then(function (results) {
         if (cancelled()) return;
         var Renderer = results[0];
-        state.assInstance = new Renderer(rendererOptions(base, video, decodeSubtitle(results[1]), results[2]));
+        state.assInstance = new Renderer(rendererOptions(base, video, decodeSubtitle(results[1]), results[2], results[3]));
       }).catch(function (error) {
         if (active !== state || state.assRequest !== request) return;
         console.warn('Homelab ASS:', error && error.message);
@@ -916,6 +916,35 @@
       return names;
     }
 
+    // Fonts the sidecar kept from other releases; a release that names a font
+    // without attaching it often finds it there.
+    var libraryIndex = null;
+    var libraryLoaded = 0;
+
+    function fontLibrary(base) {
+      if (!libraryIndex || Date.now() - libraryLoaded > 600000) {
+        libraryLoaded = Date.now();
+        var timer;
+        // A slow sidecar must not hold the subtitles back.
+        var timeout = new Promise(function (resolve, reject) {
+          timer = setTimeout(function () { reject(new Error('font library: timeout')); }, 5000);
+        });
+        libraryIndex = Promise.race([window.fetch(new URL('../fonts/index.json', base).href), timeout]).then(function (response) {
+          clearTimeout(timer);
+          if (!response.ok) throw new Error('font library: HTTP ' + response.status);
+          return response.json();
+        }).then(function (index) {
+          return {base: new URL('../fonts/', base).href, fonts: (index && index.fonts) || {}, families: (index && index.families) || {}};
+        }).catch(function (error) {
+          clearTimeout(timer);
+          libraryIndex = null;
+          console.warn('Homelab ASS fonts:', error && error.message);
+          return {fonts: {}, families: {}};
+        });
+      }
+      return libraryIndex;
+    }
+
     function attachedFamilies(fonts) {
       var families = {};
       fonts.forEach(function (font) {
@@ -924,10 +953,35 @@
       return families;
     }
 
-    function standInFonts(text, attached) {
+    // Families drawn with their own font: attached ones, then library ones.
+    function keptFamilies(attached, library) {
+      var families = {};
+      Object.keys(attached).concat(Object.keys(library.families)).forEach(function (name) { families[name] = true; });
+      return families;
+    }
+
+    // Library files for the families `text` names that the release does not
+    // attach. They load up front: JASSUB's own lookup by name and weight
+    // misses names like "Roboto Light", and libass drops events without a font.
+    function libraryFiles(text, library, attached, loaded) {
+      var urls = [];
+      function add(match, font) {
+        var family = font.trim().toLowerCase();
+        if (attached[family]) return match;
+        (library.families[family] || []).forEach(function (file) {
+          var url = library.base + file;
+          if (!loaded[url]) { loaded[url] = true; urls.push(url); }
+        });
+        return match;
+      }
+      text.replace(/^Style:[^,]*,\s*([^,\r\n]*)/gm, add).replace(/\\fn([^\\}]*)/g, add);
+      return urls;
+    }
+
+    function standInFonts(text, kept) {
       function rename(font) {
         // A font the release attaches is the one it was typeset with.
-        if (attached[font.trim().toLowerCase()]) return font;
+        if (kept[font.trim().toLowerCase()]) return font;
         var standIn = FONT_STAND_INS[font.trim().toLowerCase()];
         return standIn ? standIn[0] : font;
       }
@@ -938,12 +992,14 @@
       });
     }
 
-    function rendererOptions(base, video, content, fonts) {
-      content = standInFonts(content, attachedFamilies(fonts));
-      // The fallback and the stand-ins the styles use load up front: JASSUB
+    function rendererOptions(base, video, content, fonts, library, loaded) {
+      var attached = attachedFamilies(fonts);
+      var urls = libraryFiles(content, library, attached, loaded || {});
+      content = standInFonts(content, keptFamilies(attached, library));
+      // The fallback and the fonts the styles use load up front: JASSUB
       // fetches the rest on demand, and libass skips an event without a font
       // (even a drawn mask) in the frames drawn meanwhile.
-      fonts = fonts.concat(base + 'default.woff2');
+      fonts = fonts.concat(base + 'default.woff2', urls);
       Object.keys(FONT_STAND_INS).forEach(function (name) {
         var standIn = FONT_STAND_INS[name];
         if (new RegExp('^Style:[^,]*,\\s*' + standIn[0] + '\\s*,', 'im').test(content)) {
@@ -951,6 +1007,7 @@
         }
       });
       var available = {'liberation sans': base + 'default.woff2'};
+      Object.keys(library.fonts).forEach(function (key) { available[key] = library.base + library.fonts[key]; });
       Object.keys(FONT_STAND_INS).forEach(function (name) {
         var standIn = FONT_STAND_INS[name];
         // JASSUB fetches one only when libass asks for it by name and weight.
@@ -977,7 +1034,10 @@
       var again = false;
       var queue = [];
       var renderer = null;
+      var kept = {};
       var attached = {};
+      var library = null;
+      var loaded = {};
       var errors = 0;
       var timer = null;
       function fail(error) {
@@ -991,7 +1051,11 @@
         var lines = queue.splice(0, queue.length);
         renderer.then(function (instance) {
           if (cancelled()) return;
-          return Promise.resolve(instance.renderer.processData(standInFonts(lines.join('\n'), attached))).then(function () {
+          var text = lines.join('\n');
+          var urls = libraryFiles(text, library, attached, loaded);
+          return Promise.resolve(urls.length && instance.renderer.addFonts(urls)).then(function () {
+            return instance.renderer.processData(standInFonts(text, kept));
+          }).then(function () {
             // A paused frame would keep missing the events that arrived after it.
             if (video.paused && !cancelled()) return redrawFrame(instance, video);
           });
@@ -1027,11 +1091,13 @@
             if (!seen.has(line)) { seen.add(line); queue.push(line); }
           });
           if (!renderer && data.header) {
-            renderer = Promise.all([loadAssRenderer(base), fonts]).then(function (results) {
+            renderer = Promise.all([loadAssRenderer(base), fonts, fontLibrary(base)]).then(function (results) {
               if (cancelled()) throw new Error('cancelled');
               var Renderer = results[0];
               attached = attachedFamilies(results[1]);
-              state.assInstance = new Renderer(rendererOptions(base, video, data.header, results[1]));
+              library = results[2];
+              kept = keptFamilies(attached, library);
+              state.assInstance = new Renderer(rendererOptions(base, video, data.header, results[1], library, loaded));
               var instance = state.assInstance;
               return instance.ready.then(function () { return instance; });
             });
@@ -1088,11 +1154,13 @@
       return item;
     }
 
+    var TEXT_CODECS = {ass: true, ssa: true, subrip: true, text: true};
+
     function embeddedItems(state) {
       var originals = state.hlsSubs || [];
       var data = state.embedded;
-      // hls.js lists GST's text subtitles in file order; ASS ones are drawn
-      // by JASSUB instead when the sidecar's probe lines up with them.
+      // hls.js lists GST's text subtitles in file order; JASSUB draws them
+      // instead when the sidecar's probe lines up with them (SRT converted).
       if (!data || data.subtitles.length !== originals.length) return originals;
       var aligned = data.subtitles.every(function (sub, i) {
         return !sub.title || String(originals[i].label || '').trim() === sub.title;
@@ -1101,7 +1169,7 @@
       var base = '/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + state.work.homelab_file_index + '/';
       return originals.map(function (original, i) {
         var sub = data.subtitles[i];
-        if ((sub.codec !== 'ass' && sub.codec !== 'ssa') || !Number.isInteger(sub.stream) || state.embeddedBroken[sub.stream]) return original;
+        if (!TEXT_CODECS[sub.codec] || !Number.isInteger(sub.stream) || state.embeddedBroken[sub.stream]) return original;
         if (original.homelabAss) return original;
         var item = state.embeddedProxies[sub.stream];
         if (!item) {
@@ -1206,7 +1274,7 @@
       }
       lookup(4).then(function (data) {
         if (active !== state || generation !== revision || !data || typeof data.renderer !== 'string' || !Array.isArray(data.subtitles)) return;
-        if (!data.subtitles.some(function (sub) { return sub.codec === 'ass' || sub.codec === 'ssa'; })) return;
+        if (!data.subtitles.some(function (sub) { return TEXT_CODECS[sub.codec]; })) return;
         state.assRenderer = data.renderer;
         state.embedded = data;
         adoptSubtitles(state);

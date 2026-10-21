@@ -51,7 +51,8 @@ class FakeAss {
   constructor(options) {
     this.options = options; this.destroyed = false; this.events = [];
     this.ready = Promise.resolve();
-    this.renderer = { processData: data => { this.events.push(...data.split('\n')); } };
+    this.added = [];
+    this.renderer = { processData: data => { this.events.push(...data.split('\n')); }, addFonts: urls => { this.added.push(...urls); } };
     this.renders = [];
     FakeAss.instances.push(this);
   }
@@ -60,7 +61,7 @@ class FakeAss {
 }
 FakeAss.instances = [];
 
-function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null, attachments = {} } = {}) {
+function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null, attachments = {}, library = null } = {}) {
   const notices = [];
   let work = false;
   let video = createVideo();
@@ -159,6 +160,9 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
         if (/^\/extaudio\/[^/]+\/\d+\/sub\/\d+$/.test(new URL(url).pathname)) {
           const payload = events(new URL(url));
           return Promise.resolve(payload ? {ok: true, json: async () => payload} : {ok: false, status: 502});
+        }
+        if (new URL(url).pathname === '/extaudio/fonts/index.json') {
+          return Promise.resolve(library ? {ok: true, json: async () => library} : {ok: false, status: 404});
         }
         const fontMatch = /^\/extaudio\/[^/]+\/\d+\/attachment\/(\d+)$/.exec(new URL(url).pathname);
         if (fontMatch) {
@@ -1254,7 +1258,7 @@ test('embedded ASS tracks are drawn by JASSUB from events read as playback goes'
   await h.settle();
   assert.deepEqual(h.subtitleMenu(), ['Надписи', 'SRT', 'Полные'], 'labels stay as GST named them');
   const [signs, srt, full] = h.subtitleList();
-  assert.ok(signs.homelabAss && full.homelabAss && !srt.homelabAss, 'only ASS streams are replaced');
+  assert.ok(signs.homelabAss && full.homelabAss && srt.homelabAss, 'SRT is drawn too: the WebVTT GST makes of it can come out empty');
   h.video().currentTime = 61.25;
   h.chooseSubtitle('Полные');
   await h.settle();
@@ -1289,6 +1293,11 @@ test('embedded ASS tracks are drawn by JASSUB from events read as playback goes'
   await h.settle();
   assert.ok(ass.destroyed);
   assert.equal(h.subtitleTitle(), 'SRT');
+  assert.equal(server.asked.at(-1).stream, '2', 'the sidecar converts the SRT stream');
+  assert.equal(FakeAss.instances.length, 2);
+  h.chooseSubtitle(null);
+  await h.settle();
+  assert.ok(FakeAss.instances[1].destroyed);
   assert.ok(![...h.timers.values()].some(timer => timer.delay === 3000), 'polling stops with the track');
 });
 
@@ -1430,6 +1439,37 @@ test('Windows fonts a release does not attach are drawn with metric-compatible s
     'https://lampa.test/extaudio/jassub/default.woff2',
     'https://lampa.test/extaudio/jassub/comic-relief-regular.ttf', 'https://lampa.test/extaudio/jassub/comic-relief-bold.ttf',
   ], 'a stand-in the styles use loads up front; one only in \\fn tags waits until asked');
+});
+
+test('fonts kept from other releases are drawn instead of stand-ins', async t => {
+  FakeAss.instances.length = 0;
+  const styled = header.replace('[Events]', '[V4+ Styles]\nStyle: fon,Comic Sans MS,55,&H00FFFFFF\nStyle: Default,Tahoma,50,&H00FFFFFF\n\n[Events]');
+  const sign = 'Dialogue: 0,0:00:01.00,0:00:03.00,fon,,0,0,0,,{\\fnImpact}Нати{\\fnTimes New Roman} Тип';
+  const h = harness(t, new Map(), {
+    embedded: embeddedLookup,
+    library: {
+      fonts: { 'tahoma': 'a.ttf', 'tahoma regular': 'a.ttf', 'tahoma bold': 'b.ttf', 'impact': 'c.ttf', 'comic sans ms': 'd.ttf' },
+      families: { 'tahoma': ['a.ttf', 'b.ttf'], 'impact': ['c.ttf'], 'comic sans ms': ['d.ttf'] },
+    },
+    events: url => ({ track: 1, header: url.searchParams.get('from') === '0' ? styled : null, lines: [sign], next: 1, more: false, failed: false }),
+  });
+  h.start(13, 'abc', true);
+  await h.probe(signsAndFull);
+  h.emitSubtitles(signsAndFull);
+  await h.settle();
+  h.chooseSubtitle('Полные');
+  await h.settle();
+  const ass = FakeAss.instances[0];
+  assert.match(ass.options.subContent, /Style: fon,Comic Sans MS,55,/, 'the real font beats a stand-in');
+  assert.deepEqual(ass.events, ['Dialogue: 0,0:00:01.00,0:00:03.00,fon,,0,0,0,,{\\fnImpact}Нати{\\fnTinos} Тип']);
+  assert.equal(ass.options.availableFonts['tahoma bold'], 'https://lampa.test/extaudio/fonts/b.ttf');
+  assert.equal(ass.options.availableFonts['impact'], 'https://lampa.test/extaudio/fonts/c.ttf');
+  assert.deepEqual(ass.added, ['https://lampa.test/extaudio/fonts/c.ttf'], 'a font named in \\fn tags loads with its events');
+  assert.deepEqual(Array.from(ass.options.fonts).filter(font => typeof font === 'string'), [
+    'https://lampa.test/extaudio/jassub/default.woff2', 'https://lampa.test/extaudio/fonts/d.ttf',
+    'https://lampa.test/extaudio/fonts/a.ttf', 'https://lampa.test/extaudio/fonts/b.ttf',
+  ], 'fonts the styles use load up front');
+  assert.equal(h.requests.filter(request => request.url.endsWith('/fonts/index.json')).length, 1);
 });
 
 test('a Windows font the release attaches keeps its name instead of a stand-in', async t => {

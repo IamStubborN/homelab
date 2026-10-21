@@ -73,8 +73,11 @@ services:
       CACHE_DIR: /cache
       CACHE_MAX_MB: "1024"
       CACHE_TTL_HOURS: "24"
+      FONT_LIBRARY_DIR: /fonts
     volumes:
       - ./extaudio-cache:/cache
+      # Fonts collected from releases; licensed fonts never enter git.
+      - ./extaudio-fonts:/fonts
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"

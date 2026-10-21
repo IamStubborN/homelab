@@ -68,10 +68,11 @@ Kinozal incremental refresh, Cloudflare warmups, and archive backfills.
 JSON checkpoints still save every five minutes; logs rotate every 15 minutes.
 There are no tracker starts at 22:00–23:59 and no new Sunday full-cycle start.
 
-SubsPlease `ParseShows` walks its show catalogue 100 shows per run (about
-25 minutes) and runs daily at 02:25, so the whole catalogue of about 1,250
-shows is revisited every two weeks. The weekly 50-show runs it replaced would
-have needed six months to reach older shows. AniLiberty is enabled again; its refresh reads the latest API page
+SubsPlease `ParseShows` walks its show catalogue 200 shows per run (JacRed's
+maximum, about 50 minutes) and runs daily at 02:25, so the whole catalogue of
+about 1,250 shows is revisited every week. It reads the public JSON API with
+pauses and needs no browser solver, so it is not a heavy job. The weekly
+50-show runs it replaced would have needed six months to reach older shows. AniLiberty is enabled again; its refresh reads the latest API page
 every four hours. Search returns only trackers listed in `synctrackers`, so a
 locally crawled tracker must be listed there too (and not in
 `disable_trackers`) for its torrents to appear. To backfill its whole catalogue once (about 63 pages, eight

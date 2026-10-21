@@ -256,9 +256,9 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       request.resolve({ok: true, url: `https://lampa.test/gst/${id}/master.m3u8`});
       await new Promise(setImmediate);
     },
-    start(file = 1, hash = 'same-torrent', prepare = false) {
+    start(file = 1, hash = 'same-torrent', prepare = false, fields = {}) {
       destroy();
-      work = { torrent_hash: hash, url: `https://lampa.test/torrserver/gst/${hash}/master.m3u8?index=${file}&audio=0` };
+      work = { ...fields, torrent_hash: hash, url: `https://lampa.test/torrserver/gst/${hash}/master.m3u8?index=${file}&audio=0` };
       video = createVideo();
       if (prepare) player.send('create', {data: work});
       player.send('start', work);
@@ -1533,4 +1533,10 @@ test('a Windows font the release attaches keeps its name instead of a stand-in',
   assert.match(ass.options.subContent, /Style: fon,Comic Sans MS,55,/);
   assert.deepEqual(ass.events, ['Dialogue: 0,0:00:01.00,0:00:03.00,fon,,0,0,0,,{\\fnComic Sans MS\\b1}Нати{\\fnTinos} Тип'], 'only the missing family is replaced');
   assert.deepEqual(Array.from(ass.options.fonts).filter(font => typeof font === 'string'), ['https://lampa.test/extaudio/jassub/default.woff2']);
+});
+
+test('a torrent card ffprobe does not relabel GST tracks', t => {
+  const h = harness(t);
+  h.start(1, 'same-torrent', true, {ffprobe: [{codec_type: 'audio', tags: {language: 'rus', title: 'External Studio'}}]});
+  assert.equal(h.work().ffprobe, undefined);
 });

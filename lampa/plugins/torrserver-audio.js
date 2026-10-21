@@ -547,6 +547,9 @@
       var original = masterUrl(work);
       if (!original) return;
       pausedWork = null;
+      // A torrent card's ffprobe describes one file of the release, often an
+      // external audio file, and Lampa would label the GST tracks with it.
+      delete work.ffprobe;
       // hls.js preserves EXT-X-MEDIA subtitles. Lampa's native parser can
       // reduce a muxed-audio master to its video-only variant on Safari.
       work.hls_type = 'hlsjs';

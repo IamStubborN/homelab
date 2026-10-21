@@ -894,13 +894,38 @@
       Promise.all([loadAssRenderer(base), content, fetchFonts(item.homelabAss.fonts, cancelled), fontLibrary(base)]).then(function (results) {
         if (cancelled()) return;
         var Renderer = results[0];
-        state.assInstance = new Renderer(rendererOptions(base, video, decodeSubtitle(results[1]), results[2], results[3]));
+        var text = decodeSubtitle(results[1]);
+        if (item.homelabAss.signs) {
+          text = signsOnly(text);
+          if (!/^Dialogue:/im.test(text)) Lampa.Noty.show('В этих субтитрах надписи не отделены от реплик');
+        }
+        state.assInstance = new Renderer(rendererOptions(base, video, text, results[2], results[3]));
       }).catch(function (error) {
         if (active !== state || state.assRequest !== request) return;
         console.warn('Homelab ASS:', error && error.message);
         hideAss(state);
         Lampa.Noty.show('Не удалось показать ASS-субтитры');
       });
+    }
+
+    // Releases name the styles of on-screen text: "Sign 3", "Title",
+    // "Надпись серии", a translator's "Примечание". Dialogue styles are
+    // named after speakers or "Text", "Default".
+    // Word starts only: "Subtitles" and "Design" are dialogue styles.
+    var SIGN_STYLE = /(^|[\s_\-])(sign|title|note)|надпис|тайтл|примеч/i;
+
+    function signsOnly(text) {
+      var style = 3; // the V4+ column order, until a Format line says otherwise
+      return text.split(/\r?\n/).filter(function (line) {
+        var format = /^Format:(.*)$/i.exec(line);
+        if (format) {
+          style = format[1].split(',').map(function (name) { return name.trim().toLowerCase(); }).indexOf('style');
+          return true;
+        }
+        if (!/^Dialogue:/i.test(line)) return true;
+        if (style < 0) return false;
+        return SIGN_STYLE.test(line.slice(line.indexOf(':') + 1).split(',')[style] || '');
+      }).join('\n');
     }
 
     // Windows fonts subtitles often name without attaching them, and the
@@ -1187,10 +1212,12 @@
       // hls.js lists GST's text subtitles in file order; JASSUB draws them
       // instead when the sidecar's probe lines up with them (SRT converted).
       if (!data || data.subtitles.length !== originals.length) return originals;
-      // GST turns double quotes in a title into single ones.
+      // GST turns double quotes in a title into single ones, and names a
+      // stream whose tags it lost "Subtitle N".
       function title(text) { return String(text || '').replace(/["']/g, '').trim(); }
       var aligned = data.subtitles.every(function (sub, i) {
-        return !sub.title || title(originals[i].label) === title(sub.title);
+        var label = title(originals[i].label);
+        return !sub.title || label === title(sub.title) || /^Subtitle \d+$/.test(label);
       });
       if (!aligned) return originals;
       var base = '/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + state.work.homelab_file_index + '/';
@@ -1211,26 +1238,40 @@
         }
         // A reload brings new hls.js tracks; the item stays the same.
         item.index = original.index;
-        item.label = original.label;
+        item.label = subtitleLabel(sub.title || 'Субтитры ' + (i + 1), 'в видео');
+        // Choices are remembered by GST's name, which a choice made before
+        // this probe arrived also used.
+        item.gstTitle = original.label;
         item.selected = original.selected;
         item.homelabOriginal = original;
         return item;
       });
     }
 
+    // Menu labels say where subtitles come from: the video file itself or a
+    // separate file of the release.
+    function subtitleLabel(name, source) {
+      name = String(name).trim();
+      return name.charAt(0).toUpperCase() + name.slice(1) + ' (' + source + ')';
+    }
+
     function assItems(state, data) {
       var base = '/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/';
-      return (data.subtitles || []).filter(function (sub) { return Number.isInteger(sub.file); }).map(function (sub, number) {
-        return defineMode(state, {
-          index: 1000 + number, label: (sub.title || 'ASS') + ' (ASS)', language: sub.language || '', external: true,
-          homelabAss: {
-            url: base + sub.file + '/raw',
-            fonts: (sub.fonts || []).filter(Number.isInteger).map(function (id) {
-              return new URL(base + id + '/raw', window.location.href).href;
-            })
-          }
+      var items = [];
+      (data.subtitles || []).filter(function (sub) { return Number.isInteger(sub.file); }).forEach(function (sub, number) {
+        var name = sub.title || 'Субтитры';
+        var fonts = (sub.fonts || []).filter(Number.isInteger).map(function (id) {
+          return new URL(base + id + '/raw', window.location.href).href;
+        });
+        [false, true].forEach(function (signs) {
+          items.push(defineMode(state, {
+            index: 1000 + number * 2 + (signs ? 1 : 0), external: true, language: sub.language || '',
+            label: subtitleLabel(signs ? name + ': только надписи' : name, 'отдельный файл'),
+            homelabAss: {url: base + sub.file + '/raw', fonts: fonts, signs: signs}
+          }));
         });
       });
+      return items;
     }
 
     function withAss(state, list) {

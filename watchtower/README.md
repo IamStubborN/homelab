@@ -97,6 +97,7 @@ job into another's window.
 
 | Time | Job |
 | --- | --- |
+| 03:00–03:55 | Lampac update when upstream changed and Lampa is idle (`lampa/UPDATE.md`) |
 | 03:55 | Image retention records the running images |
 | 04:00 | Watchtower updates containers |
 | 04:20 | Docker cleanup: untagged images, build cache older than 7 days |

@@ -1,8 +1,41 @@
 # Controlled Intel runtime updates
 
-`update-runtime.py` is a manual operator CLI, not an updater service. It only
-recreates the `lampa` service in the root `homelab` Compose project. There is no
-schedule, automatic restart, image pruning, or automatic rollback.
+`update-runtime.py` is an operator CLI. It only recreates the `lampa` service
+in the root `homelab` Compose project. On its own it has no schedule, image
+pruning or automatic rollback; `auto-update.sh` adds those around it (below).
+
+## Automatic nightly update
+
+`lampac-auto-update.timer` runs `auto-update.sh` as root on the Docker host at
+03:00 `Europe/Sofia`, before Watchtower (04:00). It:
+
+1. stops with a Telegram alert when the last operation is unfinished or Lampa
+   still runs from a rollback's saved model (reconcile it as described under
+   Failure recovery first);
+2. pulls upstream `latest` and does nothing if its digest is the one deployed
+   or one that already failed here;
+3. waits until Lampa sent under 3 MiB in each of 5 consecutive minutes, then
+   runs `stage` and `check`, waits for idle again and runs
+   `apply --maintenance-window`. No apply starts later than 03:55;
+4. requires the container to become healthy within 5 minutes, otherwise runs
+   `rollback --maintenance-window` (only when apply got as far as stopping
+   Lampa);
+5. after success keeps only the candidate/rollback tags of the running and
+   previous images and the 3 newest generation directories.
+
+Every outcome other than "nothing new" or "busy tonight" is reported to the
+disk-watchdog's Telegram bot and chat; three busy nights in a row are reported
+too. Its own state is `<state>/auto`. The idle check sees browser (GST) and
+proxied online playback, which flow through Lampa, but not a paused player.
+`DRY_RUN=1 lampa/auto-update.sh` only reports whether an update is due.
+
+Install as root on the Docker host:
+
+```sh
+install -m 0644 lampa/lampac-auto-update.service lampa/lampac-auto-update.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now lampac-auto-update.timer
+```
 
 ## Prerequisites and scope
 

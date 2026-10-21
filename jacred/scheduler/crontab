@@ -44,7 +44,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 2 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh animelayer-parse http://jacred:9117/cron/animelayer/parse 900
 40 2,8,14,20 * * * /usr/local/bin/run-job.sh rudub-parse "http://jacred:9117/cron/rudub/parse?limit_page=10" 1800
 35 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh subsplease-parse "http://jacred:9117/cron/subsplease/parse?pages=2" 900
-25 2 * * * /usr/local/bin/run-job.sh subsplease-ParseShows http://jacred:9117/cron/subsplease/ParseShows 1800
+25 2 * * * /usr/local/bin/run-job.sh subsplease-ParseShows "http://jacred:9117/cron/subsplease/ParseShows?limit=100" 3600
 4 2,6,10,14,18 * * * /usr/local/bin/run-job.sh anidub-parse http://jacred:9117/cron/anidub/parse 900
 6 2,6,10,14,18 * * * /usr/local/bin/run-job.sh aniliberty-parse http://jacred:9117/cron/aniliberty/parse 900
 40 2 * * * /usr/local/bin/run-job.sh anistar-parse "http://jacred:9117/cron/anistar/parse?limit_page=3" 900

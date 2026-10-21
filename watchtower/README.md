@@ -99,6 +99,7 @@ saving time does not move one job into another's window.
 | 03:55 | Image retention records the running images |
 | 04:00 | Watchtower updates containers |
 | 04:30 | Docker host Ubuntu package updates |
+| 04:45 | Proxmox host updates, reboot for a new kernel (`proxmox-update/`) |
 | 05:00 | Image retention records the replacements |
 | 05:20–08:00 | Backups (see `proxmox-backup/README.md`); JacRed starts no crawls |
 

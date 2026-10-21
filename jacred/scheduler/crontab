@@ -23,6 +23,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 20 0 * * * /usr/local/bin/run-job.sh rutracker-parse http://jacred:9117/cron/rutracker/parse 3600
 35 1 * * 3 /usr/local/bin/run-job.sh rutracker-UpdateTasksParse http://jacred:9117/cron/rutracker/UpdateTasksParse 60
 35 1 * * 4 /usr/local/bin/run-job.sh kinozal-UpdateTasksParse http://jacred:9117/cron/kinozal/UpdateTasksParse 60
+# Kinozal allows one request a minute (reqMinute: 1), so refresh every six hours.
+48 2,8,14,20 * * * /usr/local/bin/run-job.sh kinozal-parse http://jacred:9117/cron/kinozal/parse 3600
 1 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh rutor-parse http://jacred:9117/cron/rutor/parse 900
 30 0 * * 1 /usr/local/bin/run-job.sh rutor-UpdateTasksParse http://jacred:9117/cron/rutor/UpdateTasksParse 60
 0 1 * * 1 /usr/local/bin/run-job.sh rutor-ParseAllTask http://jacred:9117/cron/rutor/ParseAllTask 60
@@ -59,6 +61,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 0 2 * * 0 /usr/local/bin/run-job.sh ultradox-ParseLatest http://jacred:9117/cron/ultradox/ParseLatest 900
 12 2,6,10,14,18 * * * /usr/local/bin/run-job.sh knaben-parse http://jacred:9117/cron/knaben/parse 900
 # Previously disabled jobs remain disabled: Rutracker/Kinozal/Ultradox full
-# cycle kicks, Kinozal incremental parse, Cloudflare warmup and archive backfills.
+# cycle kicks, Cloudflare warmup and archive backfills.
 # Weekly full-cycle kicks above are staggered Mon–Sat; Sunday has no new full
 # cycle, leaving more headroom for the host/VM/container backup chain.

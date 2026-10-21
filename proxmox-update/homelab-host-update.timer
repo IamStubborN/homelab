@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly Proxmox host update at 04:45 Europe/Sofia
+
+[Timer]
+OnCalendar=*-*-* 04:45:00 Europe/Sofia
+# No catch-up after downtime: updates and reboots belong in the night window.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

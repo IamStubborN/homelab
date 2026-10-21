@@ -64,7 +64,11 @@ below follow local daylight saving time; they are not fixed UTC times.
 
 Most incremental refreshes run every four to six hours. Previously disabled
 jobs remain disabled, including Rutracker/Kinozal/Ultradox full-cycle starts,
-Kinozal incremental refresh, Cloudflare warmups, and archive backfills.
+Cloudflare warmups, and archive backfills. These trackers' archives are
+already in the database and new torrents also arrive through `syncapi`; a full
+cycle re-crawls the whole archive through Solverr for weeks (Kinozal's last
+one ran 2026-09-21 to 2026-10-20). Kinozal's incremental refresh, paused
+during that cycle, runs every six hours again.
 JSON checkpoints still save every five minutes; logs rotate every 15 minutes.
 There are no tracker starts at 22:00–23:59 and no new Sunday full-cycle start.
 

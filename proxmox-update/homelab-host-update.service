@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Proxmox host package update and kernel reboot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-host-update
+# Never kill dpkg mid-upgrade. An overrun only delays the 05:20 backup,
+# which then fails on the shared lock and is reported by the backup monitor.
+TimeoutStartSec=infinity

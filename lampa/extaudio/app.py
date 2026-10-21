@@ -490,9 +490,15 @@ def probe_audio(torrent_hash, file_id):
 
 def external_tracks(torrent_hash, video_id, files):
     tracks = []
+    unread = False
     for candidate in external_candidates(files, video_id):
         try:
             streams = probe_audio(torrent_hash, candidate["id"])
+        except subprocess.TimeoutExpired:
+            # TorrServer has not fetched the file's head yet; an answer
+            # without it would leave the player on the embedded audio.
+            unread = True
+            continue
         except (ProbeFailed, subprocess.SubprocessError, ValueError, OSError):
             continue
         for number, stream in enumerate(streams):
@@ -506,6 +512,8 @@ def external_tracks(torrent_hash, video_id, files):
                 "codec": stream.get("codec_name") or "",
                 "channels": stream.get("channels") or 0,
             })
+    if unread:
+        raise NotReady()
     return tracks
 
 
@@ -1645,6 +1653,8 @@ class Handler(BaseHTTPRequestHandler):
                     "subtitles": external_subtitles(files, file_id),
                     "renderer": "/extaudio/jassub/" if os.path.isfile(os.path.join(RENDERER_DIR, "jassub.js")) else None,
                 })
+            except NotReady:
+                return self.send_json(503, {"error": "preparing"}, {"Retry-After": "5"})
             except urllib.error.HTTPError as error:
                 error.close()
                 return self.send_json(404 if error.code == 404 else 502, {"error": "track lookup failed"})

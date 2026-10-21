@@ -781,6 +781,29 @@ test('a remembered external track is restored on the next episode', async t => {
   assert.ok(h.requests.some(r => new URL(r.url).pathname === '/extaudio/abc/14/tracks'));
 });
 
+test('an external audio file still downloading is asked for until the sidecar reads it', async t => {
+  const storage = new Map();
+  const h = harness(t, storage, { external: [anilibria] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  h.ready();
+  const fetch = h.context.window.fetch;
+  let unread = 3;
+  h.context.window.fetch = (url, options) => {
+    if (unread && /\/14\/tracks$/.test(new URL(url).pathname)) { unread--; h.requests.push({ url, options }); return Promise.resolve({ ok: false, status: 503 }); }
+    return fetch(url, options);
+  };
+  h.start(14, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  assert.equal(h.work().homelab_external_audio, undefined, 'nothing to restore yet');
+  for (let i = 0; i < 3; i++) { h.fireTimer(5000); await h.settle(); }
+  assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', externalLabel]);
+  assert.equal(h.work().homelab_external_audio.name, 'AniLibria.tv', 'the remembered voice-over returns once it is read');
+});
+
 test('external audio keeps current audio playing until the rendition is ready', async t => {
   const h = harness(t, new Map(), { external: [anilibria], rendition: [503, 429] });
   h.start(13, 'abc', true);
@@ -1610,4 +1633,20 @@ test('a drawn embedded track chosen by its new label returns on the next episode
   h.emitSubtitles(signsAndFull);
   await h.settle();
   assert.equal(h.subtitleTitle(), 'Русские: полные');
+});
+
+test('external audio that arrives after embedded subtitles is still offered and restored', async t => {
+  const storage = new Map();
+  const h = harness(t, storage, { external: [anilibria], ass: assLookup, embedded: embeddedLookup, events: () => null });
+  const fetch = h.context.window.fetch;
+  let release;
+  const late = new Promise(resolve => { release = resolve; });
+  h.context.window.fetch = (url, options) => /\/tracks$/.test(new URL(url).pathname) ? late.then(() => fetch(url, options)) : fetch(url, options);
+  h.start(13, 'abc', true);
+  await h.probe(signsAndFull);
+  h.emitSubtitles(signsAndFull);
+  await h.settle();
+  release();
+  await h.settle();
+  assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', externalLabel]);
 });

@@ -147,6 +147,17 @@ class CandidateTests(unittest.TestCase):
             }])
 
 
+    def test_a_file_still_downloading_makes_the_lookup_wait_instead_of_omitting_it(self):
+        def probe(torrent_hash, file_id):
+            if file_id == 20:
+                raise subprocess.TimeoutExpired("ffprobe", 10)
+            return [{"codec_name": "aac", "channels": 2, "tags": {"title": "AniLibria.tv", "language": "rus"}}]
+
+        with mock.patch.object(app, "probe_audio", side_effect=probe):
+            with self.assertRaises(app.NotReady):
+                app.external_tracks(HASH, 13, FILES)
+
+
 SUB_FILES = [
     {"id": 13, "path": "Show/Show - 01.mkv", "length": 10**9},
     {"id": 14, "path": "Show/Show - 02.mkv", "length": 10**9},

@@ -1406,12 +1406,13 @@
       if (!work.homelab_torrent_hash || !Number.isInteger(work.homelab_file_index)) return Promise.resolve([]);
       var base = '/extaudio/' + encodeURIComponent(work.homelab_torrent_hash) + '/';
       var signal = state.externalAbort.signal;
-      function lookup(retry) {
+      function lookup(attempts) {
         return window.fetch(new URL(base + work.homelab_file_index + '/tracks', window.location.href).href, {signal: signal})
           .then(function (response) {
-            // The sidecar limits concurrent lookups; ask once more before giving up.
-            if (response.status === 429 && retry) return new Promise(function (resolve, reject) {
-              var timer = setTimeout(function () { resolve(lookup(false)); }, 5000);
+            // Busy lookup slots (429) or an audio file TorrServer has not
+            // fetched far enough to read yet (503).
+            if ((response.status === 429 || response.status === 503) && attempts > 1) return new Promise(function (resolve, reject) {
+              var timer = setTimeout(function () { resolve(lookup(attempts - 1)); }, 5000);
               signal.addEventListener('abort', function () {
                 clearTimeout(timer);
                 var error = new Error('The operation was aborted');
@@ -1423,7 +1424,7 @@
             return response.json();
           });
       }
-      return lookup(true)
+      return lookup(12)
         .then(function (data) {
           state.externalData = data;
           return data.tracks || [];
@@ -1468,7 +1469,8 @@
       probe.searchParams.delete('audio');
       probe.searchParams.delete('seconds');
       state.probeTimeout = setTimeout(function () { state.abort.abort(); }, 90000);
-      state.externalTimeout = setTimeout(function () { state.externalAbort.abort(); }, 30000);
+      // Twelve lookups, each up to the sidecar's 10 s probe and a 5 s pause.
+      state.externalTimeout = setTimeout(function () { state.externalAbort.abort(); }, 200000);
       var embedded = window.fetch(probe.href, {signal: state.abort.signal}).then(function (response) {
         if (!response.ok) throw new Error('GStreamer track probe failed');
         return response.json();

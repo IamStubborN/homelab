@@ -1385,7 +1385,14 @@ def live_file(rendition, index, wait):
 
 
 def directory_size(path):
-    return sum(entry.stat().st_size for entry in os.scandir(path) if entry.is_file())
+    total = 0
+    for entry in os.scandir(path):
+        try:
+            if entry.is_file():
+                total += entry.stat().st_size
+        except FileNotFoundError:
+            pass  # another thread renamed its partial file meanwhile
+    return total
 
 
 def evict(now=None, keep=None):

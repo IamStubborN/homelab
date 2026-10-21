@@ -829,6 +829,27 @@
       });
     }
 
+    // Lampa's subtitle delay; JASSUB draws at mediaTime + timeOffset.
+    function subtitleOffset() {
+      return -(parseInt(Lampa.Storage.get('player_subs_shift_time', '0'), 10) || 0);
+    }
+
+    function enabled(name, fallback) {
+      var value = Lampa.Storage.field(name);
+      return value === undefined || value === null ? fallback : value === true || value === 'true';
+    }
+
+    // Converted SRT has no style of its own: it follows Lampa's subtitle
+    // settings (sizes at the sidecar's PlayResY 288).
+    function textStyle(header) {
+      var size = {small: 14, normal: 17, large: 21}[Lampa.Storage.field('subtitles_size')] || 17;
+      var backdrop = enabled('subtitles_backdrop', false);
+      var stroke = enabled('subtitles_stroke', true);
+      return header.replace(/^Style: Default,.*$/m, 'Style: Default,Arial,' + size + ',&H00FFFFFF,&H000000FF,' +
+        (backdrop ? '&H60000000' : '&H00000000') + ',&H80000000,0,0,0,0,100,100,0,0,' +
+        (backdrop ? '3,1.5,0' : stroke ? '1,0.9,0.4' : '1,0,0') + ',2,20,20,14,1');
+    }
+
     // JASSUB draws on new video frames only; a paused one is drawn on request.
     function redrawFrame(instance, video) {
       return instance.manualRender({mediaTime: video.currentTime, width: video.videoWidth, height: video.videoHeight});
@@ -1015,7 +1036,7 @@
         available[standIn[0].toLowerCase() + ' bold'] = base + standIn[1] + '-bold.ttf';
       });
       return {
-        video: video, subContent: content, fonts: fonts,
+        video: video, subContent: content, fonts: fonts, timeOffset: subtitleOffset(),
         workerUrl: base + 'jassub-worker.js', wasmUrl: base + 'jassub-worker.wasm',
         modernWasmUrl: base + 'jassub-worker-modern.wasm',
         availableFonts: available
@@ -1097,7 +1118,8 @@
               attached = attachedFamilies(results[1]);
               library = results[2];
               kept = keptFamilies(attached, library);
-              state.assInstance = new Renderer(rendererOptions(base, video, data.header, results[1], library, loaded));
+              var header = item.homelabAss.text ? textStyle(data.header) : data.header;
+              state.assInstance = new Renderer(rendererOptions(base, video, header, results[1], library, loaded));
               var instance = state.assInstance;
               return instance.ready.then(function () { return instance; });
             });
@@ -1177,7 +1199,7 @@
         if (!item) {
           item = state.embeddedProxies[sub.stream] = defineMode(state, {
             homelabAss: {
-              stream: sub.stream, events: base + 'sub/' + sub.stream,
+              stream: sub.stream, events: base + 'sub/' + sub.stream, text: sub.codec !== 'ass' && sub.codec !== 'ssa',
               fonts: (data.fonts || []).filter(Number.isInteger).map(function (id) {
                 return new URL(base + 'attachment/' + id, window.location.href).href;
               })
@@ -1457,6 +1479,13 @@
     Lampa.PlayerVideo.listener.follow('play', function () {
       var video = Lampa.PlayerVideo.video();
       if (pausedWork === Lampa.Player.playdata() && video && !video.paused) pausedWork = null;
+    });
+    if (Lampa.Storage.listener) Lampa.Storage.listener.follow('change', function (event) {
+      var instance = active && active.assInstance;
+      if (event.name !== 'player_subs_shift_time' || !instance) return;
+      instance.timeOffset = subtitleOffset();
+      var video = Lampa.PlayerVideo.video();
+      if (video && video.paused) instance.ready.then(function () { return redrawFrame(instance, video); }).catch(function () {});
     });
     Lampa.Player.listener.follow('create', preparePlayback);
     Lampa.Player.listener.follow('ready', installCurrent);

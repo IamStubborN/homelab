@@ -982,6 +982,20 @@ class FontLibraryTests(unittest.TestCase):
             self.keep(font(["Two"], padding=1000))
         self.assertEqual(len(os.listdir(self.library)), 1)
 
+    def test_a_partial_file_renamed_meanwhile_does_not_stop_keeping(self):
+        partial = os.path.join(self.library, "x.part")
+        with open(partial, "wb") as output:
+            output.write(b"x")
+        real_scandir = os.scandir
+
+        def scandir(path):
+            entries = list(real_scandir(path))
+            os.unlink(partial)  # gone between listing and stat
+            return iter(entries)
+        with mock.patch.object(app.os, "scandir", scandir):
+            self.keep(font(["Viking"]))
+        self.assertEqual(len(os.listdir(self.library)), 1)
+
     def test_nothing_is_kept_without_a_library(self):
         with mock.patch.object(app, "FONT_LIBRARY_DIR", ""):
             self.keep(font(["Viking"]))

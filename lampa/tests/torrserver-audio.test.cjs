@@ -103,13 +103,14 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
     destroy() {}
   }
   let timerId = 0;
-  const player = subscription(), playerVideo = subscription(), panel = subscription();
+  const player = subscription(), playerVideo = subscription(), panel = subscription(), settings = subscription();
   const Lampa = {
     Storage: {
       get: (key, fallback) => storage.has(key) ? JSON.parse(storage.get(key)) : fallback,
       set: (key, value) => storage.set(key, JSON.stringify(value)),
       remove: key => storage.delete(key),
       field: key => storage.has(key) ? JSON.parse(storage.get(key)) : undefined,
+      listener: settings,
     },
     Controller: { toggle() {} }, Platform: { is: name => android && name === 'android' },
     Player: { playdata: () => work, listener: player },
@@ -1330,6 +1331,34 @@ test('embedded ASS falls back to the plain-text track when the sidecar cannot re
   assert.ok(!full.homelabAss, 'the broken drawn item leaves the menu');
   assert.equal(h.subtitleTitle(), 'Полные', 'the plain-text track shows instead');
   assert.match(h.notices.at(-1), /простой текст/);
+});
+
+test('converted SRT follows Lampa subtitle settings and every drawn track follows its delay', async t => {
+  FakeAss.instances.length = 0;
+  const srtHeader = '[Script Info]\nPlayResY: 288\n\n[V4+ Styles]\nStyle: Default,Arial,17,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0.9,0.4,2,20,20,14,1\n\n[Events]\n';
+  const storage = new Map([['subtitles_size', '"large"'], ['subtitles_backdrop', 'true'], ['player_subs_shift_time', '"2"']]);
+  const h = harness(t, storage, {
+    embedded: embeddedLookup,
+    events: url => ({ track: 1, header: url.searchParams.get('from') === '0' ? (url.pathname.endsWith('/2') ? srtHeader : header) : null, lines: [line(1)], next: 1, more: false, failed: false }),
+  });
+  h.start(13, 'abc', true);
+  await h.probe(signsAndFull);
+  h.emitSubtitles(signsAndFull);
+  await h.settle();
+  h.chooseSubtitle('SRT');
+  await h.settle();
+  const srt = FakeAss.instances[0];
+  assert.match(srt.options.subContent, /^Style: Default,Arial,21,&H00FFFFFF,&H000000FF,&H60000000,&H80000000,0,0,0,0,100,100,0,0,3,1.5,0,/m);
+  assert.equal(srt.options.timeOffset, -2, 'a positive Lampa delay shows subtitles later');
+  h.chooseSubtitle('Полные');
+  await h.settle();
+  const full = FakeAss.instances[1];
+  assert.equal(full.options.subContent, header, 'ASS keeps its own styles');
+  assert.equal(full.options.timeOffset, -2);
+  storage.set('player_subs_shift_time', '"-1"');
+  h.context.Lampa.Storage.listener.send('change', { name: 'player_subs_shift_time', value: '-1' });
+  await h.settle();
+  assert.equal(full.timeOffset, 1, 'a changed delay applies at once');
 });
 
 test('a quoted title GST rewrote still lines up with the probe', async t => {

@@ -1389,4 +1389,7 @@ test('Windows fonts a release does not attach are drawn with metric-compatible s
   assert.deepEqual(ass.events, ['Dialogue: 0,0:00:01.00,0:00:03.00,fon,,0,0,0,,{\\fnTinos\\b1}Имя{\\fnCarlito} Тип']);
   assert.equal(ass.options.availableFonts['comic relief bold'], 'https://lampa.test/extaudio/jassub/comic-relief-bold.ttf');
   assert.equal(ass.options.availableFonts['tinos'], 'https://lampa.test/extaudio/jassub/tinos-regular.ttf');
+  assert.deepEqual(Array.from(ass.options.fonts).filter(font => typeof font === 'string'), [
+    'https://lampa.test/extaudio/jassub/comic-relief-regular.ttf', 'https://lampa.test/extaudio/jassub/comic-relief-bold.ttf',
+  ], 'a stand-in the styles use loads up front; one only in \\fn tags waits until asked');
 });

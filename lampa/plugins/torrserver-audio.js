@@ -883,6 +883,16 @@
     }
 
     function rendererOptions(base, video, content, fonts) {
+      content = standInFonts(content);
+      // Stand-ins the styles use load up front: JASSUB does not redraw a
+      // paused frame after a font it fetched on demand arrives.
+      fonts = fonts.slice();
+      Object.keys(FONT_STAND_INS).forEach(function (name) {
+        var standIn = FONT_STAND_INS[name];
+        if (new RegExp('^Style:[^,]*,\\s*' + standIn[0] + '\\s*,', 'im').test(content)) {
+          fonts.push(base + standIn[1] + '-regular.ttf', base + standIn[1] + '-bold.ttf');
+        }
+      });
       var available = {'liberation sans': base + 'default.woff2'};
       Object.keys(FONT_STAND_INS).forEach(function (name) {
         var standIn = FONT_STAND_INS[name];
@@ -891,7 +901,7 @@
         available[standIn[0].toLowerCase() + ' bold'] = base + standIn[1] + '-bold.ttf';
       });
       return {
-        video: video, subContent: standInFonts(content), fonts: fonts,
+        video: video, subContent: content, fonts: fonts,
         workerUrl: base + 'jassub-worker.js', wasmUrl: base + 'jassub-worker.wasm',
         modernWasmUrl: base + 'jassub-worker-modern.wasm',
         availableFonts: available

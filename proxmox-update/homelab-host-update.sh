@@ -96,8 +96,25 @@ else
   apt-get "${APT_OPTS[@]}" -y full-upgrade 9>&-
 fi
 
-# The newest kernel that can actually boot, not leftover module directories.
+# Proxmox marks all but the running and newest kernels for autoremoval
+# (76pveconf). Purge only those kernels, so /boot does not fill up; other
+# autoremovable packages are left alone.
 running=$(uname -r)
+mapfile -t old < <(apt-get -s autoremove 9>&- | grep -oE '^Remv proxmox-kernel-[0-9][^ ]*-pve-signed' \
+  | sed 's/^Remv //' | grep -vxF "proxmox-kernel-$running-signed" || true)
+if [ "${#old[@]}" -gt 0 ]; then
+  extra=$(apt-get -s purge "${old[@]}" 9>&- | grep -E '^(Purg|Remv|Inst) ' | grep -cvE '^Purg proxmox-kernel-[0-9]' || true)
+  if [ "$extra" != 0 ]; then
+    echo "Purging old kernels ${old[*]} would change other packages; leaving them."
+  elif [ -n "$DRY_RUN" ]; then
+    echo "DRY_RUN: would purge old kernels: ${old[*]}"
+  else
+    echo "Purging old kernels: ${old[*]}"
+    apt-get "${APT_OPTS[@]}" -y purge "${old[@]}" 9>&-
+  fi
+fi
+
+# The newest kernel that can actually boot, not leftover module directories.
 newest=$(find /boot -maxdepth 1 -name 'vmlinuz-*-pve' -printf '%f\n' | sed 's/^vmlinuz-//' | sort -V | tail -n 1)
 if [ -z "$newest" ] || [ "$running" = "$newest" ]; then
   echo "Running kernel $running is the newest installed; no reboot needed."

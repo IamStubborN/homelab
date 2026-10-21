@@ -19,6 +19,10 @@ the unit fails, if the held plan would still install the young kernel or remove
 packages. Holds you set by hand are left alone. If Proxmox publishes kernels
 less than 7 days apart, each new version restarts the wait.
 
+After the upgrade it purges the kernels Proxmox marks as removable (all but
+the running and newest ones, see `/etc/apt/apt.conf.d/76pveconf`), and only
+those; other autoremovable packages stay.
+
 It reboots only when the newest `/boot/vmlinuz-*-pve` kernel is newer than the
 running one and 7 days old, and only after these checks pass:
 
@@ -45,6 +49,12 @@ monitor's Telegram alerts (`host-update` and `host-boot` jobs with
 not come back at all, nothing on it can report that.
 
 ## Host settings this relies on
+
+- The host boots shim and GRUB from `EFI/proxmox`. The unused `systemd-boot`
+  package was purged on 2026-10-21: it copied every kernel to the EFI
+  partition, which would have filled it. Backups of the EFI files and the
+  boot entries are in `/root/esp-EFI-loader-20261021.tgz` and
+  `/root/efibootmgr-20261021.txt`.
 
 - `/etc/fstab` mounts `/mnt/usb_drive` with
   `nofail,x-systemd.device-timeout=30s`, so a missing USB drive cannot stop

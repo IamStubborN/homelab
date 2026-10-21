@@ -7,7 +7,6 @@ Requires=docker.service
 Type=oneshot
 ExecStart=/home/iamstubborn/homelab/lampa/auto-update.sh
 Nice=10
-IOSchedulingClass=idle
 # The script stops starting new work after 55 minutes; this only bounds a
 # hung build or rollback.
 TimeoutStartSec=3h

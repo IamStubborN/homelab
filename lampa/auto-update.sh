@@ -44,6 +44,7 @@ pending() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(
 
 # Upstream digests that failed here are not retried until upstream moves on.
 mark_failed() { echo "$latest" > "$AUTO/failed-upstream"; }
+RETRY="Повторить следующей ночью: rm $AUTO/failed-upstream"
 
 lampa_tx() { docker exec lampa awk '/eth0/{print $10}' /proc/net/dev 2>/dev/null || echo 0; }
 
@@ -107,7 +108,7 @@ config_files=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.pro
 if [[ "$config_files" == *"$STATE"* ]]; then
   if [ ! -e "$AUTO/reconcile-notified" ]; then
     notify "Lampac: после отката Lampa запущена из сохранённой модели. Автообновление ждёт ручной сверки Compose (UPDATE.md, Failure recovery)."
-    touch "$AUTO/reconcile-notified"
+    [ -n "$DRY_RUN" ] || touch "$AUTO/reconcile-notified"
   fi
   exit 1
 fi
@@ -142,15 +143,20 @@ if ! wait_for_idle; then
   exit 0
 fi
 rm -f "$AUTO/busy-nights"
+# Building and checking take a while; do not let them run into Watchtower (04:00).
+if [ $(( DEADLINE - $(date +%s) )) -lt 1800 ]; then
+  echo "Too close to the deadline to build; trying again next night."
+  exit 0
+fi
 
 if ! tool stage; then
   mark_failed
-  notify "Lampac: сборка новой версии не удалась, работает текущая. Логи в $STATE (последняя папка)."
+  notify "Lampac: stage новой версии не удался (сборка или несовпадение с развёрнутым Compose), работает текущая. Логи в $STATE (последняя папка). $RETRY"
   exit 1
 fi
 if ! tool check; then
   mark_failed
-  notify "Lampac: новая версия не прошла проверку, работает текущая. Логи: $STATE/$(pending generation)"
+  notify "Lampac: новая версия не прошла проверку, работает текущая. Логи: $STATE/$(pending generation). $RETRY"
   exit 1
 fi
 if ! wait_for_idle; then
@@ -169,7 +175,7 @@ phase=$(pending phase)
 case "$phase" in
   stopping|backed-up|applied|restoring) ;;
   *)
-    notify "Lampac: установка отказалась начинаться (phase=$phase), работает текущая версия. Логи: $STATE/$(pending generation)"
+    notify "Lampac: установка отказалась начинаться (phase=$phase), работает текущая версия. Логи: $STATE/$(pending generation). $RETRY"
     exit 1
     ;;
 esac

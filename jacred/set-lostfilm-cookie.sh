@@ -4,7 +4,7 @@
 # it never appears in arguments, logs or this repository.
 set -euo pipefail
 
-HOST="${JACRED_HOST:-docker.local.iamstubborn.dev}"
+HOST="${JACRED_HOST:?set JACRED_HOST to the Docker host SSH name}"
 CONFIG="${JACRED_CONFIG:-homelab/jacred/config/init.yaml}"
 
 read -rsp "LostFilm cookie (lf_session=...; PHPSESSID=...): " cookie

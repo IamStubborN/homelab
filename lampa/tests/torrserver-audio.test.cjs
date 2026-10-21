@@ -1368,3 +1368,25 @@ test('embedded ASS is looked up again while TorrServer still fetches the torrent
   await h.settle();
   assert.ok(h.subtitleList()[0].homelabAss);
 });
+
+test('Windows fonts a release does not attach are drawn with metric-compatible stand-ins', async t => {
+  FakeAss.instances.length = 0;
+  const styled = header.replace('[Events]', '[V4+ Styles]\nStyle: fon,Comic Sans MS,55,&H00FFFFFF\nStyle: Default,Open Sans Semibold,50,&H00FFFFFF\n\n[Events]');
+  const sign = 'Dialogue: 0,0:00:01.00,0:00:03.00,fon,,0,0,0,,{\\fnTimes New Roman\\b1}Имя{\\fncalibri} Тип';
+  const h = harness(t, new Map(), {
+    embedded: embeddedLookup,
+    events: url => ({ track: 1, header: url.searchParams.get('from') === '0' ? styled : null, lines: [sign], next: 1, more: false, failed: false }),
+  });
+  h.start(13, 'abc', true);
+  await h.probe(signsAndFull);
+  h.emitSubtitles(signsAndFull);
+  await h.settle();
+  h.chooseSubtitle('Полные');
+  await h.settle();
+  const ass = FakeAss.instances[0];
+  assert.match(ass.options.subContent, /Style: fon,Comic Relief,55,/);
+  assert.match(ass.options.subContent, /Style: Default,Open Sans Semibold,50,/, 'attached fonts keep their names');
+  assert.deepEqual(ass.events, ['Dialogue: 0,0:00:01.00,0:00:03.00,fon,,0,0,0,,{\\fnTinos\\b1}Имя{\\fnCarlito} Тип']);
+  assert.equal(ass.options.availableFonts['comic relief bold'], 'https://lampa.test/extaudio/jassub/comic-relief-bold.ttf');
+  assert.equal(ass.options.availableFonts['tinos'], 'https://lampa.test/extaudio/jassub/tinos-regular.ttf');
+});

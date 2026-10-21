@@ -83,7 +83,10 @@ MAX_SUB_TRACKS = 8
 MAX_SUB_LINES = 2000  # per response
 MAX_EMBEDDED_FONT_BYTES = 64 * 1024 * 1024
 RENDERER_DIR = os.environ.get("RENDERER_DIR", "/app/jassub")
-RENDERER_TYPES = {".js": "text/javascript", ".wasm": "application/wasm", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8"}
+RENDERER_TYPES = {
+    ".js": "text/javascript", ".wasm": "application/wasm", ".woff2": "font/woff2", ".ttf": "font/ttf",
+    ".txt": "text/plain; charset=utf-8",
+}
 # Demuxers ffmpeg may pick by content. Playlist formats (HLS, concat) are left
 # out so a crafted torrent file cannot make ffmpeg fetch other URLs.
 INPUT_FORMATS = (
@@ -111,7 +114,7 @@ COPY_CODECS = {"aac", "opus", "ac3", "eac3"}
 FILE_RE = re.compile(r"^(?:audio\.m3u8|init\.mp4|s\d{1,6}\.m4s)$")
 ROUTE_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(tracks|raw)|(\d{1,2})/(copy|aac)/([^/]+))$")
 EMBEDDED_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(embedded)|sub/(\d{1,2})|attachment/(\d{1,3}))$")
-RENDERER_RE = re.compile(r"^/extaudio/jassub/([a-z0-9-]+\.(?:js|wasm|woff2|txt))$")
+RENDERER_RE = re.compile(r"^/extaudio/jassub/([a-z0-9-]+\.(?:js|wasm|woff2|ttf|txt))$")
 CONTENT_TYPES = {".m3u8": "application/vnd.apple.mpegurl", ".mp4": "audio/mp4", ".m4s": "video/iso.segment"}
 
 _probe_cache = {}

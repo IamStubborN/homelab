@@ -862,12 +862,39 @@
       });
     }
 
+    // Windows fonts subtitles often name without attaching them, and the
+    // metric-compatible fonts the sidecar serves instead: the same widths keep
+    // signs inside the boxes they were typeset for.
+    var FONT_STAND_INS = {
+      'comic sans ms': ['Comic Relief', 'comic-relief'], 'times new roman': ['Tinos', 'tinos'],
+      'courier new': ['Cousine', 'cousine'], 'calibri': ['Carlito', 'carlito']
+    };
+
+    function standInFonts(text) {
+      function rename(font) {
+        var standIn = FONT_STAND_INS[font.trim().toLowerCase()];
+        return standIn ? standIn[0] : font;
+      }
+      return text.replace(/^(Style:[^,]*,)([^,\r\n]*)/gm, function (match, head, font) {
+        return head + rename(font);
+      }).replace(/\\fn([^\\}]*)/g, function (match, font) {
+        return '\\fn' + rename(font);
+      });
+    }
+
     function rendererOptions(base, video, content, fonts) {
+      var available = {'liberation sans': base + 'default.woff2'};
+      Object.keys(FONT_STAND_INS).forEach(function (name) {
+        var standIn = FONT_STAND_INS[name];
+        // JASSUB fetches one only when libass asks for it by name and weight.
+        available[standIn[0].toLowerCase()] = base + standIn[1] + '-regular.ttf';
+        available[standIn[0].toLowerCase() + ' bold'] = base + standIn[1] + '-bold.ttf';
+      });
       return {
-        video: video, subContent: content, fonts: fonts,
+        video: video, subContent: standInFonts(content), fonts: fonts,
         workerUrl: base + 'jassub-worker.js', wasmUrl: base + 'jassub-worker.wasm',
         modernWasmUrl: base + 'jassub-worker-modern.wasm',
-        availableFonts: {'liberation sans': base + 'default.woff2'}
+        availableFonts: available
       };
     }
 
@@ -895,7 +922,7 @@
         if (!renderer || !queue.length || cancelled()) return;
         var lines = queue.splice(0, queue.length);
         renderer.then(function (instance) {
-          if (!cancelled()) return instance.renderer.processData(lines.join('\n'));
+          if (!cancelled()) return instance.renderer.processData(standInFonts(lines.join('\n')));
         }).catch(fail);
       }
       function schedule(delay) {

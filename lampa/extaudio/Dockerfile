@@ -1,7 +1,7 @@
 FROM node:22.23.3-alpine AS renderer
 
 WORKDIR /build
-COPY jassub/package.json jassub/package-lock.json jassub/build.sh ./
+COPY jassub/package.json jassub/package-lock.json jassub/build.sh jassub/fonts.sha256 ./
 RUN npm ci --no-audit --no-fund && sh build.sh /out
 
 FROM python:3.12-alpine

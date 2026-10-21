@@ -870,8 +870,47 @@
       'courier new': ['Cousine', 'cousine'], 'calibri': ['Carlito', 'carlito']
     };
 
-    function standInFonts(text) {
+    // Family names from a font's name table (the first font of a collection).
+    function fontFamilies(bytes) {
+      var names = [];
+      try {
+        var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        var start = view.getUint32(0) === 0x74746366 ? view.getUint32(12) : 0; // 'ttcf'
+        for (var i = 0; i < view.getUint16(start + 4); i++) {
+          var record = start + 12 + i * 16;
+          if (view.getUint32(record) !== 0x6e616d65) continue; // 'name'
+          var table = view.getUint32(record + 8);
+          var strings = table + view.getUint16(table + 4);
+          for (var j = 0; j < view.getUint16(table + 2); j++) {
+            var entry = table + 6 + j * 12;
+            var id = view.getUint16(entry + 6);
+            if (id !== 1 && id !== 16) continue;
+            var wide = view.getUint16(entry) !== 1; // Unicode and Windows names are UTF-16BE
+            var length = view.getUint16(entry + 8);
+            var offset = strings + view.getUint16(entry + 10);
+            var text = '';
+            for (var k = 0; k < length; k += wide ? 2 : 1) {
+              text += String.fromCharCode(wide ? view.getUint16(offset + k) : view.getUint8(offset + k));
+            }
+            names.push(text.trim().toLowerCase());
+          }
+        }
+      } catch (error) {}
+      return names;
+    }
+
+    function attachedFamilies(fonts) {
+      var families = {};
+      fonts.forEach(function (font) {
+        if (typeof font !== 'string') fontFamilies(font).forEach(function (name) { families[name] = true; });
+      });
+      return families;
+    }
+
+    function standInFonts(text, attached) {
       function rename(font) {
+        // A font the release attaches is the one it was typeset with.
+        if (attached[font.trim().toLowerCase()]) return font;
         var standIn = FONT_STAND_INS[font.trim().toLowerCase()];
         return standIn ? standIn[0] : font;
       }
@@ -883,7 +922,7 @@
     }
 
     function rendererOptions(base, video, content, fonts) {
-      content = standInFonts(content);
+      content = standInFonts(content, attachedFamilies(fonts));
       // The fallback and the stand-ins the styles use load up front: JASSUB
       // fetches the rest on demand, and libass skips an event without a font
       // (even a drawn mask) in the frames drawn meanwhile.
@@ -921,6 +960,7 @@
       var again = false;
       var queue = [];
       var renderer = null;
+      var attached = {};
       var errors = 0;
       var timer = null;
       function fail(error) {
@@ -934,7 +974,7 @@
         var lines = queue.splice(0, queue.length);
         renderer.then(function (instance) {
           if (cancelled()) return;
-          return Promise.resolve(instance.renderer.processData(standInFonts(lines.join('\n')))).then(function () {
+          return Promise.resolve(instance.renderer.processData(standInFonts(lines.join('\n'), attached))).then(function () {
             // JASSUB draws on new video frames only: a paused frame would keep
             // missing the events that arrived after it.
             if (!video.paused || cancelled()) return;
@@ -975,6 +1015,7 @@
             renderer = Promise.all([loadAssRenderer(base), fonts]).then(function (results) {
               if (cancelled()) throw new Error('cancelled');
               var Renderer = results[0];
+              attached = attachedFamilies(results[1]);
               state.assInstance = new Renderer(rendererOptions(base, video, data.header, results[1]));
               var instance = state.assInstance;
               return instance.ready.then(function () { return instance; });

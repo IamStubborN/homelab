@@ -60,7 +60,7 @@ class FakeAss {
 }
 FakeAss.instances = [];
 
-function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null } = {}) {
+function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null, attachments = {} } = {}) {
   const notices = [];
   let work = false;
   let video = createVideo();
@@ -161,7 +161,10 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
           return Promise.resolve(payload ? {ok: true, json: async () => payload} : {ok: false, status: 502});
         }
         const fontMatch = /^\/extaudio\/[^/]+\/\d+\/attachment\/(\d+)$/.exec(new URL(url).pathname);
-        if (fontMatch) return Promise.resolve({ok: true, arrayBuffer: async () => new Uint8Array([Number(fontMatch[1])]).buffer});
+        if (fontMatch) {
+          const bytes = attachments[fontMatch[1]] || new Uint8Array([Number(fontMatch[1])]);
+          return Promise.resolve({ok: true, arrayBuffer: async () => bytes.buffer});
+        }
         const rawMatch = /^\/extaudio\/[^/]+\/(\d+)\/raw$/.exec(new URL(url).pathname);
         if (rawMatch) {
           const bytes = raw[rawMatch[1]];
@@ -1193,6 +1196,24 @@ test('ASS vector drawings never reach Lampa as subtitle text', async t => {
 const signsAndFull = [
   track('audio', 0, 'Japanese', 'ja'), track('subtitle', 0, 'Надписи'), track('subtitle', 1, 'SRT'), track('subtitle', 2, 'Полные'),
 ];
+// A font with only a name table: a Windows family name and a Mac full name.
+function fontNamed(family) {
+  const full = Buffer.from(family + ' Bold', 'latin1');
+  const wide = Buffer.from(family, 'utf16le').swap16();
+  const name = Buffer.alloc(30 + wide.length + full.length);
+  name.writeUInt16BE(2, 2); name.writeUInt16BE(30, 4);
+  [[3, 1, wide.length, 0], [1, 4, full.length, wide.length]].forEach(([platform, id, length, offset], i) => {
+    const entry = 6 + i * 12;
+    name.writeUInt16BE(platform, entry); name.writeUInt16BE(id, entry + 6);
+    name.writeUInt16BE(length, entry + 8); name.writeUInt16BE(offset, entry + 10);
+  });
+  wide.copy(name, 30); full.copy(name, 30 + wide.length);
+  const head = Buffer.alloc(28);
+  head.writeUInt32BE(0x00010000, 0); head.writeUInt16BE(1, 4);
+  head.write('name', 12, 'latin1'); head.writeUInt32BE(28, 20); head.writeUInt32BE(name.length, 24);
+  return new Uint8Array(Buffer.concat([head, name]));
+}
+
 const embeddedLookup = {
   renderer: '/extaudio/jassub/', fonts: [7, 9],
   subtitles: [
@@ -1399,4 +1420,25 @@ test('Windows fonts a release does not attach are drawn with metric-compatible s
     'https://lampa.test/extaudio/jassub/default.woff2',
     'https://lampa.test/extaudio/jassub/comic-relief-regular.ttf', 'https://lampa.test/extaudio/jassub/comic-relief-bold.ttf',
   ], 'a stand-in the styles use loads up front; one only in \\fn tags waits until asked');
+});
+
+test('a Windows font the release attaches keeps its name instead of a stand-in', async t => {
+  FakeAss.instances.length = 0;
+  const styled = header.replace('[Events]', '[V4+ Styles]\nStyle: fon,Comic Sans MS,55,&H00FFFFFF\n\n[Events]');
+  const sign = 'Dialogue: 0,0:00:01.00,0:00:03.00,fon,,0,0,0,,{\\fnComic Sans MS\\b1}Нати{\\fnTimes New Roman} Тип';
+  const h = harness(t, new Map(), {
+    embedded: embeddedLookup,
+    attachments: { 9: fontNamed('Comic Sans MS') },
+    events: url => ({ track: 1, header: url.searchParams.get('from') === '0' ? styled : null, lines: [sign], next: 1, more: false, failed: false }),
+  });
+  h.start(13, 'abc', true);
+  await h.probe(signsAndFull);
+  h.emitSubtitles(signsAndFull);
+  await h.settle();
+  h.chooseSubtitle('Полные');
+  await h.settle();
+  const ass = FakeAss.instances[0];
+  assert.match(ass.options.subContent, /Style: fon,Comic Sans MS,55,/);
+  assert.deepEqual(ass.events, ['Dialogue: 0,0:00:01.00,0:00:03.00,fon,,0,0,0,,{\\fnComic Sans MS\\b1}Нати{\\fnTinos} Тип'], 'only the missing family is replaced');
+  assert.deepEqual(Array.from(ass.options.fonts).filter(font => typeof font === 'string'), ['https://lampa.test/extaudio/jassub/default.woff2']);
 });

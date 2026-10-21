@@ -6,6 +6,7 @@ set -euo pipefail
 BACKUP_LOCK=/run/lock/homelab-google-drive-backup.lock
 DOCKER_CT=300
 STATE=/var/lib/homelab-host-update
+EFI_MIN_FREE_KB=$((200 * 1024))
 
 in_window() { [ "$(TZ=Europe/Sofia date +%H)" = 04 ]; }
 
@@ -47,11 +48,37 @@ if [ "$(cat "$STATE/reboot-target" 2>/dev/null)" = "$newest" ]; then
   exit 1
 fi
 
+# The new kernel must be complete and be GRUB's default entry.
+problems=()
+[ -z "$(dpkg --audit)" ] || problems+=("dpkg --audit reports problems")
+[ -s "/boot/initrd.img-$newest" ] || problems+=("no initrd for $newest")
+grep -q "with Linux $newest'" /boot/grub/grub.cfg || problems+=("grub.cfg has no entry for $newest")
+# GRUB_DEFAULT=0 boots the first menu entry; read the kernel from its linux line.
+first=$(grep -m1 -oE '^\s*linux\s+\S*/vmlinuz-[^ ]+' /boot/grub/grub.cfg | sed 's/.*vmlinuz-//' || true)
+[ "$first" = "$newest" ] || problems+=("GRUB would boot $first, not $newest")
+if mountpoint -q /boot/efi; then
+  free_kb=$(df --output=avail -k /boot/efi | tail -n 1 | tr -d ' ')
+  [ "$free_kb" -ge "$EFI_MIN_FREE_KB" ] || problems+=("EFI partition has only ${free_kb} KiB free")
+fi
+if [ "${#problems[@]}" -gt 0 ]; then
+  printf 'Not rebooting into %s: %s\n' "$newest" "${problems[*]}"
+  exit 1
+fi
+
 # Let the Docker guest finish its own 04:30 package updates before rebooting.
+# A oneshot unit is "activating" while it runs; a stopped guest counts as idle.
+guest_busy=1
 for _ in $(seq 60); do
-  pct exec "$DOCKER_CT" -- systemctl is-active --quiet apt-daily-upgrade.service 2>/dev/null || break
-  sleep 10
+  state=$(pct exec "$DOCKER_CT" -- systemctl show -P ActiveState apt-daily-upgrade.service 2>/dev/null) || { guest_busy=0; break; }
+  case "$state" in
+    activating|active|deactivating|reloading) sleep 10 ;;
+    *) guest_busy=0; break ;;
+  esac
 done
+if [ "$guest_busy" = 1 ]; then
+  echo "Docker guest is still installing updates; rebooting next night."
+  exit 0
+fi
 
 if ! in_window; then
   echo "Kernel $newest installed, but the update window has passed; rebooting next night."

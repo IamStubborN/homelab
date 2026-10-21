@@ -1,0 +1,12 @@
+[Unit]
+Description=Check guests and internet after a nightly kernel reboot
+After=pve-guests.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-host-boot-check
+ExecStopPost=-/usr/local/libexec/homelab-backup-monitor record host-boot
+
+[Install]
+WantedBy=multi-user.target

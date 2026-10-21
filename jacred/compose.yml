@@ -57,6 +57,10 @@ services:
       TZ: ${TIMEZONE:-Europe/Sofia}
       CURL_CONNECT_TIMEOUT: "10"
       LOCK_DIR: /tmp/jacred-cron-locks
+      TELEGRAM_CHAT_ID: ${PRIMARY_TELEGRAM_CHAT_ID}
+      TELEGRAM_TOKEN_FILE: /run/secrets/telegram_bot_token
+    secrets:
+      - telegram_bot_token
     volumes:
       - ./data/log:/var/log/jacred
     networks:

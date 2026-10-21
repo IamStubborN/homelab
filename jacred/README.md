@@ -159,9 +159,13 @@ and root-project ownership afterward.
 LostFilm needs the browser session cookie of a LostFilm account. Run
 `jacred/set-lostfilm-cookie.sh` from a workstation: it reads the cookie without
 echo, sends it over SSH stdin into the private `init.yaml`, moves `lostfilm`
-from `disable_trackers` to `synctrackers`, and hot-reloads JacRed. It refuses
-to run when a `Lostfilm:` section already exists; replace the cookie there by
-hand. Without a
+from `disable_trackers` to `synctrackers`, and hot-reloads JacRed. Run it again
+to renew an expired cookie: it then replaces only the `cookie:` line. Without a
 valid cookie every episode logs `expand failed (no magnets)`. The refresh
-reads LostFilm's new-episodes page every four hours. When the session expires,
-run the script again.
+reads LostFilm's new-episodes page every four hours. JacRed has no LostFilm
+login by password, upstream included, so the cookie cannot renew itself.
+
+`lostfilm-auth-check.sh` runs 28 minutes after each refresh. When at least
+half of the run's items failed to resolve to magnets, it sends one Telegram
+message (the disk-watchdog bot and chat) and another once LostFilm recovers.
+Its state is `data/log/.scheduler-backoff/lostfilm-auth`.

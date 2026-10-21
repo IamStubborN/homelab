@@ -11,7 +11,7 @@ read -rsp "LostFilm cookie (lf_session=...; PHPSESSID=...): " cookie
 echo
 [[ "$cookie" == *lf_session=* ]] || { echo "No lf_session in the cookie." >&2; exit 1; }
 
-printf '%s' "$cookie" | ssh "$HOST" "CONFIG='$CONFIG' python3 -c '
+printf '%s' "$cookie" | ssh "$HOST" "JACRED_DRY_RUN='${JACRED_DRY_RUN:-}'; CONFIG='$CONFIG' python3 -c '
 import json, os, shutil, sys, time
 path = os.environ[\"CONFIG\"]
 cookie = sys.stdin.read().strip()
@@ -32,8 +32,19 @@ for line in lines:
 text = \"\\n\".join(out)
 block = \"Lostfilm:\\n  host: https://www.lostfilm.tv\\n  useproxy: false\\n  reqMinute: 8\\n  parseDelay: 7000\\n  log: true\\n  cookie: \" + json.dumps(cookie) + \"\\n\"
 if \"\\nLostfilm:\" in text:
-    sys.exit(\"Lostfilm section already exists; edit it by hand.\")
-text = text.rstrip(\"\\n\") + \"\\n\" + block
+    # Renewing: replace only the cookie line inside the Lostfilm section.
+    lines, section, replaced = text.split(\"\\n\"), None, False
+    for i, line in enumerate(lines):
+        if line and not line.startswith((\" \", \"#\")):
+            section = line.split(\":\")[0]
+        elif section == \"Lostfilm\" and line.strip().startswith(\"cookie:\"):
+            lines[i] = \"  cookie: \" + json.dumps(cookie)
+            replaced = True
+    if not replaced:
+        sys.exit(\"Lostfilm section has no cookie line; edit it by hand.\")
+    text = \"\\n\".join(lines)
+else:
+    text = text.rstrip(\"\\n\") + \"\\n\" + block
 with open(path, \"r+\") as f:
     f.seek(0); f.write(text); f.truncate()
 print(\"config updated\")

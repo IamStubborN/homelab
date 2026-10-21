@@ -51,6 +51,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 6 2,6,10,14,18 * * * /usr/local/bin/run-job.sh aniliberty-parse http://jacred:9117/cron/aniliberty/parse 900
 # LostFilm needs the session cookie in init.yaml (set-lostfilm-cookie.sh).
 12 2,6,10,14,18 * * * /usr/local/bin/run-job.sh lostfilm-parse http://jacred:9117/cron/lostfilm/parse 900
+# After each LostFilm parse: alert when the session cookie stops working.
+40 2,6,10,14,18 * * * /usr/local/bin/lostfilm-auth-check.sh
 40 2 * * * /usr/local/bin/run-job.sh anistar-parse "http://jacred:9117/cron/anistar/parse?limit_page=3" 900
 45 2 * * * /usr/local/bin/run-job.sh leproduction-parse "http://jacred:9117/cron/leproduction/parse?limit_page=3" 900
 5 3 * * * /usr/local/bin/run-job.sh anifilm-parse http://jacred:9117/cron/anifilm/parse 1800

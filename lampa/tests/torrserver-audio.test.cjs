@@ -52,8 +52,10 @@ class FakeAss {
     this.options = options; this.destroyed = false; this.events = [];
     this.ready = Promise.resolve();
     this.renderer = { processData: data => { this.events.push(...data.split('\n')); } };
+    this.renders = [];
     FakeAss.instances.push(this);
   }
+  manualRender(frame) { this.renders.push(frame); }
   destroy() { this.destroyed = true; }
 }
 FakeAss.instances = [];
@@ -1241,9 +1243,12 @@ test('embedded ASS tracks are drawn by JASSUB from events read as playback goes'
   assert.equal(ass.options.subContent, header);
   assert.deepEqual(Array.from(ass.options.fonts, font => font[0]), [7, 9], 'fonts come from the attachments');
   assert.deepEqual(ass.events, [line(1), line(3)]);
+  assert.deepEqual(ass.renders, [], 'a playing video redraws with its next frame');
+  Object.assign(h.video(), { paused: true, currentTime: 62.5, videoWidth: 1920, videoHeight: 1080 });
   await pollTimer(h);
   assert.equal(server.asked[1].from, 2);
   assert.deepEqual(ass.events, [line(1), line(3), line(5)], 'a repeated event is not added twice');
+  assert.deepEqual(JSON.parse(JSON.stringify(ass.renders)), [{ mediaTime: 62.5, width: 1920, height: 1080 }], 'a paused frame is redrawn with the new events');
   h.video().fire('seeking');
   h.fireTimer(300);
   await h.settle();

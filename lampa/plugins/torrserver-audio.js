@@ -932,7 +932,13 @@
         if (!renderer || !queue.length || cancelled()) return;
         var lines = queue.splice(0, queue.length);
         renderer.then(function (instance) {
-          if (!cancelled()) return instance.renderer.processData(standInFonts(lines.join('\n')));
+          if (cancelled()) return;
+          return Promise.resolve(instance.renderer.processData(standInFonts(lines.join('\n')))).then(function () {
+            // JASSUB draws on new video frames only: a paused frame would keep
+            // missing the events that arrived after it.
+            if (!video.paused || cancelled()) return;
+            return instance.manualRender({mediaTime: video.currentTime, width: video.videoWidth, height: video.videoHeight});
+          });
         }).catch(fail);
       }
       function schedule(delay) {

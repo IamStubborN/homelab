@@ -68,6 +68,13 @@ Kinozal incremental refresh, Cloudflare warmups, and archive backfills.
 JSON checkpoints still save every five minutes; logs rotate every 15 minutes.
 There are no tracker starts at 22:00–23:59 and no new Sunday full-cycle start.
 
+SubsPlease `ParseShows` walks its show catalogue 50 shows per run (about
+12 minutes) and runs daily at 02:25: weekly runs would take months to reach
+older shows. AniLiberty is enabled again; its refresh reads the latest API page
+every four hours. To backfill its whole catalogue once (about 63 pages, eight
+minutes), request `/cron/aniliberty/parse?parseFrom=1&parseTo=<total_pages>`
+through `run-job.sh`.
+
 The HTTP runner skips new crawler submissions daily at **02:00–02:59 UTC**
 and on Sundays at **03:00–08:59 UTC**. These fixed UTC windows follow the
 backup timers, reserving the daily configuration/application-backup hour and

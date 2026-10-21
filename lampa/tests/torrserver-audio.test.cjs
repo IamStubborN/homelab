@@ -1332,6 +1332,19 @@ test('embedded ASS falls back to the plain-text track when the sidecar cannot re
   assert.match(h.notices.at(-1), /простой текст/);
 });
 
+test('a quoted title GST rewrote still lines up with the probe', async t => {
+  const quoted = [track('audio', 0, 'Japanese', 'ja'), track('subtitle', 0, "'Русские'")];
+  const h = harness(t, new Map(), {
+    embedded: { ...embeddedLookup, subtitles: [{ stream: 0, codec: 'subrip', title: '"Русские"', language: 'rus' }] },
+    events: () => null,
+  });
+  h.start(13, 'abc', true);
+  await h.probe(quoted);
+  h.emitSubtitles(quoted);
+  await h.settle();
+  assert.ok(h.subtitleList()[0].homelabAss);
+});
+
 test('embedded ASS stays plain text when the probe does not line up with the menu', async t => {
   const h = harness(t, new Map(), { embedded: { ...embeddedLookup, subtitles: embeddedLookup.subtitles.slice(1) }, events: () => null });
   h.start(13, 'abc', true);

@@ -1162,8 +1162,10 @@
       // hls.js lists GST's text subtitles in file order; JASSUB draws them
       // instead when the sidecar's probe lines up with them (SRT converted).
       if (!data || data.subtitles.length !== originals.length) return originals;
+      // GST turns double quotes in a title into single ones.
+      function title(text) { return String(text || '').replace(/["']/g, '').trim(); }
       var aligned = data.subtitles.every(function (sub, i) {
-        return !sub.title || String(originals[i].label || '').trim() === sub.title;
+        return !sub.title || title(originals[i].label) === title(sub.title);
       });
       if (!aligned) return originals;
       var base = '/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + state.work.homelab_file_index + '/';

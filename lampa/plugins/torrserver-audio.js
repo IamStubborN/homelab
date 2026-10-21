@@ -1238,7 +1238,7 @@
         }
         // A reload brings new hls.js tracks; the item stays the same.
         item.index = original.index;
-        item.label = subtitleLabel(sub.title || 'Субтитры ' + (i + 1), 'в видео');
+        item.label = item.homelabLabel = subtitleLabel(sub.title, sub.language, false);
         // Choices are remembered by GST's name, which a choice made before
         // this probe arrived also used.
         item.gstTitle = original.label;
@@ -1248,36 +1248,69 @@
       });
     }
 
-    // Menu labels say where subtitles come from: the video file itself or a
-    // separate file of the release.
-    function subtitleLabel(name, source) {
-      name = String(name).trim();
-      return name.charAt(0).toUpperCase() + name.slice(1) + ' (' + source + ')';
+    // Menu labels read "<who>: <what>", like the audio menu: the group or the
+    // language, then full subtitles or signs only. External files end in
+    // "(внешние)", as external audio ends in "(внешняя)".
+    // Words match whole only: JS's \b knows no Cyrillic letters.
+    function words(list) { return new RegExp('(^|[^0-9A-Za-zА-Яа-яЁё])(' + list + ')(?=$|[^0-9A-Za-zА-Яа-яЁё])', 'gi'); }
+    var FULL_WORDS = words('full|полные|полн[а-яё]*');
+    var SIGNS_WORDS = words('signs?|forced|songs?|надпис[а-яё]*|песни');
+    var NOISE_WORDS = words('[a-z]{2}-[a-z]{2}|только|от|by|full|полные|полн[а-яё]*|signs?|forced|songs?|надпис[а-яё]*|песни|и|and|subs?|subtitles?|субтитры|' +
+      'srt|ass|ssa|rus|ru|russian|русские|русский|eng|en|english|английские|английский|jpn|ja|japanese|японские|японский|ukr|uk|украинские|украинский');
+    var LANGUAGES = {
+      rus: 'Русские', ru: 'Русские', eng: 'Английские', en: 'Английские', jpn: 'Японские', ja: 'Японские',
+      ukr: 'Украинские', uk: 'Украинские'
+    };
+    function subtitleLabel(title, language, external, signs) {
+      title = String(title || '').replace(/["'«»]/g, '').trim();
+      // Full subtitles that mention signs ("Full + Signs") are still full.
+      if (signs === undefined) signs = !title.match(FULL_WORDS) && !!title.match(SIGNS_WORDS);
+      var lang = LANGUAGES[String(language || '').toLowerCase()] || '';
+      var group = title.replace(NOISE_WORDS, '$1').replace(/[\[\]()]/g, ' ')
+        .replace(/^[\s\-_.,:;|/+&]+|[\s\-_,:;|/+&]+$/g, '').replace(/\s+/g, ' ');
+      if (/^[\d\s]*$/.test(group)) group = ''; // "Субтитры 2": tracks are numbered later
+      var who = group || lang || title || 'Субтитры';
+      var what = signs ? 'надписи' : 'полные';
+      // A group says nothing of the language unless it is the usual Russian.
+      if (group && lang && lang !== 'Русские') what += ', ' + lang.toLowerCase();
+      return who.charAt(0).toUpperCase() + who.slice(1) + ': ' + what + (external ? ' (внешние)' : '');
+    }
+
+    // Tracks that come out with the same label are numbered in menu order, so
+    // they stay apart and a choice by label finds the same one next episode.
+    function numberLabels(items) {
+      var seen = {};
+      items.forEach(function (item) {
+        if (!item.homelabLabel) return;
+        var count = seen[item.homelabLabel] = (seen[item.homelabLabel] || 0) + 1;
+        item.label = count > 1 ? item.homelabLabel + ' ' + count : item.homelabLabel;
+      });
+      return items;
     }
 
     function assItems(state, data) {
       var base = '/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/';
       var items = [];
       (data.subtitles || []).filter(function (sub) { return Number.isInteger(sub.file); }).forEach(function (sub, number) {
-        var name = sub.title || 'Субтитры';
         var fonts = (sub.fonts || []).filter(Number.isInteger).map(function (id) {
           return new URL(base + id + '/raw', window.location.href).href;
         });
         [false, true].forEach(function (signs) {
           items.push(defineMode(state, {
             index: 1000 + number * 2 + (signs ? 1 : 0), external: true, language: sub.language || '',
-            label: subtitleLabel(signs ? name + ': только надписи' : name, 'отдельный файл'),
+            label: subtitleLabel(sub.title, sub.language, true, signs),
+            homelabLabel: subtitleLabel(sub.title, sub.language, true, signs),
             homelabAss: {url: base + sub.file + '/raw', fonts: fonts, signs: signs}
           }));
         });
       });
-      return items;
+      return numberLabels(items);
     }
 
     function withAss(state, list) {
       if (!state.hlsSubs) state.hlsSubs = list.filter(function (item) { return !item.homelabAss; });
       var items = embeddedItems(state);
-      list.splice.apply(list, [0, list.length].concat(items, state.assItems || []));
+      list.splice.apply(list, [0, list.length].concat(numberLabels(items.concat(state.assItems || []))));
       // A plain-text track already showing switches to its drawn version.
       items.forEach(function (item) {
         if (item.homelabOriginal && item.homelabOriginal.mode === 'showing') item.mode = 'showing';

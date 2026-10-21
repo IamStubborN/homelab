@@ -1053,10 +1053,10 @@ test('external ASS subtitles join the menu and render through JASSUB', async t =
   h.start(13, 'abc', true);
   await h.probe([japaneseAAC]);
   await h.settle();
-  assert.deepEqual(h.subtitleMenu(), ['YakuSub Studio (отдельный файл)', 'YakuSub Studio: только надписи (отдельный файл)'], 'external subtitles form the menu without embedded ones');
+  assert.deepEqual(h.subtitleMenu(), ['YakuSub Studio: полные (внешние)', 'YakuSub Studio: надписи (внешние)'], 'external subtitles form the menu without embedded ones');
   h.emitSubtitles(firstEpisode);
-  assert.deepEqual(h.subtitleMenu(), ['надписи', 'English', 'Russian', 'YakuSub Studio (отдельный файл)', 'YakuSub Studio: только надписи (отдельный файл)']);
-  h.chooseSubtitle('YakuSub Studio (отдельный файл)');
+  assert.deepEqual(h.subtitleMenu(), ['надписи', 'English', 'Russian', 'YakuSub Studio: полные (внешние)', 'YakuSub Studio: надписи (внешние)']);
+  h.chooseSubtitle('YakuSub Studio: полные (внешние)');
   await h.settle();
   assert.equal(FakeAss.instances.length, 1);
   const options = FakeAss.instances[0].options;
@@ -1065,10 +1065,10 @@ test('external ASS subtitles join the menu and render through JASSUB', async t =
   assert.deepEqual(Array.from(options.fonts.slice(0, 2), font => new TextDecoder().decode(font)), ['font37', 'font38'], 'fonts arrive as bytes');
   assert.equal(options.fonts[2], 'https://lampa.test/extaudio/jassub/default.woff2', 'the fallback font loads up front');
   assert.equal(options.workerUrl, 'https://lampa.test/extaudio/jassub/jassub-worker.js');
-  assert.equal(h.subtitleTitle(), 'YakuSub Studio (отдельный файл)');
+  assert.equal(h.subtitleTitle(), 'YakuSub Studio: полные (внешние)');
   h.chooseSubtitle('English');
   assert.ok(FakeAss.instances[0].destroyed, 'another subtitle removes the ASS layer');
-  h.chooseSubtitle('YakuSub Studio (отдельный файл)');
+  h.chooseSubtitle('YakuSub Studio: полные (внешние)');
   await h.settle();
   h.destroy();
   assert.ok(FakeAss.instances[1].destroyed, 'closing the player removes the ASS layer');
@@ -1081,13 +1081,13 @@ test('a remembered ASS choice returns on the next episode', async t => {
   first.start(13, 'abc', true);
   await first.probe([japaneseAAC]);
   await first.settle();
-  first.chooseSubtitle('YakuSub Studio (отдельный файл)');
+  first.chooseSubtitle('YakuSub Studio: полные (внешние)');
   await first.settle();
   first.start(14, 'abc', true);
   await first.probe([japaneseAAC]);
   first.emitSubtitles(firstEpisode);
   await first.settle();
-  assert.equal(first.subtitleTitle(), 'YakuSub Studio (отдельный файл)');
+  assert.equal(first.subtitleTitle(), 'YakuSub Studio: полные (внешние)');
   assert.equal(FakeAss.instances.length, 2);
   assert.ok(FakeAss.instances[0].destroyed && !FakeAss.instances[1].destroyed);
 });
@@ -1099,7 +1099,7 @@ test('ASS subtitles without a BOM fall back to Windows-1251', async t => {
   h.start(13, 'abc', true);
   await h.probe([japaneseAAC]);
   await h.settle();
-  h.chooseSubtitle('YakuSub Studio (отдельный файл)');
+  h.chooseSubtitle('YakuSub Studio: полные (внешние)');
   await h.settle();
   assert.equal(FakeAss.instances[0].options.subContent, 'Привет');
 });
@@ -1110,7 +1110,7 @@ test('a failed ASS download is reported and leaves subtitles off', async t => {
   h.start(13, 'abc', true);
   await h.probe([japaneseAAC]);
   await h.settle();
-  h.chooseSubtitle('YakuSub Studio (отдельный файл)');
+  h.chooseSubtitle('YakuSub Studio: полные (внешние)');
   await h.settle();
   assert.equal(FakeAss.instances.length, 0);
   assert.equal(h.subtitleTitle(), null);
@@ -1122,7 +1122,7 @@ test('ASS items join subtitles reported before the player was ready', async t =>
   h.startWithSubtitles(firstEpisode, 13, 'abc');
   await h.probe([japaneseAAC]);
   await h.settle();
-  assert.deepEqual(h.subtitleMenu(), ['надписи', 'English', 'Russian', 'YakuSub Studio (отдельный файл)', 'YakuSub Studio: только надписи (отдельный файл)']);
+  assert.deepEqual(h.subtitleMenu(), ['надписи', 'English', 'Russian', 'YakuSub Studio: полные (внешние)', 'YakuSub Studio: надписи (внешние)']);
 });
 
 test('a pending ASS download is dropped after another choice or closing', async t => {
@@ -1132,11 +1132,11 @@ test('a pending ASS download is dropped after another choice or closing', async 
   await h.probe([japaneseAAC]);
   h.emitSubtitles(firstEpisode);
   await h.settle();
-  h.chooseSubtitle('YakuSub Studio (отдельный файл)');
+  h.chooseSubtitle('YakuSub Studio: полные (внешние)');
   h.chooseSubtitle('English');
   await h.settle();
   assert.equal(FakeAss.instances.length, 0, 'switching away cancels the pending renderer');
-  h.chooseSubtitle('YakuSub Studio (отдельный файл)');
+  h.chooseSubtitle('YakuSub Studio: полные (внешние)');
   h.destroy();
   await h.settle();
   assert.equal(FakeAss.instances.length, 0, 'closing cancels the pending renderer');
@@ -1148,7 +1148,7 @@ test('ASS items leave the menu with their episode', async t => {
   await h.probe([japaneseAAC]);
   await h.settle();
   const panelList = h.subtitleList();
-  assert.deepEqual(Array.from(panelList, item => item.label), ['YakuSub Studio (отдельный файл)', 'YakuSub Studio: только надписи (отдельный файл)']);
+  assert.deepEqual(Array.from(panelList, item => item.label), ['YakuSub Studio: полные (внешние)', 'YakuSub Studio: надписи (внешние)']);
   h.destroy();
   assert.equal(panelList.length, 0, 'the list the panel kept loses its ASS items');
 });
@@ -1160,7 +1160,7 @@ test('ASS rendering follows a new video element after a reload', async t => {
   await h.probe([japaneseAAC]);
   h.emitSubtitles(firstEpisode);
   await h.settle();
-  h.chooseSubtitle('YakuSub Studio (отдельный файл)');
+  h.chooseSubtitle('YakuSub Studio: полные (внешние)');
   await h.settle();
   h.replaceVideo();
   h.emitSubtitles(firstEpisode);
@@ -1257,13 +1257,13 @@ test('embedded ASS tracks are drawn by JASSUB from events read as playback goes'
   await h.probe(signsAndFull);
   h.emitSubtitles(signsAndFull);
   await h.settle();
-  assert.deepEqual(h.subtitleMenu(), ['Надписи (в видео)', 'SRT (в видео)', 'Полные (в видео)'], 'labels say the subtitles are in the video');
+  assert.deepEqual(h.subtitleMenu(), ['Русские: надписи', 'SRT: полные', 'Русские: полные'], 'labels name who made the subtitles and what they cover');
   const [signs, srt, full] = h.subtitleList();
   assert.ok(signs.homelabAss && full.homelabAss && srt.homelabAss, 'SRT is drawn too: the WebVTT GST makes of it can come out empty');
   h.video().currentTime = 61.25;
-  h.chooseSubtitle('Полные (в видео)');
+  h.chooseSubtitle('Русские: полные');
   await h.settle();
-  assert.equal(h.subtitleTitle(), 'Полные (в видео)');
+  assert.equal(h.subtitleTitle(), 'Русские: полные');
   assert.deepEqual(server.asked[0], { stream: '3', at: '61.3', from: 0 });
   assert.equal(FakeAss.instances.length, 1);
   const ass = FakeAss.instances[0];
@@ -1290,10 +1290,10 @@ test('embedded ASS tracks are drawn by JASSUB from events read as playback goes'
   h.fireTimer(300);
   await h.settle();
   assert.equal(server.asked.length, 3, 'a seek asks for the new position at once');
-  h.chooseSubtitle('SRT (в видео)');
+  h.chooseSubtitle('SRT: полные');
   await h.settle();
   assert.ok(ass.destroyed);
-  assert.equal(h.subtitleTitle(), 'SRT (в видео)');
+  assert.equal(h.subtitleTitle(), 'SRT: полные');
   assert.equal(server.asked.at(-1).stream, '2', 'the sidecar converts the SRT stream');
   assert.equal(FakeAss.instances.length, 2);
   h.chooseSubtitle(null);
@@ -1325,7 +1325,7 @@ test('embedded ASS falls back to the plain-text track when the sidecar cannot re
   await h.probe(signsAndFull);
   h.emitSubtitles(signsAndFull);
   await h.settle();
-  h.chooseSubtitle('Полные (в видео)');
+  h.chooseSubtitle('Русские: полные');
   await h.settle();
   const full = h.subtitleList()[2];
   assert.ok(!full.homelabAss, 'the broken drawn item leaves the menu');
@@ -1345,12 +1345,12 @@ test('converted SRT follows Lampa subtitle settings and every drawn track follow
   await h.probe(signsAndFull);
   h.emitSubtitles(signsAndFull);
   await h.settle();
-  h.chooseSubtitle('SRT (в видео)');
+  h.chooseSubtitle('SRT: полные');
   await h.settle();
   const srt = FakeAss.instances[0];
   assert.match(srt.options.subContent, /^Style: Default,Arial,21,&H00FFFFFF,&H000000FF,&H60000000,&H80000000,0,0,0,0,100,100,0,0,3,1.5,0,/m);
   assert.equal(srt.options.timeOffset, -2, 'a positive Lampa delay shows subtitles later');
-  h.chooseSubtitle('Полные (в видео)');
+  h.chooseSubtitle('Русские: полные');
   await h.settle();
   const full = FakeAss.instances[1];
   assert.equal(full.options.subContent, header, 'ASS keeps its own styles');
@@ -1397,7 +1397,7 @@ test('a seek during a request asks again once instead of starting a second poll 
   await h.probe(signsAndFull);
   h.emitSubtitles(signsAndFull);
   await h.settle();
-  h.chooseSubtitle('Полные (в видео)');
+  h.chooseSubtitle('Русские: полные');
   h.video().fire('seeking');
   h.video().fire('seeking');
   await h.settle();
@@ -1419,7 +1419,7 @@ test('a restarted sidecar track resends events that are not drawn twice', async 
   await h.probe(signsAndFull);
   h.emitSubtitles(signsAndFull);
   await h.settle();
-  h.chooseSubtitle('Полные (в видео)');
+  h.chooseSubtitle('Русские: полные');
   await h.settle();
   server.track = 2;
   await pollTimer(h);
@@ -1469,7 +1469,7 @@ test('Windows fonts a release does not attach are drawn with metric-compatible s
   await h.probe(signsAndFull);
   h.emitSubtitles(signsAndFull);
   await h.settle();
-  h.chooseSubtitle('Полные (в видео)');
+  h.chooseSubtitle('Русские: полные');
   await h.settle();
   const ass = FakeAss.instances[0];
   assert.match(ass.options.subContent, /Style: fon,Comic Relief,55,/);
@@ -1499,7 +1499,7 @@ test('fonts kept from other releases are drawn instead of stand-ins', async t =>
   await h.probe(signsAndFull);
   h.emitSubtitles(signsAndFull);
   await h.settle();
-  h.chooseSubtitle('Полные (в видео)');
+  h.chooseSubtitle('Русские: полные');
   await h.settle();
   const ass = FakeAss.instances[0];
   assert.match(ass.options.subContent, /Style: fon,Comic Sans MS,55,/, 'the real font beats a stand-in');
@@ -1527,7 +1527,7 @@ test('a Windows font the release attaches keeps its name instead of a stand-in',
   await h.probe(signsAndFull);
   h.emitSubtitles(signsAndFull);
   await h.settle();
-  h.chooseSubtitle('Полные (в видео)');
+  h.chooseSubtitle('Русские: полные');
   await h.settle();
   const ass = FakeAss.instances[0];
   assert.match(ass.options.subContent, /Style: fon,Comic Sans MS,55,/);
@@ -1548,8 +1548,32 @@ test('a stream GST names "Subtitle N" lines up and takes the title from the prob
   await h.probe(placeholders);
   h.emitSubtitles(placeholders);
   await h.settle();
-  assert.deepEqual(h.subtitleMenu(), ['Надписи (в видео)', 'SRT (в видео)', 'Полные (в видео)']);
+  assert.deepEqual(h.subtitleMenu(), ['Русские: надписи', 'SRT: полные', 'Русские: полные']);
   assert.ok(h.subtitleList().every(item => item.homelabAss));
+});
+
+test('labels name the group or the language, then full subtitles or signs', async t => {
+  const h = harness(t, new Map(), {
+    embedded: { ...embeddedLookup, subtitles: [
+      { stream: 0, codec: 'ass', title: 'Надписи [AniLibria]', language: 'rus' },
+      { stream: 1, codec: 'ass', title: 'Полные AniLibria.tv', language: 'rus' },
+      { stream: 2, codec: 'ass', title: '[Erai-raws] English', language: 'eng' },
+      { stream: 3, codec: 'ass', title: 'English', language: 'eng' },
+      { stream: 4, codec: 'ass', title: 'English', language: 'eng' },
+      { stream: 5, codec: 'ass', title: 'Песни и надписи', language: 'rus' },
+      { stream: 6, codec: 'ass', title: 'Full + Signs', language: 'eng' },
+    ] },
+    events: () => null,
+  });
+  h.start(13, 'abc', true);
+  const tracks = [track('audio', 0, 'Japanese', 'ja'), track('subtitle', 0, 'Надписи [AniLibria]'), track('subtitle', 1, 'Полные AniLibria.tv'),
+    track('subtitle', 2, '[Erai-raws] English'), track('subtitle', 3, 'English'), track('subtitle', 4, 'English'),
+    track('subtitle', 5, 'Песни и надписи'), track('subtitle', 6, 'Full + Signs')];
+  await h.probe(tracks);
+  h.emitSubtitles(tracks);
+  await h.settle();
+  assert.deepEqual(h.subtitleMenu(), ['AniLibria: надписи', 'AniLibria.tv: полные', 'Erai-raws: полные, английские', 'Английские: полные',
+    'Английские: полные 2', 'Русские: надписи', 'Английские: полные 3'], 'the same label twice is numbered');
 });
 
 test('the signs-only item draws only on-screen text styles of an external ASS', async t => {
@@ -1564,7 +1588,7 @@ test('the signs-only item draws only on-screen text styles of an external ASS', 
   h.start(13, 'abc', true);
   await h.probe([japaneseAAC]);
   await h.settle();
-  h.chooseSubtitle('YakuSub Studio: только надписи (отдельный файл)');
+  h.chooseSubtitle('YakuSub Studio: надписи (внешние)');
   await h.settle();
   const content = FakeAss.instances[0].options.subContent;
   assert.ok(content.includes('Имя: Фран') && content.includes('Серия 4'));
@@ -1580,10 +1604,10 @@ test('a drawn embedded track chosen by its new label returns on the next episode
   await h.probe(signsAndFull);
   h.emitSubtitles(signsAndFull);
   await h.settle();
-  h.chooseSubtitle('Полные (в видео)');
+  h.chooseSubtitle('Русские: полные');
   h.start(14, 'abc', true);
   await h.probe(signsAndFull);
   h.emitSubtitles(signsAndFull);
   await h.settle();
-  assert.equal(h.subtitleTitle(), 'Полные (в видео)');
+  assert.equal(h.subtitleTitle(), 'Русские: полные');
 });

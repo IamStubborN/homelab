@@ -9,8 +9,18 @@ and runs `apt-get full-upgrade` with the default answers for configuration
 prompts. It skips the night and fails the unit when the upgrade would remove a
 package; review those with `apt-get -s full-upgrade`.
 
-It reboots only when a `/boot/vmlinuz-*-pve` kernel newer than the running one
-is installed, and only after these checks pass:
+New kernels wait 7 days: broken Proxmox kernels are usually replaced within a
+few days. The script records when it first sees a kernel version as an upgrade
+(`/var/lib/homelab-host-update/kernel-seen/`; kernels installed before this use
+their dpkg install time). Until the version is 7 days old, the installed kernel
+meta packages (`proxmox-kernel-7.0` and similar) are held with `apt-mark` for
+that night's upgrade, so everything else still updates. The night skips, and
+the unit fails, if the held plan would still install the young kernel or remove
+packages. Holds you set by hand are left alone. If Proxmox publishes kernels
+less than 7 days apart, each new version restarts the wait.
+
+It reboots only when the newest `/boot/vmlinuz-*-pve` kernel is newer than the
+running one and 7 days old, and only after these checks pass:
 
 - `dpkg --audit` is clean, the kernel has an initrd, and GRUB's first entry
   boots it;
@@ -57,3 +67,5 @@ systemctl enable homelab-host-boot-check.service
 ```
 
 Check runs with `journalctl -u homelab-host-update -u homelab-host-boot-check`.
+`DRY_RUN=1 homelab-host-update` prints the plan and decisions without
+installing, holding or rebooting.

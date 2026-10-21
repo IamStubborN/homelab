@@ -1,0 +1,11 @@
+[Unit]
+Description=Remove untagged Docker images and week-old build cache
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Untagged images only: tagged ones (latest, Lampa candidate/rollback tags)
+# and images used by any container, even a stopped one, stay.
+ExecStart=/usr/bin/docker image prune -f
+ExecStart=/usr/bin/docker builder prune -f --filter until=168h

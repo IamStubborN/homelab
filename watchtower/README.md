@@ -99,12 +99,29 @@ job into another's window.
 | --- | --- |
 | 03:55 | Image retention records the running images |
 | 04:00 | Watchtower updates containers |
+| 04:20 | Docker cleanup: untagged images, build cache older than 7 days |
 | 04:30 | Docker host Ubuntu package updates |
 | 04:45 | Proxmox host updates, reboot for a new kernel (`proxmox-update/`) |
 | 05:00 | Image retention records the replacements |
 | 05:20–08:00 | Backups (see `proxmox-backup/README.md`); JacRed starts no crawls |
 
 Updates stay inside 04:00–05:00 and finish before the first backup.
+
+## Nightly Docker cleanup
+
+`docker-prune.timer` runs `docker image prune -f` and
+`docker builder prune -f --filter until=168h` at 04:20. Only untagged images
+that no container (even a stopped one) uses are removed, so tags such as
+`latest` and Lampa's candidate/rollback tags stay. An image Watchtower replaced
+at 04:00 loses its tag and is removed the same night; roll back by pulling the
+previous digest (`image-retention.py plan` lists them). Install as root on the
+Docker host:
+
+```sh
+install -m 0644 watchtower/docker-prune.service watchtower/docker-prune.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now docker-prune.timer
+```
 
 ## Nightly host package updates
 

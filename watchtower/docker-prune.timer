@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly Docker cleanup after the 04:00 Sofia Watchtower update
+
+[Timer]
+OnCalendar=*-*-* 04:20:00 Europe/Sofia
+Persistent=false
+
+[Install]
+WantedBy=timers.target

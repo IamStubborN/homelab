@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly Lampac update at 03:00 Sofia, before Watchtower (04:00)
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 Europe/Sofia
+Persistent=false
+
+[Install]
+WantedBy=timers.target

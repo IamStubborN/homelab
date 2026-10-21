@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly Lampac runtime update from upstream latest
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/iamstubborn/homelab/lampa/auto-update.sh
+# Waits up to an hour for Lampa to go idle; build, check and apply add more.
+TimeoutStartSec=2h

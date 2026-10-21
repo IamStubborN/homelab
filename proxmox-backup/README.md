@@ -8,13 +8,17 @@ uploaded with rclone to the ID-pinned `homelab-backups:` Google Drive alias.
 `backup-monitor.py` alerts the owner's private chat about failures or stale
 copies.
 
-| Job | UTC schedule | Remote directory | Keep |
+| Job | Europe/Sofia schedule | Remote directory | Keep |
 | --- | --- | --- | --- |
-| OPNsense configuration | daily 02:20 | `Proxmox/OPNsense/config` | 5 |
-| Application data | daily 02:40 | `Proxmox/Docker/apps` | 7 |
-| Proxmox host configuration | Sunday 03:30 | `Proxmox/host-config` | 5 |
-| Full OPNsense VM 100 | Sunday 04:00 | `Proxmox/OPNsense/full-vm` | 5 |
-| Full Docker CT 300 | first Sunday of month 05:00 | `Proxmox/Docker/full-lxc` | 5 |
+| OPNsense configuration | daily 05:20 | `Proxmox/OPNsense/config` | 5 |
+| Application data | daily 05:40 | `Proxmox/Docker/apps` | 7 |
+| Proxmox host configuration | Sunday 06:30 | `Proxmox/host-config` | 5 |
+| Full OPNsense VM 100 | Sunday 07:00 | `Proxmox/OPNsense/full-vm` | 5 |
+| Full Docker CT 300 | first Sunday of month 08:00 | `Proxmox/Docker/full-lxc` | 5 |
+
+Timers name `Europe/Sofia` explicitly, so daylight saving time cannot move a
+backup into the 04:00–05:00 update window (see `watchtower/README.md`). The
+JacRed scheduler skips new crawls during the same backup hours.
 
 The Docker guest's external bind mounts `/mnt/internal` and `/mnt/usb_drive`
 are intentionally excluded; they are not covered by the application export

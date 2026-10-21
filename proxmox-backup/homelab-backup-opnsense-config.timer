@@ -2,7 +2,7 @@
 Description=Daily OPNsense configuration and DNSBL source backup to Google Drive
 
 [Timer]
-OnCalendar=*-*-* 02:20:00 UTC
+OnCalendar=*-*-* 05:20:00 Europe/Sofia
 RandomizedDelaySec=120
 Persistent=true
 Unit=homelab-backup@opnsense-config.service

@@ -24,15 +24,15 @@ if ! [[ "$MAX_TIME" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
-# Backup timers use UTC, unlike the local-time crawler crontab. Reserve the
-# daily config/app-backup hour and the longer Sunday guest-backup window.
+# Backup timers use Europe/Sofia time, like this crontab. Reserve the daily
+# config/app-backup hour (05:00) and the longer Sunday guest-backup window.
 # This gates new submissions only: JacRed has no supported live crawl pause.
 case "$JOB_NAME" in
   *-parse|*-ParseAllTask|*-ParseLatest|*-ParseShows|*-UpdateTasksParse|parseall-resume)
-    read -r utc_day utc_hour < <(date -u '+%u %H')
-    utc_hour=$((10#$utc_hour))
-    if (( utc_hour == 2 || (utc_day == 7 && utc_hour >= 3 && utc_hour < 9) )); then
-      log "SKIP ${JOB_NAME}: reserved UTC backup window; existing crawl/backoff unchanged"
+    read -r local_day local_hour < <(date '+%u %H')
+    local_hour=$((10#$local_hour))
+    if (( local_hour == 5 || (local_day == 7 && local_hour >= 6 && local_hour < 12) )); then
+      log "SKIP ${JOB_NAME}: reserved backup window; existing crawl/backoff unchanged"
       exit 0
     fi
     ;;

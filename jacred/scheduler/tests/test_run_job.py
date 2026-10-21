@@ -19,7 +19,7 @@ class JobOutcomeTests(unittest.TestCase):
         # These tests exercise HTTP classification and persisted backoff only.
         for name, source in {
             "flock": '#!/bin/sh\nexit 0\n',
-            "date": '#!/bin/sh\ncase "$*" in *"%u %H"*) echo "${TEST_UTC:-6 12}";; *"%s"*) echo 2000000000;; *) echo test-time;; esac\n',
+            "date": '#!/bin/sh\ncase "$*" in *"%u %H"*) echo "${TEST_TIME:-6 12}";; *"%s"*) echo 2000000000;; *) echo test-time;; esac\n',
             "curl": '''#!/bin/sh
 while [ "$#" -gt 0 ]; do
   if [ "$1" = -o ]; then output=$2; shift; fi
@@ -65,10 +65,16 @@ exit "${TEST_CURL_RC:-0}"
 
     def test_reserved_window_skips_without_changing_backoff(self):
         self.state.write_text("1 0\n")
-        result = self.run_job("bitru-parse", "saved 3", TEST_UTC="7 08")
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("reserved UTC backup window", result.stdout)
-        self.assertEqual(self.state.read_text(), "1 0\n")
+        for moment in ("3 05", "7 11"):
+            with self.subTest(moment=moment):
+                result = self.run_job("bitru-parse", "saved 3", TEST_TIME=moment)
+                self.assertEqual(result.returncode, 0)
+                self.assertIn("reserved backup window", result.stdout)
+                self.assertEqual(self.state.read_text(), "1 0\n")
+
+    def test_update_hour_is_not_reserved(self):
+        result = self.run_job("bitru-parse", "saved 3", TEST_TIME="7 04")
+        self.assertNotIn("reserved backup window", result.stdout)
 
     def test_category_failures_and_partial_knaben_results_are_unknown(self):
         for job, reply in (("rutor-parse", "1 - 1 / True 2 - 1 / False"),

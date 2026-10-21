@@ -88,3 +88,37 @@ files. Keep the state: resetting it discards provenance. Application rollback is
 still available by retained full image ID (`plan` lists each service's history)
 or an existing manual rollback tag. Disabling retention cannot restore images
 already deleted in a subsequently approved apply run.
+
+## Nightly schedule
+
+All times are `Europe/Sofia` and are written with that zone, so daylight
+saving time does not move one job into another's window.
+
+| Time | Job |
+| --- | --- |
+| 03:55 | Image retention records the running images |
+| 04:00 | Watchtower updates containers |
+| 04:30 | Docker host Ubuntu package updates |
+| 05:00 | Image retention records the replacements |
+| 05:20–08:00 | Backups (see `proxmox-backup/README.md`); JacRed starts no crawls |
+
+Updates stay inside 04:00–05:00 and finish before the first backup.
+
+## Nightly host package updates
+
+Container updates (04:00) and the Docker host's Ubuntu `unattended-upgrades`
+both run at night, so neither restarts services during the day. Ubuntu's
+`apt-daily-upgrade.timer` defaults to 06:00 UTC plus up to an hour of random
+delay. `apt-daily-upgrade.override.conf` moves it to 04:30 `Europe/Sofia`.
+Install it as root on the Docker host:
+
+```sh
+install -D -m 0644 watchtower/apt-daily-upgrade.override.conf \
+  /etc/systemd/system/apt-daily-upgrade.timer.d/override.conf
+systemctl daemon-reload
+systemctl restart apt-daily-upgrade.timer
+systemctl list-timers apt-daily-upgrade.timer
+```
+
+Docker Engine comes from `download.docker.com`, which `unattended-upgrades`
+does not cover; it is updated manually.

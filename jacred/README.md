@@ -72,17 +72,20 @@ SubsPlease `ParseShows` walks its show catalogue 200 shows per run (JacRed's
 maximum, about 50 minutes) and runs daily at 02:25, so the whole catalogue of
 about 1,250 shows is revisited every week. It reads the public JSON API with
 pauses and needs no browser solver, so it is not a heavy job. The weekly
-50-show runs it replaced would have needed six months to reach older shows. AniLiberty is enabled again; its refresh reads the latest API page
-every four hours. Search returns only trackers listed in `synctrackers`, so a
-locally crawled tracker must be listed there too (and not in
-`disable_trackers`) for its torrents to appear. To backfill its whole catalogue once (about 63 pages, eight
-minutes), request `/cron/aniliberty/parse?parseFrom=1&parseTo=<total_pages>`
-through `run-job.sh`.
+50-show runs it replaced would have needed six months to reach older shows.
 
-The HTTP runner skips new crawler submissions daily at **02:00–02:59 UTC**
-and on Sundays at **03:00–08:59 UTC**. These fixed UTC windows follow the
-backup timers, reserving the daily configuration/application-backup hour and
-additional time for weekly/monthly guest backups. Incremental refreshes retry
+AniLiberty is enabled again; its refresh reads the latest API page every four
+hours. Search returns only trackers listed in `synctrackers`, so a locally
+crawled tracker must be listed there too (and not in `disable_trackers`) for
+its torrents to appear. To backfill its whole catalogue once (about 63 pages,
+eight minutes), request
+`/cron/aniliberty/parse?parseFrom=1&parseTo=<total_pages>` through
+`run-job.sh`.
+
+The HTTP runner skips new crawler submissions daily at **05:00–05:59** and
+on Sundays at **06:00–11:59** (`Europe/Sofia`, like the backup timers). They
+reserve the daily configuration/application-backup hour and additional time
+for weekly/monthly guest backups. Incremental refreshes retry
 at their next normal cron slot; skips do not change failure backoff. Saves,
 log rotation and the report-only maintenance check remain enabled. The Sunday
 resume was moved to 14:10 Sofia so it does not immediately start new work just
@@ -91,7 +94,7 @@ before the weekly backup chain.
 This is a conservative schedule guard, **not active-backup detection**. Manual
 or delayed backups outside these windows are not covered, and an existing
 asynchronous crawl is not paused. No Docker socket, host credentials or SSH
-access is granted to the scheduler. Review these UTC windows when backup
+access is granted to the scheduler. Review these windows when backup
 timers change.
 
 This is a start schedule, not a strict work window. `ParseAllTask` starts

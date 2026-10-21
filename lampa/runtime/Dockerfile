@@ -21,9 +21,45 @@ RUN curl -fsSL https://www.sqlite.org/2026/sqlite-amalgamation-3530300.zip -o sq
 COPY verify-sqlite-build.py /build/verify-sqlite-build.py
 RUN python verify-sqlite-build.py original.so libe_sqlite3.so
 
+# matroskademux rejects blocks over 15 MiB (32 MiB since 1.28); some releases carry ~31 MiB
+# attachment blocks. Rebuild only that plugin from the Debian source of the
+# installed version with a higher limit (see download/torrserver/Dockerfile).
+FROM runtime-base AS matroska
+
+ARG MATROSKA_MAX_BLOCK_MIB=64
+USER root
+
+RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install --no-install-recommends --yes \
+      dpkg-dev \
+      gcc \
+      libbz2-dev \
+      libgstreamer-plugins-base1.0-dev \
+      libgstreamer1.0-dev \
+      meson \
+      ninja-build \
+      pkg-config \
+      zlib1g-dev \
+    && version="$(dpkg-query -W -f='${Version}' gstreamer1.0-plugins-good)" \
+    && mkdir /src && cd /src \
+    && apt-get source --only-source "gst-plugins-good1.0=${version}" \
+    && cd gst-plugins-good1.0-*/ \
+    && sed -i "s/^#define MAX_BLOCK_SIZE ([0-9]* \* 1024 \* 1024)$/#define MAX_BLOCK_SIZE (${MATROSKA_MAX_BLOCK_MIB} * 1024 * 1024)/" gst/matroska/*.[ch] \
+    && grep -qF "#define MAX_BLOCK_SIZE (${MATROSKA_MAX_BLOCK_MIB} * 1024 * 1024)" gst/matroska/matroska-demux.c \
+    && CFLAGS="$(dpkg-buildflags --get CFLAGS)" LDFLAGS="$(dpkg-buildflags --get LDFLAGS)" \
+       meson setup build --buildtype=plain \
+         -Dauto_features=disabled -Dmatroska=enabled -Dbz2=enabled \
+    && ninja -C build gst/matroska/libgstmatroska.so \
+    && mkdir /out \
+    && strip --strip-unneeded -o /out/libgstmatroska.so build/gst/matroska/libgstmatroska.so \
+    && echo "${version}" > /out/version
+
 FROM runtime-base
 
 USER root
+
+COPY --from=matroska /out /tmp/matroska
 
 # Lampac selects qsvh264enc, which needs both the Intel VA driver and VPL runtime.
 RUN sed -i 's/^Components: main$/Components: main non-free/' /etc/apt/sources.list.d/debian.sources \
@@ -33,7 +69,12 @@ RUN sed -i 's/^Components: main$/Components: main non-free/' /etc/apt/sources.li
         libmfx-gen1.2 \
         libvpl2 \
         vainfo \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && test "$(dpkg-query -W -f='${Version}' gstreamer1.0-plugins-good)" = "$(cat /tmp/matroska/version)" \
+    && install -m 0644 /tmp/matroska/libgstmatroska.so \
+         "$(dpkg -L gstreamer1.0-plugins-good | grep '/libgstmatroska\.so$')" \
+    && rm -rf /tmp/matroska \
+    && gst-inspect-1.0 matroskademux >/dev/null
 
 ENV LIBVA_DRIVER_NAME=iHD
 

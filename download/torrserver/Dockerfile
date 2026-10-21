@@ -21,7 +21,7 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.s
     && mkdir /src && cd /src \
     && apt-get source --only-source "gst-plugins-good1.0=${version}" \
     && cd gst-plugins-good1.0-*/ \
-    && sed -i "s/^#define MAX_BLOCK_SIZE (15 \* 1024 \* 1024)$/#define MAX_BLOCK_SIZE (${MATROSKA_MAX_BLOCK_MIB} * 1024 * 1024)/" gst/matroska/*.[ch] \
+    && sed -i "s/^#define MAX_BLOCK_SIZE ([0-9]* \* 1024 \* 1024)$/#define MAX_BLOCK_SIZE (${MATROSKA_MAX_BLOCK_MIB} * 1024 * 1024)/" gst/matroska/*.[ch] \
     && grep -qF "#define MAX_BLOCK_SIZE (${MATROSKA_MAX_BLOCK_MIB} * 1024 * 1024)" gst/matroska/matroska-demux.c \
     && CFLAGS="$(dpkg-buildflags --get CFLAGS)" LDFLAGS="$(dpkg-buildflags --get LDFLAGS)" \
        meson setup build --buildtype=plain \

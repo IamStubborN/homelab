@@ -119,8 +119,10 @@ External `.ass`/`.ssa` files named after the video (for example
 
 Embedded text subtitles are drawn the same way. `/extaudio/<hash>/<file
 id>/embedded` lists the text streams and font attachments; `sub/<n>` reads a
-stream from the playback position as it plays. SRT is converted to ASS with a
-fixed `Default` style (GST's WebVTT of some SRT streams comes out empty).
+stream from the playback position as it plays. SRT is converted to ASS (GST's
+WebVTT of some SRT streams comes out empty); the plugin styles it from Lampa's
+subtitle size, stroke and backdrop settings. Lampa's subtitle delay applies to
+every drawn track.
 
 Fonts a release attaches or ships are also copied once, by content hash, into
 `extaudio-fonts/` (ignored; `FONT_LIBRARY_DIR`, capped by

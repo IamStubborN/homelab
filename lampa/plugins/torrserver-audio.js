@@ -829,11 +829,18 @@
       });
     }
 
+    // JASSUB draws on new video frames only; a paused one is drawn on request.
+    function redrawFrame(instance, video) {
+      return instance.manualRender({mediaTime: video.currentTime, width: video.videoWidth, height: video.videoHeight});
+    }
+
     function hideAss(state) {
       state.assActive = null;
       state.assRequest = (state.assRequest || 0) + 1;
       if (state.assStop) state.assStop();
       state.assStop = null;
+      if (state.assSeeked) state.assSeeked();
+      state.assSeeked = null;
       if (!state.assInstance) return;
       try { state.assInstance.destroy(); } catch (error) {}
       state.assInstance = null;
@@ -848,6 +855,16 @@
       var request = state.assRequest;
       function cancelled() { return active !== state || state.assRequest !== request; }
       var base = new URL(state.assRenderer, window.location.href).href;
+      function seeked() {
+        var instance = state.assInstance;
+        if (!instance || !video.paused) return;
+        instance.ready.then(function () {
+          if (state.assInstance === instance) return redrawFrame(instance, video);
+        }).catch(function () {});
+      }
+      // A paused seek does not always report its frame to JASSUB.
+      video.addEventListener('seeked', seeked);
+      state.assSeeked = function () { video.removeEventListener('seeked', seeked); };
       if (item.homelabAss.events) return showEmbeddedAss(state, item, video, base, cancelled);
       var content = fetchBytes(new URL(item.homelabAss.url, window.location.href).href, cancelled, 5);
       Promise.all([loadAssRenderer(base), content, fetchFonts(item.homelabAss.fonts, cancelled)]).then(function (results) {
@@ -975,10 +992,8 @@
         renderer.then(function (instance) {
           if (cancelled()) return;
           return Promise.resolve(instance.renderer.processData(standInFonts(lines.join('\n'), attached))).then(function () {
-            // JASSUB draws on new video frames only: a paused frame would keep
-            // missing the events that arrived after it.
-            if (!video.paused || cancelled()) return;
-            return instance.manualRender({mediaTime: video.currentTime, width: video.videoWidth, height: video.videoHeight});
+            // A paused frame would keep missing the events that arrived after it.
+            if (video.paused && !cancelled()) return redrawFrame(instance, video);
           });
         }).catch(fail);
       }

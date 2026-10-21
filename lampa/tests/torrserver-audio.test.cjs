@@ -1271,6 +1271,16 @@ test('embedded ASS tracks are drawn by JASSUB from events read as playback goes'
   assert.equal(server.asked[1].from, 2);
   assert.deepEqual(ass.events, [line(1), line(3), line(5)], 'a repeated event is not added twice');
   assert.deepEqual(JSON.parse(JSON.stringify(ass.renders)), [{ mediaTime: 62.5, width: 1920, height: 1080 }], 'a paused frame is redrawn with the new events');
+  h.video().currentTime = 70;
+  h.video().fire('seeked');
+  await h.settle();
+  assert.equal(ass.renders.length, 2, 'a paused seek redraws even when the frame callback stays silent');
+  assert.equal(ass.renders[1].mediaTime, 70);
+  h.video().paused = false;
+  h.video().fire('seeked');
+  await h.settle();
+  assert.equal(ass.renders.length, 2, 'a playing video redraws by itself');
+  h.video().paused = true;
   h.video().fire('seeking');
   h.fireTimer(300);
   await h.settle();

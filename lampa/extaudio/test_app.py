@@ -220,17 +220,8 @@ class SubtitleTests(unittest.TestCase):
 
 
 class RemuxTests(unittest.TestCase):
-    def test_browser_codecs_are_copied_at_low_priority(self):
-        for codec in ("aac", "opus", "ac3", "eac3"):
-            command = app.remux_command("src", "/out", 1, codec)
-            self.assertEqual(command[:4], ["nice", "-n", "10", "ffmpeg"])
-            self.assertIn("0:a:1", command)
-            self.assertEqual(command[command.index("-c:a") + 1], "copy")
-        with self.assertRaises(ValueError):
-            app.remux_command("src", "/out", 0, "dts")
-
     def test_inputs_cannot_be_playlists(self):
-        for command in (app.remux_command("src", "/out", 0, "aac"), app.live_command("src", "/out", 0, 2, 0, 10)):
+        for command in (app.live_command("src", "/out", 0, 2, 0, 10),):
             formats = command[command.index("-format_whitelist") + 1].split(",")
             self.assertNotIn("hls", formats)
             self.assertNotIn("concat", formats)
@@ -247,7 +238,7 @@ class RemuxTests(unittest.TestCase):
         self.assertEqual(command[command.index("-b:a") + 1], "384k")
         stereo = app.live_command("src", "/out", 0, 2, 0, 30)
         self.assertNotIn("aformat", stereo[stereo.index("-af") + 1])
-        self.assertEqual(stereo[stereo.index("-b:a") + 1], "192k")
+        self.assertEqual(stereo[stereo.index("-b:a") + 1], "256k")
 
     def test_live_playlist_lists_whole_segments(self):
         playlist = app.live_playlist(3).splitlines()
@@ -268,24 +259,6 @@ class RemuxTests(unittest.TestCase):
             self.assertEqual(int.from_bytes(value, "big"), 7 * app.SEGMENT_SAMPLES)
         with self.assertRaises(ValueError):
             app.with_decode_time(box(b"mdat", b"x"), 1)
-
-    def test_timeout_grows_with_file_size(self):
-        self.assertEqual(app.job_timeout(0), app.JOB_BASE_SECONDS)
-        self.assertEqual(app.job_timeout(1024 ** 3), app.JOB_BASE_SECONDS + 1024 ** 3 // app.MIN_SOURCE_RATE)
-        self.assertEqual(app.job_timeout(1024 ** 4), app.JOB_MAX_SECONDS)
-
-    def test_abandoned_job_stops_ffmpeg(self):
-        job = {"timeout": 60, "seen": time.monotonic() - app.ABANDON_SECONDS - 1}
-        started = time.monotonic()
-        with self.assertRaises(TimeoutError):
-            app.run_command(["sleep", "30"], job)
-        self.assertLess(time.monotonic() - started, 15)
-
-    def test_failed_command_reports_stderr(self):
-        job = {"timeout": 60, "seen": time.monotonic()}
-        with self.assertRaises(subprocess.CalledProcessError) as raised:
-            app.run_command(["sh", "-c", "echo broken >&2; exit 3"], job)
-        self.assertEqual(raised.exception.stderr, b"broken\n")
 
 
 class RangeHandler(BaseHTTPRequestHandler):
@@ -618,84 +591,6 @@ class CacheTests(unittest.TestCase):
         self.assertFalse(os.path.exists(old))
         self.assertTrue(os.path.exists(recent))
 
-    def test_concurrent_requests_share_one_job(self):
-        started = []
-        release = threading.Event()
-
-        def run_job(torrent_hash, file_id, stream, mode, job):
-            started.append((torrent_hash, file_id, stream, mode))
-            release.wait(5)
-            os.makedirs(app.rendition_dir(torrent_hash, file_id, stream, mode))
-            open(os.path.join(app.rendition_dir(torrent_hash, file_id, stream, mode), "audio.m3u8"), "w").close()
-            job["done"].set()
-            with app._jobs_lock:
-                app._jobs.pop((torrent_hash, file_id, stream, mode), None)
-
-        with mock.patch.object(app, "run_job", side_effect=run_job):
-            self.assertEqual(app.ensure_rendition(HASH, 1, 0, "copy", 0), (False, None))
-            self.assertEqual(app.ensure_rendition(HASH, 1, 0, "copy", 0), (False, None))
-            release.set()
-            self.assertEqual(app.ensure_rendition(HASH, 1, 0, "copy", 5), (True, None))
-        self.assertEqual(started, [(HASH, 1, 0, "copy")])
-
-    def test_new_job_is_seen_before_its_thread_starts(self):
-        jobs = []
-        with mock.patch.object(app.threading, "Thread") as thread:
-            thread.side_effect = lambda target, args, daemon: jobs.append(dict(args[-1])) or mock.Mock()
-            app.ensure_rendition(HASH, 1, 0, "copy", 0)
-        with app._jobs_lock:
-            app._jobs.clear()
-        self.assertIn("seen", jobs[0])
-
-    def test_failed_job_is_reported(self):
-        with mock.patch.object(app, "probe_audio", return_value=[]):
-            self.assertEqual(app.ensure_rendition(HASH, 1, 0, "copy", 5), (False, "remux failed"))
-        self.assertEqual(os.listdir(self.directory.name), [])
-
-    def test_queue_is_bounded(self):
-        release = threading.Event()
-
-        def run_job(torrent_hash, file_id, stream, mode, job):
-            release.wait(5)
-            job["done"].set()
-            with app._jobs_lock:
-                app._jobs.pop((torrent_hash, file_id, stream, mode), None)
-
-        with mock.patch.object(app, "run_job", side_effect=run_job):
-            for file_id in range(app.MAX_JOBS):
-                self.assertEqual(app.ensure_rendition(HASH, file_id, 0, "aac", 0), (False, None))
-            self.assertEqual(app.ensure_rendition(HASH, 99, 0, "aac", 0), (False, "busy"))
-            release.set()
-
-    def test_job_skips_a_rendition_finished_meanwhile(self):
-        directory = app.rendition_dir(HASH, 1, 0, "copy")
-        os.makedirs(directory)
-        open(os.path.join(directory, "audio.m3u8"), "w").close()
-        job = {"done": threading.Event(), "error": None, "seen": time.monotonic(), "timeout": 60}
-        with mock.patch.object(app, "probe_audio") as probe:
-            app.run_job(HASH, 1, 0, "copy", job)
-        probe.assert_not_called()
-        self.assertEqual(job["error"], None)
-
-    def test_abandoned_queued_job_does_not_start(self):
-        job = {"done": threading.Event(), "error": None, "seen": time.monotonic() - app.ABANDON_SECONDS - 1, "timeout": 60}
-        with mock.patch.object(app, "probe_audio") as probe:
-            app.run_job(HASH, 1, 0, "copy", job)
-        probe.assert_not_called()
-        self.assertEqual(job["error"], "remux failed")
-
-    def test_eviction_failure_does_not_fail_a_finished_job(self):
-        def remux(command, job):
-            open(os.path.join(command[-1]), "w").close()
-
-        job = {"done": threading.Event(), "error": None, "seen": time.monotonic(), "timeout": 60}
-        with mock.patch.object(app, "probe_audio", return_value=[{"codec_name": "aac", "channels": 2}]), \
-                mock.patch.object(app, "run_command", side_effect=remux), \
-                mock.patch.object(app, "evict", side_effect=FileNotFoundError("gone")):
-            app.run_job(HASH, 1, 0, "copy", job)
-        self.assertEqual(job["error"], None)
-        self.assertTrue(app.rendition_ready(HASH, 1, 0, "copy"))
-
     def test_eviction_skips_directories_removed_meanwhile(self):
         self.rendition("kept", 10, 0)
         real_size = app.directory_size
@@ -707,12 +602,6 @@ class CacheTests(unittest.TestCase):
 
         with mock.patch.object(app, "directory_size", side_effect=vanishing):
             app.evict()
-
-    def test_new_rendition_survives_its_own_eviction(self):
-        new = self.rendition("new", 200, 0)
-        with mock.patch.object(app, "CACHE_MAX_BYTES", 100):
-            app.evict(keep=new)
-        self.assertTrue(os.path.exists(new))
 
 
 class EmbeddedInfoTests(unittest.TestCase):
@@ -1092,12 +981,13 @@ class HttpTests(unittest.TestCase):
 
     def test_rejects_paths_outside_the_rendition(self):
         for path in (
-            f"/extaudio/{HASH}/1/0/copy/..%2F..%2Fetc%2Fpasswd",
-            f"/extaudio/{HASH}/1/0/copy/other.txt",
+            f"/extaudio/{HASH}/1/0/aac/..%2F..%2Fetc%2Fpasswd",
+            f"/extaudio/{HASH}/1/0/copy/audio.m3u8",
+            f"/extaudio/{HASH}/1/0/aac/other.txt",
             f"/extaudio/{HASH}/1/0/flac/audio.m3u8",
             f"/extaudio/{HASH}/1/0/audio.m3u8",
             "/extaudio/not-a-hash/1/tracks",
-            f"/extaudio/{HASH}/1/0/copy/../tracks",
+            f"/extaudio/{HASH}/1/0/aac/../tracks",
         ):
             with self.subTest(path=path):
                 self.assertEqual(self.get(path)[0], 404)
@@ -1131,28 +1021,6 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(status, 503)
         self.assertEqual(headers["Retry-After"], "3")
 
-    def test_serves_ready_rendition_files(self):
-        directory = app.rendition_dir(HASH, 1, 0, "copy")
-        os.makedirs(directory)
-        with open(os.path.join(directory, "audio.m3u8"), "w") as playlist:
-            playlist.write("#EXTM3U\n")
-        with open(os.path.join(directory, "s3.m4s"), "wb") as segment:
-            segment.write(b"segment")
-        status, headers, body = self.get(f"/extaudio/{HASH.upper()}/1/0/copy/audio.m3u8")
-        self.assertEqual((status, body), (200, b"#EXTM3U\n"))
-        self.assertEqual(headers["Content-Type"], "application/vnd.apple.mpegurl")
-        self.assertEqual(self.get(f"/extaudio/{HASH}/1/0/aac/s3.m4s")[0], 404)
-        status, headers, body = self.get(f"/extaudio/{HASH}/1/0/copy/s3.m4s")
-        self.assertEqual((status, body, headers["Cache-Control"]), (200, b"segment", "private, max-age=3600"))
-
-    def test_preparing_rendition_asks_client_to_retry(self):
-        files = [dict(item, length=5000) for item in FILES]
-        with mock.patch.object(app, "torrent_files", return_value=files), \
-                mock.patch.object(app, "ensure_rendition", return_value=(False, None)) as ensure:
-            status, headers, _ = self.get(f"/extaudio/{HASH}/1/0/copy/audio.m3u8")
-        self.assertEqual((status, headers["Retry-After"]), (503, "2"))
-        ensure.assert_called_once_with(HASH, 1, 0, "copy", app.JOB_WAIT_SECONDS, 5000)
-
     def test_encoded_playlist_is_immediate_and_starts_at_the_position(self):
         rendition = mock.Mock(count=1000, **{"owner.return_value": None})
         def create(torrent_hash, file_id, stream):
@@ -1165,8 +1033,9 @@ class HttpTests(unittest.TestCase):
         with mock.patch.object(app, "torrent_files", return_value=FILES), \
                 mock.patch.object(app, "live_rendition", side_effect=create), \
                 mock.patch.object(app, "start_run") as start:
-            status, _, body = self.get(f"/extaudio/{HASH}/1/0/aac/audio.m3u8?at=600")
+            status, headers, body = self.get(f"/extaudio/{HASH.upper()}/1/0/aac/audio.m3u8?at=600")
         self.assertEqual((status, body), (200, b"#EXTM3U\n"))
+        self.assertEqual(headers["Content-Type"], "application/vnd.apple.mpegurl")
         start.assert_called_once_with(rendition, 600 * app.SAMPLE_RATE // app.SEGMENT_SAMPLES)
 
     def test_encoded_segments_need_a_checked_playlist(self):
@@ -1179,36 +1048,15 @@ class HttpTests(unittest.TestCase):
         unknown = urllib.error.HTTPError("url", 404, "Not Found", {}, None)
         self.addCleanup(unknown.close)
         cases = (
-            (mock.Mock(return_value=FILES), f"/extaudio/{HASH}/13/0/copy/audio.m3u8"),
-            (mock.Mock(return_value=FILES), f"/extaudio/{HASH}/77/0/copy/audio.m3u8"),
-            (mock.Mock(side_effect=unknown), f"/extaudio/{HASH}/1/0/copy/audio.m3u8"),
+            (mock.Mock(return_value=FILES), f"/extaudio/{HASH}/13/0/aac/audio.m3u8"),
+            (mock.Mock(return_value=FILES), f"/extaudio/{HASH}/77/0/aac/audio.m3u8"),
+            (mock.Mock(side_effect=unknown), f"/extaudio/{HASH}/1/0/aac/audio.m3u8"),
         )
         for files, path in cases:
             with self.subTest(path=path), mock.patch.object(app, "torrent_files", files), \
-                    mock.patch.object(app, "ensure_rendition") as ensure:
+                    mock.patch.object(app, "live_rendition") as live:
                 self.assertEqual(self.get(path)[0], 404)
-                ensure.assert_not_called()
-
-    def test_segments_never_start_a_job(self):
-        with mock.patch.object(app, "ensure_rendition") as ensure:
-            self.assertEqual(self.get(f"/extaudio/{HASH}/1/0/copy/s0.m4s")[0], 404)
-        ensure.assert_not_called()
-
-    def test_a_prepared_rendition_is_checked_without_starting_work(self):
-        with mock.patch.object(app, "rendition_ready", return_value=False), \
-                mock.patch.object(app, "ensure_rendition") as ensure:
-            status, _, _ = self.get(f"/extaudio/{HASH}/1/0/copy/audio.m3u8?ready=1")
-        self.assertEqual(status, 404)
-        ensure.assert_not_called()
-        with mock.patch.object(app, "rendition_ready", return_value=True):
-            status, _, _ = self.get(f"/extaudio/{HASH}/1/0/copy/audio.m3u8?ready=1")
-        self.assertEqual(status, 200)
-
-    def test_busy_queue_is_reported(self):
-        with mock.patch.object(app, "torrent_files", return_value=FILES), \
-                mock.patch.object(app, "ensure_rendition", return_value=(False, "busy")):
-            status, headers, _ = self.get(f"/extaudio/{HASH}/1/0/copy/audio.m3u8")
-        self.assertEqual((status, headers["Retry-After"]), (429, "10"))
+                live.assert_not_called()
 
     def test_tracks_endpoint(self):
         tracks = [{"file": 1, "stream": 0, "title": "AniLibria.tv"}]

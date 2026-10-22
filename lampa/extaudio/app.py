@@ -25,11 +25,7 @@ CACHE_DIR = os.environ.get("CACHE_DIR", "/cache")
 CACHE_MAX_BYTES = int(os.environ.get("CACHE_MAX_MB", "1024")) * 1024 * 1024
 CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_HOURS", "24")) * 3600
 JOB_WAIT_SECONDS = float(os.environ.get("JOB_WAIT_SECONDS", "25"))
-# A job gets this long plus the time to read the file at MIN_SOURCE_RATE.
-JOB_BASE_SECONDS = int(os.environ.get("JOB_BASE_SECONDS", "300"))
-JOB_MAX_SECONDS = int(os.environ.get("JOB_MAX_SECONDS", "14400"))
-MIN_SOURCE_RATE = int(os.environ.get("MIN_SOURCE_KBPS", "256")) * 1024
-# The plugin polls every ~30 s; a job nobody polls stops pulling the torrent.
+# An encoder run nobody asks for this long stops pulling the torrent.
 ABANDON_SECONDS = int(os.environ.get("ABANDON_SECONDS", "120"))
 PROBE_TIMEOUT_SECONDS = int(os.environ.get("PROBE_TIMEOUT_SECONDS", "10"))
 PROBE_RETRY_SECONDS = 600
@@ -37,7 +33,6 @@ PROBE_RETRY_SECONDS = 600
 # this long in the background while TorrServer fetches the file.
 PROBE_BACKGROUND_SECONDS = int(os.environ.get("PROBE_BACKGROUND_SECONDS", "180"))
 MAX_CANDIDATES = 6
-MAX_JOBS = 2
 MAX_TRACK_LOOKUPS = 2
 MAX_PROBES_CACHED = 256
 
@@ -141,10 +136,8 @@ STALE_SECONDS = 10  # an active run nobody asked for this long yields its slot
 MAX_FAILURES = 3
 FAILURE_RESET_SECONDS = 60
 SEGMENT_RE = re.compile(r"^s(\d+)\.m4s$")
-# Codecs the plugin may ask to copy when the browser can decode them in MSE.
-COPY_CODECS = {"aac", "opus", "ac3", "eac3"}
 FILE_RE = re.compile(r"^(?:audio\.m3u8|init\.mp4|s\d{1,6}\.m4s)$")
-ROUTE_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(tracks|raw)|(\d{1,2})/(copy|aac)/([^/]+))$")
+ROUTE_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(tracks|raw)|(\d{1,2})/(aac)/([^/]+))$")
 EMBEDDED_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(embedded)|sub/(\d{1,2})|attachment/(\d{1,3}))$")
 RENDERER_RE = re.compile(r"^/extaudio/jassub/([a-z0-9-]+\.(?:js|wasm|woff2|ttf|txt))$")
 CONTENT_TYPES = {".m3u8": "application/vnd.apple.mpegurl", ".mp4": "audio/mp4", ".m4s": "video/iso.segment"}
@@ -155,10 +148,6 @@ _probing = {}
 _probe_lock = threading.Lock()
 _track_lookups = threading.Semaphore(MAX_TRACK_LOOKUPS)
 _raw_fetches = threading.Semaphore(MAX_RAW_FETCHES)
-_jobs = {}
-_jobs_lock = threading.Lock()
-# One remux at a time keeps the shared Docker host responsive.
-_job_slot = threading.Semaphore(1)
 _live = {}
 _live_changed = threading.Condition()
 _embedded_cache = {}
@@ -445,10 +434,6 @@ def fetch_raw(torrent_hash, file_id):
     if extension in FONT_EXTENSIONS:
         keep_font(path)
     return path
-
-
-def job_timeout(length):
-    return min(JOB_MAX_SECONDS, JOB_BASE_SECONDS + length // MIN_SOURCE_RATE)
 
 
 def cached_probe(cache, key, command, parse, timeout=PROBE_TIMEOUT_SECONDS):
@@ -1024,73 +1009,8 @@ def subtitle_events(torrent_hash, file_id, stream, position, offset, serial=None
         }
 
 
-def remux_command(source, output, stream, codec):
-    if codec not in COPY_CODECS:
-        raise ValueError(f"{codec} cannot be copied")
-    # -copyts keeps an intentional start delay; GST's video timeline starts at 0.
-    return [
-        "nice", "-n", "10", "ffmpeg", "-nostdin", "-v", "error", *INPUT_OPTIONS, "-copyts", "-i", source,
-        "-map", f"0:a:{stream}", "-vn", "-sn", "-dn", "-c:a", "copy",
-        "-f", "hls", "-hls_time", "6", "-hls_playlist_type", "vod",
-        "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4",
-        "-hls_segment_filename", os.path.join(output, "s%d.m4s"),
-        os.path.join(output, "audio.m3u8"),
-    ]
-
-
 def rendition_dir(torrent_hash, file_id, stream, mode):
     return os.path.join(CACHE_DIR, f"{torrent_hash}-{file_id}-{stream}-{mode}")
-
-
-def abandoned(job):
-    return time.monotonic() - job["seen"] > ABANDON_SECONDS
-
-
-def run_command(command, job):
-    """Run ffmpeg until it exits, the job deadline passes or no client waits."""
-    deadline = time.monotonic() + job["timeout"]
-    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    while True:
-        try:
-            _, stderr = process.communicate(timeout=5)
-            break
-        except subprocess.TimeoutExpired:
-            if abandoned(job) or time.monotonic() > deadline:
-                process.kill()
-                process.communicate()
-                raise TimeoutError("abandoned" if abandoned(job) else "deadline passed") from None
-    if process.returncode:
-        raise subprocess.CalledProcessError(process.returncode, command, stderr=stderr)
-
-
-def run_job(torrent_hash, file_id, stream, mode, job):
-    final = rendition_dir(torrent_hash, file_id, stream, mode)
-    temporary = final + ".tmp"
-    try:
-        with _job_slot:
-            if os.path.isfile(os.path.join(final, "audio.m3u8")):
-                return
-            if abandoned(job):
-                raise TimeoutError("abandoned while queued")
-            streams = probe_audio(torrent_hash, file_id)
-            if stream >= len(streams):
-                raise ValueError("audio stream does not exist")
-            shutil.rmtree(temporary, ignore_errors=True)
-            os.makedirs(temporary)
-            command = remux_command(stream_url(torrent_hash, file_id), temporary, stream, streams[stream].get("codec_name"))
-            run_command(command, job)
-            os.replace(temporary, final)
-    except Exception as error:  # Reported to the waiting request; the next request retries.
-        shutil.rmtree(temporary, ignore_errors=True)
-        detail = error.stderr.decode("utf-8", "replace")[-500:] if getattr(error, "stderr", None) else str(error)
-        print(f"remux {torrent_hash}/{file_id}/{stream}/{mode} failed: {type(error).__name__} {detail}", file=sys.stderr, flush=True)
-        job["error"] = "remux failed"
-    finally:
-        job["done"].set()
-        with _jobs_lock:
-            _jobs.pop((torrent_hash, file_id, stream, mode), None)
-    if not job["error"]:
-        evict_safely(keep=final)
 
 
 def rendition_ready(torrent_hash, file_id, stream, mode):
@@ -1102,28 +1022,6 @@ def rendition_ready(torrent_hash, file_id, stream, mode):
     except OSError:
         pass
     return True
-
-
-def ensure_rendition(torrent_hash, file_id, stream, mode, wait, length=0):
-    """Return (ready, error). Starts at most one job per rendition."""
-    if rendition_ready(torrent_hash, file_id, stream, mode):
-        return True, None
-    key = (torrent_hash, file_id, stream, mode)
-    with _jobs_lock:
-        job = _jobs.get(key)
-        if job is None and len(_jobs) >= MAX_JOBS:
-            return False, "busy"
-        if job is None:
-            job = {"done": threading.Event(), "error": None, "timeout": job_timeout(length), "seen": time.monotonic()}
-            _jobs[key] = job
-            threading.Thread(target=run_job, args=(*key, job), daemon=True).start()
-        else:
-            job["seen"] = time.monotonic()
-    if not job["done"].wait(wait):
-        return False, None
-    if job["error"]:
-        return False, job["error"]
-    return True, None
 
 
 class Run:
@@ -1193,7 +1091,7 @@ def live_command(source, output, stream, channels, start, count):
         "-reconnect", "1", "-reconnect_delay_max", "10",
         "-ss", f"{start * SEGMENT_SECONDS:.6f}", "-i", source,
         "-map", f"0:a:{stream}", "-vn", "-sn", "-dn", "-af", filters, "-t", remaining,
-        "-c:a", "aac", "-ar", str(SAMPLE_RATE), "-b:a", "384k" if channels > 2 else "192k",
+        "-c:a", "aac", "-ar", str(SAMPLE_RATE), "-b:a", "384k" if channels > 2 else "256k",
         "-f", "hls", "-hls_time", f"{SEGMENT_SECONDS:.9f}", "-hls_flags", "temp_file", "-hls_list_size", "0",
         "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-start_number", str(start),
         "-hls_segment_filename", os.path.join(output, "s%d.m4s"), os.path.join(output, "audio.m3u8"),
@@ -1446,23 +1344,18 @@ def directory_size(path):
     return total
 
 
-def evict(now=None, keep=None):
+def evict(now=None):
     now = now or time.time()
     entries = []
     for name in os.listdir(CACHE_DIR):
         path = os.path.join(CACHE_DIR, name)
-        if name.endswith(".tmp") or path == keep:
+        if name.endswith(".tmp"):
             continue
         try:  # Another eviction may remove a directory meanwhile.
             entries.append((os.stat(path).st_mtime, directory_size(path), path))
         except (FileNotFoundError, NotADirectoryError):
             continue
     total = sum(size for _, size, _ in entries)
-    if keep:
-        try:
-            total += directory_size(keep)
-        except FileNotFoundError:
-            pass
     for modified, size, path in sorted(entries):
         if now - modified <= CACHE_TTL_SECONDS and total <= CACHE_MAX_BYTES:
             break
@@ -1470,9 +1363,9 @@ def evict(now=None, keep=None):
         total -= size
 
 
-def evict_safely(keep=None):
+def evict_safely():
     try:
-        evict(keep=keep)
+        evict()
     except Exception as error:
         print(f"eviction failed: {type(error).__name__} {error}", file=sys.stderr, flush=True)
 
@@ -1706,37 +1599,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(502, {"error": "track lookup failed"})
             finally:
                 _track_lookups.release()
-        stream, mode, name = int(match.group(4)), match.group(5), match.group(6)
+        stream, name = int(match.group(4)), match.group(6)
         if not FILE_RE.match(name):
             return self.send_json(404, {"error": "not found"})
-        if mode == "aac":
-            return self.serve_live(torrent_hash, file_id, stream, name, query)
-        if name == "audio.m3u8" and "ready" in query:
-            # Whether a rendition prepared earlier is still cached; starts nothing.
-            ready = rendition_ready(torrent_hash, file_id, stream, mode)
-            return self.send_json(200 if ready else 404, {"ready": ready})
-        if name != "audio.m3u8":
-            # Segments never start work; only a prepared rendition serves them.
-            if not rendition_ready(torrent_hash, file_id, stream, mode):
-                return self.send_json(404, {"error": "not found"})
-        else:
-            length = 0
-            if not rendition_ready(torrent_hash, file_id, stream, mode):
-                try:
-                    length = require_audio_file(torrent_hash, file_id)
-                except Rejected:
-                    return self.send_json(404, {"error": "not found"})
-                except Exception:
-                    return self.send_json(502, {"error": "track lookup failed"})
-            ready, error = ensure_rendition(torrent_hash, file_id, stream, mode, JOB_WAIT_SECONDS, length)
-            if error == "busy":
-                return self.send_json(429, {"error": "busy"}, {"Retry-After": "10"})
-            if error:
-                return self.send_json(502, {"error": error})
-            if not ready:
-                # The plugin polls until the whole rendition exists.
-                return self.send_json(503, {"error": "preparing"}, {"Retry-After": "2"})
-        self.serve_file(os.path.join(rendition_dir(torrent_hash, file_id, stream, mode), name), name)
+        return self.serve_live(torrent_hash, file_id, stream, name, query)
 
 
 def main():

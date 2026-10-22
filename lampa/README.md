@@ -52,17 +52,11 @@ sidecar adds those files to browser playback without modifying Lampac:
   skip `OST`, `Music`, `Bonus`, `Extras`, `Specials`, `CD1` and `Scans`
   folders unless the video itself is in one. Lookups query only the torrent
   being played and probe at most six candidates, named files first.
-- `/extaudio/<hash>/<file id>/<stream>/copy/audio.m3u8` copies the selected
-  file once into fMP4 HLS. The plugin asks for `copy` when the browser decodes
-  the codec itself (AAC everywhere, Opus in Chrome and Safari, AC-3 and E-AC-3
-  in Safari). One copy job runs at a time at low priority, so the playlist
-  answers `503 Retry-After` until it is ready. A job's deadline grows with the
-  file size (`JOB_BASE_SECONDS` plus `MIN_SOURCE_KBPS`, at most
-  `JOB_MAX_SECONDS`), and a job nobody polls for `ABANDON_SECONDS` is stopped.
 - `/extaudio/<hash>/<file id>/<stream>/aac/audio.m3u8?at=<seconds>` encodes
-  anything else (FLAC, MP3, DTS, TrueHD, PCM, WMA, AC-3 in Chrome and so on) to
-  AAC on demand, the way Jellyfin does. The playlist covers the whole duration
-  at once; ffmpeg starts at the playback position and restarts at a seek.
+  the selected track to AAC on demand, the way Jellyfin does, whatever its
+  codec. The voice-over starts about a second after it is chosen; copying the
+  whole file first took 15–30 s per episode. Stereo is encoded at 256 kbit/s
+  and 5.1 at 384 kbit/s. The playlist covers the whole duration at once; ffmpeg starts at the playback position and restarts at a seek.
   Segments are 281 AAC frames (about 6 s) on a fixed grid, and the sidecar
   writes each segment's absolute time, so segments from different runs line up.
   A run starts one segment early and drops it, because an AAC encoder's first
@@ -73,9 +67,6 @@ sidecar adds those files to browser playback without modifying Lampac:
   Each track keeps up to two runs, so two viewers at different positions do
   not restart each other; a third position replaces the least recently used
   run, and at most two runs encode at once across all tracks.
-- To check the encoder in a browser that could copy the codec, run
-  `localStorage.homelab_extaudio_encode = '1'` in the Lampa page and reopen
-  the episode. Remove the key to go back to copying.
 - ffmpeg accepts only audio container formats (`INPUT_FORMATS` in `app.py`), so a
   file disguised as a playlist cannot make it fetch other URLs. Track lookups
   run at most two at a time, and a probe that fails (other than a timeout) is

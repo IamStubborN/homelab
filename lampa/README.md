@@ -52,15 +52,21 @@ sidecar adds those files to browser playback without modifying Lampac:
   skip `OST`, `Music`, `Bonus`, `Extras`, `Specials`, `CD1` and `Scans`
   folders unless the video itself is in one. Lookups query only the torrent
   being played and probe at most six candidates, named files first.
-- `/extaudio/<hash>/<file id>/<stream>/aac/audio.m3u8?at=<seconds>` encodes
-  the selected track to AAC on demand, the way Jellyfin does, whatever its
-  codec. The voice-over starts about a second after it is chosen; copying the
-  whole file first took 15–30 s per episode. Stereo is encoded at 256 kbit/s
-  and 5.1 at 384 kbit/s. The playlist covers the whole duration at once; ffmpeg starts at the playback position and restarts at a seek.
-  Segments are 281 AAC frames (about 6 s) on a fixed grid, and the sidecar
-  writes each segment's absolute time, so segments from different runs line up.
-  A run starts one segment early and drops it, because an AAC encoder's first
-  frame is priming. ffmpeg pauses once it is `LIVE_AHEAD_SEGMENTS` (about five
+- `/extaudio/<hash>/<file id>/<stream>/aac/audio.m3u8?at=<seconds>`
+  serves the selected track from the playback position on demand, the way
+  Jellyfin does. AAC-LC mono or stereo (most voice-overs) is copied as it is:
+  ffmpeg copies it from just before the position with its absolute timestamps,
+  and the sidecar cuts segments of about 6 s on the track's own frame grid
+  (281 frames at 48 kHz, 258 at 44.1 kHz), so segments from different start
+  positions are byte-identical. The encoder's priming frame before zero is left
+  out. Anything else is encoded to AAC: stereo at 256 kbit/s, 5.1 at
+  384 kbit/s. The voice-over starts a second or a few after it is chosen;
+  copying the whole file first took 15–30 s per episode. The playlist covers
+  the whole duration at once; ffmpeg starts at the playback position and
+  restarts at a seek. Encoded segments are 281 AAC frames on the same fixed
+  grid, and the sidecar writes each segment's absolute time, so segments from
+  different runs line up. An encoding run starts one segment early and drops
+  it, because an AAC encoder's first frame is priming. ffmpeg pauses once it is `LIVE_AHEAD_SEGMENTS` (about five
   minutes) ahead of playback and resumes in batches, so the torrent is read
   only as far as someone watches. Multichannel audio becomes standard 5.1:
   Chrome rejects the `5.1(side)` layout that AC-3 and DTS decode to.

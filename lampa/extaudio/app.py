@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """External torrent audio tracks as HLS renditions for Lampa's browser player."""
 
+import functools
 import hashlib
 import io
 import json
@@ -460,18 +461,26 @@ def cached_probe(cache, key, command, parse, timeout=PROBE_TIMEOUT_SECONDS):
     return value
 
 
+def tag_duration(value):
+    """mkvmerge's per-track DURATION tag, such as 00:23:40.480000000."""
+    match = re.fullmatch(r"(\d+):(\d{2}):(\d{2}(?:\.\d+)?)", (value or "").strip())
+    return int(match.group(1)) * 3600 + int(match.group(2)) * 60 + float(match.group(3)) if match else 0
+
+
 def audio_streams(probe):
     streams = probe.get("streams") or []
     for item in streams:
-        # Matroska reports the duration on the container only.
-        item["duration"] = float(item.get("duration") or (probe.get("format") or {}).get("duration") or 0)
+        # Matroska reports a track's own duration only in a tag, if at all;
+        # the container's is the longest track's.
+        item["duration"] = float(item.get("duration") or tag_duration((item.get("tags") or {}).get("DURATION"))
+                                 or (probe.get("format") or {}).get("duration") or 0)
     return streams
 
 
 def probe_audio(torrent_hash, file_id, timeout=PROBE_TIMEOUT_SECONDS):
     command = [
         "ffprobe", "-v", "error", *INPUT_OPTIONS, "-select_streams", "a",
-        "-show_entries", "stream=codec_name,channels,duration:stream_tags=title,language:format=duration",
+        "-show_entries", "stream=codec_name,profile,sample_rate,channels,duration:stream_tags=title,language,DURATION:format=duration",
         "-of", "json", stream_url(torrent_hash, file_id),
     ]
     return cached_probe(_probe_cache, (torrent_hash, file_id), command, audio_streams, timeout=timeout)
@@ -1013,22 +1022,34 @@ def rendition_dir(torrent_hash, file_id, stream, mode):
     return os.path.join(CACHE_DIR, f"{torrent_hash}-{file_id}-{stream}-{mode}")
 
 
-def rendition_ready(torrent_hash, file_id, stream, mode):
-    final = rendition_dir(torrent_hash, file_id, stream, mode)
-    if not os.path.isfile(os.path.join(final, "audio.m3u8")):
-        return False
+def rendition_ready(torrent_hash, file_id, stream):
+    """Whether the track's playlist exists, copied or encoded."""
+    for mode in ("copied", "aac"):
+        final = rendition_dir(torrent_hash, file_id, stream, mode)
+        if os.path.isfile(os.path.join(final, "audio.m3u8")):
+            try:
+                os.utime(final)
+            except OSError:
+                pass
+            return True
+    return False
+
+
+def copyable(info):
+    """AAC-LC is played as it is; anything else is encoded."""
     try:
-        os.utime(final)
-    except OSError:
-        pass
-    return True
+        rate = int(info.get("sample_rate") or 0)
+    except ValueError:
+        return False
+    return info.get("codec_name") == "aac" and info.get("profile") == "LC" and info.get("channels") in (1, 2) and rate > 0
 
 
 class Run:
-    """One ffmpeg process encoding a rendition from `start` onwards."""
+    """One ffmpeg process encoding or copying a rendition from `start` onwards."""
 
-    def __init__(self, process, start, warmup, requested):
+    def __init__(self, process, start, warmup, requested, splitter=None):
         self.process = process
+        self.splitter = splitter
         self.start = self.head = start
         self.warmup = warmup
         self.paused = False
@@ -1047,14 +1068,23 @@ class Run:
 
 
 class LiveRendition:
-    """An AAC rendition encoded from playback positions on demand."""
+    """An AAC rendition made from playback positions on demand: AAC-LC is
+    copied and cut on its own frame grid, anything else is encoded."""
 
     def __init__(self, torrent_hash, file_id, stream, info):
         self.source = stream_url(torrent_hash, file_id)
         self.stream = stream
         self.channels = info.get("channels") or 2
-        self.count = math.ceil(info["duration"] * SAMPLE_RATE / SEGMENT_SAMPLES)
-        self.directory = rendition_dir(torrent_hash, file_id, stream, "aac")
+        self.copy = copyable(info)
+        self.rate = int(info["sample_rate"]) if self.copy else SAMPLE_RATE
+        # About six seconds of whole AAC frames at the track's own rate.
+        self.frames = round(SEGMENT_SECONDS * self.rate / 1024) if self.copy else SEGMENT_SAMPLES // 1024
+        self.segment_seconds = self.frames * 1024 / self.rate
+        self.duration = info["duration"]
+        self.count = math.ceil(self.duration / self.segment_seconds)
+        # A copied track ends where its audio does; encoding pads to the grid.
+        self.last_seconds = info["duration"] - (self.count - 1) * self.segment_seconds if self.copy else self.segment_seconds
+        self.directory = rendition_dir(torrent_hash, file_id, stream, "copied" if self.copy else "aac")
         self.runs = []
         self.requested = 0
         self.seen = time.monotonic()
@@ -1068,14 +1098,13 @@ class LiveRendition:
         return max(runs, key=lambda run: run.seen) if runs else None
 
 
-def live_playlist(count):
-    # Every segment is whole: the encoder pads the audio to the end of the grid.
+def live_playlist(count, seconds=SEGMENT_SECONDS, last=SEGMENT_SECONDS):
     lines = [
         "#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-TARGETDURATION:6", "#EXT-X-MEDIA-SEQUENCE:0",
         "#EXT-X-PLAYLIST-TYPE:VOD", '#EXT-X-MAP:URI="init.mp4"',
     ]
     for index in range(count):
-        lines += [f"#EXTINF:{SEGMENT_SECONDS:.6f},", f"s{index}.m4s"]
+        lines += [f"#EXTINF:{last if index == count - 1 else seconds:.6f},", f"s{index}.m4s"]
     return "\n".join(lines + ["#EXT-X-ENDLIST", ""])
 
 
@@ -1098,18 +1127,184 @@ def live_command(source, output, stream, channels, start, count):
     ]
 
 
+def copy_command(source, output, stream, start):
+    # Absolute timestamps survive (-copyts, frag_discont), so each frame's
+    # place on the grid is known; the seek lands a little early to cover it.
+    return [
+        "nice", "-n", "10", "ffmpeg", "-nostdin", "-v", "error", *INPUT_OPTIONS,
+        "-reconnect", "1", "-reconnect_delay_max", "10",
+        "-ss", f"{max(start - 1, 0):.6f}", "-copyts", "-i", source,
+        "-map", f"0:a:{stream}", "-vn", "-sn", "-dn", "-c:a", "copy",
+        "-avoid_negative_ts", "disabled", "-use_editlist", "0", "-f", "mp4",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof+frag_discont+skip_trailer",
+        "-frag_duration", "1000000", os.path.join(output, "copy.mp4"),
+    ]
+
+
+def mp4_children(data, start, end):
+    while start + 8 <= end:
+        size, kind = struct.unpack(">I4s", data[start:start + 8])
+        if size < 8:
+            raise ValueError("bad box")
+        yield kind, start, size
+        start += size
+
+
+def mdhd_timescale(data, moov, size):
+    for kind, trak, trak_size in mp4_children(data, moov + 8, moov + size):
+        if kind != b"trak":
+            continue
+        for kind, mdia, mdia_size in mp4_children(data, trak + 8, trak + trak_size):
+            if kind != b"mdia":
+                continue
+            for kind, box, _ in mp4_children(data, mdia + 8, mdia + mdia_size):
+                if kind == b"mdhd":
+                    offset = box + (28 if data[box + 8] else 20)
+                    return struct.unpack(">I", data[offset:offset + 4])[0]
+    return None
+
+
+def mp4_box(kind, *parts):
+    body = b"".join(parts)
+    return struct.pack(">I4s", 8 + len(body), kind) + body
+
+
+class CopySplitter:
+    """Cuts the fragmented MP4 that ffmpeg copies a track into into segments
+    of `frames` AAC frames on the track's absolute frame grid, so segments of
+    runs started at different positions are interchangeable."""
+
+    def __init__(self, run_dir, frames, first, rate, count, duration):
+        self.run_dir = run_dir
+        self.frames = frames
+        self.first = first * frames  # earlier frames come from the early seek
+        self.rate = rate
+        self.count = count
+        self.end = duration * rate / 1024  # frames, as probed
+        self.timescale = rate
+        self.offset = 0
+        self.head = b""
+        self.track = 1
+        self.sample_flags = 0x02000000
+        self.pending = []  # (frame, bytes) of the segment being filled
+        self.last = -1
+        self.final = None  # the last frame read, even before `first`
+
+    def feed(self, finished=False):
+        """Write the segments complete so far. `finished` means ffmpeg reached
+        the end of the file: the rest is written too, but only when it is the
+        end of the audio and not a dropped connection."""
+        path = os.path.join(self.run_dir, "copy.mp4")
+        with open(path, "rb") as source:
+            source.seek(self.offset)
+            data = source.read()
+        used = 0
+        boxes = list(mp4_children(data, 0, len(data)))
+        for number, (kind, start, size) in enumerate(boxes):
+            if start + size > len(data):
+                break
+            if kind in (b"ftyp", b"moov"):
+                self.head += data[start:start + size]
+                if kind == b"moov":
+                    self.timescale = mdhd_timescale(data, start, size) or self.rate
+                    write_atomically(os.path.join(self.run_dir, "init.mp4"), self.head)
+            elif kind == b"moof":
+                # Its samples are in the following mdat, which may still be written.
+                following = boxes[number + 1] if number + 1 < len(boxes) else None
+                if following is None or following[1] + following[2] > len(data):
+                    break
+                self.take(data, start, size)
+            used = start + size
+        self.offset += used
+        # A stopped run leaves its unfinished segment to a later run.
+        if finished and self.final and self.final[0] + 1 >= self.end - self.rate / 1024:
+            last = self.final[0] // self.frames
+            if self.pending:
+                self.write(last)
+            # The probed duration can reach a little into one more listed
+            # segment; one repeated frame there keeps the playlist whole.
+            for index in range(max(last + 1, self.first // self.frames), self.count):
+                self.pending = [(index * self.frames, self.final[1])]
+                self.write(index)
+
+    def take(self, data, moof, size):
+        for kind, traf, traf_size in mp4_children(data, moof + 8, moof + size):
+            if kind != b"traf":
+                continue
+            boxes = {kind: start for kind, start, _ in mp4_children(data, traf + 8, traf + traf_size)}
+            tfhd, tfdt, trun = boxes[b"tfhd"], boxes[b"tfdt"], boxes[b"trun"]
+            flags = int.from_bytes(data[tfhd + 9:tfhd + 12], "big")
+            self.track = struct.unpack(">I", data[tfhd + 12:tfhd + 16])[0]
+            position = tfhd + 16 + (8 if flags & 0x1 else 0) + (4 if flags & 0x2 else 0)
+            duration = size_default = None
+            if flags & 0x8:
+                duration = struct.unpack(">I", data[position:position + 4])[0]
+                position += 4
+            if flags & 0x10:
+                size_default = struct.unpack(">I", data[position:position + 4])[0]
+                position += 4
+            if flags & 0x20:
+                self.sample_flags = struct.unpack(">I", data[position:position + 4])[0]
+            decoded = struct.unpack(">Q", data[tfdt + 12:tfdt + 20])[0] if data[tfdt + 8] else struct.unpack(">I", data[tfdt + 12:tfdt + 16])[0]
+            flags = int.from_bytes(data[trun + 9:trun + 12], "big")
+            count = struct.unpack(">I", data[trun + 12:trun + 16])[0]
+            position = trun + 16
+            offset = moof
+            if flags & 0x1:
+                offset += struct.unpack(">i", data[position:position + 4])[0]
+                position += 4
+            if flags & 0x4:
+                position += 4
+            for _ in range(count):
+                sample_duration, sample_size = duration, size_default
+                if flags & 0x100:
+                    sample_duration = struct.unpack(">I", data[position:position + 4])[0]
+                    position += 4
+                if flags & 0x200:
+                    sample_size = struct.unpack(">I", data[position:position + 4])[0]
+                    position += 4
+                position += (4 if flags & 0x400 else 0) + (4 if flags & 0x800 else 0)
+                # Matroska keeps milliseconds: the nearest whole frame is exact.
+                frame = round(decoded * self.rate / self.timescale / 1024)
+                self.add(frame, data[offset:offset + sample_size])
+                offset += sample_size
+                decoded += sample_duration
+
+    def add(self, frame, sample):
+        if self.final is None or frame > self.final[0]:
+            self.final = (frame, sample)
+        if frame < self.first or frame <= self.last:
+            return
+        self.last = frame
+        if self.pending and frame // self.frames != self.pending[0][0] // self.frames:
+            self.write(self.pending[0][0] // self.frames)
+        self.pending.append((frame, sample))
+
+    def write(self, index):
+        samples, self.pending = self.pending, []
+        # A missing frame lengthens the one before it instead of shifting the rest.
+        unit = 1024 * self.timescale / self.rate  # one frame in the track's timescale
+        durations = [round((following[0] - frame) * unit) for (frame, _), following in zip(samples, samples[1:])] + [round(unit)]
+        entries = b"".join(struct.pack(">II", duration, len(sample)) for duration, (_, sample) in zip(durations, samples))
+
+        def moof(data_offset):
+            return mp4_box(
+                b"moof", mp4_box(b"mfhd", struct.pack(">II", 0, index + 1)),
+                mp4_box(b"traf",
+                        mp4_box(b"tfhd", struct.pack(">III", 0x020020, self.track, self.sample_flags)),
+                        mp4_box(b"tfdt", struct.pack(">IQ", 0x01000000, round(samples[0][0] * unit))),
+                        mp4_box(b"trun", struct.pack(">IIi", 0x000301, len(samples), data_offset), entries)),
+            )
+
+        header = moof(0)
+        segment = moof(len(header) + 8) + mp4_box(b"mdat", *(sample for _, sample in samples))
+        write_atomically(os.path.join(self.run_dir, f"s{index}.m4s"), segment)
+
+
 def with_decode_time(data, index):
     """Place a run's segment on the absolute timeline; ffmpeg starts each run at 0."""
     data = bytearray(data)
-
-    def children(start, end):
-        while start + 8 <= end:
-            size, kind = struct.unpack(">I4s", data[start:start + 8])
-            if size < 8:
-                raise ValueError("bad box")
-            yield kind, start, size
-            start += size
-
+    children = functools.partial(mp4_children, data)
     patched = False
     for kind, start, size in children(0, len(data)):
         if kind != b"moof":
@@ -1151,7 +1346,7 @@ def live_rendition(torrent_hash, file_id, stream):
     os.makedirs(rendition.directory, exist_ok=True)
     playlist = os.path.join(rendition.directory, "audio.m3u8")
     if not os.path.isfile(playlist):
-        write_atomically(playlist, live_playlist(rendition.count).encode("utf-8"))
+        write_atomically(playlist, live_playlist(rendition.count, rendition.segment_seconds, rendition.last_seconds).encode("utf-8"))
     return rendition
 
 
@@ -1192,31 +1387,36 @@ def start_run(rendition, index):
     pairs = running()
     if len(pairs) >= MAX_RUNS:
         stop_run(*min(pairs, key=lambda pair: (not pair[1].paused, pair[1].seen)))
-    # The first segment of a run starts with the encoder's priming frame, so
-    # a run starts one segment early and drops it.
-    start = max(index - 1, 0)
+    # The first segment of an encoded run starts with the encoder's priming
+    # frame, so such a run starts one segment early and drops it.
+    start = index if rendition.copy else max(index - 1, 0)
     run_dir = f"{rendition.directory}.run{rendition.started}.tmp"
     rendition.started += 1
     shutil.rmtree(run_dir, ignore_errors=True)
     os.makedirs(run_dir)
+    if rendition.copy:
+        command = copy_command(rendition.source, run_dir, rendition.stream, start * rendition.segment_seconds)
+    else:
+        command = live_command(rendition.source, run_dir, rendition.stream, rendition.channels, start, rendition.count)
     log = open(os.path.join(run_dir, "ffmpeg.log"), "wb")
     try:
-        process = subprocess.Popen(
-            live_command(rendition.source, run_dir, rendition.stream, rendition.channels, start, rendition.count),
-            stdout=subprocess.DEVNULL, stderr=log,
-        )
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=log)
     except OSError:
         shutil.rmtree(run_dir, ignore_errors=True)
         raise
     finally:
         log.close()
-    run = Run(process, start, start if index > 0 else None, index)
+    warmup = start if index > 0 and not rendition.copy else None
+    splitter = CopySplitter(run_dir, rendition.frames, start, rendition.rate, rendition.count, rendition.duration) if rendition.copy else None
+    run = Run(process, start, warmup, index, splitter)
     rendition.runs.append(run)
     threading.Thread(target=watch_run, args=(rendition, run, run_dir), daemon=True).start()
     return run
 
 
-def collect_segments(rendition, run, run_dir):
+def collect_segments(rendition, run, run_dir, ended=False):
+    if run.splitter is not None and os.path.isfile(os.path.join(run_dir, "copy.mp4")):
+        run.splitter.feed(ended)
     finished = sorted(
         (int(match.group(1)), name) for name in os.listdir(run_dir) if (match := SEGMENT_RE.match(name))
     )
@@ -1233,7 +1433,9 @@ def collect_segments(rendition, run, run_dir):
         target = os.path.join(rendition.directory, name)
         if index != run.warmup and not os.path.isfile(target):
             with open(path, "rb") as source:
-                write_atomically(target, with_decode_time(source.read(), index))
+                data = source.read()
+                # Copied segments carry their own place on the timeline.
+                write_atomically(target, data if rendition.copy else with_decode_time(data, index))
         os.remove(path)
         with _live_changed:
             run.head = max(run.head, index + 1)
@@ -1247,7 +1449,7 @@ def watch_run(rendition, run, run_dir):
     try:
         while True:
             finished = process.poll() is not None
-            collect_segments(rendition, run, run_dir)
+            collect_segments(rendition, run, run_dir, finished and process.returncode == 0)
             if finished:
                 break
             with _live_changed:
@@ -1512,28 +1714,27 @@ class Handler(BaseHTTPRequestHandler):
         self.send_bytes(200, body, RENDERER_TYPES[os.path.splitext(name)[1]], "public, max-age=86400")
 
     def serve_live(self, torrent_hash, file_id, stream, name, query):
-        directory = rendition_dir(torrent_hash, file_id, stream, "aac")
         if name == "audio.m3u8":
             # The audio-file check runs once; segments require its playlist.
-            if not rendition_ready(torrent_hash, file_id, stream, "aac"):
+            if not rendition_ready(torrent_hash, file_id, stream):
                 try:
                     require_audio_file(torrent_hash, file_id)
                 except Rejected:
                     return self.send_json(404, {"error": "not found"})
                 except Exception:
                     return self.send_json(502, {"error": "track lookup failed"})
-        elif not rendition_ready(torrent_hash, file_id, stream, "aac"):
+        elif not rendition_ready(torrent_hash, file_id, stream):
             return self.send_json(404, {"error": "not found"})
         try:
             rendition = live_rendition(torrent_hash, file_id, stream)
         except Exception as error:
-            print(f"live rendition {directory} failed: {type(error).__name__} {error}", file=sys.stderr, flush=True)
+            print(f"live rendition {torrent_hash}/{file_id}/{stream} failed: {type(error).__name__} {error}", file=sys.stderr, flush=True)
             return self.send_json(502, {"error": "remux failed"})
         if name == "audio.m3u8":
             position = query.get("at", [""])[0]
             if re.fullmatch(r"[0-9]{1,6}", position):
                 # Start encoding where playback is before hls.js asks for it.
-                index = min(int(position) * SAMPLE_RATE // SEGMENT_SAMPLES, rendition.count - 1)
+                index = min(int(int(position) // rendition.segment_seconds), rendition.count - 1)
                 with _live_changed:
                     rendition.requested = index
                     rendition.seen = time.monotonic()
@@ -1543,7 +1744,7 @@ class Handler(BaseHTTPRequestHandler):
                         except OSError as error:
                             # The segment request retries; the playlist is still valid.
                             print(f"live encode {rendition.directory} failed to start: {error}", file=sys.stderr, flush=True)
-            return self.serve_file(os.path.join(directory, name), name)
+            return self.serve_file(os.path.join(rendition.directory, name), name)
         index = None if name == "init.mp4" else int(name[1:-4])
         if index is not None and index >= rendition.count:
             return self.send_json(404, {"error": "not found"})
@@ -1552,7 +1753,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(502, {"error": "remux failed"})
         if not ready:
             return self.send_json(503, {"error": "preparing"}, {"Retry-After": "1"})
-        return self.serve_file(os.path.join(directory, name), name)
+        return self.serve_file(os.path.join(rendition.directory, name), name)
 
     def do_GET(self):
         split = urllib.parse.urlsplit(self.path)

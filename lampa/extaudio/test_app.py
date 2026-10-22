@@ -240,6 +240,24 @@ class RemuxTests(unittest.TestCase):
         self.assertNotIn("aformat", stereo[stereo.index("-af") + 1])
         self.assertEqual(stereo[stereo.index("-b:a") + 1], "256k")
 
+    def test_a_matroska_track_takes_its_own_duration_tag(self):
+        probe = {"format": {"duration": "1500.0"}, "streams": [
+            {"codec_name": "aac", "tags": {"DURATION": "00:23:40.480000000"}}, {"codec_name": "aac"},
+        ]}
+        self.assertEqual([item["duration"] for item in app.audio_streams(probe)], [1420.48, 1500.0])
+
+    def test_only_aac_lc_mono_or_stereo_is_copied(self):
+        lc = {"codec_name": "aac", "profile": "LC", "sample_rate": "48000", "channels": 2}
+        self.assertTrue(app.copyable(lc))
+        for change in ({"profile": "HE-AAC"}, {"channels": 6}, {"codec_name": "ac3"}, {"sample_rate": None}):
+            self.assertFalse(app.copyable({**lc, **change}), change)
+
+    def test_a_copied_playlist_ends_with_the_audio(self):
+        rendition = app.LiveRendition(HASH, 1, 0, {"codec_name": "aac", "profile": "LC", "sample_rate": "48000", "channels": 2, "duration": 20.0})
+        self.assertEqual((rendition.count, rendition.frames), (4, 281))
+        playlist = app.live_playlist(rendition.count, rendition.segment_seconds, rendition.last_seconds).splitlines()
+        self.assertEqual(playlist[-3], f"#EXTINF:{20 - 3 * rendition.segment_seconds:.6f},")
+
     def test_live_playlist_lists_whole_segments(self):
         playlist = app.live_playlist(3).splitlines()
         self.assertEqual(playlist[-1], "#EXT-X-ENDLIST")
@@ -408,6 +426,151 @@ class LiveEncodeTests(unittest.TestCase):
             self.assertLessEqual(run.head, 1 + 2 + 2)
             self.assertTrue(app.live_file(self.rendition, 3, 30))
             self.assertFalse(run.paused and run.head <= 4)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class CopiedAacTests(unittest.TestCase):
+    """Copy a real AAC file served over HTTP, as TorrServer would."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.source = tempfile.TemporaryDirectory()
+        cls.path = os.path.join(cls.source.name, "audio.mka")
+        subprocess.run([
+            "ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "sine=f=440:d=40:r=44100",
+            "-ac", "2", "-c:a", "aac", "-b:a", "128k", cls.path,
+        ], check=True)
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), RangeHandler)
+        cls.server.path = cls.path
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}/audio.mka"
+        cls.info = {"codec_name": "aac", "profile": "LC", "sample_rate": "44100", "channels": 2, "duration": 40.0}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.source.cleanup()
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        patcher = mock.patch.object(app, "CACHE_DIR", self.directory.name)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        app._live.clear()
+        self.addCleanup(self.stop_runs)
+
+    def stop_runs(self):
+        for pair in app.running():
+            app.stop_run(*pair)
+        deadline = time.monotonic() + 5
+        while any(name.endswith(".tmp") for name in os.listdir(self.directory.name)) and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    def rendition(self, file_id):
+        rendition = app.LiveRendition(HASH, file_id, 0, self.info)
+        rendition.source = self.url
+        os.makedirs(rendition.directory)
+        app._live[(HASH, file_id, 0)] = rendition
+        return rendition
+
+    def read(self, rendition, name):
+        with open(os.path.join(rendition.directory, name), "rb") as source:
+            return source.read()
+
+    def packets(self, path):
+        """Hashes of the frames at or after zero; the encoder's priming frame
+        before zero is not on the grid and decoders drop its output anyway."""
+        lines = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-map", "0:a", "-c", "copy", "-f", "framemd5", "-"],
+                               capture_output=True, check=True).stdout.decode().splitlines()
+        fields = [[field.strip() for field in line.split(",")] for line in lines if not line.startswith("#")]
+        return [field[-1] for field in fields if int(field[2]) >= 0]
+
+    def test_a_track_is_cut_on_its_own_frame_grid(self):
+        rendition = self.rendition(1)
+        self.assertTrue(rendition.copy)
+        self.assertEqual(rendition.frames, 258)
+        self.assertEqual(rendition.count, 7)
+        self.assertTrue(app.live_file(rendition, 3, 30))
+        segment = self.read(rendition, "s3.m4s")
+        offset = segment.index(b"tfdt")
+        self.assertEqual(int.from_bytes(segment[offset + 8:offset + 16], "big"), 3 * 258 * 1024)
+
+    def test_a_fragment_waits_for_its_samples_while_ffmpeg_writes(self):
+        output = os.path.join(self.directory.name, "whole")
+        os.makedirs(output)
+        subprocess.run(app.copy_command(self.url, output, 0, 0), check=True, capture_output=True)
+        with open(os.path.join(output, "copy.mp4"), "rb") as source:
+            data = source.read()
+        growing = os.path.join(self.directory.name, "growing")
+        os.makedirs(growing)
+        splitter = app.CopySplitter(growing, 258, 0, 44100, 7, 40.0)
+        with open(os.path.join(growing, "copy.mp4"), "wb") as copy:
+            for offset in range(0, len(data), 7919):  # cuts boxes at arbitrary bytes
+                copy.write(data[offset:offset + 7919])
+                copy.flush()
+                splitter.feed()
+        splitter.feed(finished=True)
+        reference = os.path.join(self.directory.name, "reference")
+        os.makedirs(reference)
+        os.replace(os.path.join(output, "copy.mp4"), os.path.join(reference, "copy.mp4"))
+        app.CopySplitter(reference, 258, 0, 44100, 7, 40.0).feed(finished=True)
+        for index in range(7):
+            with open(os.path.join(growing, f"s{index}.m4s"), "rb") as one, open(os.path.join(reference, f"s{index}.m4s"), "rb") as other:
+                self.assertEqual(one.read(), other.read(), index)
+
+    def copied(self, name):
+        output = os.path.join(self.directory.name, name)
+        os.makedirs(output)
+        subprocess.run(app.copy_command(self.url, output, 0, 0), check=True, capture_output=True)
+        return output
+
+    def test_a_stopped_run_keeps_its_unfinished_segment_out(self):
+        output = self.copied("stopped")
+        with open(os.path.join(output, "copy.mp4"), "rb") as source:
+            data = source.read()
+        cut = data.index(b"moof", len(data) // 2) - 4
+        with open(os.path.join(output, "copy.mp4"), "wb") as copy:
+            copy.write(data[:cut])
+        app.CopySplitter(output, 258, 0, 44100, 7, 40.0).feed(finished=True)
+        written = sorted(name for name in os.listdir(output) if name.endswith(".m4s"))
+        self.assertLess(len(written), 7)
+        last = max(int(name[1:-4]) for name in written)
+        with open(os.path.join(output, f"s{last}.m4s"), "rb") as segment:
+            data = segment.read()
+        offset = data.index(b"trun")
+        self.assertEqual(int.from_bytes(data[offset + 8:offset + 12], "big"), 258, "only whole segments")
+
+    def test_a_listed_segment_past_the_audio_gets_its_last_frame(self):
+        output = self.copied("longer")
+        app.CopySplitter(output, 258, 0, 44100, 8, 40.0).feed(finished=True)
+        with open(os.path.join(output, "s7.m4s"), "rb") as segment:
+            data = segment.read()
+        offset = data.index(b"tfdt")
+        self.assertEqual(int.from_bytes(data[offset + 8:offset + 16], "big"), 7 * 258 * 1024)
+
+    def test_a_run_started_past_the_audio_closes_the_last_listed_segment(self):
+        output = self.copied("past")
+        app.CopySplitter(output, 258, 7, 44100, 8, 40.0).feed(finished=True)
+        self.assertEqual(sorted(name for name in os.listdir(output) if name.endswith(".m4s")), ["s7.m4s"])
+
+    def test_segments_from_any_position_are_the_same_and_hold_the_original_frames(self):
+        whole, seeked = self.rendition(1), self.rendition(2)
+        for index in range(whole.count):
+            self.assertTrue(app.live_file(whole, index, 30), index)
+        self.assertTrue(app.live_file(seeked, 4, 30))
+        self.assertEqual(self.read(seeked, "s4.m4s"), self.read(whole, "s4.m4s"))
+        joined = os.path.join(self.directory.name, "joined.mp4")
+        with open(joined, "wb") as output:
+            output.write(self.read(whole, "init.mp4"))
+            for index in range(whole.count):
+                output.write(self.read(whole, f"s{index}.m4s"))
+        self.assertEqual(self.packets(joined), self.packets(self.path), "every frame is copied as it is")
+        deadline = time.monotonic() + 5
+        while app.running() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertEqual(whole.failures, 0, "a track that ends inside its last segment is complete")
 
 
 class CoverageTests(unittest.TestCase):
@@ -1022,7 +1185,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(headers["Retry-After"], "3")
 
     def test_encoded_playlist_is_immediate_and_starts_at_the_position(self):
-        rendition = mock.Mock(count=1000, **{"owner.return_value": None})
+        rendition = mock.Mock(count=1000, segment_seconds=app.SEGMENT_SECONDS, directory=app.rendition_dir(HASH, 1, 0, "aac"), **{"owner.return_value": None})
         def create(torrent_hash, file_id, stream):
             directory = app.rendition_dir(torrent_hash, file_id, stream, "aac")
             os.makedirs(directory, exist_ok=True)

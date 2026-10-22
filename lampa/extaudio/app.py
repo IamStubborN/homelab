@@ -33,6 +33,9 @@ MIN_SOURCE_RATE = int(os.environ.get("MIN_SOURCE_KBPS", "256")) * 1024
 ABANDON_SECONDS = int(os.environ.get("ABANDON_SECONDS", "120"))
 PROBE_TIMEOUT_SECONDS = int(os.environ.get("PROBE_TIMEOUT_SECONDS", "10"))
 PROBE_RETRY_SECONDS = 600
+# A lookup waits PROBE_TIMEOUT_SECONDS for an audio file; its probe carries on
+# this long in the background while TorrServer fetches the file.
+PROBE_BACKGROUND_SECONDS = int(os.environ.get("PROBE_BACKGROUND_SECONDS", "180"))
 MAX_CANDIDATES = 6
 MAX_JOBS = 2
 MAX_TRACK_LOOKUPS = 2
@@ -148,6 +151,7 @@ CONTENT_TYPES = {".m3u8": "application/vnd.apple.mpegurl", ".mp4": "audio/mp4", 
 
 _probe_cache = {}
 _probe_failures = {}
+_probing = {}
 _probe_lock = threading.Lock()
 _track_lookups = threading.Semaphore(MAX_TRACK_LOOKUPS)
 _raw_fetches = threading.Semaphore(MAX_RAW_FETCHES)
@@ -479,13 +483,46 @@ def audio_streams(probe):
     return streams
 
 
-def probe_audio(torrent_hash, file_id):
+def probe_audio(torrent_hash, file_id, timeout=PROBE_TIMEOUT_SECONDS):
     command = [
         "ffprobe", "-v", "error", *INPUT_OPTIONS, "-select_streams", "a",
         "-show_entries", "stream=codec_name,channels,duration:stream_tags=title,language:format=duration",
         "-of", "json", stream_url(torrent_hash, file_id),
     ]
-    return cached_probe(_probe_cache, (torrent_hash, file_id), command, audio_streams)
+    return cached_probe(_probe_cache, (torrent_hash, file_id), command, audio_streams, timeout=timeout)
+
+
+def probe_audio_soon(torrent_hash, file_id, wait=PROBE_TIMEOUT_SECONDS):
+    """Streams of an audio file, or None when TorrServer has not fetched enough
+    of it within `wait` seconds. The probe then carries on in the background,
+    so a later lookup finds the result cached instead of starting over."""
+    key = (torrent_hash, file_id)
+    with _probe_lock:
+        if key in _probe_cache:
+            return _probe_cache[key]
+        done = _probing.get(key)
+        if done is None:
+            done = _probing[key] = threading.Event()
+            threading.Thread(target=probe_in_background, args=(torrent_hash, file_id, done), daemon=True).start()
+    if not done.wait(max(0, wait)):
+        return None
+    with _probe_lock:
+        if key in _probe_cache:
+            return _probe_cache[key]
+        if key in _probe_failures:
+            raise ProbeFailed()
+    return None  # the background probe timed out too; the next lookup starts another
+
+
+def probe_in_background(torrent_hash, file_id, done):
+    try:
+        probe_audio(torrent_hash, file_id, timeout=PROBE_BACKGROUND_SECONDS)
+    except Exception:  # failures are cached; a timeout is probed again on the next lookup
+        pass
+    finally:
+        with _probe_lock:
+            _probing.pop((torrent_hash, file_id), None)
+        done.set()
 
 
 def external_tracks(torrent_hash, video_id, files):
@@ -493,13 +530,21 @@ def external_tracks(torrent_hash, video_id, files):
     read in time because TorrServer has not fetched its head yet."""
     tracks = []
     unread = False
-    for candidate in external_candidates(files, video_id):
+    candidates = external_candidates(files, video_id)
+    # Every file's probe starts at once and they share one wait.
+    for candidate in candidates:
         try:
-            streams = probe_audio(torrent_hash, candidate["id"])
-        except subprocess.TimeoutExpired:
-            unread = True  # not cached as a failure: asking again may read it
-            continue
+            probe_audio_soon(torrent_hash, candidate["id"], wait=0)
         except (ProbeFailed, subprocess.SubprocessError, ValueError, OSError):
+            pass
+    deadline = time.monotonic() + PROBE_TIMEOUT_SECONDS
+    for candidate in candidates:
+        try:
+            streams = probe_audio_soon(torrent_hash, candidate["id"], wait=deadline - time.monotonic())
+        except (ProbeFailed, subprocess.SubprocessError, ValueError, OSError):
+            continue
+        if streams is None:
+            unread = True
             continue
         for number, stream in enumerate(streams):
             tags = stream.get("tags") or {}
@@ -1666,6 +1711,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(404, {"error": "not found"})
         if mode == "aac":
             return self.serve_live(torrent_hash, file_id, stream, name, query)
+        if name == "audio.m3u8" and "ready" in query:
+            # Whether a rendition prepared earlier is still cached; starts nothing.
+            ready = rendition_ready(torrent_hash, file_id, stream, mode)
+            return self.send_json(200 if ready else 404, {"ready": ready})
         if name != "audio.m3u8":
             # Segments never start work; only a prepared rendition serves them.
             if not rendition_ready(torrent_hash, file_id, stream, mode):

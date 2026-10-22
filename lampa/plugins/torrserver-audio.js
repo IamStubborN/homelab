@@ -322,6 +322,15 @@
 
         function recover(data) {
           if (handled.has(data)) return true;
+          if (!disposed && !terminated && data.fatal && work.homelab_prepared && work.homelab_external_audio &&
+              /^audioTrackLoad(Error|TimeOut)$/.test(data.details)) {
+            // The voice-over prepared ahead is no longer cached: play the
+            // embedded audio and prepare it again as usual.
+            handled.add(data);
+            hls.stopLoad();
+            setTimeout(function () { if (!disposed) preparedMissing(work); }, 0);
+            return true;
+          }
           if (!disposed && !terminated && data.response && /^Homelab audio:/.test(data.response.text || '')) {
             // A loader transform failed; retrying the same bytes cannot help.
             handled.add(data);
@@ -544,6 +553,7 @@
 
     function preparePlayback(event) {
       installHlsResilience();
+      cancelPreparingAhead();
       var work = event.data;
       var original = masterUrl(work);
       if (!original) return;
@@ -568,6 +578,17 @@
         work.url = playback.href;
         work.homelab_torrent_hash = work.torrent_hash;
         work.homelab_file_index = Number(source.searchParams.get('index'));
+        var stored = Lampa.Storage.get(preferenceKey, {});
+        var prepared = preparedFor(work.homelab_torrent_hash, work.homelab_file_index,
+          ((stored && stored[work.homelab_torrent_hash]) || {}).audio);
+        if (prepared) {
+          // The remembered voice-over was prepared while the previous episode
+          // played: start with it instead of switching to it later.
+          work.homelab_external_audio = Object.assign({}, prepared.audio);
+          work.homelab_prepared = true;
+          playback.searchParams.set('audio', String(prepared.carrier));
+          work.url = playback.href;
+        }
         // Prevent Lampa's old TorrServer GST heartbeat/drop from controlling
         // another viewer's legacy task for this torrent.
         delete work.torrent_hash;
@@ -702,7 +723,7 @@
       if (state.preparing && state.preparing.track === track) return;
       cancelPreparation(state);
       // The sidecar sizes its own deadline to the file; this only bounds polling.
-      var preparing = state.preparing = {track: track, abort: new AbortController(), timer: null, deadline: Date.now() + 14400000};
+      var preparing = state.preparing = {track: track, abort: new AbortController(), timer: null, deadline: Date.now() + 14400000, announced: !automatic};
       if (!automatic && Lampa.Noty) Lampa.Noty.show('Готовлю озвучку: ' + track.label);
       function attempt() {
         if (state.preparing !== preparing) return;
@@ -711,9 +732,14 @@
           if (response.ok) {
             state.preparing = null;
             track.ready = true;
+            if (preparing.announced && Lampa.Noty) Lampa.Noty.show('Озвучка готова: ' + track.label);
             return selectTrack(state, track, true);
           }
           if ((response.status === 503 || response.status === 429) && Date.now() < preparing.deadline) {
+            // A remembered voice-over still being prepared says so, instead of
+            // the embedded audio silently playing meanwhile.
+            if (!preparing.announced && Lampa.Noty) Lampa.Noty.show('Готовлю озвучку: ' + track.label);
+            preparing.announced = true;
             preparing.timer = setTimeout(attempt, response.status === 429 ? 10000 : 2000);
             return;
           }
@@ -738,6 +764,7 @@
     function abandonExternal(work) {
       var carrier = embeddedFallback(work);
       if (!carrier) return;
+      forgetPrepared(work.homelab_torrent_hash, work.homelab_file_index);
       var failed = selectedTrack(active, masterUrl(work));
       if (failed) failed.unsupported = true;
       console.warn('Homelab external audio: unsupported fragment layout');
@@ -755,7 +782,7 @@
 
     function carrierTrack(state, url) {
       var index = Number(url.searchParams.get('audio') || 0);
-      var embedded = state.tracks.filter(function (track) { return !track.external; });
+      var embedded = (state.tracks || []).filter(function (track) { return !track.external; });
       var current = embedded.filter(function (track) { return track.index === index; })[0];
       if (current && current.aac) return current;
       return embedded.filter(function (track) { return track.aac; })[0] || current || {index: index};
@@ -1403,54 +1430,193 @@
       applySubtitles(state, withAss(state, state.subtitleList));
     }
 
-    var EXTERNAL_LOOKUPS = 12;
+    // A pending lookup waits up to 10 s in the sidecar for the files it is
+    // still reading, so about four minutes in all.
+    var EXTERNAL_LOOKUPS = 20;
 
-    function externalTracks(state, work) {
-      if (!work.homelab_torrent_hash || !Number.isInteger(work.homelab_file_index)) return Promise.resolve([]);
-      var base = '/extaudio/' + encodeURIComponent(work.homelab_torrent_hash) + '/';
-      var signal = state.externalAbort.signal;
+    function abortError() {
+      var error = new Error('The operation was aborted');
+      error.name = 'AbortError';
+      return error;
+    }
+
+    function wait(delay, signal) {
+      return new Promise(function (resolve, reject) {
+        function aborted() {
+          clearTimeout(timer);
+          reject(abortError());
+        }
+        var timer = setTimeout(function () {
+          signal.removeEventListener('abort', aborted);
+          resolve();
+        }, delay);
+        signal.addEventListener('abort', aborted, {once: true});
+      });
+    }
+
+    function lookupExternal(hash, file, signal) {
       function lookup(retry) {
-        return window.fetch(new URL(base + work.homelab_file_index + '/tracks', window.location.href).href, {signal: signal})
+        return window.fetch(new URL('/extaudio/' + encodeURIComponent(hash) + '/' + file + '/tracks', window.location.href).href, {signal: signal})
           .then(function (response) {
             // The sidecar limits concurrent lookups; ask once more before giving up.
-            if (response.status === 429 && retry) return new Promise(function (resolve, reject) {
-              var timer = setTimeout(function () { resolve(lookup(false)); }, 5000);
-              signal.addEventListener('abort', function () {
-                clearTimeout(timer);
-                var error = new Error('The operation was aborted');
-                error.name = 'AbortError';
-                reject(error);
-              }, {once: true});
-            });
+            if (response.status === 429 && retry) return wait(5000, signal).then(function () { return lookup(false); });
             if (!response.ok) throw new Error('External audio lookup failed');
             return response.json();
           });
       }
-      return lookup(true)
+      return lookup(true);
+    }
+
+    function externalItems(hash, tracks) {
+      var base = '/extaudio/' + encodeURIComponent(hash) + '/';
+      return (tracks || []).filter(function (track) {
+        return Number.isInteger(track.file) && Number.isInteger(track.stream);
+      }).map(function (track) {
+        var mode = externalMode(track.codec);
+        return {
+          external: true, key: track.file + ':' + track.stream,
+          url: base + track.file + '/' + track.stream + '/' + mode + '/audio.m3u8',
+          codecs: mode === 'copy' ? COPY_CODECS[track.codec] : COPY_CODECS.aac, live: mode === 'aac',
+          language: track.language, gstTitle: track.title || '',
+          label: (track.title || track.location || 'Audio') + ' (внешняя)',
+          extra: {channels: track.channels}
+        };
+      });
+    }
+
+    function externalTracks(state, work) {
+      if (!work.homelab_torrent_hash || !Number.isInteger(work.homelab_file_index)) return Promise.resolve([]);
+      return lookupExternal(work.homelab_torrent_hash, work.homelab_file_index, state.externalAbort.signal)
         .then(function (data) {
           state.externalData = data;
-          return data.tracks || [];
+          return externalItems(work.homelab_torrent_hash, data.tracks);
         })
         .catch(function (error) {
           if (error.name === 'AbortError') throw error;
           console.warn('Homelab external audio:', error.message);
           return [];
-        })
-        .then(function (tracks) {
-          return tracks.filter(function (track) {
-            return Number.isInteger(track.file) && Number.isInteger(track.stream);
-          }).map(function (track) {
-            var mode = externalMode(track.codec);
-            return {
-              external: true, key: track.file + ':' + track.stream,
-              url: base + track.file + '/' + track.stream + '/' + mode + '/audio.m3u8',
-              codecs: mode === 'copy' ? COPY_CODECS[track.codec] : COPY_CODECS.aac, live: mode === 'aac',
-              language: track.language, gstTitle: track.title || '',
-              label: (track.title || track.location || 'Audio') + ' (внешняя)',
-              extra: {channels: track.channels}
-            };
+        });
+    }
+
+    // While an episode plays with a remembered external voice-over, that
+    // voice-over is prepared for the following episodes one by one, so they
+    // can start with it instead of switching once TorrServer has fetched it.
+    var PREPARED_KEY = 'homelab_gst_prepared_audio';
+    var PREPARE_AFTER_SECONDS = 60;
+    // Only the next episodes: the cache drops the oldest renditions first.
+    var PREPARE_FILES = 2;
+    // The sidecar keeps renditions for 24 hours after their last use.
+    var PREPARED_FOR_MS = 20 * 3600000;
+    var preparingAhead = null;
+
+    function preparedAudio() {
+      var stored = Lampa.Storage.get(PREPARED_KEY, {});
+      return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+    }
+
+    function preparedFor(hash, file, preference) {
+      var entry = (preparedAudio()[hash] || {})[file];
+      if (!entry || !preference || entry.preference !== JSON.stringify(preference)) return null;
+      return Date.now() - entry.at < PREPARED_FOR_MS ? entry : null;
+    }
+
+    function rememberPrepared(hash, file, entry) {
+      var stored = preparedAudio();
+      var files = stored[hash] || {};
+      delete stored[hash];
+      files[file] = entry;
+      stored[hash] = files;
+      Object.keys(stored).slice(0, -10).forEach(function (key) { delete stored[key]; });
+      Lampa.Storage.set(PREPARED_KEY, stored);
+    }
+
+    function forgetPrepared(hash, file) {
+      var stored = preparedAudio();
+      if (!stored[hash] || !stored[hash][file]) return;
+      delete stored[hash][file];
+      Lampa.Storage.set(PREPARED_KEY, stored);
+    }
+
+    function preparedMissing(work) {
+      forgetPrepared(work.homelab_torrent_hash, work.homelab_file_index);
+      delete work.homelab_prepared;
+      // Before the player is ready, its state picks this up when it is made.
+      if (!active || active.work !== work) return void (work.homelab_prepared_missing = true);
+      active.preparedMissing = true;
+      if (active.publish) active.publish();
+    }
+
+    function followingFiles(work) {
+      var playlist = Lampa.PlayerPlaylist;
+      if (!playlist || typeof playlist.get !== 'function' || typeof playlist.position !== 'function') return [];
+      if (typeof playlist.canNext === 'function' && !playlist.canNext()) return [];
+      return (playlist.get() || []).slice(playlist.position() + 1).map(function (item) {
+        if (!item || (item.homelab_torrent_hash || item.torrent_hash) !== work.homelab_torrent_hash) return null;
+        if (Number.isInteger(item.homelab_file_index)) return item.homelab_file_index;
+        if (typeof item.url !== 'string') return null;
+        try {
+          var index = new URL(item.url, window.location.href).searchParams.get('index');
+          return index === null ? null : Number(index);
+        } catch (error) { return null; }
+      }).filter(function (file) { return Number.isInteger(file) && file !== work.homelab_file_index; });
+    }
+
+    function cancelPreparingAhead() {
+      if (!preparingAhead) return;
+      preparingAhead.abort.abort();
+      preparingAhead = null;
+    }
+
+    // Whether the following episodes were looked at: only once this episode
+    // plays the remembered external voice-over.
+    function prepareAhead(state) {
+      var preference = state.preferences.audio;
+      var hash = state.work.homelab_torrent_hash;
+      var url = masterUrl(state.work);
+      if (!preference || !preference.external || !hash || !url || !state.tracks) return false;
+      var current = selectedTrack(state, url);
+      if (!current || !current.external || current !== matchingTrack(state.tracks, preference)) return false;
+      var files = followingFiles(state.work).slice(0, PREPARE_FILES).filter(function (file) { return !preparedFor(hash, file, preference); });
+      if (!files.length) return true;
+      cancelPreparingAhead();
+      var job = preparingAhead = {abort: new AbortController()};
+      var signal = job.abort.signal;
+      // The embedded track that carries the external audio in this episode.
+      var carrier = carrierTrack(state, url).index;
+      function prepareFile(file, deadline) {
+        return lookupExternal(hash, file, signal).then(function (data) {
+          var track = matchingTrack(externalItems(hash, data.tracks), preference);
+          if (!track && data.pending && Date.now() < deadline) return wait(2000, signal).then(function () { return prepareFile(file, deadline); });
+          // Encoded renditions are made from the playback position on demand.
+          if (track && !track.live) return rendition(file, track, deadline);
+        });
+      }
+      function rendition(file, track, deadline) {
+        return window.fetch(new URL(track.url, window.location.href).href, {signal: signal, cache: 'no-store'}).then(function (response) {
+          if (response.ok) {
+            rememberPrepared(hash, file, {
+              preference: JSON.stringify(preference), carrier: carrier, at: Date.now(),
+              audio: {key: track.key, url: track.url, codecs: track.codecs, name: track.gstTitle, language: track.language}
+            });
+            return;
+          }
+          if ((response.status === 503 || response.status === 429) && Date.now() < deadline) {
+            return wait(5000, signal).then(function () { return rendition(file, track, deadline); });
+          }
+        });
+      }
+      files.reduce(function (previous, file) {
+        return previous.then(function () {
+          if (preparingAhead !== job) throw abortError();
+          return prepareFile(file, Date.now() + 600000).catch(function (error) {
+            if (error.name === 'AbortError') throw error;
+            console.warn('Homelab external audio ahead:', error.message);
           });
         });
+      }, Promise.resolve()).catch(function () {}).then(function () {
+        if (preparingAhead === job) preparingAhead = null;
+      });
+      return true;
     }
 
     function installCurrent() {
@@ -1461,8 +1627,9 @@
       if (!url || typeof window.fetch !== 'function' || typeof AbortController === 'undefined') return;
       var state = active = {
         work: work, abort: new AbortController(), externalAbort: new AbortController(), previousTracks: work.voiceovers,
-        embeddedProxies: {}, embeddedBroken: {}
+        embeddedProxies: {}, embeddedBroken: {}, preparedMissing: Boolean(work.homelab_prepared_missing)
       };
+      delete work.homelab_prepared_missing;
       var stored = Lampa.Storage.get(preferenceKey, {});
       state.preferences = stored && stored[String(work.homelab_torrent_hash || work.torrent_hash)] || {};
       var revision = generation;
@@ -1491,11 +1658,23 @@
         });
       });
       var lists = {embedded: null, external: []};
+      state.publish = publish;
       // Embedded tracks are published first; slower external lookups are
       // merged when they arrive.
       function publish() {
         if (active !== state || generation !== revision || Lampa.Player.playdata() !== work || !lists.embedded) return;
         state.tracks = lists.embedded.concat(lists.external);
+        // The carrier comes from the previous episode, whose tracks can differ.
+        if (work.homelab_prepared && lists.embedded.length &&
+            !lists.embedded.some(function (track) { return track.index === Number(url.searchParams.get('audio') || 0); })) {
+          forgetPrepared(work.homelab_torrent_hash, work.homelab_file_index);
+          delete work.homelab_prepared;
+          state.preparedMissing = true;
+        }
+        if (state.preparedMissing) {
+          state.preparedMissing = false;
+          selectTrack(state, carrierTrack(state, url), true);
+        }
         if (state.tracks.length < 2) return;
         var current = selectedTrack(state, url);
         state.tracks.forEach(function (track) {
@@ -1524,13 +1703,13 @@
       }).catch(function () {}).finally(function () { clearTimeout(state.probeTimeout); });
       // The sidecar answers with the audio files it could read in time and
       // marks the rest pending; those are asked for again in the background.
-      function lookupExternal(attempts) {
+      function lookupExternalTracks(attempts) {
         externalTracks(state, work).then(function (list) {
           clearTimeout(state.externalTimeout);
           if (active !== state || generation !== revision) return;
           if (attempts === EXTERNAL_LOOKUPS) installAss(state, state.externalData);
           if (state.externalData && state.externalData.pending && attempts > 1) {
-            state.externalRetry = setTimeout(function () { lookupExternal(attempts - 1); }, 5000);
+            state.externalRetry = setTimeout(function () { lookupExternalTracks(attempts - 1); }, 2000);
           }
           var keys = function (tracks) { return tracks.map(function (track) { return track.key; }).join(); };
           if (!list.length || keys(list) === keys(lists.external)) return;
@@ -1542,8 +1721,14 @@
           publish();
         }).catch(function () {});
       }
-      lookupExternal(EXTERNAL_LOOKUPS);
+      lookupExternalTracks(EXTERNAL_LOOKUPS);
       ownStream(state, url);
+      if (work.homelab_prepared && work.homelab_external_audio) {
+        // A prepared voice-over can have left the sidecar's cache since.
+        window.fetch(new URL(work.homelab_external_audio.url + '?ready=1', window.location.href).href, {signal: state.abort.signal, cache: 'no-store'})
+          .then(function (response) { if (response.status === 404 && active === state) preparedMissing(work); })
+          .catch(function () {});
+      }
     }
 
     Lampa.PlayerVideo.listener.follow('subs', function (event) {
@@ -1586,7 +1771,15 @@
     Lampa.Player.listener.follow('ready', installCurrent);
     Lampa.Player.listener.follow('destroy', function () {
       pausedWork = null;
+      cancelPreparingAhead();
       clear();
+    });
+    Lampa.PlayerVideo.listener.follow('timeupdate', function (event) {
+      // After the first minute, when the episode's own start no longer
+      // competes with the following episodes' audio files.
+      if (!active || active.preparedAhead || Lampa.Player.playdata() !== active.work) return;
+      if (!(Number(event && event.current) >= PREPARE_AFTER_SECONDS)) return;
+      active.preparedAhead = prepareAhead(active);
     });
     Lampa.HomelabGstAudio = {installCurrent: installCurrent};
   }

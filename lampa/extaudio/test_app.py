@@ -135,12 +135,12 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(app.external_candidates(FILES, 99), [])
 
     def test_tracks_use_stream_metadata_and_skip_unreadable_files(self):
-        def probe(torrent_hash, file_id):
+        def probe(torrent_hash, file_id, wait):
             if file_id == 20:
                 raise subprocess.CalledProcessError(1, "ffprobe")
             return [{"codec_name": "aac", "channels": 2, "tags": {"title": "AniLibria.tv", "language": "rus"}}]
 
-        with mock.patch.object(app, "probe_audio", side_effect=probe):
+        with mock.patch.object(app, "probe_audio_soon", side_effect=probe):
             self.assertEqual(app.external_tracks(HASH, 13, FILES), ([{
                 "file": 1, "stream": 0, "title": "AniLibria.tv", "location": "Sound",
                 "language": "rus", "codec": "aac", "channels": 2,
@@ -148,12 +148,12 @@ class CandidateTests(unittest.TestCase):
 
 
     def test_a_file_still_downloading_is_reported_as_pending_next_to_the_tracks_read(self):
-        def probe(torrent_hash, file_id):
+        def probe(torrent_hash, file_id, wait):
             if file_id == 20:
-                raise subprocess.TimeoutExpired("ffprobe", 10)
+                return None
             return [{"codec_name": "aac", "channels": 2, "tags": {"title": "AniLibria.tv", "language": "rus"}}]
 
-        with mock.patch.object(app, "probe_audio", side_effect=probe):
+        with mock.patch.object(app, "probe_audio_soon", side_effect=probe):
             tracks, pending = app.external_tracks(HASH, 13, FILES)
         self.assertEqual([track["file"] for track in tracks], [1])
         self.assertTrue(pending)
@@ -568,6 +568,27 @@ class ProbeTests(unittest.TestCase):
                 with self.assertRaises(subprocess.TimeoutExpired):
                     app.probe_audio(HASH, 1)
         self.assertEqual(run.call_count, 2)
+
+
+    def test_a_slow_probe_carries_on_in_the_background_and_is_found_cached(self):
+        fetched = threading.Event()
+        def run(command, **options):
+            fetched.wait(5)
+            return mock.Mock(stdout=json.dumps({"streams": [{"codec_name": "aac"}]}).encode())
+        with mock.patch.object(app.subprocess, "run", side_effect=run) as ffprobe:
+            self.assertIsNone(app.probe_audio_soon(HASH, 1, wait=0.05))
+            self.assertIsNone(app.probe_audio_soon(HASH, 1, wait=0.05), "the second lookup joins the running probe")
+            fetched.set()
+            streams = app.probe_audio_soon(HASH, 1, wait=5)
+        self.assertEqual(streams[0]["codec_name"], "aac")
+        self.assertEqual(ffprobe.call_count, 1)
+        self.assertEqual(ffprobe.call_args.kwargs["timeout"], app.PROBE_BACKGROUND_SECONDS)
+
+
+    def test_a_background_probe_that_times_out_leaves_the_file_pending(self):
+        with mock.patch.object(app.subprocess, "run", side_effect=subprocess.TimeoutExpired("ffprobe", 180)) as ffprobe:
+            self.assertIsNone(app.probe_audio_soon(HASH, 1, wait=5))
+        self.assertEqual(ffprobe.call_count, 1, "the waiting lookup does not probe again itself")
 
 
 class CacheTests(unittest.TestCase):
@@ -1172,6 +1193,16 @@ class HttpTests(unittest.TestCase):
         with mock.patch.object(app, "ensure_rendition") as ensure:
             self.assertEqual(self.get(f"/extaudio/{HASH}/1/0/copy/s0.m4s")[0], 404)
         ensure.assert_not_called()
+
+    def test_a_prepared_rendition_is_checked_without_starting_work(self):
+        with mock.patch.object(app, "rendition_ready", return_value=False), \
+                mock.patch.object(app, "ensure_rendition") as ensure:
+            status, _, _ = self.get(f"/extaudio/{HASH}/1/0/copy/audio.m3u8?ready=1")
+        self.assertEqual(status, 404)
+        ensure.assert_not_called()
+        with mock.patch.object(app, "rendition_ready", return_value=True):
+            status, _, _ = self.get(f"/extaudio/{HASH}/1/0/copy/audio.m3u8?ready=1")
+        self.assertEqual(status, 200)
 
     def test_busy_queue_is_reported(self):
         with mock.patch.object(app, "torrent_files", return_value=FILES), \

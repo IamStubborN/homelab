@@ -805,7 +805,7 @@ test('an external audio file still downloading is asked for until the sidecar re
   await h.settle();
   assert.equal(h.work().homelab_external_audio, undefined, 'nothing to restore yet');
   assert.ok(h.subtitleMenu().includes('YakuSub Studio: полные (внешние)'), 'external subtitles do not wait for the audio');
-  for (let i = 0; i < 3; i++) { h.fireTimer(5000); await h.settle(); }
+  for (let i = 0; i < 3; i++) { h.fireTimer(2000); await h.settle(); }
   assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', externalLabel]);
   assert.equal(h.work().homelab_external_audio.name, 'AniLibria.tv', 'the remembered voice-over returns once it is read');
 });
@@ -1655,4 +1655,137 @@ test('external audio that arrives after embedded subtitles is still offered', as
   release();
   await h.settle();
   assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', externalLabel]);
+});
+
+function episodes(h, hash, files, position) {
+  h.context.Lampa.PlayerPlaylist = {
+    get: () => files.map(file => ({ torrent_hash: hash, url: `https://lampa.test/torrserver/gst/${hash}/master.m3u8?index=${file}&audio=0` })),
+    position: () => position, canNext: () => position < files.length - 1,
+  };
+}
+
+test('the remembered external voice-over is prepared for the following episodes, which start with it', async t => {
+  const storage = new Map();
+  const h = harness(t, storage, { external: [anilibria] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  h.ready();
+  episodes(h, 'abc', [12, 13, 14, 15, 16], 1);
+  const timeupdate = current => h.context.Lampa.PlayerVideo.listener.send('timeupdate', { current, duration: 1420 });
+  timeupdate(30);
+  await h.settle();
+  assert.ok(!h.requests.some(r => /\/1[45]\/tracks$/.test(new URL(r.url).pathname)), 'the episode start is not competed with');
+  timeupdate(61);
+  for (let i = 0; i < 4; i++) await h.settle();
+  const asked = h.requests.map(r => new URL(r.url).pathname).filter(path => /\/(14|15)\/tracks$|audio\.m3u8$/.test(path));
+  assert.deepEqual(asked.filter(path => /tracks$/.test(path)), ['/extaudio/abc/14/tracks', '/extaudio/abc/15/tracks'], 'following episodes in order, not earlier ones');
+  const prepared = JSON.parse(storage.get('homelab_gst_prepared_audio')).abc;
+  assert.deepEqual(Object.keys(prepared), ['14', '15']);
+
+  h.start(14, 'abc', true);
+  assert.deepEqual({ ...h.work().homelab_external_audio }, externalAudio, 'the next episode starts with the voice-over');
+  const loads = h.loads.length;
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  assert.equal(h.loads.length, loads, 'and does not switch to it again');
+  assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), [externalLabel]);
+});
+
+test('a voice-over prepared for another choice is not used', async t => {
+  const storage = new Map([['homelab_gst_prepared_audio', JSON.stringify({ abc: { 14: {
+    preference: JSON.stringify({ title: 'other studio', language: 'ru', external: true }), carrier: 0, at: Date.now(), audio: externalAudio,
+  } } })], ['homelab_gst_track_preferences', JSON.stringify({ abc: { audio: { title: 'anilibria.tv', language: 'ru', external: true } } })]]);
+  const h = harness(t, storage, { external: [anilibria] });
+  h.start(14, 'abc', true);
+  assert.equal(h.work().homelab_external_audio, undefined);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+});
+
+test('a remembered voice-over that is still being prepared says so and when it is ready', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  h.ready();
+  h.notices.length = 0;
+  h.context.window.fetch = (fetch => (url, options) => /audio\.m3u8$/.test(new URL(url).pathname) && !h.notices.length
+    ? (h.requests.push({ url, options }), Promise.resolve({ ok: false, status: 503 })) : fetch(url, options))(h.context.window.fetch);
+  h.start(14, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  assert.deepEqual(h.notices, ['Готовлю озвучку: ' + externalLabel]);
+  h.fireTimer(2000);
+  await h.settle();
+  assert.deepEqual(h.notices, ['Готовлю озвучку: ' + externalLabel, 'Озвучка готова: ' + externalLabel]);
+});
+
+const preparedStorage = () => new Map([['homelab_gst_prepared_audio', JSON.stringify({ abc: { 14: {
+  preference: JSON.stringify({ title: 'anilibria.tv', language: 'ru', external: true }), carrier: 0, at: Date.now(), audio: externalAudio,
+} } })], ['homelab_gst_track_preferences', JSON.stringify({ abc: { audio: { title: 'anilibria.tv', language: 'ru', external: true } } })]]);
+
+test('a prepared voice-over gone from the cache falls back to the embedded audio and is prepared again', async t => {
+  const storage = preparedStorage();
+  const h = harness(t, storage, { external: [anilibria], rendition: [404] });
+  h.start(14, 'abc', true);
+  assert.deepEqual({ ...h.work().homelab_external_audio }, externalAudio);
+  const loads = h.loads.length;
+  await h.probe([japaneseAAC]);
+  for (let i = 0; i < 3; i++) await h.settle();
+  assert.equal(JSON.parse(storage.get('homelab_gst_prepared_audio')).abc[14], undefined, 'the entry is forgotten');
+  assert.ok(h.requests.some(r => new URL(r.url).search === '?ready=1'));
+  assert.ok(h.loads.length > loads, 'the episode is reloaded instead of failing');
+  assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), [externalLabel]);
+});
+
+test('a prepared voice-over that fails to load in the player falls back instead of an error', async t => {
+  const storage = preparedStorage();
+  const h = harness(t, storage, { external: [anilibria] });
+  h.start(14, 'abc', true);
+  const hls = h.createHls();
+  const errors = [];
+  hls.on('error', (name, data) => errors.push(data));
+  hls.trigger('error', { type: 'networkError', details: 'audioTrackLoadError', fatal: true, response: { code: 503 } });
+  assert.deepEqual(errors, []);
+  h.fireTimer(0);
+  await h.probe([japaneseAAC]);
+  for (let i = 0; i < 3; i++) await h.settle();
+  assert.equal(JSON.parse(storage.get('homelab_gst_prepared_audio')).abc[14], undefined);
+  assert.equal(h.work().homelab_prepared, undefined);
+});
+
+test('the following episodes are prepared once the external voice-over is chosen later in the episode', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  h.ready();
+  episodes(h, 'abc', [13, 14], 0);
+  const timeupdate = current => h.context.Lampa.PlayerVideo.listener.send('timeupdate', { current, duration: 1420 });
+  timeupdate(61);
+  await h.settle();
+  assert.ok(!h.requests.some(r => /\/14\/tracks$/.test(new URL(r.url).pathname)));
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  timeupdate(62);
+  for (let i = 0; i < 4; i++) await h.settle();
+  assert.ok(h.requests.some(r => /\/14\/tracks$/.test(new URL(r.url).pathname)), 'the next episode is prepared');
+});
+
+test('a prepared start on an audio track the episode does not have reloads on one it has', async t => {
+  const storage = preparedStorage();
+  const entries = JSON.parse(storage.get('homelab_gst_prepared_audio'));
+  entries.abc[14].carrier = 3;
+  storage.set('homelab_gst_prepared_audio', JSON.stringify(entries));
+  const h = harness(t, storage, { external: [anilibria] });
+  h.start(14, 'abc', true);
+  const loads = h.loads.length;
+  await h.probe([japaneseAAC]);
+  for (let i = 0; i < 3; i++) await h.settle();
+  assert.equal(JSON.parse(storage.get('homelab_gst_prepared_audio')).abc[14], undefined);
+  assert.ok(h.loads.length > loads);
+  assert.equal(new URL(h.work().url).searchParams.get('audio'), '0');
 });

@@ -1590,7 +1590,9 @@ test('the signs-only item draws only on-screen text styles of an external ASS', 
     'Dialogue: 0,0:00:01.00,0:00:02.00,Text,,0,0,0,,{\\pos(1,1)}Реплика\r\n' +
     'Dialogue: 0,0:00:01.00,0:00:02.00,Subtitles,,0,0,0,,Вторая реплика\r\n' +
     'Dialogue: 0,0:00:01.00,0:00:02.00,Sign 3,,0,0,0,,Имя: Фран\n' +
-    'Dialogue: 0,0:00:03.00,0:00:04.00,Надпись серии 1,,0,0,0,,Серия 4\n';
+    'Dialogue: 0,0:00:03.00,0:00:04.00,Надпись серии 1,,0,0,0,,Серия 4\n' +
+    'Dialogue: 0,0:00:05.00,0:00:06.00,Caption-6,,0,0,0,,{\\pos(76,52)}Авангард\n' +
+    'Dialogue: 0,0:00:07.00,0:00:08.00,Интерфейс 1,,0,0,0,,Получен титул\n';
   const h = harness(t, new Map(), { ass: assLookup, raw: { 25: new TextEncoder().encode(script), 37: new Uint8Array(1), 38: new Uint8Array(1) } });
   h.start(13, 'abc', true);
   await h.probe([japaneseAAC]);
@@ -1599,6 +1601,7 @@ test('the signs-only item draws only on-screen text styles of an external ASS', 
   await h.settle();
   const content = FakeAss.instances[0].options.subContent;
   assert.ok(content.includes('Имя: Фран') && content.includes('Серия 4'));
+  assert.ok(content.includes('Авангард') && content.includes('Получен титул'), 'captions and interface messages are signs');
   assert.ok(!content.includes('Реплика'), 'dialogue is dropped even with a position');
   assert.ok(!content.includes('Вторая реплика'), 'a "Subtitles" style is dialogue');
   assert.ok(content.includes('Style: Text,Arial'), 'styles stay');

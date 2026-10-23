@@ -895,7 +895,8 @@
     // "Надпись серии", a translator's "Примечание". Dialogue styles are
     // named after speakers or "Text", "Default".
     // Word starts only: "Subtitles" and "Design" are dialogue styles.
-    var SIGN_STYLE = /(^|[\s_\-])(sign|title|note)|надпис|тайтл|примеч/i;
+    // Captions and interface messages (game windows, system notices) are on-screen text too.
+    var SIGN_STYLE = /(^|[\s_\-])(sign|title|note|caption|interface)|надпис|тайтл|примеч|интерфейс/i;
 
     function signsOnly(text) {
       var style = 3; // the V4+ column order, until a Format line says otherwise

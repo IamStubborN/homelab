@@ -908,8 +908,20 @@
         }
         if (!/^Dialogue:/i.test(line)) return true;
         if (style < 0) return false;
-        return SIGN_STYLE.test(line.slice(line.indexOf(':') + 1).split(',')[style] || '');
+        var fields = line.slice(line.indexOf(':') + 1).split(',');
+        return SIGN_STYLE.test(fields[style] || '') || typeset(fields.slice(style + 6).join(','));
       }).join('\n');
+    }
+
+    // Some groups type a sign in the dialogue style: an episode title, a
+    // "Next time" card, credits. Such a line is placed and styled by hand;
+    // a placed line of dialogue rarely carries more than its position.
+    var TYPESET_TAGS = [/\\fade?\(/, /\\(blur|be)\d/, /\\fs\d/, /\\fsc[xy]\d/, /\\[1-4]?c&H/i, /\\fr[xyz]?-?\d/,
+      /\\i?clip\(/, /\\fn[^\\}]/, /\\org\(/, /\\bord\d/, /\\shad\d/];
+
+    function typeset(text) {
+      if (!/\\(pos|move)\(/.test(text)) return false;
+      return TYPESET_TAGS.filter(function (tag) { return tag.test(text); }).length >= 2;
     }
 
     // Windows fonts subtitles often name without attaching them, and the

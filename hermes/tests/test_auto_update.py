@@ -92,7 +92,7 @@ class FakeHost:
                             "HERMES_GATEWAY_BOOTSTRAP_STATE=running"],
                     "Labels": {"com.docker.compose.config-hash": f"hash-{name}"},
                 },
-                "State": {"Health": {"Status": "healthy"}, "StartedAt": "2026-10-24T02:30:00.123456789Z"},
+                "State": {"Health": {"Status": "healthy"}, "Running": True, "StartedAt": "2026-10-24T02:30:00.123456789Z"},
                 "Mounts": [
                     {"Type": "volume", "Name": f"{name}-profile", "Destination": "/opt/data",
                      "Source": str(profile), "RW": True},
@@ -118,7 +118,9 @@ class FakeHost:
         return self.digest
 
     def inspect(self, name):
-        return json.loads(json.dumps(self.containers[name]))
+        container = json.loads(json.dumps(self.containers[name]))
+        container["State"]["Running"] = self.agents_running
+        return container
 
     def image_env(self, image):
         return ["PATH=/usr/bin"]
@@ -405,7 +407,8 @@ class AutoUpdateTests(unittest.TestCase):
         utc = datetime.timezone.utc
         for start, limit in (("2026-10-24T02:30", "2026-10-24T00:30"),   # summer time
                              ("2026-10-25T02:30", "2026-10-25T00:30"),   # clocks go back at 04:00
-                             ("2027-01-10T02:30", "2027-01-10T01:30")):
+                             ("2027-01-10T02:30", "2027-01-10T01:30"),
+                             ("2027-03-28T02:30", "2027-03-28T01:00")):  # 03:30 does not exist: 04:00
             with self.subTest(start=start):
                 expected = datetime.datetime.fromisoformat(limit).replace(tzinfo=utc).timestamp()
                 self.assertEqual(updater.latest_start(at(start)), expected)
@@ -421,9 +424,17 @@ class AutoUpdateTests(unittest.TestCase):
             os.kill(os.getpid(), updater.signal.SIGTERM)
             original(*args)
 
-        updater.restore_volume = interrupted
+        calls = []
+
+        def counted(*args):
+            calls.append(args[0])
+            interrupted(*args)
+
+        updater.restore_volume = counted
         self.addCleanup(setattr, updater, "restore_volume", original)
         self.assertEqual(self.run_updater(), 1)
+        self.assertEqual(len(calls), len(set(calls)), "each volume is restored once, by one rollback")
+        self.assertEqual(self.host.calls.count(("up", PINNED)), 1)
         self.assertNotIn("phase", self.saved_state())
         self.assertEqual((self.host.profile("hermes-primary") / "state.db").read_bytes(), b"before")
         self.assertIn("откатил", self.host.messages[-1])
@@ -463,6 +474,61 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(self.run_updater(), 1)
         self.assertNotIn("failed_digest", self.saved_state())
         self.assertIn("Повторю следующей ночью", self.host.messages[-1])
+
+    def test_kill_before_the_env_switch_restores_instead_of_trusting_stopped_agents(self):
+        original = updater.set_env_value
+
+        def killed(*args):
+            raise KeyboardInterrupt
+
+        updater.set_env_value = killed
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_updater()
+        updater.set_env_value = original
+        self.assertEqual(self.saved_state()["phase"], "apply")
+        self.assertFalse(self.host.agents_running)
+        recovery = updater.Updater(self.host, self.host.root, self.state, recover_only=True)
+        self.assertEqual(recovery.run(), 1)
+        self.assertTrue(self.host.agents_running)
+        self.assertIn(("up", PINNED), self.host.calls)
+        self.assertNotIn("уже откачено", self.host.messages[-1])
+
+    def test_sigterm_inside_finish_recovers_from_the_saved_state(self):
+        previous = updater.signal.signal(updater.signal.SIGTERM, updater.terminated)
+        self.addCleanup(updater.signal.signal, updater.signal.SIGTERM, previous)
+        original = self.host.tag
+
+        def interrupted(*args):
+            original(*args)
+            os.kill(os.getpid(), updater.signal.SIGTERM)
+
+        self.host.tag = interrupted
+        self.assertEqual(self.run_updater(), 0)
+        state = self.saved_state()
+        self.assertNotIn("phase", state)
+        self.assertEqual(state["config_version"], 41)
+        self.assertIsNotNone(state["mcp_revision"])
+        self.assertFalse(any("MCP" in message for message in self.host.messages))
+
+    def test_sigterm_before_the_snapshot_drops_canary_copies_and_reports(self):
+        previous = updater.signal.signal(updater.signal.SIGTERM, updater.terminated)
+        self.addCleanup(updater.signal.signal, updater.signal.SIGTERM, previous)
+        self.host.profile("hermes-primary").joinpath("gateway_state.json").write_text(
+            json.dumps({**gateway_state(), "active_agents": 1}))
+        self.host.sleep = lambda seconds: os.kill(os.getpid(), updater.signal.SIGTERM)
+        self.assertEqual(self.run_updater(), 1)
+        self.assertEqual(list(self.state.glob("*/canary-*/data")), [])
+        self.assertNotIn(("stop",), self.host.calls)
+        self.assertIn("агенты не затронуты", self.host.messages[-1])
+
+    def test_failed_size_check_does_not_restart_running_agents(self):
+        original = updater.MAX_SNAPSHOT_BYTES
+        updater.MAX_SNAPSHOT_BYTES = 1
+        self.addCleanup(setattr, updater, "MAX_SNAPSHOT_BYTES", original)
+        self.assertEqual(self.run_updater(), 1)
+        self.assertNotIn(("docker", "stop"), self.host.calls)
+        self.assertNotIn(("docker", "start"), self.host.calls)
+        self.assertIn("снимок данных не удался", self.host.messages[-1])
 
     def test_recovery_of_an_already_finished_rollback_only_clears_the_phase(self):
         self.host.healthy_after_up = False

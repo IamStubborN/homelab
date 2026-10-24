@@ -144,7 +144,8 @@ retention observation (03:55) and Watchtower (04:00). It tracks the upstream
 5. waits until both gateways report `active_agents: 0` in
    `gateway_state.json` for 3 consecutive minutes (a reply in progress counts;
    a user typing does not). The wait ends 20 minutes after the canaries and, for
-   a run started before 03:30, at the night's first 03:30 in Sofia; canaries
+   a run started before 03:30, at the night's first 03:30 in Sofia (04:00 on
+   the spring night, which has no 03:30); canaries
    that end later postpone the install without counting a busy night. A busy
    night is retried the next night and the third in a row is reported;
 6. stops both agents and snapshots their read-write volumes (profile, memory,

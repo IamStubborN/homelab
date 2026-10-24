@@ -367,6 +367,8 @@ class Updater:
         self.state_file = self.state_dir / "state.json"
         self.state: dict = {}
         self.deadline = 0.0
+        self.generation: pathlib.Path | None = None
+        self.stopped = False  # whether this run stopped the agents
 
     # state ------------------------------------------------------------
     def load(self) -> None:
@@ -441,7 +443,8 @@ class Updater:
         except (UpdateError, IndexError, ValueError):
             return None
         for container in states:
-            if container["Config"]["Image"] != image or \
+            # A stopped container keeps its last health status.
+            if container["Config"]["Image"] != image or not container["State"].get("Running") or \
                     (container["State"].get("Health") or {}).get("Status") != "healthy":
                 return None
             if telegram and not self.telegram_connected(container):
@@ -579,6 +582,7 @@ class Updater:
         for volume in volumes:
             if os.stat(pathlib.Path(volume["source"]).parent).st_dev != os.stat(generation).st_dev:
                 raise UpdateError("state and Docker volumes must share a filesystem")
+        self.stopped = True
         self.host.stop()
         for index, volume in enumerate(volumes):
             volume["archive"] = f"volume-{index}.tar.gz"
@@ -611,8 +615,13 @@ class Updater:
         try:
             return self.update()
         except Terminated:
+            self.load()  # act on what a restart would read, not on half-made changes
             phase = self.state.get("phase")
             log(f"Terminated in phase {phase}.")
+            if phase is None and self.generation is not None:
+                for copied in self.generation.glob("canary-*/data"):  # copies of the live .env
+                    shutil.rmtree(copied, ignore_errors=True)
+                self.notify("Hermes: автообновление остановлено до установки, агенты не затронуты.")
             if phase in ("snapshot", "apply", "rollback") and not self.dry_run:
                 try:
                     return self.recover()
@@ -622,6 +631,7 @@ class Updater:
                                 f"нужна ручная проверка ({self.state_dir}).")
             return 1
         except Exception as error:
+            self.load()
             phase = self.state.get("phase")
             log(f"Update crashed in phase {phase}: {type(error).__name__}: {error}")
             self.notify(f"Hermes: автообновление упало ({type(error).__name__}: {error}), phase={phase or 'нет'}."
@@ -720,7 +730,7 @@ class Updater:
             log(f"DRY_RUN: idle now: {self.idle(containers)}; would pull, check canaries, snapshot and apply.")
             return 0
 
-        generation = self.state_dir / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(self.host.now()))
+        generation = self.generation = self.state_dir / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(self.host.now()))
         generation.mkdir(mode=0o700)
         env_path = self.root / ".env"
         try:
@@ -786,7 +796,7 @@ class Updater:
         try:
             self.snapshot(volumes, generation)
         except Exception as error:
-            started = self.start_agents()
+            started = self.start_agents() if self.stopped else True  # size checks fail before the stop
             self.phase(None, required=False)
             self.cleanup(generation.name)
             self.notify(f"Hermes: снимок данных не удался ({error}), обновление не установлено"
@@ -905,7 +915,10 @@ def latest_start(now: float) -> float | None:
     import zoneinfo
     zone = zoneinfo.ZoneInfo("Europe/Sofia")
     local = datetime.datetime.fromtimestamp(now, zone)
-    limit = local.replace(hour=LATEST_START[0], minute=LATEST_START[1], second=0, microsecond=0, fold=0).timestamp()
+    def at(hour, minute):
+        return local.replace(hour=hour, minute=minute, second=0, microsecond=0, fold=0).timestamp()
+    # On the spring night 03:30 does not exist and fold=0 gives 04:30: cap at 04:00 (Watchtower).
+    limit = min(at(*LATEST_START), at(4, 0))
     return limit if now < limit else None
 
 

@@ -291,7 +291,9 @@
         delete config.xhrSetup;
         config.manifestLoadPolicy = policy(90000, 90000, 2);
         config.playlistLoadPolicy = policy(30000, 60000, 2);
-        config.fragLoadPolicy = policy(30000, 120000, 3);
+        // A torrent at the edge of its bitrate can take longer than 30 s to
+        // fetch the pieces of one segment; waiting beats asking again.
+        config.fragLoadPolicy = policy(60000, 180000, 3);
         if (work.homelab_external_audio) {
           externalAudioLoaders(config, config.loader || BaseHls.DefaultConfig.loader, work.homelab_external_audio);
         }

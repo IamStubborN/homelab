@@ -172,8 +172,8 @@ run these `up` commands from a Worker. Do not enable Watchtower. Do not add
 GitHub Actions.
 
 Start health first, wait for the healthcheck, start wiki host services only
-after their gates, then recreate both Hermes services so their entrypoint
-installs the current config and skill:
+after their gates, then recreate both Hermes services so they load the
+current mounted config and skill:
 
 ```bash
 docker compose build health-service

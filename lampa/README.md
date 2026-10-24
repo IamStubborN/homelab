@@ -248,10 +248,12 @@ or task, external audio lookup, preparation and fallback, and JASSUB
 track; `preference`, `drawn`, `new-video`; `replace`, `off`, `failed`,
 `clear`), `ass-failed` and `ass-fallback`. Each line carries the page session
 `s`, the first 8 hash characters `h`, the file `f` and the position `t` in
-seconds; URLs keep only their path. The plugin drops a repeat within 5 s and
-sends at most 30 events a minute, counting the rest in `dropped`; the sidecar
-takes bodies up to 4 KiB of JSON, 300 a minute in all. Logging failures never
-affect playback.
+seconds; URLs keep only their path and full hashes their prefix. The plugin
+drops a repeat within 5 s and sends at most 30 events a minute; `dropped` on
+the next event counts both kinds. The sidecar takes bodies up to 4 KiB of
+JSON, 120 a minute in all. The `lampa-extaudio-log` router limits each address
+to 60 a minute (burst 30) and keeps these posts out of Traefik's access log.
+Logging failures never affect playback.
 
 `init.conf` disables VeoVeo: its upstream host `api.rstprgapipt.com` no longer
 resolves. Lampac rereads `init.conf` when the file changes, but it is mounted as

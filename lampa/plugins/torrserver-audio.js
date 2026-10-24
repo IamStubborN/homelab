@@ -22,14 +22,19 @@
     var logCount = 0;
     var logDropped = 0;
 
+    // A full torrent hash shortens to the prefix every event carries.
+    function shortHashes(text) {
+      return text.replace(/[0-9a-f]{40}/gi, function (hash) { return hash.slice(0, 8); });
+    }
+
     function logText(value) {
       // A message may quote a URL whose query carries a token.
-      return String(value).replace(/\?\S*/g, '').slice(0, 160);
+      return shortHashes(String(value).replace(/\?\S*/g, '')).slice(0, 160);
     }
 
     function logPath(url) {
       if (!url) return null;
-      try { return new URL(url, window.location.href).pathname.slice(0, 160); } catch (error) { return null; }
+      try { return shortHashes(new URL(url, window.location.href).pathname).slice(0, 160); } catch (error) { return null; }
     }
 
     function report(name, fields, work) {
@@ -944,7 +949,7 @@
         why: why, track: item.label, embedded: Boolean(item.homelabAss.events),
         same: state.assActive === item, newVideo: Boolean(state.assVideo) && state.assVideo !== video
       };
-      hideAss(state, 'replace');
+      hideAss(state, created.newVideo ? 'new-video' : 'replace');
       report('ass-create', created, state.work);
       state.assActive = item;
       state.assVideo = video;

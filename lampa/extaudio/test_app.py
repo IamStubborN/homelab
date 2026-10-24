@@ -1,3 +1,4 @@
+import http.client
 import io
 import json
 import os
@@ -1347,6 +1348,24 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(statuses, [415, 400, 400, 400, 413, 404])
         self.assertEqual(lines, [])
         self.assertEqual(self.get("/extaudio/log")[0], 404)
+
+    def test_client_event_text_cannot_split_the_line(self):
+        event = {"e": "ass-failed", "reason": "one\ntwo\r\u2028three\u2029four\x00five", "ts\n": 1, "Ts": "forged"}
+        statuses, lines = self.logged(("/extaudio/log", json.dumps(event).encode()))
+        self.assertEqual(statuses, [204])
+        self.assertEqual(len(lines), 1)
+        self.assertNotIn("\u2028", lines[0])
+        logged = json.loads(lines[0][len("client "):])
+        self.assertEqual(logged["reason"], "onetwothreefourfive")
+        self.assertEqual(set(logged), {"ts", "e", "reason"})
+
+    def test_client_events_need_a_content_length(self):
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
+        self.addCleanup(connection.close)
+        connection.putrequest("POST", "/extaudio/log")
+        connection.putheader("Content-Type", "application/json")
+        connection.endheaders()
+        self.assertEqual(connection.getresponse().status, 411)
 
     def test_client_events_are_rate_limited(self):
         with mock.patch.object(app, "LOG_PER_MINUTE", 2):

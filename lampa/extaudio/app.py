@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -143,10 +144,10 @@ EMBEDDED_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(embedded)|
 RENDERER_RE = re.compile(r"^/extaudio/jassub/([a-z0-9-]+\.(?:js|wasm|woff2|ttf|txt))$")
 # Player events, one JSON line each in the container log (`client {...}`).
 LOG_MAX_BYTES = 4096
-LOG_PER_MINUTE = 300  # all viewers together; the plugin sends at most 30
+LOG_PER_MINUTE = 120  # all viewers together; the plugin sends at most 30
 LOG_MAX_FIELDS = 24
 LOG_MAX_TEXT = 200
-LOG_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$", re.IGNORECASE)
+LOG_KEY_RE = re.compile(r"[a-z][a-z0-9_-]{0,23}", re.IGNORECASE)
 CONTENT_TYPES = {".m3u8": "application/vnd.apple.mpegurl", ".mp4": "audio/mp4", ".m4s": "video/iso.segment"}
 
 _probe_cache = {}
@@ -164,6 +165,7 @@ _library = {"faces": {}, "index": None}
 _library_lock = threading.Lock()
 _log_window = {"start": 0.0, "count": 0}
 _log_lock = threading.Lock()
+_log_write_lock = threading.Lock()
 
 
 def log_allowed(now=None):
@@ -175,19 +177,32 @@ def log_allowed(now=None):
         return _log_window["count"] <= LOG_PER_MINUTE
 
 
+def log_text(value):
+    # Control characters and line or paragraph separators would split the line.
+    return "".join(char for char in value if unicodedata.category(char) not in ("Cc", "Zl", "Zp"))
+
+
 def client_event(payload):
     """Flat scalar fields, short strings; anything else is dropped."""
     now = time.time()
     event = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now)) + f".{int(now * 1000) % 1000:03d}Z"}
     for key, value in list(payload.items())[:LOG_MAX_FIELDS]:
-        if not isinstance(key, str) or not LOG_KEY_RE.match(key) or key == "ts":
+        if not isinstance(key, str) or not LOG_KEY_RE.fullmatch(key) or key.lower() == "ts":
             continue
+        key = log_text(key)
         if isinstance(value, str):
-            event[key] = value[:LOG_MAX_TEXT]
+            event[key] = log_text(value)[:LOG_MAX_TEXT]
         elif value is None or isinstance(value, bool) or isinstance(value, int) and abs(value) < 2 ** 53 or \
                 isinstance(value, float) and math.isfinite(value):
             event[key] = value
     return event
+
+
+def write_client_event(payload):
+    line = "client " + json.dumps(client_event(payload), ensure_ascii=False, separators=(",", ":"))
+    with _log_write_lock:
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
 
 
 def stream_url(torrent_hash, file_id):
@@ -1641,13 +1656,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(415, {"error": "json only"})
         if not log_allowed():
             return self.send_json(429, {"error": "busy"})
+        # A client that announces a body and never sends it must not hold a thread.
+        self.connection.settimeout(5)
         try:
             payload = json.loads(self.rfile.read(length))
         except (ValueError, RecursionError, OSError):
             return self.send_json(400, {"error": "invalid json"})
         if not isinstance(payload, dict):
             return self.send_json(400, {"error": "object expected"})
-        print("client " + json.dumps(client_event(payload), ensure_ascii=False, separators=(",", ":")), flush=True)
+        write_client_event(payload)
         self.send_response(204)
         self.send_header("Cache-Control", "no-store")
         self.end_headers()

@@ -1709,12 +1709,18 @@ test('HLS errors are logged with the URL path only, and repeats and bursts are d
   assert.equal(errors.length, 1, 'a repeat within seconds and a minor event are not sent');
   assert.deepEqual([errors[0].details, errors[0].status, errors[0].sn, errors[0].frag, errors[0].path], ['fragLoadError', 502, 7, 'main', '/gst/501/seg7.m4s']);
   assert.ok(!JSON.stringify(h.logs).includes('secret'));
+  now += 5000;
+  hls.trigger('error', error);
+  assert.equal(h.logs.filter(event => event.e === 'hls-error').length, 2, 'a repeat after 5 s is sent again');
+  hls.trigger('error', { type: 'networkError', details: 'levelLoadError', fatal: false,
+    url: 'https://lampa.test/extaudio/' + 'ab12'.repeat(10) + '/1/tracks', reason: 'see ' + 'AB12'.repeat(10) });
+  assert.deepEqual([h.logs.at(-1).path, h.logs.at(-1).reason], ['/extaudio/ab12ab12/1/tracks', 'see AB12AB12'], 'full hashes shorten');
   now += 6000;
   for (let i = 0; i < 40; i++) hls.trigger('error', { ...error, frag: { ...error.frag, sn: i } });
   assert.equal(h.logs.length, 30, 'at most 30 events a minute');
   now += 60000;
   hls.trigger('error', { type: 'networkError', details: 'manifestLoadError', fatal: true });
-  assert.equal(h.logs.at(-1).dropped, 12, 'the next event counts what was dropped');
+  assert.equal(h.logs.at(-1).dropped, 14, 'the next event counts what was dropped (play-start used one slot)');
   assert.equal(h.logs.at(-1).fatal, true);
 });
 
@@ -1734,7 +1740,7 @@ test('JASSUB creation and destruction are logged with the reason', async t => {
   const ass = h.logs.filter(event => /^ass-(create|destroy)$/.test(event.e)).map(event => [event.e, event.why, event.same, event.newVideo]);
   assert.deepEqual(ass, [
     ['ass-create', 'mode', false, false],
-    ['ass-destroy', 'replace', undefined, undefined],
+    ['ass-destroy', 'new-video', undefined, undefined],
     ['ass-create', 'new-video', true, true],
     ['ass-destroy', 'off', undefined, undefined],
   ]);

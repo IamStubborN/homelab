@@ -33,7 +33,7 @@ services:
       - "com.centurylinklabs.watchtower.enable=false"
       - "deunhealth.restart.on.unhealthy=true"
       - "traefik.enable=true"
-      - "traefik.docker.network=proxy"
+      - "traefik.docker.network=jacred"
       - "traefik.http.routers.lampa-jacred.tls=true"
       - "traefik.http.routers.lampa-jacred.entrypoints=https"
       - "traefik.http.routers.lampa-jacred.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/jacred`)"
@@ -41,8 +41,10 @@ services:
       - "traefik.http.routers.lampa-jacred.middlewares=lampa-jacred-strip"
       - "traefik.http.middlewares.lampa-jacred-strip.stripprefix.prefixes=/jacred"
       - "traefik.http.services.lampa-jacred.loadbalancer.server.port=9117"
+    # Not on `proxy`: its config API returns tracker passwords and cookies to
+    # any container that can reach it, so only its own clients share this network.
     networks:
-      - proxy
+      - jacred
 
   jacred-cron:
     build:
@@ -64,8 +66,12 @@ services:
     volumes:
       - ./data/log:/var/log/jacred
     networks:
-      - proxy
+      - jacred
 
 networks:
-  proxy:
+  # JacRed and its clients: Lampac, Solverr, the scheduler, Traefik and the
+  # TorrServer it analyses tracks with. Not internal: JacRed crawls trackers.
+  # Created once like `proxy`: docker network create jacred
+  jacred:
+    name: jacred
     external: true

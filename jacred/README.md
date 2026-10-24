@@ -47,6 +47,17 @@ TorrServer's 2 GiB RAM cache and disconnect timeout are retained. On
 when torrents became inactive. This observation does not establish a leak
 and does not justify a hard memory limit below playback demand.
 
+## Network
+
+JacRed has no API key, and `GET /api/v1.0/config` returns tracker passwords
+and cookies to anyone who reaches port 9117 directly (Traefik refuses it from
+outside). JacRed therefore stays off the shared `proxy` network and lives on
+`jacred` with only its clients: `lampa` (Lampac's parser), `solverr`,
+`solverr-crawl`, `jacred-cron`, Traefik (the `/jacred` route) and
+`gluetun-torrserver` (`tsuri`, for track analyses). The network is not
+internal, so crawling keeps its Internet access. Create it once with
+`docker network create jacred` before the first `docker compose up`.
+
 ## Background schedule
 
 The scheduler uses `Europe/Sofia` from the root `TIMEZONE` setting. Times

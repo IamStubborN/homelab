@@ -168,9 +168,13 @@ services:
       start_period: 90s
     networks:
       - proxy
+      - jacred
 
 networks:
   proxy:
+    external: true
+  jacred:
+    name: jacred
     external: true
 
 secrets:

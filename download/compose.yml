@@ -152,6 +152,7 @@ services:
       - "deunhealth.restart.on.unhealthy=true"
     networks:
       - proxy
+      - jacred
     security_opt:
       - no-new-privileges:true
 
@@ -356,6 +357,7 @@ services:
       - "traefik.enable=false"
     networks:
       - proxy
+      - jacred
 
   # Dedicated browser pool for JacRed crawl/ParseAll work.
   solverr-crawl:
@@ -404,6 +406,7 @@ services:
       - "traefik.enable=false"
     networks:
       - proxy
+      - jacred
 
   gluetun-watcher:
     image: docker:cli
@@ -471,4 +474,7 @@ secrets:
 
 networks:
   proxy:
+    external: true
+  jacred:
+    name: jacred
     external: true

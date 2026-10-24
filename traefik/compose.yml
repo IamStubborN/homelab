@@ -17,6 +17,7 @@ services:
       proxy:
         aliases:
           - freedium.${DOCKER_DOMAIN}
+      jacred: {}
     ports:
       # HTTP & HTTPS
       - "80:80"
@@ -44,4 +45,7 @@ secrets:
 
 networks:
   proxy:
+    external: true
+  jacred:
+    name: jacred
     external: true

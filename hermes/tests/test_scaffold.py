@@ -33,7 +33,7 @@ class ImageContractTests(unittest.TestCase):
             service = compose["services"][f"hermes-{profile}"]
             self.assertEqual(
                 service["image"],
-                "nousresearch/hermes-agent@sha256:efb82540aeb8ac21c58ecb4482bd3eb103ea617da2af2c61f12526ed68f6c2d9",
+                "${HERMES_IMAGE:-nousresearch/hermes-agent@sha256:efb82540aeb8ac21c58ecb4482bd3eb103ea617da2af2c61f12526ed68f6c2d9}",
             )
             self.assertNotIn("pull_policy", service)
             self.assertEqual(

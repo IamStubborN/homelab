@@ -1,0 +1,635 @@
+#!/usr/bin/env python3
+"""Nightly guarded update of the official Hermes image for both profiles.
+
+When the tracked upstream tag has a new digest that has not failed here, check
+the candidate in disposable canaries, wait until both agents are idle, stop
+them, snapshot their persistent volumes, select the candidate through the
+deployment's root `.env` (`HERMES_IMAGE`), recreate only the two agents and
+require them to become healthy without migration backups or persisted runtime
+secrets. Any failure after the snapshot restores the previous image and data.
+Reports go to Telegram through the disk-watchdog bot. DRY_RUN=1 only reports.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import pathlib
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import tarfile
+import time
+import urllib.request
+
+ROOT = pathlib.Path(os.environ.get("HERMES_UPDATE_ROOT", "/home/iamstubborn/homelab"))
+STATE = pathlib.Path(os.environ.get("HERMES_UPDATE_STATE", "/var/lib/hermes-update"))
+REPOSITORY = "nousresearch/hermes-agent"
+TAG = os.environ.get("HERMES_UPDATE_TAG", "stable")
+SERVICES = ("hermes-primary", "hermes-secondary")
+ROLLBACK_TAG = "homelab/hermes-agent:rollback"
+ENV_KEY = "HERMES_IMAGE"
+START_WINDOW = 20 * 60          # no snapshot/apply starts later than this
+IDLE_CHECKS = 3                 # consecutive idle samples, one per minute
+HEALTH_TIMEOUT = 420
+CANARY_TIMEOUT = 600
+KEEP_GENERATIONS = 3
+MAX_SNAPSHOT_BYTES = 6 * 1024**3
+# Regenerable caches and Hermes' durable temp are not snapshotted. Rollback
+# moves the live caches back; temp starts empty.
+SNAPSHOT_EXCLUDES = {"/opt/data": ("tmp", ".cache", "home/.cache")}
+RESTORED_CACHES = (".cache", "home/.cache")
+BACKUP_GLOBS = ("config.yaml.bak-*", "config.yaml.corrupt.*.bak", ".env.bak-*")
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+RETRY = f"Повторить следующей ночью: удалить failed_digest в {STATE}/state.json"
+
+CANARY_PROBE = """
+import json
+from hermes_cli.config import check_config_version
+import gateway.config
+current, latest = check_config_version()
+print("HERMES_CANARY " + json.dumps({"current": current, "latest": latest}), flush=True)
+raise SystemExit(0 if current >= latest else 1)
+"""
+
+# Runs as root inside each recreated agent. Prints only file names.
+POST_START_SCAN = r"""
+set -u
+found=0
+for pattern in config.yaml.bak-* config.yaml.corrupt.*.bak .env.bak-*; do
+    for file in /opt/data/$pattern; do
+        [ -e "$file" ] || continue
+        echo "backup ${file#/opt/data/}"
+        found=1
+    done
+done
+patterns=$(mktemp /run/hermes-secret-scan.XXXXXX)
+for secret in /run/secrets/*; do
+    [ -f "$secret" ] || continue
+    sed '/^[[:space:]]*$/d' "$secret" >"$patterns"
+    [ -s "$patterns" ] || continue
+    hits=$(grep -rlsF -D skip --exclude-dir=tmp -f "$patterns" /opt/data || true)
+    [ -z "$hits" ] && continue
+    printf '%s\n' "$hits" | sed "s#^/opt/data/#leak ${secret##*/} #"
+    found=1
+done
+rm -f "$patterns"
+exit "$found"
+"""
+
+
+class UpdateError(Exception):
+    pass
+
+
+def log(message: str) -> None:
+    print(message, flush=True)
+
+
+class Host:
+    """Docker, registry and Telegram side effects; replaced by a fake in tests."""
+
+    def run(self, *args, timeout=300, check=True, cwd=None):
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+        if check and result.returncode != 0:
+            raise UpdateError(f"{' '.join(args[:3])} failed: {result.stderr.strip()[-400:]}")
+        return result
+
+    def docker(self, *args, **kwargs) -> str:
+        return self.run("docker", *args, **kwargs).stdout
+
+    def registry_digest(self) -> str:
+        scope = f"repository:{REPOSITORY}:pull"
+        with urllib.request.urlopen(
+            f"https://auth.docker.io/token?service=registry.docker.io&scope={scope}", timeout=30
+        ) as response:
+            token = json.load(response)["token"]
+        accept = ", ".join((
+            "application/vnd.oci.image.index.v1+json",
+            "application/vnd.docker.distribution.manifest.list.v2+json",
+            "application/vnd.oci.image.manifest.v1+json",
+            "application/vnd.docker.distribution.manifest.v2+json",
+        ))
+        request = urllib.request.Request(
+            f"https://registry-1.docker.io/v2/{REPOSITORY}/manifests/{TAG}",
+            method="HEAD", headers={"Authorization": f"Bearer {token}", "Accept": accept},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.headers.get("Docker-Content-Digest", "")
+
+    def inspect(self, name: str) -> dict:
+        return json.loads(self.docker("inspect", name))[0]
+
+    def image_env(self, image: str) -> list[str]:
+        return json.loads(self.docker("image", "inspect", "-f", "{{json .Config.Env}}", image)) or []
+
+    def has_image(self, ref: str) -> bool:
+        return self.run("docker", "image", "inspect", ref, check=False).returncode == 0
+
+    def pull(self, ref: str) -> None:
+        self.docker("pull", "-q", ref, timeout=3600)
+
+    def remove_image(self, ref: str) -> None:
+        self.run("docker", "image", "rm", ref, check=False)
+
+    def tag(self, image_id: str, ref: str) -> None:
+        if self.run("docker", "tag", image_id, ref, check=False).returncode:
+            log(f"Could not tag {image_id} as {ref}")
+
+    def chown_tree(self, root: pathlib.Path) -> None:
+        """Hand a canary's data to the image's Hermes UID/GID."""
+        for directory, names, files in os.walk(root):
+            for name in (*names, *files):
+                os.lchown(os.path.join(directory, name), 10000, 10000)
+        os.lchown(root, 10000, 10000)
+
+    def compose_hash(self, service: str) -> str:
+        output = self.docker("compose", "config", "--hash", service, cwd=ROOT).split()
+        return output[1] if len(output) == 2 and output[0] == service else ""
+
+    def compose_up(self) -> None:
+        self.docker("compose", "up", "-d", "--no-deps", "--no-build", "--pull", "never",
+                    "--force-recreate", *SERVICES, cwd=ROOT, timeout=900)
+
+    def stop(self) -> None:
+        self.docker("stop", "-t", "90", *SERVICES, timeout=300)
+
+    def start(self) -> None:
+        self.docker("start", *SERVICES)
+
+    def scan(self, name: str) -> tuple[int, str]:
+        result = self.run("docker", "exec", "-u", "0", name, "sh", "-c", POST_START_SCAN,
+                          check=False, timeout=600)
+        return result.returncode, result.stdout
+
+    def canary(self, name: str, args: list[str]) -> tuple[int, str]:
+        try:
+            result = self.run("docker", "run", "--rm", "--name", name, *args,
+                              check=False, timeout=CANARY_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            self.run("docker", "rm", "-f", name, check=False)
+            return 124, ""
+        return result.returncode, result.stdout + result.stderr
+
+    def notify(self, text: str) -> None:
+        log(text)
+        token = self.run("docker", "exec", "disk-watchdog", "cat", "/run/secrets/telegram_bot_token", check=False)
+        chat = self.run("docker", "exec", "disk-watchdog", "printenv", "TELEGRAM_CHAT_ID", check=False)
+        if token.returncode or chat.returncode:
+            log("Telegram not delivered: disk-watchdog unavailable")
+            return
+        body = json.dumps({"chat_id": chat.stdout.strip(), "text": text}).encode()
+        request = urllib.request.Request(
+            f"https://api.telegram.org/bot{token.stdout.strip()}/sendMessage", body,
+            {"Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(request, timeout=15).read()
+        except Exception:  # the URL holds the token: never print the exception
+            log("Telegram delivery failed")
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+    def now(self) -> float:
+        return time.time()
+
+
+# ---------------------------------------------------------------- filesystem
+
+def write_atomic(path: pathlib.Path, text: str, mode=0o600, owner=None) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with open(temporary, "w", encoding="utf-8") as stream:
+        stream.write(text)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(temporary, mode)
+    if owner is not None:
+        os.chown(temporary, *owner)
+    os.replace(temporary, path)
+
+
+def read_env_value(path: pathlib.Path, key: str) -> str | None:
+    values = [line.split("=", 1)[1] for line in path.read_text(encoding="utf-8").splitlines()
+              if line.startswith(f"{key}=")]
+    if len(values) > 1:
+        raise UpdateError(f"{key} occurs more than once in {path}")
+    return values[0] if values else None
+
+
+def set_env_value(path: pathlib.Path, key: str, value: str | None) -> None:
+    """Set or (value None) remove one key, keeping every other line, mode and owner."""
+    read_env_value(path, key)
+    stat = path.stat()
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines()
+             if not line.startswith(f"{key}=")]
+    if value is not None:
+        lines.append(f"{key}={value}")
+    write_atomic(path, "\n".join(lines) + "\n", stat.st_mode & 0o7777, (stat.st_uid, stat.st_gid))
+
+
+def tree_size(root: pathlib.Path, excludes=()) -> int:
+    total = 0
+    skipped = {root / item for item in excludes}
+    for directory, names, files in os.walk(root):
+        names[:] = [n for n in names if pathlib.Path(directory, n) not in skipped]
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(directory, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def snapshot_volume(source: pathlib.Path, archive: pathlib.Path, excludes=()) -> None:
+    skipped = {f"./{item}" for item in excludes}
+
+    def keep(info):
+        return None if info.name in skipped else info
+
+    with tarfile.open(archive, "w:gz", compresslevel=1) as tar:
+        tar.add(source, arcname=".", filter=keep)
+
+
+def restore_volume(source: pathlib.Path, archive: pathlib.Path, displaced: pathlib.Path) -> None:
+    """Replace a stopped volume's contents with its archive; keep the old tree aside."""
+    displaced.parent.mkdir(parents=True, exist_ok=True)
+    if source.exists():
+        if displaced.exists():
+            shutil.rmtree(displaced)
+        os.rename(source, displaced)
+    source.mkdir(mode=0o700)
+    with tarfile.open(archive, "r:gz") as tar:
+        tar.extractall(source, numeric_owner=True, filter="fully_trusted")
+    for cache in RESTORED_CACHES:
+        old, new = displaced / cache, source / cache
+        if old.is_dir() and not new.exists() and new.parent.is_dir():
+            os.rename(old, new)
+
+
+def managed_config_version(path: pathlib.Path) -> int | None:
+    match = re.search(r"^_config_version:\s*(\d+)\s*$", path.read_text(encoding="utf-8"), re.M)
+    return int(match.group(1)) if match else None
+
+
+def mcp_schema_revision(path: pathlib.Path) -> str:
+    """Reuse the entrypoint's revision of the mounted media MCP schema."""
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader(
+        "hermes_mcp_schema_revision", str(pathlib.Path(__file__).with_name("hermes-mcp-schema-revision")))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module.schema_revision(path)
+
+
+def find_secret(root: pathlib.Path, values: list[bytes]) -> list[str]:
+    hits = []
+    for directory, _, files in os.walk(root):
+        for name in files:
+            path = pathlib.Path(directory, name)
+            if path.is_symlink() or not path.is_file():
+                continue
+            data = path.read_bytes()
+            if any(value in data for value in values):
+                hits.append(str(path.relative_to(root)))
+    return hits
+
+
+# ---------------------------------------------------------------- updater
+
+class Updater:
+    def __init__(self, host: Host, root=ROOT, state_dir=STATE, dry_run=False):
+        self.host, self.root, self.state_dir, self.dry_run = host, pathlib.Path(root), pathlib.Path(state_dir), dry_run
+        self.state_file = self.state_dir / "state.json"
+        self.state: dict = {}
+        self.deadline = 0.0
+
+    # state ------------------------------------------------------------
+    def load(self) -> None:
+        self.state = json.loads(self.state_file.read_text()) if self.state_file.exists() else {}
+
+    def save(self) -> None:
+        if not self.dry_run:
+            write_atomic(self.state_file, json.dumps(self.state, indent=2, sort_keys=True) + "\n")
+
+    def phase(self, value: str | None) -> None:
+        if value is None:
+            self.state.pop("phase", None)
+        else:
+            self.state["phase"] = value
+        self.save()
+
+    def notify(self, text: str) -> None:
+        if self.dry_run:
+            log(text)
+        else:
+            self.host.notify(text)
+
+    # inspection ---------------------------------------------------------
+    def containers(self) -> dict:
+        return {name: self.host.inspect(name) for name in SERVICES}
+
+    @staticmethod
+    def mount(container: dict, destination: str) -> dict:
+        for mount in container["Mounts"]:
+            if mount["Destination"] == destination:
+                return mount
+        raise UpdateError(f"{container['Name']} has no {destination} mount")
+
+    def idle(self, containers: dict) -> bool:
+        for container in containers.values():
+            path = pathlib.Path(self.mount(container, "/opt/data")["Source"], "gateway_state.json")
+            try:
+                if json.loads(path.read_text()).get("active_agents") != 0:
+                    return False
+            except (OSError, ValueError):
+                return False
+        return True
+
+    def wait_for_idle(self, containers: dict) -> bool:
+        idle = 0
+        while idle < IDLE_CHECKS:
+            if self.host.now() >= self.deadline:
+                return False
+            idle = idle + 1 if self.idle(containers) else 0
+            if idle < IDLE_CHECKS:
+                self.host.sleep(60)
+        return True
+
+    def healthy(self, image: str) -> bool:
+        end = self.host.now() + HEALTH_TIMEOUT
+        while self.host.now() < end:
+            try:
+                states = [self.host.inspect(name) for name in SERVICES]
+            except (UpdateError, IndexError, ValueError):
+                states = []
+            if states and all(
+                c["Config"]["Image"] == image and (c["State"].get("Health") or {}).get("Status") == "healthy"
+                for c in states
+            ):
+                return True
+            self.host.sleep(10)
+        return False
+
+    def post_start_problems(self) -> list[str]:
+        problems = []
+        for name in SERVICES:
+            code, output = self.host.scan(name)
+            if code:
+                problems += [f"{name}: {line}" for line in output.splitlines() if line.strip()] or [f"{name}: scan failed"]
+        return problems
+
+    # canary ---------------------------------------------------------------
+    def run_canaries(self, containers: dict, candidate: str, generation: pathlib.Path) -> dict:
+        versions = {}
+        for name, container in containers.items():
+            work = generation / f"canary-{name}"
+            data, secrets_dir = work / "data", work / "secrets"
+            for directory in (data / "memories", data / "browser_auth", secrets_dir):
+                directory.mkdir(parents=True, exist_ok=True)
+            live = pathlib.Path(self.mount(container, "/opt/data")["Source"])
+            for item in ("config.base.yaml", ".env"):
+                if (live / item).is_file():
+                    shutil.copy2(live / item, data / item)
+            for item in ("python-packages", "lazy-packages"):
+                if (live / item).is_dir():
+                    shutil.copytree(live / item, data / item, symlinks=True)
+            self.host.chown_tree(data)
+            args = ["--network", "none", "--read-only", "--cap-drop", "ALL",
+                    "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER",
+                    "--cap-add", "SETGID", "--cap-add", "SETUID",
+                    "--security-opt", "no-new-privileges:true", "--pids-limit", "512", "--memory", "2g",
+                    "--tmpfs", "/run:rw,exec,nosuid,nodev,size=32m",
+                    "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=256m"]
+            synthetic = []
+            for mount in container["Mounts"]:
+                destination = mount["Destination"]
+                if destination.startswith("/run/secrets/"):
+                    value = f"canary{secrets.token_hex(24)}"
+                    synthetic.append(value.encode())
+                    secret = secrets_dir / pathlib.Path(destination).name
+                    secret.write_text(value + "\n")
+                    args += ["-v", f"{secret}:{destination}:ro"]
+                elif mount["Type"] == "bind" and not destination.startswith("/wiki"):
+                    args += ["-v", f"{mount['Source']}:{destination}:ro"]
+                elif mount["Type"] == "volume" and not mount["RW"]:
+                    args += ["-v", f"{mount['Name']}:{destination}:ro"]
+            for destination, path in (("/opt/data", data), ("/opt/data/memories", data / "memories"),
+                                      ("/opt/data/browser_auth", data / "browser_auth")):
+                args += ["-v", f"{path}:{destination}"]
+            image_env = set(self.host.image_env(container["Image"]))
+            env_file = work / "env"
+            env_file.write_text("".join(f"{line}\n" for line in container["Config"]["Env"] if line not in image_env))
+            env_file.chmod(0o600)
+            args += ["--env-file", str(env_file), "--entrypoint", "/usr/local/bin/hermes-home-entrypoint",
+                     candidate, "/opt/hermes/.venv/bin/python", "-c", CANARY_PROBE]
+            code, output = self.host.canary(f"hermes-canary-{name}", args)
+            (work / "output.log").write_text(output)
+            marker = [line for line in output.splitlines() if line.startswith("HERMES_CANARY ")]
+            if code or not marker:
+                raise UpdateError(f"{name}: bootstrap canary failed (exit {code})")
+            versions[name] = json.loads(marker[-1].split(" ", 1)[1])
+            backups = [p.name for pattern in BACKUP_GLOBS for p in data.glob(pattern)]
+            leaks = find_secret(data, synthetic)
+            if backups or leaks:
+                raise UpdateError(f"{name}: canary left migration backups or secrets: {len(backups)}/{len(leaks)}")
+            shutil.rmtree(work)
+        return versions
+
+    # snapshot -------------------------------------------------------------
+    def volumes(self, containers: dict) -> list[dict]:
+        return [{"container": name, "name": m["Name"], "destination": m["Destination"], "source": m["Source"]}
+                for name, c in containers.items() for m in c["Mounts"] if m["Type"] == "volume" and m["RW"]]
+
+    def snapshot(self, volumes: list[dict], generation: pathlib.Path) -> None:
+        size = sum(tree_size(pathlib.Path(v["source"]), SNAPSHOT_EXCLUDES.get(v["destination"], ())) for v in volumes)
+        if size > MAX_SNAPSHOT_BYTES:
+            raise UpdateError(f"snapshot would be {size >> 20} MiB, above the {MAX_SNAPSHOT_BYTES >> 20} MiB bound")
+        if shutil.disk_usage(generation).free < 2 * size + 2 * 1024**3:
+            raise UpdateError("not enough free space for the snapshot")
+        for volume in volumes:
+            if os.stat(pathlib.Path(volume["source"]).parent).st_dev != os.stat(generation).st_dev:
+                raise UpdateError("state and Docker volumes must share a filesystem")
+        self.host.stop()
+        for index, volume in enumerate(volumes):
+            volume["archive"] = f"volume-{index}.tar.gz"
+            snapshot_volume(pathlib.Path(volume["source"]), generation / volume["archive"],
+                            SNAPSHOT_EXCLUDES.get(volume["destination"], ()))
+        (generation / "volumes.json").write_text(json.dumps(volumes, indent=2))
+
+    def restore(self, generation: pathlib.Path) -> None:
+        volumes = json.loads((generation / "volumes.json").read_text())
+        self.host.run("docker", "stop", "-t", "60", *SERVICES, check=False, timeout=300)
+        for volume in volumes:
+            restore_volume(pathlib.Path(volume["source"]), generation / volume["archive"],
+                           generation / "displaced" / volume["name"])
+
+    def cleanup(self, keep: str) -> None:
+        generations = sorted(p for p in self.state_dir.iterdir() if p.is_dir() and p.name.startswith("20"))
+        for path in generations[:-KEEP_GENERATIONS]:
+            if path.name != keep:
+                shutil.rmtree(path, ignore_errors=True)
+
+    # main flow --------------------------------------------------------------
+    def run(self) -> int:
+        self.load()
+        self.deadline = self.host.now() + START_WINDOW
+        if self.state.get("phase"):
+            self.notify(f"Hermes: предыдущее автообновление не завершено (phase={self.state['phase']}), "
+                        f"нужна ручная проверка ({self.state_dir}).")
+            return 1
+        try:
+            digest = self.host.registry_digest()
+        except Exception:
+            digest = ""
+        if not DIGEST.fullmatch(digest or ""):
+            self.notify(f"Hermes: не удалось узнать digest {REPOSITORY}:{TAG}, обновление пропущено.")
+            return 1
+        candidate = f"{REPOSITORY}@{digest}"
+        containers = self.containers()
+        current = {c["Config"]["Image"] for c in containers.values()}
+        if len(current) != 1 or not all(
+            (c["State"].get("Health") or {}).get("Status") == "healthy" for c in containers.values()
+        ):
+            self.notify("Hermes: агенты не в рабочем состоянии или на разных образах, автообновление пропущено.")
+            return 1
+        previous = current.pop()
+        if previous == candidate:
+            log(f"Hermes upstream unchanged ({candidate}).")
+            return 0
+        if digest == self.state.get("failed_digest"):
+            log(f"Hermes upstream {digest} failed here before; waiting for a newer one.")
+            return 0
+        log(f"New Hermes upstream {TAG}: {candidate} (running {previous}).")
+
+        stale = [name for name, c in containers.items()
+                 if self.host.compose_hash(name) != c["Config"]["Labels"].get("com.docker.compose.config-hash")]
+        if stale:
+            reason = "stale:" + ",".join(stale)
+            if self.state.get("blocked") != reason:
+                self.notify("Hermes: развёрнутые агенты не совпадают с текущим Compose (неприменённые правки "
+                            f"{', '.join(stale)}). Автообновление ждёт ручного деплоя.")
+                self.state["blocked"] = reason
+                self.save()
+            return 1
+        self.state.pop("blocked", None)
+        if self.dry_run:
+            log(f"DRY_RUN: idle now: {self.idle(containers)}; would pull, check canaries, snapshot and apply.")
+            return 0
+
+        generation = self.state_dir / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(self.host.now()))
+        generation.mkdir(mode=0o700)
+        env_path = self.root / ".env"
+        try:
+            self.host.pull(candidate)
+            versions = self.run_canaries(containers, candidate, generation)
+        except (UpdateError, OSError, ValueError, subprocess.SubprocessError) as error:
+            log(f"Candidate check failed: {error}")
+            for copied in generation.glob("canary-*/data"):  # keep output.log only
+                shutil.rmtree(copied, ignore_errors=True)
+            self.state["failed_digest"] = digest
+            self.save()
+            self.host.remove_image(candidate)
+            self.notify(f"Hermes: новая версия {TAG} не прошла проверку ({error}), работает текущая. "
+                        f"Логи: {generation}. {RETRY}")
+            return 1
+
+        if not self.wait_for_idle(containers):
+            busy = self.state.get("busy_nights", 0) + 1
+            self.state["busy_nights"] = busy
+            self.save()
+            log("Hermes was not idle before the deadline; trying again next night.")
+            if busy == 3:
+                self.notify("Hermes: третью ночь подряд агенты заняты, обновление не установлено.")
+            return 0
+        self.state.pop("busy_nights", None)
+
+        managed = managed_config_version(pathlib.Path(self.mount(containers[SERVICES[0]], "/etc/hermes-home/config.yaml")["Source"]))
+        latest = max(v["latest"] for v in versions.values())
+        schema = pathlib.Path(self.mount(containers[SERVICES[0]], "/etc/hermes-home/skills")["Source"], "media", "MCP_SCHEMA.json")
+        mcp_revision = mcp_schema_revision(schema)
+        previous_id = containers[SERVICES[0]]["Image"]
+        env_previous = read_env_value(env_path, ENV_KEY)
+        self.state.update(generation=generation.name, previous=previous, env_previous=env_previous)
+        volumes = self.volumes(containers)
+        self.phase("snapshot")
+        try:
+            self.snapshot(volumes, generation)
+        except (UpdateError, OSError, subprocess.SubprocessError) as error:
+            self.host.run("docker", "start", *SERVICES, check=False)
+            self.phase(None)
+            self.notify(f"Hermes: снимок данных не удался ({error}), обновление не установлено. Логи: {generation}")
+            return 1
+
+        self.phase("apply")
+        problems: list[str] = []
+        try:
+            set_env_value(env_path, ENV_KEY, candidate)
+            self.host.compose_up()
+            if not self.healthy(candidate):
+                problems.append("агенты не стали healthy")
+            else:
+                problems = self.post_start_problems()
+        except (UpdateError, OSError, subprocess.SubprocessError) as error:
+            problems.append(str(error))
+        if not problems:
+            self.host.tag(previous_id, ROLLBACK_TAG)  # survives `docker image prune`
+            notices = []
+            if managed is not None and latest != managed and self.state.get("schema_notified") != latest:
+                notices.append(f"со сменой схемы конфигурации {managed}→{latest}: "
+                               "синхронизируй управляемый конфиг в репозитории")
+                self.state["schema_notified"] = latest
+            if self.state.get("mcp_revision") not in (None, mcp_revision):
+                notices.append("ревизия схемы MCP изменилась после прошлого обновления")
+            self.state.update(current=candidate, config_version=latest, mcp_revision=mcp_revision)
+            self.state.pop("failed_digest", None)
+            self.phase(None)
+            self.notify(f"Hermes обновлён до {TAG} ({digest[7:19]})"
+                        + (" " + "; ".join(notices) if notices else "") + ".")
+            self.cleanup(generation.name)
+            return 0
+
+        log("Apply failed: " + "; ".join(problems))
+        (generation / "problems.log").write_text("\n".join(problems) + "\n")
+        self.state["failed_digest"] = digest
+        self.phase("rollback")
+        try:
+            self.restore(generation)
+            set_env_value(env_path, ENV_KEY, env_previous)
+            if not self.host.has_image(previous):
+                self.host.pull(previous)
+            self.host.compose_up()
+            restored = self.healthy(previous)
+        except (UpdateError, OSError, subprocess.SubprocessError) as error:
+            log(f"Rollback failed: {error}")
+            restored = False
+        self.host.remove_image(candidate)
+        if restored:
+            self.phase(None)
+            self.notify(f"Hermes: новая версия не прошла проверку после запуска ({len(problems)} проблем), "
+                        f"откатил образ и данные на прежние. Логи: {generation}. {RETRY}")
+            return 1
+        self.phase("rollback-failed")
+        self.notify("Hermes: обновление и откат не удались, агенты могут не работать. "
+                    f"Нужна ручная проверка, снимок: {generation}")
+        return 1
+
+
+def main() -> int:
+    STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(STATE, 0o700)
+    with open(STATE / "lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log("Another Hermes update is running.")
+            return 1
+        return Updater(Host(), dry_run=bool(os.environ.get("DRY_RUN"))).run()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly Hermes update at 02:30 Sofia, before Lampac (03:00) and Watchtower (04:00)
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 Europe/Sofia
+Persistent=false
+
+[Install]
+WantedBy=timers.target

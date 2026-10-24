@@ -33,7 +33,9 @@ fingerprint.
 
 ## Official upstream
 
-Hermes is not rebuilt or patched by this repository. Compose pulls:
+Hermes is not rebuilt or patched by this repository. Compose pulls
+`${HERMES_IMAGE}` from the deployment's ignored root `.env` and falls back to
+the reviewed pin:
 
 ```text
 nousresearch/hermes-agent@sha256:efb82540aeb8ac21c58ecb4482bd3eb103ea617da2af2c61f12526ed68f6c2d9
@@ -44,7 +46,8 @@ into the container. Conversational media operations and Telegram callbacks use
 the media-service MCP endpoint. The media CLI is a trusted-host operator tool
 and is not mounted into either Hermes container. Watchtower is explicitly
 disabled for both profile containers; their image changes only through the
-manual schema-aware upgrade gate documented below.
+guarded nightly update documented under [Automatic image updates](#automatic-image-updates)
+or a manual digest change.
 
 - [Docker runtime](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/docker.md)
 - [isolated Hermes profiles](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/profiles.md)
@@ -65,14 +68,27 @@ agent-browser-updater     vaultwarden-broker-primary
 
 The Hermes containers share the official image but not state or credentials. Each has its own profile, config, SOUL, personal skills, memory, browser metadata, Telegram bot token, media client token, and health client token. Primary alone has a Vaultwarden broker and approval plugin. Profile sources are mounted read-only under `/etc/hermes-home`; the entrypoint installs shared and profile-local skills and plugins into the writable profile volume before the official bootstrap runs. Neither container receives the Docker socket.
 
-Hermes services are excluded from Watchtower and pinned to an exact digest.
-Upgrades are manual: update the managed profile `_config_version` to the schema
-supported by the candidate image, run the full config/runtime and official-image
-bootstrap checks, verify that no `config.yaml.bak-*` captures runtime secrets,
-and only then change the digest. Automatic image/schema upgrades are forbidden.
-After a database or MCP contract change, image-only rollback and in-place
-downgrade are unsupported; follow the fail-closed incident guidance in the
-health runbook and make the recovery choice explicitly.
+Hermes services are excluded from Watchtower and always run an exact digest.
+Image upgrades, including ones that raise the config schema, are automatic only
+through `scripts/hermes-auto-update`: it runs the official bootstrap of the
+candidate in disposable canaries, snapshots both profiles' volumes, requires
+both agents to become healthy without migration backups or persisted runtime
+secrets, and otherwise restores the previous image and data. A schema change is
+applied by the image's own migration, and syncing the managed profile
+`_config_version` and options in this repository is a follow-up that the update
+announces. Image-only rollback and in-place downgrade after a database or MCP
+contract change remain unsupported; roll back with the update's volume snapshot
+or follow the fail-closed incident guidance in the health runbook.
+
+Every start removes upstream migration backups (`config.yaml.bak-*`,
+`config.yaml.corrupt.*.bak`, `.env.bak-*`) from the profile volume, because the
+active config links to the bearer-bearing runtime file. The entrypoint runs the
+image's boot migration (`docker_config_migrate.py`) itself, against a copy of
+the sanitized base in a private tmpfs home, stores the migrated sanitized base,
+rebuilds the runtime config from it and sets `HERMES_SKIP_CONFIG_MIGRATION=1`
+for the upstream stage2 hook. The config merger keeps a newer
+`_config_version` than the managed profile, so the migration runs once per
+schema change rather than on every restart.
 
 The root filesystem is read-only. `/run` is the only executable tmpfs because s6-overlay stages its init binary there; `/tmp` remains `noexec`. All Linux capabilities are dropped except the official bootstrap requirements. Hermes runs as UID/GID `10000:10000`. Before privileges are dropped, the entrypoint copies only the media, health, and browser-broker client tokens into a private `0400` runtime directory owned by that user. The copies live only in `/run` and disappear with the container. The health token is not exported to the Hermes process environment. The config merger keeps a sanitized persistent base at `/opt/data/config.base.yaml`, writes the bearer-bearing active config as `0600` on `/run` tmpfs, and leaves only a symlink at `/opt/data/config.yaml`. Container restarts rematerialize the runtime file; generation failures remove temporary/runtime outputs, so named-volume files and snapshots do not retain the bearer.
 
@@ -95,6 +111,73 @@ file, clears caller-provided configuration, rejects identity and token flags,
 and forces JSON output.
 
 The Primary Vaultwarden session is isolated by secret scoping and network segmentation, not by file permissions: `primary_vaultwarden_session` is mounted only into `vaultwarden-broker-primary`, never into a Hermes container. The broker joins only Primary's private network and serves the generic metadata and approved browser-credential interfaces. `hermes-secondary` has no Vaultwarden broker, session secret, server configuration, or login skill. The Hermes-facing `vaultwarden-safe` client can return status, sync state, up to five item summaries, usernames, and URIs; passwords, notes, TOTP values, and complete item JSON never cross the Hermes boundary.
+
+## Automatic image updates
+
+`hermes-auto-update.timer` runs `scripts/hermes-auto-update` as root on the
+Docker host at 02:30 `Europe/Sofia`: before the Lampac update (03:00), the image
+retention observation (03:55) and Watchtower (04:00). It tracks the upstream
+`stable` tag (`HERMES_UPDATE_TAG` overrides it) and:
+
+1. stops with a Telegram alert when the previous run left an unfinished phase
+   or the agents are unhealthy or run different images;
+2. asks Docker Hub for the tag's digest without pulling and does nothing when
+   it is the running one or one that already failed here;
+3. refuses, alerting once per reason, while a running agent's Compose
+   config-hash differs from the current root Compose model, so unreviewed
+   edits are never deployed by the update;
+4. pulls the candidate and runs, per profile, a disposable canary: the
+   candidate image with the repository entrypoint and read-only profile/script
+   mounts, `--network none`, synthetic secrets, a copy of the live sanitized
+   config base, `.env` and package directories, and no wiki. The official
+   bootstrap and config migration must finish, the migrated schema must reach
+   the image's latest version, and the canary data must hold no migration
+   backup and no synthetic secret;
+5. waits until both gateways report `active_agents: 0` in
+   `gateway_state.json` for 3 consecutive minutes (a reply in progress counts;
+   a user typing does not). No snapshot starts after 02:50; a busy night is
+   retried the next night and the third in a row is reported;
+6. stops both agents and snapshots their read-write volumes (profile, memory,
+   browser) without `tmp/`, `.cache/` and `home/.cache/`, refusing above 6 GiB
+   or without twice that space free;
+7. writes `HERMES_IMAGE=<candidate>` to the root `.env`, keeping its other
+   lines, mode and owner, and recreates only `hermes-primary` and
+   `hermes-secondary` with `--no-deps --no-build --pull never`;
+8. requires both to become healthy within 7 minutes and then scans each
+   profile volume (except Hermes' durable `tmp/`) for migration backups and
+   for the content of every mounted `/run/secrets/*` file.
+
+On success the previous image is tagged `homelab/hermes-agent:rollback` so the
+nightly `docker image prune` keeps it, and only the 3 newest generations stay
+under `/var/lib/hermes-update`. A raised config schema is announced once in
+Russian with the old and new version, for example «Hermes обновлён со сменой
+схемы конфигурации 41→42: синхронизируй управляемый конфиг в репозитории». Any
+failure after the snapshot stops the agents, moves the candidate-era volume
+contents to `<generation>/displaced/`, restores the snapshot (live caches are
+moved back), restores the previous `HERMES_IMAGE` value, recreates both agents
+and reports the outcome. A failed digest is not retried until upstream moves
+on or `failed_digest` is removed from `/var/lib/hermes-update/state.json`. A
+failed rollback leaves `phase` set and blocks later runs until checked.
+
+Reports go to the disk-watchdog's Telegram bot and chat. The state directory is
+root-owned `0700`, outside Git, and holds private data: snapshots include the
+profiles' persistent credentials. It must share a filesystem with the Docker
+volumes. `DRY_RUN=1` only reports whether an update is due and whether the
+agents are idle; it writes nothing.
+
+Install as root on the Docker host after deploying this checkout:
+
+```sh
+cd /home/iamstubborn/homelab/hermes
+DRY_RUN=1 python3 scripts/hermes-auto-update
+install -m 0644 hermes-auto-update.service hermes-auto-update.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now hermes-auto-update.timer
+```
+
+The guarded media-orchestrator deployment uses the same root `.env`, so it keeps
+the selected digest. To return to the reviewed pin, delete the `HERMES_IMAGE`
+line and recreate the two agents in an idle window.
 
 ## Operator CLI artifact
 
@@ -296,7 +379,8 @@ Hermes documents durable login persistence only for Camofox when an external Cam
 ./scripts/check
 ```
 
-The check covers use of the digest-pinned unmodified official image, disabled
+The check covers use of the digest-pinned unmodified official image, the guarded
+auto-update, config-migration backup cleanup, disabled
 Hermes Watchtower updates, profile and secret isolation, notifier HMAC/state
 behavior, mounted plugins and tools, Primary-only Vaultwarden login contracts,
 wrapper redaction, ShellCheck, YAML lint, and rendered Compose validation.

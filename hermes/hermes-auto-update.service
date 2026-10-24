@@ -1,0 +1,13 @@
+[Unit]
+Description=Nightly guarded Hermes image update from upstream stable
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/bin/python3 /home/iamstubborn/homelab/hermes/scripts/hermes-auto-update
+Nice=10
+# No snapshot or apply starts later than 20 minutes after the start; this only
+# bounds a hung pull, canary or rollback.
+TimeoutStartSec=2h

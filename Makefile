@@ -13,7 +13,8 @@ dns-leak-test:
 
 update-containers:
 	docker compose config --quiet
-	docker compose pull
+	# Locally built images share a name with someone else's Docker Hub namespace.
+	docker compose pull --ignore-buildable
 	docker compose up -d
 
 check-runtime:

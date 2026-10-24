@@ -78,7 +78,7 @@ sidecar adds those files to browser playback without modifying Lampac:
   run at most two at a time, and a probe that fails (other than a timeout) is
   not retried for 10 minutes.
 - Results live in the ignored `extaudio-cache/` directory, which is limited to
-  1 GiB and 24 hours. Delete it at any time.
+  2 GiB and 72 hours (`CACHE_MAX_MB`, `CACHE_TTL_HOURS`). Delete it at any time.
 - The plugin lists external tracks in the regular audio menu. When an external
   track is chosen, the video keeps using the same GST task. hls.js receives an
   `EXT-X-MEDIA` audio rendition, and the plugin removes the embedded audio track
@@ -196,10 +196,12 @@ supplementary groups. The current deployment's render device is owned by UID
 The derived image is also tagged `latest`, but upstream updates require an
 explicit rebuild. Use the [controlled update workflow](UPDATE.md) to stage a
 separately tagged candidate, check isolated startup, and retain a rollback
-checkpoint before applying it in an idle maintenance window. The CLI is manual;
-it does not detect viewers or schedule restarts. Watchtower is disabled for this
-service because it cannot rebuild a derived image. No automatic rebuild pipeline
-is installed.
+checkpoint before applying it in an idle maintenance window. The CLI itself
+does not detect viewers; `lampac-auto-update.timer` runs it nightly at 03:00
+`Europe/Sofia` only after the access log shows no viewing, as described there.
+Watchtower is disabled for this service because it cannot rebuild a derived
+image; a plain `docker compose build` would retag `latest` and make the next
+staged update refuse, so rebuild only through that workflow.
 
 ## Runtime safeguards and logs
 

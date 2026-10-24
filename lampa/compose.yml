@@ -63,7 +63,11 @@ services:
     read_only: true
     cap_drop:
       - ALL
-    pids_limit: 64
+    # One thread per connection: JASSUB asks for up to 32 fonts at once, on top
+    # of ffmpeg's own threads. Too low a limit leaves a run without its watcher.
+    pids_limit: 256
+    # Reaps ffmpeg children and stops at once on SIGTERM.
+    init: true
     # Remuxing is copy-only for AAC; the cap bounds transcoding other codecs.
     cpus: 1.0
     cpu_shares: 512
@@ -130,6 +134,8 @@ services:
     labels:
       # Rebuild with --pull to update the upstream latest image and Intel runtime together.
       - "com.centurylinklabs.watchtower.enable=false"
+      # Traefik stops routing to an unhealthy container; restart it instead.
+      - "deunhealth.restart.on.unhealthy=true"
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
       - "traefik.http.routers.lampa.tls=true"

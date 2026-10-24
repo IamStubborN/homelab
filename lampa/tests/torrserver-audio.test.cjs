@@ -785,6 +785,20 @@ test('external audio is offered with one embedded track and reuses the AAC task'
   assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), ['Japanese']);
 });
 
+test('track names from torrents never reach Lampa as markup', async t => {
+  const hostile = { ...anilibria, title: '<img src=x onerror=alert(1)>' };
+  const h = harness(t, new Map(), { external: [hostile] });
+  h.start(13, 'abc', true);
+  await h.probe([{ ...japaneseAAC, Title: '<b onclick="x">Jap</b>' }]);
+  await h.task('301');
+  const labels = h.audioMenu().map(item => item.label);
+  assert.deepEqual(labels, ['\u2039b onclick=\u2033x\u2033\u203aJap\u2039/b\u203a',
+    '\u2039img src=x onerror=alert(1)\u203a (внешняя)']);
+  h.chooseAudio(labels[1]);
+  await h.settle();
+  assert.ok(h.notices.every(text => !/[<>]/.test(text)), h.notices.join('; '));
+});
+
 test('external audio moves the hidden embedded track to AAC to avoid transcoding', async t => {
   const h = harness(t, new Map(), { external: [anilibria] });
   h.start(13, 'abc', true);

@@ -161,6 +161,24 @@ class CandidateTests(unittest.TestCase):
             }], False))
 
 
+    def test_track_names_never_carry_markup(self):
+        files = [{"id": 13, "path": "Show/Show - 01.mkv", "length": 10**9},
+                 {"id": 1, "path": "Show/<img src=x onerror=alert(1)>/Show - 01.mka", "length": 10**8},
+                 {"id": 2, "path": "Show/<b onload=x>Group/Show - 01.ass", "length": 1000}]
+
+        def probe(torrent_hash, file_id, wait):
+            return [{"codec_name": "aac", "channels": 2,
+                     "tags": {"title": "<script>x</script> \"Dub\" `n` it's", "language": "<ru>"}}]
+
+        with mock.patch.object(app, "probe_audio_soon", side_effect=probe):
+            tracks, _ = app.external_tracks(HASH, 13, files)
+        subtitles = app.external_subtitles(files, 13)
+        for item in tracks + subtitles:
+            for key in ("title", "location", "language"):
+                self.assertNotRegex(item[key], r"[<>\"'`]", key)
+        self.assertEqual(tracks[0]["title"], "\u2039script\u203ax\u2039/script\u203a \u2033Dub\u2033 \u02bbn\u02bb it\u2019s")
+        self.assertEqual(subtitles[0]["title"], "\u2039b onload=x\u203aGroup")
+
     def test_a_file_still_downloading_is_reported_as_pending_next_to_the_tracks_read(self):
         def probe(torrent_hash, file_id, wait):
             if file_id == 20:

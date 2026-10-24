@@ -483,6 +483,14 @@
       return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
     }
 
+    // Track names come from torrent files and tags, and Lampa puts menu titles
+    // and notices into HTML unescaped: never let one carry markup. Look-alikes
+    // keep the name readable; the sidecar does the same.
+    var MARKUP = {'<': '\u2039', '>': '\u203a', '"': '\u2033', "'": '\u2019', '`': '\u02bb'};
+    function plain(text) {
+      return String(text).replace(/[<>"'`]/g, function (char) { return MARKUP[char]; });
+    }
+
     var LANGUAGE_ALIASES = {rus: 'ru', eng: 'en', jpn: 'ja', deu: 'de', ger: 'de', fra: 'fr', fre: 'fr', spa: 'es', ita: 'it', ukr: 'uk', por: 'pt'};
 
     function languageCode(value) {
@@ -1335,7 +1343,7 @@
       if (!data || data.subtitles.length !== originals.length) return originals;
       // GST turns double quotes in a title into single ones, and names a
       // stream whose tags it lost "Subtitle N".
-      function title(text) { return String(text || '').replace(/["']/g, '').trim(); }
+      function title(text) { return plain(text || '').replace(/[\u2033\u2019]/g, '').trim(); }
       var aligned = data.subtitles.every(function (sub, i) {
         var label = title(originals[i].label);
         return !sub.title || label === title(sub.title) || /^Subtitle \d+$/.test(label);
@@ -1391,7 +1399,7 @@
     }
 
     function subtitleLabel(title, language, external, signs) {
-      title = String(title || '').replace(/["'«»]/g, '').trim();
+      title = String(title || '').replace(/["'«»\u2033\u2019]/g, '').trim();
       if (signs === undefined) signs = signsTitle(title);
       var lang = LANGUAGES[String(language || '').toLowerCase()] || '';
       var group = title.replace(NOISE_WORDS, '$1').replace(/[\[\]()]/g, ' ')
@@ -1401,7 +1409,7 @@
       var what = signs ? 'надписи' : 'полные';
       // A group says nothing of the language unless it is the usual Russian.
       if (group && lang && lang !== 'Русские') what += ', ' + lang.toLowerCase();
-      return who.charAt(0).toUpperCase() + who.slice(1) + ': ' + what + (external ? ' (внешние)' : '');
+      return plain(who.charAt(0).toUpperCase() + who.slice(1) + ': ' + what + (external ? ' (внешние)' : ''));
     }
 
     // Tracks that come out with the same label are numbered in menu order, so
@@ -1438,6 +1446,10 @@
     function withAss(state, list) {
       if (!state.hlsSubs) state.hlsSubs = list.filter(function (item) { return !item.homelabAss; });
       var items = embeddedItems(state);
+      // Tracks the plugin does not rename keep GST's name, which can carry markup.
+      items.forEach(function (item) {
+        if (!item.homelabAss && /[<>"'`]/.test(item.label)) item.label = plain(item.label);
+      });
       list.splice.apply(list, [0, list.length].concat(numberLabels(items.concat(state.assItems || []))));
       // A plain-text track already showing switches to its drawn version.
       items.forEach(function (item) {
@@ -1686,7 +1698,7 @@
               url: base + track.file + '/' + track.stream + '/aac/audio.m3u8',
               codecs: EXTERNAL_CODECS,
               language: track.language, gstTitle: track.title || '',
-              label: (track.title || track.location || 'Audio') + ' (внешняя)',
+              label: plain((track.title || track.location || 'Audio') + ' (внешняя)'),
               extra: {channels: track.channels}
             };
           });
@@ -1726,7 +1738,7 @@
         }).map(function (track) {
           return {
             index: track.Index, language: track.Language, gstTitle: track.Title || '',
-            label: track.Title || ('Audio ' + (track.Index + 1)),
+            label: plain(track.Title || ('Audio ' + (track.Index + 1))),
             aac: Boolean(track.IsAAC), extra: {channels: track.Channels}
           };
         });

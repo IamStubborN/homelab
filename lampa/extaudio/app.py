@@ -238,6 +238,15 @@ def torrent_files(torrent_hash):
     ]
 
 
+# Names come from torrent files and their tags; the plugin hands them to Lampa,
+# which puts menu titles into HTML unescaped. Look-alikes keep them readable.
+MARKUP = str.maketrans({"<": "\u2039", ">": "\u203a", '"': "\u2033", "'": "\u2019", "`": "\u02bb"})
+
+
+def plain(text):
+    return str(text).translate(MARKUP)
+
+
 def split_name(path):
     directory, _, name = path.rpartition("/")
     stem, extension = os.path.splitext(name)
@@ -380,7 +389,7 @@ def external_candidates(files, video_id, extensions=AUDIO_EXTENSIONS):
             directory = ""
         candidates.append((rule, {
             "id": item["id"], "path": item["path"], "suffix": label,
-            "location": " / ".join(part for part in (directory.replace("/", " / "), label) if part),
+            "location": plain(" / ".join(part for part in (directory.replace("/", " / "), label) if part)),
         }))
     candidates.sort(key=lambda pair: (pair[0], pair[1]["location"].casefold()))
     if len(candidates) > MAX_CANDIDATES:
@@ -430,7 +439,7 @@ def external_subtitles(files, video_id):
             "file": candidate["id"],
             # A folder name is usually the group (`YakuSub Studio/`); a
             # suffix is usually a language (`<stem>.rus.ass`).
-            "title": directory.rpartition("/")[2] or candidate["suffix"] or "ASS",
+            "title": plain(directory.rpartition("/")[2] or candidate["suffix"] or "ASS"),
             "location": candidate["location"],
             "language": candidate["suffix"] if re.fullmatch(r"[a-z]{2,3}", candidate["suffix"], re.IGNORECASE) else "",
             "fonts": subtitle_fonts(files, candidate["path"], video["path"]),
@@ -589,12 +598,12 @@ def external_tracks(torrent_hash, video_id, files):
             continue
         for number, stream in enumerate(streams):
             tags = stream.get("tags") or {}
-            title = (tags.get("title") or "").strip()
+            title = plain((tags.get("title") or "").strip())
             tracks.append({
                 "file": candidate["id"], "stream": number,
                 "title": title or candidate["location"] or f"Audio {len(tracks) + 1}",
                 "location": candidate["location"],
-                "language": (tags.get("language") or "").strip(),
+                "language": plain((tags.get("language") or "").strip()),
                 "codec": stream.get("codec_name") or "",
                 "channels": stream.get("channels") or 0,
             })
@@ -622,7 +631,8 @@ def embedded_info(probe):
             if item.get("codec_name") in TEXT_SUBTITLE_CODECS:
                 subtitles.append({
                     "stream": number, "codec": item["codec_name"],
-                    "title": (tags.get("title") or "").strip(), "language": (tags.get("language") or "").strip(),
+                    "title": plain((tags.get("title") or "").strip()),
+                    "language": plain((tags.get("language") or "").strip()),
                 })
             number += 1  # ffmpeg's 0:s:N counts image subtitles too
         elif item.get("codec_type") == "attachment" and isinstance(item.get("index"), int):

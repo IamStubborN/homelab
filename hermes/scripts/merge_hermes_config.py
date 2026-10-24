@@ -22,6 +22,17 @@ def merge(current, managed, path=()):
             result.pop(key, None)
             continue
         result[key] = merge(result.get(key), value, (*path, key))
+    if path == ():
+        # A newer image migrates the persistent config before the managed
+        # profile is synced; never hand it the older schema number again.
+        current_version = current.get("_config_version")
+        managed_version = managed.get("_config_version")
+        if (
+            type(current_version) is int
+            and type(managed_version) is int
+            and current_version > managed_version
+        ):
+            result["_config_version"] = current_version
     if len(path) >= 3 and path[-1] == "tools" and path[-3] == "mcp_servers":
         for filter_name in ("include", "exclude"):
             if filter_name not in managed:

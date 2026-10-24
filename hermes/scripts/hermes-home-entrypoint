@@ -40,7 +40,8 @@ fi
 chown -R 10000:10000 "$lazy_packages"
 export PYTHONPATH="$python_packages${PYTHONPATH:+:$PYTHONPATH}"
 
-# Durable temp for TTS/auto-TTS (Hermes blocks /tmp as protected)
+# Temp for TTS/auto-TTS and terminal snapshots (Hermes blocks /tmp as
+# protected); a tmpfs from compose.yaml, so nothing here outlives the container.
 install -d -o 10000 -g 10000 -m 1777 /opt/data/tmp
 export TMPDIR=/opt/data/tmp
 export TMP=/opt/data/tmp
@@ -86,6 +87,59 @@ materialize_hermes_config() {
     trap - EXIT HUP INT TERM
 }
 
+# Upstream config migrations back up config.yaml and .env next to them. The
+# active config.yaml links to the bearer-bearing runtime file, so such a copy
+# would persist the health bearer. Remove them on every start.
+remove_migration_backups() {
+    for backup in "$1"/config.yaml.bak-* "$1"/config.yaml.corrupt.*.bak "$1"/.env.bak-*; do
+        if [ -e "$backup" ] || [ -L "$backup" ]; then
+            rm -f "$backup"
+        fi
+    done
+}
+
+# Run the image's own boot migration against the sanitized base in a private
+# tmpfs home instead of the volume. Its backups stay on tmpfs, the migrated
+# base never holds the bearer, and the runtime config is rebuilt from it. The
+# merger keeps the newer _config_version, so the upstream stage2 migration (also
+# disabled below) finds nothing to do until the managed profile catches up.
+migrate_hermes_config() {
+    python=$1
+    migrator=$2
+    merger=$3
+    managed=$4
+    persistent_base=$5
+    env_file=$6
+    runtime_config=$7
+    health_secret=$8
+    work=$9
+    as_hermes=${10}
+    [ -f "$migrator" ] || return 0
+    rm -rf "$work"
+    install -d -o 10000 -g 10000 -m 0700 "$work"
+    install -o 10000 -g 10000 -m 0600 "$persistent_base" "$work/config.yaml"
+    if [ -f "$env_file" ]; then
+        install -o 10000 -g 10000 -m 0600 "$env_file" "$work/.env"
+    fi
+    # A clean environment: the secrets exported above never reach the migrator.
+    if env -i PATH="$PATH" HOME="$work" HERMES_HOME="$work" \
+            "$as_hermes" hermes "$python" "$migrator"; then
+        if ! cmp -s "$work/config.yaml" "$persistent_base"; then
+            "$python" "$merger" "$managed" "$work/config.yaml" "$work/base.yaml" --sanitize-health
+            install -o 10000 -g 10000 -m 0640 "$work/base.yaml" "$persistent_base"
+            "$python" "$merger" "$managed" "$persistent_base" "$work/runtime.yaml" "$health_secret"
+            install -o 10000 -g 10000 -m 0600 "$work/runtime.yaml" "$runtime_config"
+        fi
+        if [ -f "$work/.env" ] && ! cmp -s "$work/.env" "$env_file"; then
+            install -o 10000 -g 10000 -m 0600 "$work/.env" "$env_file"
+        fi
+    else
+        echo "Hermes config migration failed; starting with the unmigrated config" >&2
+    fi
+    rm -rf "$work"
+}
+
+remove_migration_backups /opt/data
 materialize_hermes_config \
     /opt/hermes/.venv/bin/python \
     /usr/local/bin/merge-hermes-config \
@@ -95,6 +149,18 @@ materialize_hermes_config \
     /run/hermes-config.yaml \
     "$runtime_secret_dir/health_api_token" \
     /tmp
+migrate_hermes_config \
+    /opt/hermes/.venv/bin/python \
+    /opt/hermes/scripts/docker_config_migrate.py \
+    /usr/local/bin/merge-hermes-config \
+    /etc/hermes-home/config.yaml \
+    /opt/data/config.base.yaml \
+    /opt/data/.env \
+    /run/hermes-config.yaml \
+    "$runtime_secret_dir/health_api_token" \
+    /run/hermes-config-migrate \
+    /command/s6-setuidgid
+export HERMES_SKIP_CONFIG_MIGRATION=1
 install -o 10000 -g 10000 -m 0644 /etc/hermes-home/SOUL.md /opt/data/SOUL.md
 
 install_skills() {

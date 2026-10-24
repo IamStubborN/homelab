@@ -36,6 +36,7 @@ def read(relative_path: str) -> str:
 
 def compose_environment() -> dict:
     environment = os.environ.copy()
+    environment.pop("HERMES_IMAGE", None)
     environment.update(
         {
             "PRIMARY_TELEGRAM_USER_ID": "1",
@@ -1027,7 +1028,7 @@ class EmbeddedHealthWikiExampleTests(unittest.TestCase):
             )
             self.assertEqual(
                 service["image"],
-                "nousresearch/hermes-agent@sha256:efb82540aeb8ac21c58ecb4482bd3eb103ea617da2af2c61f12526ed68f6c2d9",
+                "${HERMES_IMAGE:-nousresearch/hermes-agent@sha256:efb82540aeb8ac21c58ecb4482bd3eb103ea617da2af2c61f12526ed68f6c2d9}",
             )
             self.assertEqual(
                 service["labels"]["com.centurylinklabs.watchtower.enable"],

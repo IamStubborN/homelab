@@ -70,3 +70,24 @@ The image ships `ffprobe`, which TorrServer looks up in `PATH` for `/ffp`.
 Without it JacRed's track analyses (`tracks: true`) all fail while still making
 TorrServer fetch each file's head; with it Lampa's torrent list shows the audio
 and subtitle tracks of analysed releases.
+
+## Requests from other web pages
+
+TorrServer runs without a login (`TS_HTTPAUTH=0`) and answers every origin
+with `Access-Control-Allow-Origin: *`, so any page open in a LAN browser or TV
+could read the torrent list or change settings, and a plain
+`<img src=".../shutdown">` stopped the server. The Traefik file provider
+(`traefik/config/config.yml`, see `config.example.yml`) guards it without
+recreating the VPN container that carries TorrServer's labels:
+
+- `torrserver-shutdown*` refuses `/shutdown` on both hosts with 403
+  (`deny-all`). Restart TorrServer through Docker instead.
+- `torrserver-foreign*`, `lampa-torrserver-foreign` and
+  `lampa-torrserver-gst-foreign` match requests whose `Origin` is neither
+  Lampa nor TorrServer, or cross-site requests without an `Origin`. For now they
+  only forward and write an access log line, to confirm that no TV client sends
+  such requests; once confirmed, they get `deny-all` too.
+
+Check with `docker logs traefik | grep -- '-foreign@file'`. A `HEAD` request
+tests the shutdown rule safely: TorrServer itself answers `HEAD /shutdown` with
+404, so 403 proves Traefik refused it.

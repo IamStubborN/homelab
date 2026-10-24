@@ -1,5 +1,57 @@
 http:
   routers:
+    # TorrServer has no login and answers any origin (CORS *), so a web page in
+    # a LAN browser could read or change it. /shutdown is always refused.
+    # Requests from a foreign page (an Origin that is not Lampa or TorrServer,
+    # or a cross-site request without one) are logged by the *-foreign routers
+    # to confirm that no TV client sends them before they are refused too.
+    torrserver-shutdown:
+      rule: "(Host(`torrserver.${DOCKER_DOMAIN}`) && Path(`/shutdown`)) || (Host(`lampa.${DOCKER_DOMAIN}`) && Path(`/torrserver/shutdown`))"
+      entryPoints: [https]
+      tls: {}
+      priority: 300
+      service: torrserver@docker
+      middlewares: [deny-all]
+    torrserver-shutdown-http:
+      rule: "Host(`torrserver.${DOCKER_DOMAIN}`) && Path(`/shutdown`)"
+      entryPoints: [http]
+      priority: 300
+      service: torrserver@docker
+      middlewares: [deny-all]
+    torrserver-foreign:
+      rule: "Host(`torrserver.${DOCKER_DOMAIN}`) && ((HeaderRegexp(`Origin`, `.`) && !HeaderRegexp(`Origin`, `^https?://(lampa|torrserver)[.]${DOCKER_DOMAIN}$`)) || (Header(`Sec-Fetch-Site`, `cross-site`) && !HeaderRegexp(`Origin`, `.`)))"
+      entryPoints: [https]
+      tls: {}
+      priority: 250
+      service: torrserver@docker
+      observability:
+        accessLogs: true
+    torrserver-foreign-http:
+      rule: "Host(`torrserver.${DOCKER_DOMAIN}`) && ((HeaderRegexp(`Origin`, `.`) && !HeaderRegexp(`Origin`, `^https?://(lampa|torrserver)[.]${DOCKER_DOMAIN}$`)) || (Header(`Sec-Fetch-Site`, `cross-site`) && !HeaderRegexp(`Origin`, `.`)))"
+      entryPoints: [http]
+      priority: 250
+      service: torrserver@docker
+      observability:
+        accessLogs: true
+    lampa-torrserver-foreign:
+      rule: "Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/torrserver`) && ((HeaderRegexp(`Origin`, `.`) && !HeaderRegexp(`Origin`, `^https?://(lampa|torrserver)[.]${DOCKER_DOMAIN}$`)) || (Header(`Sec-Fetch-Site`, `cross-site`) && !HeaderRegexp(`Origin`, `.`)))"
+      entryPoints: [https]
+      tls: {}
+      priority: 250
+      service: torrserver@docker
+      middlewares: [lampa-torrserver-strip@docker]
+      observability:
+        accessLogs: true
+    # Below lampa-gst-sessions (120): only the paths that reach TorrServer.
+    lampa-torrserver-gst-foreign:
+      rule: "Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/gst`) && ((HeaderRegexp(`Origin`, `.`) && !HeaderRegexp(`Origin`, `^https?://(lampa|torrserver)[.]${DOCKER_DOMAIN}$`)) || (Header(`Sec-Fetch-Site`, `cross-site`) && !HeaderRegexp(`Origin`, `.`)))"
+      entryPoints: [https]
+      tls: {}
+      priority: 110
+      service: torrserver@docker
+      observability:
+        accessLogs: true
+
     http-catchall-redirect:
       rule: "HostRegexp(`^.+$`)"
       entryPoints:
@@ -36,6 +88,11 @@ http:
           - url: "http://${LAN_BIND_IP:-127.0.0.1}:8123"
 
   middlewares:
+    # Matches no client address: every request through it gets 403.
+    deny-all:
+      ipAllowList:
+        sourceRange:
+          - "0.0.0.0/32"
     redirect-to-https:
       redirectScheme:
         scheme: https

@@ -71,6 +71,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
   let waiting = false;
   const pending = [];
   const requests = [];
+  const logs = [];
   const timers = new Map();
   const loads = [];
   const playingStates = [];
@@ -149,6 +150,10 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       location: { origin: 'https://lampa.test', href: 'https://lampa.test/' },
       localStorage: browserStorage,
       fetch(url, options) {
+        if (new URL(url).pathname === '/extaudio/log') {
+          logs.push({...JSON.parse(options.body), options});
+          return Promise.resolve({ok: true, status: 204});
+        }
         requests.push({url, options});
         if (/\/(?:heartbeat|remove)(?:\?|$)/.test(url)) return Promise.resolve({ok: true});
         if (/^\/extaudio\/[^/]+\/\d+\/tracks$/.test(new URL(url).pathname)) {
@@ -232,7 +237,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
   });
 
   return {
-    loads, storage, requests, destroy, playingStates, notices, context, video: () => video,
+    loads, storage, requests, logs, destroy, playingStates, notices, context, video: () => video,
     settle: async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); },
     audioMenu: () => audioMenu,
     loaderInstances: TestLoader.instances,
@@ -1662,4 +1667,113 @@ test('external audio that arrives after embedded subtitles is still offered', as
   release();
   await h.settle();
   assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', externalLabel]);
+});
+
+test('playback start, track switches and stop are logged without URLs or credentials', async t => {
+  const h = harness(t);
+  h.start(1, 'b1c2d3e4f5a6', true);
+  await h.probe(firstEpisode);
+  h.emitSubtitles(firstEpisode);
+  h.chooseAudio('Amediateka (Studio Band)');
+  h.ready();
+  h.emitSubtitles(firstEpisode);
+  h.chooseSubtitle('Russian');
+  h.video().currentTime = 61.27;
+  h.destroy();
+  await h.settle();
+  // The harness has no embedded subtitles, which is logged as a failed lookup.
+  const events = h.logs.filter(event => event.e !== 'ass-lookup-failed').map(({options, ...event}) => event);
+  assert.deepEqual(events.map(event => event.e), ['play-start', 'audio-switch', 'subtitle-switch', 'play-stop']);
+  assert.ok(events.every(event => event.h === 'b1c2d3e4' && event.f === 1 && /^[a-z0-9]{1,8}$/.test(event.s)), 'hash prefix, file and session');
+  assert.equal(new Set(events.map(event => event.s)).size, 1, 'one session per page');
+  assert.deepEqual([events[1].auto, events[1].track, events[1].external], [false, 'Amediateka (Studio Band)', false]);
+  assert.deepEqual([events[2].auto, events[2].track], [false, 'Russian']);
+  assert.equal(events[3].t, 61.3);
+  const options = h.logs[0].options;
+  assert.deepEqual([options.method, options.credentials, options.keepalive, options.headers['Content-Type']], ['POST', 'omit', true, 'application/json']);
+  assert.ok(!JSON.stringify(events).includes('same-torrent') && !JSON.stringify(events).includes('http'), 'no URLs');
+});
+
+test('HLS errors are logged with the URL path only, and repeats and bursts are dropped', t => {
+  const h = harness(t);
+  let now = 1000000;
+  h.context.Date = { now: () => now };
+  h.start(1, 'same-torrent', true);
+  const hls = h.createHls();
+  const error = { type: 'networkError', details: 'fragLoadError', fatal: false, response: { code: 502 },
+    frag: { type: 'main', sn: 7, url: 'https://lampa.test/gst/501/seg7.m4s?token=secret' } };
+  hls.trigger('error', error);
+  hls.trigger('error', error);
+  hls.trigger('error', { type: 'mediaError', details: 'bufferNudgeOnStall', fatal: false });
+  const errors = h.logs.filter(event => event.e === 'hls-error');
+  assert.equal(errors.length, 1, 'a repeat within seconds and a minor event are not sent');
+  assert.deepEqual([errors[0].details, errors[0].status, errors[0].sn, errors[0].frag, errors[0].path], ['fragLoadError', 502, 7, 'main', '/gst/501/seg7.m4s']);
+  assert.ok(!JSON.stringify(h.logs).includes('secret'));
+  now += 6000;
+  for (let i = 0; i < 40; i++) hls.trigger('error', { ...error, frag: { ...error.frag, sn: i } });
+  assert.equal(h.logs.length, 30, 'at most 30 events a minute');
+  now += 60000;
+  hls.trigger('error', { type: 'networkError', details: 'manifestLoadError', fatal: true });
+  assert.equal(h.logs.at(-1).dropped, 12, 'the next event counts what was dropped');
+  assert.equal(h.logs.at(-1).fatal, true);
+});
+
+test('JASSUB creation and destruction are logged with the reason', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), { ass: assLookup, raw: { 25: new TextEncoder().encode(assText) } });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  h.emitSubtitles(firstEpisode);
+  await h.settle();
+  h.chooseSubtitle('YakuSub Studio: полные (внешние)');
+  await h.settle();
+  h.replaceVideo();
+  h.emitSubtitles(firstEpisode);
+  await h.settle();
+  h.chooseSubtitle('English');
+  const ass = h.logs.filter(event => /^ass-(create|destroy)$/.test(event.e)).map(event => [event.e, event.why, event.same, event.newVideo]);
+  assert.deepEqual(ass, [
+    ['ass-create', 'mode', false, false],
+    ['ass-destroy', 'replace', undefined, undefined],
+    ['ass-create', 'new-video', true, true],
+    ['ass-destroy', 'off', undefined, undefined],
+  ]);
+});
+
+test('a remembered drawn track and its plain-text fallback are logged', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), { embedded: embeddedLookup, events: () => ({ header: null, lines: [], next: 0, failed: true }) });
+  h.start(13, 'abc', true);
+  await h.probe(signsAndFull);
+  h.emitSubtitles(signsAndFull);
+  await h.settle();
+  h.chooseSubtitle('Русские: полные');
+  await h.settle();
+  const names = h.logs.map(event => event.e);
+  assert.ok(names.includes('ass-failed') && names.includes('ass-fallback'), names.join());
+  assert.equal(h.logs.find(event => event.e === 'ass-failed').embedded, true);
+});
+
+test('external audio failures are logged', async t => {
+  const h = harness(t, new Map(), { external: [anilibria], rendition: [502] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  const failed = h.logs.find(event => event.e === 'audio-external-failed');
+  assert.deepEqual([failed.track, failed.reason], [externalLabel, 'HTTP 502']);
+});
+
+test('a failing log request never breaks playback', async t => {
+  const h = harness(t);
+  const fetch = h.context.window.fetch;
+  h.context.window.fetch = (url, options) => {
+    if (new URL(url).pathname === '/extaudio/log') throw new Error('offline');
+    return fetch(url, options);
+  };
+  h.start(1, 'same-torrent', true);
+  await h.probe(firstEpisode);
+  h.chooseAudio('Amediateka (Studio Band)');
+  assert.equal(h.audioIndex(), 1);
 });

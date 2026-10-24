@@ -141,6 +141,12 @@ FILE_RE = re.compile(r"^(?:audio\.m3u8|init\.mp4|s\d{1,6}\.m4s)$")
 ROUTE_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(tracks|raw)|(\d{1,2})/(aac)/([^/]+))$")
 EMBEDDED_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(embedded)|sub/(\d{1,2})|attachment/(\d{1,3}))$")
 RENDERER_RE = re.compile(r"^/extaudio/jassub/([a-z0-9-]+\.(?:js|wasm|woff2|ttf|txt))$")
+# Player events, one JSON line each in the container log (`client {...}`).
+LOG_MAX_BYTES = 4096
+LOG_PER_MINUTE = 300  # all viewers together; the plugin sends at most 30
+LOG_MAX_FIELDS = 24
+LOG_MAX_TEXT = 200
+LOG_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$", re.IGNORECASE)
 CONTENT_TYPES = {".m3u8": "application/vnd.apple.mpegurl", ".mp4": "audio/mp4", ".m4s": "video/iso.segment"}
 
 _probe_cache = {}
@@ -156,6 +162,32 @@ _subs = {}
 _subs_lock = threading.Lock()
 _library = {"faces": {}, "index": None}
 _library_lock = threading.Lock()
+_log_window = {"start": 0.0, "count": 0}
+_log_lock = threading.Lock()
+
+
+def log_allowed(now=None):
+    now = time.monotonic() if now is None else now
+    with _log_lock:
+        if now - _log_window["start"] >= 60:
+            _log_window["start"], _log_window["count"] = now, 0
+        _log_window["count"] += 1
+        return _log_window["count"] <= LOG_PER_MINUTE
+
+
+def client_event(payload):
+    """Flat scalar fields, short strings; anything else is dropped."""
+    now = time.time()
+    event = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now)) + f".{int(now * 1000) % 1000:03d}Z"}
+    for key, value in list(payload.items())[:LOG_MAX_FIELDS]:
+        if not isinstance(key, str) or not LOG_KEY_RE.match(key) or key == "ts":
+            continue
+        if isinstance(value, str):
+            event[key] = value[:LOG_MAX_TEXT]
+        elif value is None or isinstance(value, bool) or isinstance(value, int) and abs(value) < 2 ** 53 or \
+                isinstance(value, float) and math.isfinite(value):
+            event[key] = value
+    return event
 
 
 def stream_url(torrent_hash, file_id):
@@ -1595,6 +1627,30 @@ class Handler(BaseHTTPRequestHandler):
     def send_json(self, status, payload, extra=None):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_bytes(status, body, "application/json; charset=utf-8", extra=extra)
+
+    def do_POST(self):
+        if urllib.parse.urlsplit(self.path).path != "/extaudio/log":
+            return self.send_json(404, {"error": "not found"})
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            return self.send_json(411, {"error": "length required"})
+        if length < 0 or length > LOG_MAX_BYTES:
+            return self.send_json(413, {"error": "too large"})
+        if self.headers.get_content_type() != "application/json":
+            return self.send_json(415, {"error": "json only"})
+        if not log_allowed():
+            return self.send_json(429, {"error": "busy"})
+        try:
+            payload = json.loads(self.rfile.read(length))
+        except (ValueError, RecursionError, OSError):
+            return self.send_json(400, {"error": "invalid json"})
+        if not isinstance(payload, dict):
+            return self.send_json(400, {"error": "object expected"})
+        print("client " + json.dumps(client_event(payload), ensure_ascii=False, separators=(",", ":")), flush=True)
+        self.send_response(204)
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
 
     def serve_file(self, path, name):
         try:

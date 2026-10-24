@@ -977,6 +977,7 @@
           if (!/^Dialogue:/im.test(text)) Lampa.Noty.show('В этих субтитрах надписи не отделены от реплик');
         }
         state.assInstance = new Renderer(rendererOptions(base, video, text, results[2], results[3]));
+        seeked(); // a paused video shows no new frame to draw on
       }).catch(function (error) {
         if (active !== state || state.assRequest !== request) return;
         console.warn('Homelab ASS:', error && error.message);
@@ -1292,13 +1293,23 @@
       // Lampa's menu switches subtitles through `mode`, like hls.js tracks.
       Object.defineProperty(item, 'mode', {
         enumerable: true,
-        get: function () { return state.assActive === item ? 'showing' : 'disabled'; },
+        get: function () { return state.assActive === item && state.assHiding !== item ? 'showing' : 'disabled'; },
         set: function (value) {
           if (value === 'showing') {
             // The replaced hls.js track must not draw its plain text too.
             if (item.homelabOriginal && item.homelabOriginal.mode === 'showing') item.homelabOriginal.mode = 'disabled';
+            if (state.assHiding === item) state.assHiding = null;
             showAss(state, item, assWhy || 'mode');
-          } else if (state.assActive === item) hideAss(state, 'off');
+          } else if (state.assActive === item && state.assHiding !== item) {
+            // Lampa's menu disables every track before showing the chosen
+            // one; choosing the track already drawn keeps its renderer.
+            state.assHiding = item;
+            Promise.resolve().then(function () {
+              if (state.assHiding !== item) return;
+              state.assHiding = null;
+              if (state.assActive === item) hideAss(state, 'off');
+            });
+          }
         }
       });
       return item;

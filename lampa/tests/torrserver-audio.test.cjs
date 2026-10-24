@@ -1100,6 +1100,7 @@ test('external ASS subtitles join the menu and render through JASSUB', async t =
   assert.equal(options.workerUrl, 'https://lampa.test/extaudio/jassub/jassub-worker.js');
   assert.equal(h.subtitleTitle(), 'YakuSub Studio: полные (внешние)');
   h.chooseSubtitle('English');
+  await h.settle();
   assert.ok(FakeAss.instances[0].destroyed, 'another subtitle removes the ASS layer');
   h.chooseSubtitle('YakuSub Studio: полные (внешние)');
   await h.settle();
@@ -1173,6 +1174,26 @@ test('a pending ASS download is dropped after another choice or closing', async 
   h.destroy();
   await h.settle();
   assert.equal(FakeAss.instances.length, 0, 'closing cancels the pending renderer');
+});
+
+test('choosing the drawn track again keeps its renderer', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), { ass: assLookup, raw: { 25: new TextEncoder().encode(assText) } });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  h.emitSubtitles(firstEpisode);
+  await h.settle();
+  h.chooseSubtitle('YakuSub Studio: полные (внешние)');
+  await h.settle();
+  assert.equal(FakeAss.instances.length, 1);
+  h.chooseSubtitle('YakuSub Studio: полные (внешние)');
+  await h.settle();
+  assert.equal(FakeAss.instances.length, 1, 'no second renderer');
+  assert.equal(FakeAss.instances[0].destroyed, false);
+  assert.equal(h.subtitleTitle() !== null, true, 'the track stays on');
+  h.chooseSubtitle(null);
+  await h.settle();
+  assert.equal(FakeAss.instances[0].destroyed, true, 'turning subtitles off still destroys it');
 });
 
 test('ASS items leave the menu with their episode', async t => {
@@ -1741,6 +1762,7 @@ test('JASSUB creation and destruction are logged with the reason', async t => {
   h.emitSubtitles(firstEpisode);
   await h.settle();
   h.chooseSubtitle('English');
+  await h.settle();
   const ass = h.logs.filter(event => /^ass-(create|destroy)$/.test(event.e)).map(event => [event.e, event.why, event.same, event.newVideo]);
   assert.deepEqual(ass, [
     ['ass-create', 'mode', false, false],

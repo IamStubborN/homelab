@@ -122,8 +122,9 @@ retention observation (03:55) and Watchtower (04:00). It tracks the upstream
 1. finishes what an interrupted run left, right away through the unit's
    `ExecStopPost` (`RECOVER_ONLY=1`) or on the next night: a run killed during
    the snapshot only restarts the agents; one killed during apply is completed
-   when both agents already run the candidate healthy and clean, and otherwise
-   rolled back without marking the digest failed. An interrupted apply older
+   when both agents already run the candidate and pass the full health, stability
+   and secret checks, is only closed when they already run the previous image
+   again, and otherwise rolled back without marking the digest failed. An interrupted apply older
    than 12 hours, a failed rollback, unhealthy agents or agents on different
    images stop it with a Telegram alert;
 2. asks Docker Hub for the tag's digest without pulling and does nothing when
@@ -138,13 +139,14 @@ retention observation (03:55) and Watchtower (04:00). It tracks the upstream
    bootstrap and config migration must finish, the migrated schema must reach
    the image's latest version, and the canary data must hold no migration
    backup and no synthetic secret. Only such a verdict marks the digest failed;
-   a failed pull, a canary timeout or a Docker error (exit 125–127) is retried
-   the next night;
+   a failed pull, a canary timeout or a Docker daemon error (exit 125) is
+   retried the next night;
 5. waits until both gateways report `active_agents: 0` in
    `gateway_state.json` for 3 consecutive minutes (a reply in progress counts;
    a user typing does not). The wait ends 20 minutes after the canaries and, for
-   a run started before 03:30, at 03:30; a busy night is retried the next night
-   and the third in a row is reported;
+   a run started before 03:30, at the night's first 03:30 in Sofia; canaries
+   that end later postpone the install without counting a busy night. A busy
+   night is retried the next night and the third in a row is reported;
 6. stops both agents and snapshots their read-write volumes (profile, memory,
    browser) without `tmp/`, `.cache/` and `home/.cache/`, refusing above 6 GiB
    or without twice that space free;
@@ -170,9 +172,11 @@ and reports the outcome. A failed digest is not retried until upstream moves
 on or `failed_digest` is removed from `/var/lib/hermes-update/state.json`. A
 failed rollback leaves `phase` set and blocks later runs until checked. Any
 unexpected error is reported with its phase. A Docker or host error during
-apply rolls back without marking the digest failed. A SIGTERM (the 2-hour
-`TimeoutStartSec`, a shutdown) turns into a rollback, which
-`TimeoutStopSec=30min` leaves time to finish. A restore refuses to run while an
+apply rolls back without marking the digest failed, and so does a candidate
+offline in Telegram when the restored previous version cannot reach Telegram
+either. A SIGTERM (the 2-hour `TimeoutStartSec`, a shutdown) turns into a
+rollback, which ignores further signals and which `TimeoutStopSec=30min`
+leaves time to finish. A restore refuses to run while an
 agent is still running. The wiki bind mount is not part of
 the snapshot, so a candidate's wiki writes survive a rollback; conversations
 held between apply and rollback stay only in `displaced/`.

@@ -60,6 +60,7 @@ class FakeHost:
         self.stop_effect = None
         self.agents_running = True
         self.starts = True
+        self.after_restore_up = None
         self.hashes = {}
         self.images = {PINNED}
         self.containers = {}
@@ -153,6 +154,8 @@ class FakeHost:
             container["State"]["Health"]["Status"] = "healthy" if healthy else "unhealthy"
         if self.after_up and not rolled_back:
             self.after_up(self)
+        if self.after_restore_up and rolled_back:
+            self.after_restore_up(self)
 
     def stop(self):
         self.calls.append(("stop",))
@@ -348,7 +351,7 @@ class AutoUpdateTests(unittest.TestCase):
     def test_sigterm_handler_ignores_further_signals_and_raises(self):
         previous = updater.signal.getsignal(updater.signal.SIGTERM)
         self.addCleanup(updater.signal.signal, updater.signal.SIGTERM, previous)
-        with self.assertRaises(updater.UpdateError):
+        with self.assertRaises(updater.Terminated):
             updater.terminated(updater.signal.SIGTERM, None)
         self.assertIs(updater.signal.getsignal(updater.signal.SIGTERM), updater.signal.SIG_IGN)
 
@@ -383,14 +386,96 @@ class AutoUpdateTests(unittest.TestCase):
                 self.assertFalse((self.state / "state.json").exists()
                                  and "failed_digest" in self.saved_state())
 
-    def test_deadline_counts_after_canaries_and_stops_at_the_latest_start(self):
-        self.host.profile("hermes-primary").joinpath("gateway_state.json").write_text(
-            json.dumps({**gateway_state(), "active_agents": 1}))
-        early = updater.Updater(self.host, self.host.root, self.state, latest_start=self.host.clock + 5)
-        before = self.host.clock
-        self.assertEqual(early.run(), 0)
-        self.assertLess(self.host.clock - before, 120)
-        self.assertEqual(sorted(p.name for p in self.state.iterdir()), ["state.json"])
+    def test_canaries_past_the_latest_start_postpone_without_counting_a_busy_night(self):
+        late = updater.Updater(self.host, self.host.root, self.state, latest_start=self.host.clock + 1)
+        self.assertEqual(late.run(), 0)
+        self.assertNotIn(("stop",), self.host.calls)
+        self.assertIn(("rmi", f"{updater.REPOSITORY}@{NEW_DIGEST}"), self.host.calls)
+        self.assertEqual([p.name for p in self.state.iterdir()], [])
+        self.assertIn("перенесена на следующую ночь", self.host.messages[0])
+
+    def test_latest_start_is_the_first_0330_in_sofia_and_none_by_day(self):
+        import datetime
+        import zoneinfo
+        sofia = zoneinfo.ZoneInfo("Europe/Sofia")
+
+        def at(text):
+            return datetime.datetime.fromisoformat(text).replace(tzinfo=sofia).timestamp()
+
+        utc = datetime.timezone.utc
+        for start, limit in (("2026-10-24T02:30", "2026-10-24T00:30"),   # summer time
+                             ("2026-10-25T02:30", "2026-10-25T00:30"),   # clocks go back at 04:00
+                             ("2027-01-10T02:30", "2027-01-10T01:30")):
+            with self.subTest(start=start):
+                expected = datetime.datetime.fromisoformat(limit).replace(tzinfo=utc).timestamp()
+                self.assertEqual(updater.latest_start(at(start)), expected)
+        self.assertIsNone(updater.latest_start(at("2026-10-24T14:00")))
+
+    def test_sigterm_during_a_rollback_is_ignored_until_it_ends(self):
+        previous = updater.signal.signal(updater.signal.SIGTERM, updater.terminated)
+        self.addCleanup(updater.signal.signal, updater.signal.SIGTERM, previous)
+        self.host.healthy_after_up = False
+        original = updater.restore_volume
+
+        def interrupted(*args):
+            os.kill(os.getpid(), updater.signal.SIGTERM)
+            original(*args)
+
+        updater.restore_volume = interrupted
+        self.addCleanup(setattr, updater, "restore_volume", original)
+        self.assertEqual(self.run_updater(), 1)
+        self.assertNotIn("phase", self.saved_state())
+        self.assertEqual((self.host.profile("hermes-primary") / "state.db").read_bytes(), b"before")
+        self.assertIn("откатил", self.host.messages[-1])
+
+    def test_sigterm_during_the_health_check_rolls_back_without_rejecting(self):
+        previous = updater.signal.signal(updater.signal.SIGTERM, updater.terminated)
+        self.addCleanup(updater.signal.signal, updater.signal.SIGTERM, previous)
+        self.host.healthy_after_up = False
+        self.host.after_up = lambda host: os.kill(os.getpid(), updater.signal.SIGTERM)
+        self.assertEqual(self.run_updater(), 1)
+        state = self.saved_state()
+        self.assertNotIn("phase", state)
+        self.assertNotIn("failed_digest", state)
+        self.assertEqual(self.env_lines(), ["WIKI_ROOT=/srv/wiki"])
+
+    def test_recovery_does_not_finish_a_restarting_candidate(self):
+        def killed(host):
+            host.containers["hermes-primary"]["RestartCount"] = 3
+            raise KeyboardInterrupt
+
+        self.host.after_up = killed
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_updater()
+        self.host.after_up = None
+        recovery = updater.Updater(self.host, self.host.root, self.state, recover_only=True)
+        self.assertEqual(recovery.run(), 1)
+        self.assertEqual(self.env_lines(), ["WIKI_ROOT=/srv/wiki"])
+        self.assertNotIn("current", self.saved_state())
+
+    def test_telegram_down_for_both_versions_does_not_reject_the_candidate(self):
+        def offline(host):
+            for name in updater.SERVICES:
+                (host.profile(name) / "gateway_state.json").write_text(json.dumps(gateway_state(telegram="retrying")))
+
+        self.host.after_up = offline
+        self.host.after_restore_up = offline
+        self.assertEqual(self.run_updater(), 1)
+        self.assertNotIn("failed_digest", self.saved_state())
+        self.assertIn("Повторю следующей ночью", self.host.messages[-1])
+
+    def test_recovery_of_an_already_finished_rollback_only_clears_the_phase(self):
+        self.host.healthy_after_up = False
+        self.assertEqual(self.run_updater(), 1)
+        state = self.saved_state()
+        (self.state / "state.json").write_text(json.dumps({**state, "phase": "apply"}))
+        marker = self.host.profile("hermes-primary") / "written-after-rollback"
+        marker.write_text("kept")
+        recovery = updater.Updater(self.host, self.host.root, self.state, recover_only=True)
+        self.assertEqual(recovery.run(), 1)
+        self.assertTrue(marker.exists())
+        self.assertNotIn("phase", self.saved_state())
+        self.assertIn("уже откачено", self.host.messages[-1])
 
     def test_agents_still_running_are_never_restored_under(self):
         self.host.healthy_after_up = False

@@ -41,7 +41,8 @@ IDLE_CHECKS = 3                 # consecutive idle samples, one per minute
 HEALTH_TIMEOUT = 420
 STABLE_FOR = 60                 # a healthy candidate must not restart for this long
 STALE_RECOVERY = 12 * 3600      # an older interrupted apply is left to the operator
-LATEST_START = (3, 30)          # local time; a nightly run starts no snapshot later
+LATEST_START = (3, 30)          # Europe/Sofia; a nightly run starts no snapshot later
+TELEGRAM_GRACE = 180            # time a restored agent gets to reconnect to Telegram
 CANARY_TIMEOUT = 600
 KEEP_GENERATIONS = 3
 MAX_SNAPSHOT_BYTES = 6 * 1024**3
@@ -96,9 +97,19 @@ class CandidateRejected(UpdateError):
     """The candidate itself failed a check, so its digest is not retried."""
 
 
+class Terminated(BaseException):
+    """SIGTERM; not an Exception, so no step's error handling swallows it."""
+
+
 def terminated(signum, frame):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)  # let the rollback finish
-    raise UpdateError("terminated by systemd")
+    raise Terminated("terminated by systemd")
+
+
+def ignore_sigterm() -> None:
+    """A restore must run to its end: a half-extracted volume is worse than late."""
+    if signal.getsignal(signal.SIGTERM) is terminated:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
 
 def parse_time(value: str) -> float:
@@ -366,14 +377,22 @@ class Updater:
             write_atomic(self.state_file, json.dumps(self.state, indent=2, sort_keys=True) + "\n")
 
     def phase(self, value: str | None, required=True) -> None:
-        """Record the phase; with required=False a failed write (ENOSPC) only logs."""
+        """Record the phase; with required=False a failed write (ENOSPC) only logs.
+
+        Memory follows the disk: a later step must act on the phase a restart
+        would read."""
+        state = dict(self.state)
         if value is None:
-            self.state.pop("phase", None)
+            state.pop("phase", None)
         else:
-            self.state["phase"] = value
+            state["phase"] = value
+        previous, self.state = self.state, state
         try:
             self.save()
         except OSError as error:
+            self.state = {**state, "phase": previous.get("phase")}
+            if previous.get("phase") is None:
+                self.state.pop("phase")
             if required:
                 raise
             log(f"Could not save phase {value}: {error}")
@@ -459,8 +478,21 @@ class Updater:
         return False
 
     def start_agents(self) -> bool:
+        # A `docker stop` cut short by SIGTERM may still be finishing: complete
+        # it first, so the start is not undone a moment later.
+        self.host.run("docker", "stop", "-t", "90", *SERVICES, check=False, timeout=300)
         self.host.run("docker", "start", *SERVICES, check=False)
+        self.host.sleep(5)
         return all(self.host.running(name) for name in SERVICES)
+
+    def telegram_reachable(self, image: str) -> bool:
+        """Whether restored agents on `image` reconnect to Telegram: if not, the outage is not the candidate's."""
+        end = self.host.now() + TELEGRAM_GRACE
+        while self.host.now() < end:
+            if self.running(image, telegram=True) is not None:
+                return True
+            self.host.sleep(10)
+        return False
 
     def post_start_problems(self) -> list[str]:
         problems = []
@@ -519,7 +551,7 @@ class Updater:
                      candidate, "/opt/hermes/.venv/bin/python", "-c", CANARY_PROBE]
             code, output = self.host.canary(f"hermes-canary-{name}", args)
             (work / "output.log").write_text(output)
-            if code in (124, 125, 126, 127):  # timeout or Docker itself: not the candidate's fault
+            if code in (124, 125):  # timeout or the Docker daemon: not the candidate's fault
                 raise UpdateError(f"{name}: canary could not run (exit {code})")
             marker = [line for line in output.splitlines() if line.startswith("HERMES_CANARY ")]
             if code or not marker:
@@ -578,6 +610,17 @@ class Updater:
         """Never leave the agents stopped silently: report any unexpected failure."""
         try:
             return self.update()
+        except Terminated:
+            phase = self.state.get("phase")
+            log(f"Terminated in phase {phase}.")
+            if phase in ("snapshot", "apply", "rollback") and not self.dry_run:
+                try:
+                    return self.recover()
+                except Exception as again:
+                    log(f"Recovery failed: {type(again).__name__}: {again}")
+                    self.notify(f"Hermes: автообновление остановлено (phase={phase}), восстановление не удалось; "
+                                f"нужна ручная проверка ({self.state_dir}).")
+            return 1
         except Exception as error:
             phase = self.state.get("phase")
             log(f"Update crashed in phase {phase}: {type(error).__name__}: {error}")
@@ -611,11 +654,20 @@ class Updater:
         if phase not in ("apply", "rollback") or not self.state.get("candidate"):
             self.notify(manual)
             return 1
+        ignore_sigterm()
         generation = self.state_dir / self.state["generation"]
-        candidate = self.state["candidate"]
-        counts = self.running(candidate, telegram=True) if phase == "apply" else None
-        if counts is not None and not self.post_start_problems():
-            log("The interrupted apply left both agents healthy on the candidate; finishing it.")
+        candidate, previous = self.state["candidate"], self.state["previous"]
+        on_env = read_env_value(self.root / ".env", ENV_KEY)
+        if on_env == self.state.get("env_previous") and self.running(previous, telegram=False) is not None:
+            # The rollback ran but could not record it (ENOSPC, kill right after).
+            log("The agents already run the previous image; clearing the phase.")
+            self.phase(None, required=False)
+            self.cleanup(generation.name)
+            self.notify(f"Hermes: прерванное обновление уже откачено, агенты на прежней версии. Логи: {generation}")
+            return 1
+        if phase == "apply" and on_env == candidate and self.running(candidate, telegram=True) is not None \
+                and self.healthy(candidate) and not self.post_start_problems():
+            log("The interrupted apply left both agents healthy and stable on the candidate; finishing it.")
             return self.finish(generation)
         if self.host.now() - self.state.get("snapshot_at", 0) > STALE_RECOVERY:
             self.notify(manual + " Снимок старше 12 часов, автоматически не откатываю.")
@@ -703,6 +755,12 @@ class Updater:
         self.deadline = self.host.now() + START_WINDOW
         if self.latest_start is not None:
             self.deadline = min(self.deadline, self.latest_start)
+        if self.host.now() >= self.deadline:  # a slow pull, not busy agents
+            shutil.rmtree(generation, ignore_errors=True)
+            self.host.remove_image(candidate)
+            self.notify(f"Hermes: проверка новой версии закончилась после {LATEST_START[0]}:{LATEST_START[1]:02d}, "
+                        "установка перенесена на следующую ночь.")
+            return 0
         if not self.wait_for_idle(containers):
             shutil.rmtree(generation, ignore_errors=True)
             busy = self.state.get("busy_nights", 0) + 1
@@ -749,7 +807,7 @@ class Updater:
         except Exception as error:
             return self.roll_back(generation, [f"{type(error).__name__}: {error}"], reject=False)
         if problems:
-            return self.roll_back(generation, problems)
+            return self.roll_back(generation, problems, health=not healthy)
         return self.finish(generation)
 
     def finish(self, generation: pathlib.Path) -> int:
@@ -773,8 +831,12 @@ class Updater:
         self.cleanup(generation.name)
         return 0
 
-    def roll_back(self, generation: pathlib.Path, problems: list[str], reject=True) -> int:
-        """Restore the snapshot and the previous image; `reject` marks the candidate as failed."""
+    def roll_back(self, generation: pathlib.Path, problems: list[str], reject=True, health=False) -> int:
+        """Restore the snapshot and the previous image; `reject` marks the candidate as failed.
+
+        After a failed health check (`health`) the mark stays only if the
+        restored agents reach Telegram: otherwise Telegram itself was down."""
+        ignore_sigterm()
         candidate, previous = self.state["candidate"], self.state["previous"]
         log("Apply failed: " + "; ".join(problems))
         try:
@@ -784,7 +846,6 @@ class Updater:
             log(f"Could not write problems.log: {error}")
         if reject:
             self.state["failed_digest"] = candidate.split("@", 1)[1]
-        retry = RETRY if self.state.get("failed_digest") == candidate.split("@", 1)[1] else "Повторю следующей ночью."
         self.phase("rollback", required=False)
         try:
             self.restore(generation)
@@ -796,7 +857,14 @@ class Updater:
         except Exception as error:
             log(f"Rollback failed: {type(error).__name__}: {error}")
             restored = False
-        self.host.remove_image(candidate)
+        if restored and reject and health and not self.telegram_reachable(previous):
+            log("The previous version cannot reach Telegram either; the candidate is not judged.")
+            self.state.pop("failed_digest", None)
+        retry = RETRY if self.state.get("failed_digest") == candidate.split("@", 1)[1] else "Повторю следующей ночью."
+        try:
+            self.host.remove_image(candidate)
+        except Exception as error:
+            log(f"Could not remove the candidate image: {error}")
         if restored:
             for key in ("pending", "snapshot_at"):
                 self.state.pop(key, None)
@@ -814,23 +882,30 @@ class Updater:
 def main() -> int:
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(STATE, 0o700)
+    recover_only = bool(os.environ.get("RECOVER_ONLY"))
     with open(STATE / "lock", "w") as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Recovery waits for a manual run holding the lock instead of giving up.
+            fcntl.flock(lock, fcntl.LOCK_EX if recover_only else fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             log("Another Hermes update is running.")
             return 1
         signal.signal(signal.SIGTERM, terminated)  # TimeoutStartSec: roll back, do not just die
         return Updater(Host(), dry_run=bool(os.environ.get("DRY_RUN")),
                        canary_only=bool(os.environ.get("CANARY_ONLY")),
-                       recover_only=bool(os.environ.get("RECOVER_ONLY")),
+                       recover_only=recover_only,
                        latest_start=latest_start(time.time())).run()
 
 
 def latest_start(now: float) -> float | None:
-    """Today's LATEST_START for a run started in the night before it; none by day."""
-    local = time.localtime(now)
-    limit = time.mktime((*local[:3], *LATEST_START, 0, 0, 0, -1))
+    """Today's LATEST_START in Sofia for a run started in the night before it; none by day.
+
+    fold=0 takes the first 03:30 of the night the clocks go back."""
+    import datetime
+    import zoneinfo
+    zone = zoneinfo.ZoneInfo("Europe/Sofia")
+    local = datetime.datetime.fromtimestamp(now, zone)
+    limit = local.replace(hour=LATEST_START[0], minute=LATEST_START[1], second=0, microsecond=0, fold=0).timestamp()
     return limit if now < limit else None
 
 

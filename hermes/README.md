@@ -62,16 +62,18 @@ Everything else is attached through upstream extension points:
 Upstream no longer applies `session_reset`, so both profiles enable the
 community plugin `hermes-session-reset-policy`, which resets a conversation on
 the first message after 1440 idle minutes. It is not mounted: it lives in each
-profile volume, pinned to a reviewed commit. Install it once per new volume:
+profile volume and follows the Hermes plugin catalog, which pins a reviewed
+commit and moves with Hermes. Every Media Orchestrator deployment that touches
+Hermes installs it when missing, updates it, and restarts an agent whose copy
+changed. To do the same by hand:
 
 ```sh
 for c in hermes-primary hermes-secondary; do
-  docker exec "$c" hermes plugins install hermes-session-reset-policy \
-    --ref 0f2ea5ad995f1e4ba7c92c2dbd21afa868b8ae21 --no-enable
+  docker exec "$c" hermes plugins install hermes-session-reset-policy --no-enable --yes-deps ||
+    docker exec "$c" hermes plugins update hermes-session-reset-policy
+  docker restart "$c"
 done
 ```
-
-Review the source before changing the pinned commit.
 
 All mounts are read-only. Conversational media operations and Telegram
 callbacks use the media-service MCP endpoint.

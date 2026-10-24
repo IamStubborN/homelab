@@ -810,6 +810,27 @@ test('an external audio file still downloading is asked for until the sidecar re
   assert.equal(h.work().homelab_external_audio.name, 'AniLibria.tv', 'the remembered voice-over returns once it is read');
 });
 
+test('external subtitles appear once a waking torrent lists its files', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), { external: [anilibria], ass: assLookup });
+  const fetch = h.context.window.fetch;
+  let unread = 2;
+  h.context.window.fetch = (url, options) => {
+    if (unread && /\/13\/tracks$/.test(new URL(url).pathname)) {
+      unread--;
+      h.requests.push({ url, options });
+      return Promise.resolve({ ok: true, json: async () => ({ tracks: [], pending: true, subtitles: [], renderer: assLookup.renderer }) });
+    }
+    return fetch(url, options);
+  };
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  assert.ok(!h.subtitleMenu().includes('YakuSub Studio: полные (внешние)'), 'nothing is listed yet');
+  for (let i = 0; i < 2; i++) { h.fireTimer(2000); await h.settle(); }
+  assert.ok(h.subtitleMenu().includes('YakuSub Studio: полные (внешние)'), 'a later answer brings the subtitles');
+});
+
 test('external audio keeps current audio playing until the rendition is ready', async t => {
   const h = harness(t, new Map(), { external: [anilibria], rendition: [503, 429] });
   h.start(13, 'abc', true);

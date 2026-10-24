@@ -1232,6 +1232,13 @@ class HttpTests(unittest.TestCase):
         self.assertEqual((status, payload["tracks"], payload["pending"], payload["renderer"]), (200, tracks, True, "/extaudio/jassub/"))
         self.assertEqual([item["file"] for item in payload["subtitles"]], [27, 25])
 
+    def test_tracks_endpoint_waits_for_the_file_list(self):
+        with mock.patch.object(app, "torrent_files", return_value=[]), \
+                mock.patch.object(app, "external_tracks") as tracks:
+            status, _, body = self.get(f"/extaudio/{HASH}/13/tracks")
+        self.assertEqual((status, json.loads(body)["pending"]), (200, True))
+        tracks.assert_not_called()
+
     def test_raw_endpoint(self):
         files = [*SUB_FILES, *({"id": 50 + n, "path": f"Show/Fonts/f{n}.ttf", "length": 1000} for n in range(10))]
         real_urlopen = urllib.request.urlopen

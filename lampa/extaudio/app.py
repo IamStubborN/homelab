@@ -1785,6 +1785,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(429, {"error": "busy"}, {"Retry-After": "5"})
             try:
                 files = torrent_files(torrent_hash)
+                if not any(item["id"] == file_id for item in files):
+                    # A torrent that just woke up is still fetching its file list.
+                    return self.send_json(200, {"tracks": [], "pending": True, "subtitles": [], "renderer": None})
                 tracks, pending = external_tracks(torrent_hash, file_id, files)
                 return self.send_json(200, {
                     "tracks": tracks,

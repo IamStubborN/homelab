@@ -1524,7 +1524,8 @@
         externalTracks(state, work).then(function (list) {
           clearTimeout(state.externalTimeout);
           if (active !== state || generation !== revision) return;
-          if (attempts === EXTERNAL_LOOKUPS) installAss(state, state.externalData);
+          // A torrent still fetching its metadata lists no subtitles at first.
+          if (!state.assItems || !state.assItems.length) installAss(state, state.externalData);
           if (state.externalData && state.externalData.pending && attempts > 1) {
             state.externalRetry = setTimeout(function () { lookupExternalTracks(attempts - 1); }, 2000);
           }

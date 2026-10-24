@@ -900,7 +900,10 @@
 
     function signsOnly(text) {
       var style = 3; // the V4+ column order, until a Format line says otherwise
+      var height = 288; // libass's frame height when the script names none
       return text.split(/\r?\n/).filter(function (line) {
+        var resolution = /^PlayResY:\s*(\d+)/i.exec(line);
+        if (resolution) height = parseInt(resolution[1], 10) || height;
         var format = /^Format:(.*)$/i.exec(line);
         if (format) {
           style = format[1].split(',').map(function (name) { return name.trim().toLowerCase(); }).indexOf('style');
@@ -909,19 +912,23 @@
         if (!/^Dialogue:/i.test(line)) return true;
         if (style < 0) return false;
         var fields = line.slice(line.indexOf(':') + 1).split(',');
-        return SIGN_STYLE.test(fields[style] || '') || typeset(fields.slice(style + 6).join(','));
+        return SIGN_STYLE.test(fields[style] || '') || typeset(fields.slice(style + 6).join(','), height);
       }).join('\n');
     }
 
     // Some groups type a sign in the dialogue style: an episode title, a
     // "Next time" card, credits. Such a line is placed and styled by hand;
-    // a placed line of dialogue rarely carries more than its position.
+    // a placed line of dialogue rarely carries more than its position. A card
+    // in the middle of the frame, where dialogue is not put, needs one tag.
     var TYPESET_TAGS = [/\\fade?\(/, /\\(blur|be)\d/, /\\fs\d/, /\\fsc[xy]\d/, /\\[1-4]?c&H/i, /\\fr[xyz]?-?\d/,
       /\\i?clip\(/, /\\fn[^\\}]/, /\\org\(/, /\\bord\d/, /\\shad\d/];
 
-    function typeset(text) {
-      if (!/\\(pos|move)\(/.test(text)) return false;
-      return TYPESET_TAGS.filter(function (tag) { return tag.test(text); }).length >= 2;
+    function typeset(text, height) {
+      var place = /\\(?:pos|move)\(\s*[\d.-]+\s*,\s*([\d.-]+)/.exec(text);
+      if (!place) return false;
+      var tags = TYPESET_TAGS.filter(function (tag) { return tag.test(text); }).length;
+      var y = parseFloat(place[1]) / height;
+      return tags >= 2 || tags === 1 && y > 0.3 && y < 0.7;
     }
 
     // Windows fonts subtitles often name without attaching them, and the

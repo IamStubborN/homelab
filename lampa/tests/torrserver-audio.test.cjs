@@ -1606,7 +1606,7 @@ test('labels name the group or the language, then full subtitles or signs', asyn
 
 test('the signs-only item draws only on-screen text styles of an external ASS', async t => {
   FakeAss.instances.length = 0;
-  const script = '[V4+ Styles]\r\nFormat: Name, Fontname\r\nStyle: Text,Arial\r\nStyle: Sign 3,Arial\r\n\r\n[Events]\r\n' +
+  const script = '[Script Info]\r\nPlayResY: 720\r\n\r\n[V4+ Styles]\r\nFormat: Name, Fontname\r\nStyle: Text,Arial\r\nStyle: Sign 3,Arial\r\n\r\n[Events]\r\n' +
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\r\n' +
     'Dialogue: 0,0:00:01.00,0:00:02.00,Text,,0,0,0,,{\\pos(1,1)}Реплика\r\n' +
     'Dialogue: 0,0:00:01.00,0:00:02.00,Subtitles,,0,0,0,,Вторая реплика\r\n' +
@@ -1616,7 +1616,9 @@ test('the signs-only item draws only on-screen text styles of an external ASS', 
     'Dialogue: 0,0:00:07.00,0:00:08.00,Интерфейс 1,,0,0,0,,Получен титул\n' +
     'Dialogue: 0,0:00:09.00,0:00:10.00,Text,,0,0,0,,{\\fad(500,0)\\i1\\blur3\\pos(640,368)}Далее: волк, призыв\n' +
     'Dialogue: 0,0:00:11.00,0:00:12.00,Text,,0,0,0,,{\\pos(640,700)\\i1}Рёв Дракона, вперёд!\n' +
-    'Dialogue: 0,0:00:13.00,0:00:14.00,Text,,0,0,0,,{\\fs60\\c&H0000FF&}Крик без позиции\n';
+    'Dialogue: 0,0:00:13.00,0:00:14.00,Text,,0,0,0,,{\\fs60\\c&H0000FF&}Крик без позиции\n' +
+    'Dialogue: 0,0:00:15.00,0:00:16.00,Text,,0,0,0,,{\\fad(500,0)\\i1\\pos(640,368)}Далее: Призыв волка\n' +
+    'Dialogue: 0,0:00:17.00,0:00:18.00,Text,,0,0,0,,{\\fad(500,0)\\pos(640,690)}Реплика с появлением\n';
   const h = harness(t, new Map(), { ass: assLookup, raw: { 25: new TextEncoder().encode(script), 37: new Uint8Array(1), 38: new Uint8Array(1) } });
   h.start(13, 'abc', true);
   await h.probe([japaneseAAC]);
@@ -1628,6 +1630,8 @@ test('the signs-only item draws only on-screen text styles of an external ASS', 
   assert.ok(content.includes('Авангард') && content.includes('Получен титул'), 'captions and interface messages are signs');
   assert.ok(content.includes('Далее: волк, призыв'), 'a placed and styled line in a dialogue style is a sign');
   assert.ok(!content.includes('Рёв Дракона') && !content.includes('Крик без позиции'), 'placed or styled dialogue alone stays dialogue');
+  assert.ok(content.includes('Призыв волка'), 'a card in the middle of the frame needs one tag');
+  assert.ok(!content.includes('Реплика с появлением'), 'a fading line at the bottom stays dialogue');
   assert.ok(!content.includes('Реплика'), 'dialogue is dropped even with a position');
   assert.ok(!content.includes('Вторая реплика'), 'a "Subtitles" style is dialogue');
   assert.ok(content.includes('Style: Text,Arial'), 'styles stay');

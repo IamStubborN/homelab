@@ -71,8 +71,8 @@ services:
     environment:
       TORRSERVER_BASE: http://gluetun-torrserver:8090
       CACHE_DIR: /cache
-      CACHE_MAX_MB: "1024"
-      CACHE_TTL_HOURS: "24"
+      CACHE_MAX_MB: "2048"
+      CACHE_TTL_HOURS: "72"
       FONT_LIBRARY_DIR: /fonts
     volumes:
       - ./extaudio-cache:/cache

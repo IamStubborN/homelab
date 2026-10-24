@@ -144,7 +144,8 @@ retention observation (03:55) and Watchtower (04:00). It tracks the upstream
    lines, mode and owner, and recreates only `hermes-primary` and
    `hermes-secondary` with `--no-deps --no-build --pull never`;
 8. requires both to become healthy within 7 minutes and then scans each
-   profile volume (except Hermes' durable `tmp/`) for migration backups and
+   profile volume (except `tmp/`, a tmpfs that holds the terminal tool's
+   environment snapshots and never reaches the disk) for migration backups and
    for the content of every mounted `/run/secrets/*` file.
 
 On success the previous image is tagged `homelab/hermes-agent:rollback` so the

@@ -40,7 +40,8 @@ fi
 chown -R 10000:10000 "$lazy_packages"
 export PYTHONPATH="$python_packages${PYTHONPATH:+:$PYTHONPATH}"
 
-# Durable temp for TTS/auto-TTS (Hermes blocks /tmp as protected)
+# Temp for TTS/auto-TTS and terminal snapshots (Hermes blocks /tmp as
+# protected); a tmpfs from compose.yaml, so nothing here outlives the container.
 install -d -o 10000 -g 10000 -m 1777 /opt/data/tmp
 export TMPDIR=/opt/data/tmp
 export TMP=/opt/data/tmp

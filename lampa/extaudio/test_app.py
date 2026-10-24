@@ -30,6 +30,19 @@ FILES = [
 ]
 
 
+
+def stop_live(directory):
+    """Stops the encoder and subtitle runs a test started and waits for their
+    watchers to remove the run directories, so the cache can be deleted."""
+    for pair in app.running():
+        app.stop_run(*pair)
+    for track in list(app._subs.values()):
+        if track.run:
+            app.stop_subtitle_run(track)
+    deadline = time.monotonic() + 5
+    while any(name.endswith(".tmp") for name in os.listdir(directory)) and time.monotonic() < deadline:
+        time.sleep(0.05)
+
 class CandidateTests(unittest.TestCase):
     def test_matches_audio_files_named_after_the_video(self):
         self.assertEqual([(item["id"], item["location"]) for item in app.external_candidates(FILES, 13)], [
@@ -342,7 +355,7 @@ class LiveEncodeTests(unittest.TestCase):
         self.rendition = app.LiveRendition(HASH, 1, 0, {"channels": 6, "duration": 40.0})
         self.rendition.source = self.url
         os.makedirs(self.rendition.directory)
-        self.addCleanup(lambda: [app.stop_run(*pair) for pair in app.running()])
+        self.addCleanup(stop_live, self.directory.name)
         app._live[(HASH, 1, 0)] = self.rendition
 
     def segment(self, index, rendition=None):
@@ -460,14 +473,7 @@ class CopiedAacTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         app._live.clear()
-        self.addCleanup(self.stop_runs)
-
-    def stop_runs(self):
-        for pair in app.running():
-            app.stop_run(*pair)
-        deadline = time.monotonic() + 5
-        while any(name.endswith(".tmp") for name in os.listdir(self.directory.name)) and time.monotonic() < deadline:
-            time.sleep(0.05)
+        self.addCleanup(stop_live, self.directory.name)
 
     def rendition(self, file_id):
         rendition = app.LiveRendition(HASH, file_id, 0, self.info)
@@ -905,7 +911,7 @@ class EmbeddedSubtitleTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
         app._embedded_cache.clear()
         app._subs.clear()
-        self.addCleanup(lambda: [app.stop_subtitle_run(track) for track in app._subs.values() if track.run])
+        self.addCleanup(stop_live, self.directory.name)
 
     def events(self, position, offset=0, wait=20):
         deadline = time.monotonic() + wait

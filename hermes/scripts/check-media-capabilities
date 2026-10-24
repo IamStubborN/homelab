@@ -110,20 +110,34 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--release-dir", type=pathlib.Path)
     parser.add_argument("--sync", action="store_true", help="copy validated bundle artifacts")
+    # Local source deployments have no release bundle: they pass the schema and
+    # capability manifest generated from the Media Orchestrator checkout.
+    parser.add_argument("--schema", type=pathlib.Path, help="MCP schema without a release bundle")
+    parser.add_argument("--capabilities", type=pathlib.Path, help="capability manifest without a release bundle")
     args = parser.parse_args()
-    configured = args.release_dir or os.environ.get("MEDIA_RELEASE_DIR")
-    if not configured:
-        print("MEDIA_RELEASE_DIR is required", file=sys.stderr)
+    if (args.schema is None) != (args.capabilities is None):
+        print("--schema and --capabilities must be given together", file=sys.stderr)
         return 1
-    release_dir = pathlib.Path(configured).resolve()
+    if args.schema is not None and args.release_dir is not None:
+        print("--release-dir cannot be combined with --schema", file=sys.stderr)
+        return 1
+    if args.schema is not None:
+        schema_path, capabilities_path = args.schema, args.capabilities
+    else:
+        configured = args.release_dir or os.environ.get("MEDIA_RELEASE_DIR")
+        if not configured:
+            print("MEDIA_RELEASE_DIR is required", file=sys.stderr)
+            return 1
+        release_dir = pathlib.Path(configured).resolve()
+        schema_path = release_dir / "MCP_SCHEMA.json"
+        capabilities_path = release_dir / "media-capabilities.json"
 
     try:
-        load_release_contract(release_dir)
-        schema_text = (release_dir / "MCP_SCHEMA.json").read_text(encoding="utf-8")
+        if args.schema is None:
+            load_release_contract(release_dir)
+        schema_text = schema_path.read_text(encoding="utf-8")
         schema = json.loads(schema_text)
-        capabilities = json.loads(
-            (release_dir / "media-capabilities.json").read_text(encoding="utf-8")
-        )
+        capabilities = json.loads(capabilities_path.read_text(encoding="utf-8"))
     except (ContractError, OSError, UnicodeError, json.JSONDecodeError) as error:
         print(f"media release contract error: {error}", file=sys.stderr)
         return 1

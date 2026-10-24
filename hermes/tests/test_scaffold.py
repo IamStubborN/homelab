@@ -753,6 +753,22 @@ class SkillContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("42 dynamically discovered tools", result.stdout)
 
+    def test_media_capability_check_accepts_a_local_schema_without_a_bundle(self):
+        release_dir = ROOT.parent / "media/release.example"
+        env = {key: value for key, value in os.environ.items() if key != "MEDIA_RELEASE_DIR"}
+        checker = str(ROOT / "scripts/check-media-capabilities")
+        local = [
+            checker,
+            "--schema", str(release_dir / "MCP_SCHEMA.json"),
+            "--capabilities", str(release_dir / "media-capabilities.json"),
+        ]
+        result = subprocess.run(local, text=True, capture_output=True, env=env, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("42 dynamically discovered tools", result.stdout)
+        for argv in (local[:3], [*local, "--release-dir", str(release_dir)]):
+            result = subprocess.run(argv, text=True, capture_output=True, env=env, check=False)
+            self.assertEqual(result.returncode, 1)
+
     def test_media_capability_sync_rolls_back_on_second_publication_failure(self):
         checker = self.load_capability_checker()
         release_dir = ROOT.parent / "media/release.example"

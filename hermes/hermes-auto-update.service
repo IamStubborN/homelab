@@ -7,7 +7,12 @@ Requires=docker.service
 Type=oneshot
 UMask=0077
 ExecStart=/usr/bin/python3 /home/iamstubborn/homelab/hermes/scripts/hermes-auto-update
+# After a kill or crash: restart agents stopped for the snapshot, or roll back
+# an interrupted apply, instead of leaving them down until the next night.
+ExecStopPost=/usr/bin/env RECOVER_ONLY=1 /usr/bin/python3 /home/iamstubborn/homelab/hermes/scripts/hermes-auto-update
 Nice=10
-# No snapshot or apply starts later than 20 minutes after the start; this only
-# bounds a hung pull, canary or rollback.
+# No snapshot starts later than 20 minutes after the canaries or after 03:30;
+# this only bounds a hung pull, canary or apply.
 TimeoutStartSec=2h
+# SIGTERM turns into a rollback, which needs a restore and a health check.
+TimeoutStopSec=30min

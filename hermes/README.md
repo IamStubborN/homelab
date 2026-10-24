@@ -119,11 +119,13 @@ Docker host at 02:30 `Europe/Sofia`: before the Lampac update (03:00), the image
 retention observation (03:55) and Watchtower (04:00). It tracks the upstream
 `stable` tag (`HERMES_UPDATE_TAG` overrides it) and:
 
-1. finishes what an interrupted run left: a run killed during the snapshot
-   only restarts the agents, one killed during apply or rollback is rolled back
-   (without marking the digest failed); after a failed rollback it stops with a
-   Telegram alert, as it does when the agents are unhealthy or run different
-   images;
+1. finishes what an interrupted run left, right away through the unit's
+   `ExecStopPost` (`RECOVER_ONLY=1`) or on the next night: a run killed during
+   the snapshot only restarts the agents; one killed during apply is completed
+   when both agents already run the candidate healthy and clean, and otherwise
+   rolled back without marking the digest failed. An interrupted apply older
+   than 12 hours, a failed rollback, unhealthy agents or agents on different
+   images stop it with a Telegram alert;
 2. asks Docker Hub for the tag's digest without pulling and does nothing when
    it is the running one or one that already failed here;
 3. refuses, alerting once per reason, while a running agent's Compose
@@ -136,19 +138,22 @@ retention observation (03:55) and Watchtower (04:00). It tracks the upstream
    bootstrap and config migration must finish, the migrated schema must reach
    the image's latest version, and the canary data must hold no migration
    backup and no synthetic secret. Only such a verdict marks the digest failed;
-   a failed pull or a Docker error is retried the next night;
+   a failed pull, a canary timeout or a Docker error (exit 125–127) is retried
+   the next night;
 5. waits until both gateways report `active_agents: 0` in
    `gateway_state.json` for 3 consecutive minutes (a reply in progress counts;
-   a user typing does not). The wait ends 20 minutes after the canaries; a busy
-   night is retried the next night and the third in a row is reported;
+   a user typing does not). The wait ends 20 minutes after the canaries and, for
+   a run started before 03:30, at 03:30; a busy night is retried the next night
+   and the third in a row is reported;
 6. stops both agents and snapshots their read-write volumes (profile, memory,
    browser) without `tmp/`, `.cache/` and `home/.cache/`, refusing above 6 GiB
    or without twice that space free;
 7. writes `HERMES_IMAGE=<candidate>` to the root `.env`, keeping its other
    lines, mode and owner, and recreates only `hermes-primary` and
    `hermes-secondary` with `--no-deps --no-build --pull never`;
-8. requires both to become healthy and connected to Telegram within 7
-   minutes, without a restart for a further minute, and then scans each
+8. requires both to become healthy and connected to Telegram (as written by
+   the gateway of this container start) within 7 minutes, with no restart at
+   all, and then scans each
    profile volume (except `tmp/`, a tmpfs that holds the terminal tool's
    environment snapshots and never reaches the disk) for migration backups and
    for the content of every mounted `/run/secrets/*` file.
@@ -164,7 +169,11 @@ moved back), restores the previous `HERMES_IMAGE` value, recreates both agents
 and reports the outcome. A failed digest is not retried until upstream moves
 on or `failed_digest` is removed from `/var/lib/hermes-update/state.json`. A
 failed rollback leaves `phase` set and blocks later runs until checked. Any
-unexpected error is reported with its phase. The wiki bind mount is not part of
+unexpected error is reported with its phase. A Docker or host error during
+apply rolls back without marking the digest failed. A SIGTERM (the 2-hour
+`TimeoutStartSec`, a shutdown) turns into a rollback, which
+`TimeoutStopSec=30min` leaves time to finish. A restore refuses to run while an
+agent is still running. The wiki bind mount is not part of
 the snapshot, so a candidate's wiki writes survive a rollback; conversations
 held between apply and rollback stay only in `displaced/`.
 

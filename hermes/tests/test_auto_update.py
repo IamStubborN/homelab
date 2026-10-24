@@ -29,6 +29,11 @@ def load_updater():
 updater = load_updater()
 
 
+def gateway_state(telegram="connected", writer_pid=7, updated_at="2100-01-01T00:00:00+00:00"):
+    return {"active_agents": 0, "pid": 7, "start_time": 11, "platforms": {"telegram": {
+        "state": telegram, "updated_at": updated_at, "writer_pid": writer_pid, "writer_start_time": 11}}}
+
+
 def read(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
@@ -53,6 +58,8 @@ class FakeHost:
         self.scan_result = (0, "")
         self.after_up = None
         self.stop_effect = None
+        self.agents_running = True
+        self.starts = True
         self.hashes = {}
         self.images = {PINNED}
         self.containers = {}
@@ -68,8 +75,7 @@ class FakeHost:
                 directory.mkdir(parents=True, exist_ok=True)
             (profile / "state.db").write_bytes(b"before")
             (profile / "config.base.yaml").write_text("_config_version: 41\n", encoding="utf-8")
-            (profile / "gateway_state.json").write_text(
-                '{"active_agents": 0, "platforms": {"telegram": {"state": "connected"}}}', encoding="utf-8")
+            (profile / "gateway_state.json").write_text(json.dumps(gateway_state()), encoding="utf-8")
             (profile / "tmp" / "scratch").write_text("temporary", encoding="utf-8")
             (profile / ".cache" / "model.bin").write_text("cached", encoding="utf-8")
             (memory / "MEMORY.md").write_text("remembered", encoding="utf-8")
@@ -85,7 +91,7 @@ class FakeHost:
                             "HERMES_GATEWAY_BOOTSTRAP_STATE=running"],
                     "Labels": {"com.docker.compose.config-hash": f"hash-{name}"},
                 },
-                "State": {"Health": {"Status": "healthy"}},
+                "State": {"Health": {"Status": "healthy"}, "StartedAt": "2026-10-24T02:30:00.123456789Z"},
                 "Mounts": [
                     {"Type": "volume", "Name": f"{name}-profile", "Destination": "/opt/data",
                      "Source": str(profile), "RW": True},
@@ -140,6 +146,7 @@ class FakeHost:
         image = self.env_image()
         self.calls.append(("up", image))
         rolled_back = image == PINNED
+        self.agents_running = True
         for container in self.containers.values():
             container["Config"]["Image"] = image
             healthy = rolled_back or self.healthy_after_up
@@ -149,6 +156,7 @@ class FakeHost:
 
     def stop(self):
         self.calls.append(("stop",))
+        self.agents_running = False
         if self.stop_effect:
             self.stop_effect()
 
@@ -157,7 +165,14 @@ class FakeHost:
 
     def run(self, *args, check=True, timeout=None, cwd=None):
         self.calls.append(tuple(args[:2]))
+        if args[:2] == ("docker", "stop"):
+            self.agents_running = False
+        elif args[:2] == ("docker", "start"):
+            self.agents_running = self.starts
         return subprocess.CompletedProcess(args, 0, "", "")
+
+    def running(self, name):
+        return self.agents_running
 
     def scan(self, name):
         if self.env_image() == PINNED:
@@ -251,6 +266,7 @@ class AutoUpdateTests(unittest.TestCase):
             raise KeyboardInterrupt  # stands in for SIGKILL: nothing in the run handles it
 
         self.host.after_up = killed
+        self.host.healthy_after_up = False
         with self.assertRaises(KeyboardInterrupt):
             self.run_updater()
         self.assertEqual(self.saved_state()["phase"], "apply")
@@ -262,6 +278,134 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(self.env_lines(), ["WIKI_ROOT=/srv/wiki"])
         self.assertEqual((self.host.profile("hermes-primary") / "state.db").read_bytes(), b"before")
         self.assertIn("Повторю следующей ночью", self.host.messages[-1])
+
+    def test_interrupted_apply_that_left_a_healthy_candidate_is_finished(self):
+        def killed(host):
+            raise KeyboardInterrupt
+
+        self.host.after_up = killed
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_updater()
+        self.host.after_up = None
+        recovery = updater.Updater(self.host, self.host.root, self.state, recover_only=True)
+        self.assertEqual(recovery.run(), 0)
+        state = self.saved_state()
+        self.assertNotIn("phase", state)
+        self.assertEqual(state["current"], f"{updater.REPOSITORY}@{NEW_DIGEST}")
+        self.assertIn(("tag", "sha256:" + "1" * 64, updater.ROLLBACK_TAG), self.host.calls)
+        self.assertEqual(self.host.messages, [f"Hermes обновлён до stable ({NEW_DIGEST[7:19]})."])
+
+    def test_stale_interrupted_apply_is_left_to_the_operator(self):
+        def killed(host):
+            raise KeyboardInterrupt
+
+        self.host.after_up = killed
+        self.host.healthy_after_up = False
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_updater()
+        self.host.clock += updater.STALE_RECOVERY + 60
+        self.assertEqual(self.run_updater(), 1)
+        self.assertEqual(self.saved_state()["phase"], "apply")
+        self.assertIn("старше 12 часов", self.host.messages[-1])
+
+    def test_recover_only_does_nothing_without_an_interrupted_phase(self):
+        for phase in (None, "rollback-failed"):
+            with self.subTest(phase=phase):
+                if phase:
+                    (self.state / "state.json").write_text(json.dumps({"phase": phase}))
+                recovery = updater.Updater(self.host, self.host.root, self.state, recover_only=True)
+                self.assertEqual(recovery.run(), 0)
+                self.assertEqual((self.host.calls, self.host.messages), ([], []))
+
+    def test_canary_only_only_reports_an_interrupted_phase(self):
+        (self.state / "state.json").write_text(json.dumps({"phase": "snapshot"}))
+        check = updater.Updater(self.host, self.host.root, self.state, canary_only=True)
+        self.assertEqual(check.run(), 1)
+        self.assertEqual(self.host.calls, [])
+        self.assertEqual(self.saved_state()["phase"], "snapshot")
+
+    def test_docker_error_during_apply_rolls_back_without_rejecting(self):
+        def broken():
+            raise updater.UpdateError("docker compose up failed: daemon")
+
+        self.host.compose_up_original = self.host.compose_up
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                broken()
+            self.host.compose_up_original()
+
+        self.host.compose_up = flaky
+        self.assertEqual(self.run_updater(), 1)
+        state = self.saved_state()
+        self.assertNotIn("failed_digest", state)
+        self.assertNotIn("phase", state)
+        self.assertEqual(self.env_lines(), ["WIKI_ROOT=/srv/wiki"])
+        self.assertIn("Повторю следующей ночью", self.host.messages[-1])
+
+    def test_sigterm_handler_ignores_further_signals_and_raises(self):
+        previous = updater.signal.getsignal(updater.signal.SIGTERM)
+        self.addCleanup(updater.signal.signal, updater.signal.SIGTERM, previous)
+        with self.assertRaises(updater.UpdateError):
+            updater.terminated(updater.signal.SIGTERM, None)
+        self.assertIs(updater.signal.getsignal(updater.signal.SIGTERM), updater.signal.SIG_IGN)
+
+    def test_restart_or_stale_telegram_record_fails_the_candidate(self):
+        def restarted(host):
+            host.containers["hermes-primary"]["RestartCount"] = 1
+
+        def stale(host):
+            path = host.profile("hermes-primary") / "gateway_state.json"
+            path.write_text(json.dumps(gateway_state(updated_at="2026-10-24T02:29:00+00:00")))
+
+        def other_writer(host):
+            path = host.profile("hermes-primary") / "gateway_state.json"
+            path.write_text(json.dumps(gateway_state(writer_pid=3)))
+
+        for effect in (restarted, stale, other_writer):
+            with self.subTest(effect=effect.__name__):
+                (self.state / "state.json").unlink(missing_ok=True)
+                self.host.containers["hermes-primary"].pop("RestartCount", None)
+                for name in updater.SERVICES:
+                    (self.host.profile(name) / "gateway_state.json").write_text(json.dumps(gateway_state()))
+                self.host.after_up = effect
+                self.assertEqual(self.run_updater(), 1)
+                self.assertEqual(self.saved_state()["failed_digest"], NEW_DIGEST)
+
+    def test_canary_docker_errors_and_timeouts_are_not_verdicts(self):
+        for code in (124, 125):
+            with self.subTest(code=code):
+                (self.state / "state.json").unlink(missing_ok=True)
+                self.host.canary_code = code
+                self.assertEqual(self.run_updater(), 1)
+                self.assertFalse((self.state / "state.json").exists()
+                                 and "failed_digest" in self.saved_state())
+
+    def test_deadline_counts_after_canaries_and_stops_at_the_latest_start(self):
+        self.host.profile("hermes-primary").joinpath("gateway_state.json").write_text(
+            json.dumps({**gateway_state(), "active_agents": 1}))
+        early = updater.Updater(self.host, self.host.root, self.state, latest_start=self.host.clock + 5)
+        before = self.host.clock
+        self.assertEqual(early.run(), 0)
+        self.assertLess(self.host.clock - before, 120)
+        self.assertEqual(sorted(p.name for p in self.state.iterdir()), ["state.json"])
+
+    def test_agents_still_running_are_never_restored_under(self):
+        self.host.healthy_after_up = False
+        self.host.run_original = self.host.run
+
+        def stuck(*args, **kwargs):
+            result = self.host.run_original(*args, **kwargs)
+            if args[:2] == ("docker", "stop"):
+                self.host.agents_running = True
+            return result
+
+        self.host.run = stuck
+        self.assertEqual(self.run_updater(), 1)
+        self.assertEqual(self.saved_state()["phase"], "rollback-failed")
+        self.assertTrue(self.host.profile("hermes-primary").exists())
 
     def test_unexpected_error_during_restore_is_reported(self):
         self.host.healthy_after_up = False
@@ -313,7 +457,7 @@ class AutoUpdateTests(unittest.TestCase):
     def test_candidate_offline_in_telegram_is_rolled_back(self):
         def offline(host):
             path = host.profile("hermes-secondary") / "gateway_state.json"
-            path.write_text('{"active_agents": 0, "platforms": {"telegram": {"state": "retrying"}}}')
+            path.write_text(json.dumps(gateway_state(telegram="retrying")))
 
         self.host.after_up = offline
         self.assertEqual(self.run_updater(), 1)

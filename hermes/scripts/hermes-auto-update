@@ -8,7 +8,8 @@ deployment's root `.env` (`HERMES_IMAGE`), recreate only the two agents and
 require them to become healthy without migration backups or persisted runtime
 secrets. Any failure after the snapshot restores the previous image and data.
 Reports go to Telegram through the disk-watchdog bot. DRY_RUN=1 only reports;
-CANARY_ONLY=1 pulls and checks the candidate, then stops before the agents.
+CANARY_ONLY=1 pulls and checks the candidate, then stops before the agents;
+RECOVER_ONLY=1 (the unit's ExecStopPost) only finishes an interrupted run.
 """
 
 from __future__ import annotations
@@ -39,6 +40,8 @@ START_WINDOW = 20 * 60          # no snapshot/apply starts later than this
 IDLE_CHECKS = 3                 # consecutive idle samples, one per minute
 HEALTH_TIMEOUT = 420
 STABLE_FOR = 60                 # a healthy candidate must not restart for this long
+STALE_RECOVERY = 12 * 3600      # an older interrupted apply is left to the operator
+LATEST_START = (3, 30)          # local time; a nightly run starts no snapshot later
 CANARY_TIMEOUT = 600
 KEEP_GENERATIONS = 3
 MAX_SNAPSHOT_BYTES = 6 * 1024**3
@@ -94,7 +97,15 @@ class CandidateRejected(UpdateError):
 
 
 def terminated(signum, frame):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)  # let the rollback finish
     raise UpdateError("terminated by systemd")
+
+
+def parse_time(value: str) -> float:
+    """Epoch seconds of an ISO time; Docker writes nanoseconds and a Z suffix."""
+    import datetime
+    value = re.sub(r"(\.\d{6})\d+", r"\1", value).replace("Z", "+00:00")
+    return datetime.datetime.fromisoformat(value).timestamp()
 
 
 def log(message: str) -> None:
@@ -177,6 +188,10 @@ class Host:
                           check=False, timeout=600)
         return result.returncode, result.stdout
 
+    def running(self, name: str) -> bool:
+        result = self.run("docker", "inspect", "-f", "{{.State.Running}}", name, check=False)
+        return result.stdout.strip() == "true"
+
     def canary(self, name: str, args: list[str]) -> tuple[int, str]:
         self.run("docker", "rm", "-f", name, check=False)
         try:
@@ -189,8 +204,14 @@ class Host:
 
     def notify(self, text: str) -> None:
         log(text)
-        token = self.run("docker", "exec", "disk-watchdog", "cat", "/run/secrets/telegram_bot_token", check=False)
-        chat = self.run("docker", "exec", "disk-watchdog", "printenv", "TELEGRAM_CHAT_ID", check=False)
+        try:
+            token = self.run("docker", "exec", "disk-watchdog", "cat", "/run/secrets/telegram_bot_token",
+                             check=False, timeout=30)
+            chat = self.run("docker", "exec", "disk-watchdog", "printenv", "TELEGRAM_CHAT_ID",
+                            check=False, timeout=30)
+        except Exception:
+            log("Telegram not delivered: disk-watchdog unavailable")
+            return
         if token.returncode or chat.returncode:
             log("Telegram not delivered: disk-watchdog unavailable")
             return
@@ -328,9 +349,10 @@ def find_secret(root: pathlib.Path, values: list[bytes]) -> list[str]:
 # ---------------------------------------------------------------- updater
 
 class Updater:
-    def __init__(self, host: Host, root=ROOT, state_dir=STATE, dry_run=False, canary_only=False):
+    def __init__(self, host: Host, root=ROOT, state_dir=STATE, dry_run=False, canary_only=False,
+                 recover_only=False, latest_start=None):
         self.host, self.root, self.state_dir, self.dry_run = host, pathlib.Path(root), pathlib.Path(state_dir), dry_run
-        self.canary_only = canary_only
+        self.canary_only, self.recover_only, self.latest_start = canary_only, recover_only, latest_start
         self.state_file = self.state_dir / "state.json"
         self.state: dict = {}
         self.deadline = 0.0
@@ -343,12 +365,18 @@ class Updater:
         if not self.dry_run:
             write_atomic(self.state_file, json.dumps(self.state, indent=2, sort_keys=True) + "\n")
 
-    def phase(self, value: str | None) -> None:
+    def phase(self, value: str | None, required=True) -> None:
+        """Record the phase; with required=False a failed write (ENOSPC) only logs."""
         if value is None:
             self.state.pop("phase", None)
         else:
             self.state["phase"] = value
-        self.save()
+        try:
+            self.save()
+        except OSError as error:
+            if required:
+                raise
+            log(f"Could not save phase {value}: {error}")
 
     def notify(self, text: str) -> None:
         if self.dry_run:
@@ -397,28 +425,42 @@ class Updater:
             if container["Config"]["Image"] != image or \
                     (container["State"].get("Health") or {}).get("Status") != "healthy":
                 return None
-            if telegram:
-                path = pathlib.Path(self.mount(container, "/opt/data")["Source"], "gateway_state.json")
-                try:
-                    platform = json.loads(path.read_text()).get("platforms", {}).get("telegram", {})
-                except (OSError, ValueError):
-                    return None
-                if platform.get("state") != "connected":
-                    return None
+            if telegram and not self.telegram_connected(container):
+                return None
         return {c["Name"]: c.get("RestartCount", 0) for c in states}
 
+    def telegram_connected(self, container: dict) -> bool:
+        """Connected as written by the gateway of this container start, not a stale record."""
+        path = pathlib.Path(self.mount(container, "/opt/data")["Source"], "gateway_state.json")
+        try:
+            state = json.loads(path.read_text())
+            platform = state.get("platforms", {}).get("telegram", {})
+            fresh = parse_time(platform["updated_at"]) >= parse_time(container["State"]["StartedAt"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+        return (platform.get("state") == "connected" and fresh
+                and platform.get("writer_pid") == state.get("pid")
+                and platform.get("writer_start_time") == state.get("start_time"))
+
     def healthy(self, image: str, telegram=True) -> bool:
+        """Healthy on `image`; a candidate (telegram=True) must also be online and never restart."""
         end = self.host.now() + HEALTH_TIMEOUT
         while self.host.now() < end:
             counts = self.running(image, telegram)
             if counts is not None:
                 if not telegram:
                     return True
+                if any(counts.values()):
+                    return False
                 self.host.sleep(STABLE_FOR)
                 if self.running(image, telegram) == counts:
                     return True
             self.host.sleep(10)
         return False
+
+    def start_agents(self) -> bool:
+        self.host.run("docker", "start", *SERVICES, check=False)
+        return all(self.host.running(name) for name in SERVICES)
 
     def post_start_problems(self) -> list[str]:
         problems = []
@@ -477,6 +519,8 @@ class Updater:
                      candidate, "/opt/hermes/.venv/bin/python", "-c", CANARY_PROBE]
             code, output = self.host.canary(f"hermes-canary-{name}", args)
             (work / "output.log").write_text(output)
+            if code in (124, 125, 126, 127):  # timeout or Docker itself: not the candidate's fault
+                raise UpdateError(f"{name}: canary could not run (exit {code})")
             marker = [line for line in output.splitlines() if line.startswith("HERMES_CANARY ")]
             if code or not marker:
                 raise CandidateRejected(f"{name}: bootstrap canary failed (exit {code})")
@@ -513,6 +557,8 @@ class Updater:
     def restore(self, generation: pathlib.Path) -> None:
         volumes = json.loads((generation / "volumes.json").read_text())
         self.host.run("docker", "stop", "-t", "60", *SERVICES, check=False, timeout=300)
+        if any(self.host.running(name) for name in SERVICES):
+            raise UpdateError("agents still run; their volumes are not restored under them")
         for volume in volumes:
             restore_volume(pathlib.Path(volume["source"]), generation / volume["archive"],
                            generation / "displaced" / volume["name"])
@@ -535,30 +581,54 @@ class Updater:
         except Exception as error:
             phase = self.state.get("phase")
             log(f"Update crashed in phase {phase}: {type(error).__name__}: {error}")
-            self.notify(f"Hermes: автообновление упало ({type(error).__name__}: {error}), phase={phase or 'нет'}. "
-                        f"Нужна ручная проверка ({self.state_dir}).")
+            self.notify(f"Hermes: автообновление упало ({type(error).__name__}: {error}), phase={phase or 'нет'}."
+                        + ("" if phase in ("snapshot", "apply") else f" Нужна ручная проверка ({self.state_dir})."))
+            if phase in ("snapshot", "apply") and not self.dry_run:
+                try:
+                    return self.recover()
+                except Exception as again:
+                    log(f"Recovery failed: {type(again).__name__}: {again}")
+                    self.notify(f"Hermes: восстановление после сбоя не удалось, нужна ручная проверка "
+                                f"({self.state_dir}).")
             return 1
 
     def recover(self) -> int:
         """Finish an operation that an earlier run could not (killed or crashed)."""
         phase = self.state["phase"]
-        if phase == "snapshot":  # nothing was changed yet
-            self.host.run("docker", "start", *SERVICES, check=False)
-            self.phase(None)
-            self.notify("Hermes: прошлое автообновление прервалось во время снимка; агенты снова запущены, "
-                        "обновление не установлено.")
+        manual = (f"Hermes: предыдущее автообновление не завершено (phase={phase}), "
+                  f"нужна ручная проверка ({self.state_dir}).")
+        if self.dry_run or self.canary_only:
+            log(manual)
             return 1
-        if phase in ("apply", "rollback") and self.state.get("candidate"):
-            return self.roll_back(self.state_dir / self.state["generation"],
-                                  [f"прошлый запуск прервался (phase={phase})"], reject=False)
-        self.notify(f"Hermes: предыдущее автообновление не завершено (phase={phase}), "
-                    f"нужна ручная проверка ({self.state_dir}).")
-        return 1
+        if phase == "snapshot":  # nothing was changed yet
+            started = self.start_agents()
+            self.phase(None)
+            self.cleanup(self.state.get("generation", ""))
+            self.notify("Hermes: автообновление прервалось во время снимка; "
+                        + ("агенты снова запущены" if started else "агенты НЕ запустились, нужна ручная проверка")
+                        + ", обновление не установлено.")
+            return 1
+        if phase not in ("apply", "rollback") or not self.state.get("candidate"):
+            self.notify(manual)
+            return 1
+        generation = self.state_dir / self.state["generation"]
+        candidate = self.state["candidate"]
+        counts = self.running(candidate, telegram=True) if phase == "apply" else None
+        if counts is not None and not self.post_start_problems():
+            log("The interrupted apply left both agents healthy on the candidate; finishing it.")
+            return self.finish(generation)
+        if self.host.now() - self.state.get("snapshot_at", 0) > STALE_RECOVERY:
+            self.notify(manual + " Снимок старше 12 часов, автоматически не откатываю.")
+            return 1
+        return self.roll_back(generation, [f"прошлый запуск прервался (phase={phase})"], reject=False)
 
     def update(self) -> int:
         self.load()
-        if self.state.get("phase"):
-            return 1 if self.dry_run else self.recover()
+        phase = self.state.get("phase")
+        if self.recover_only and phase not in ("snapshot", "apply", "rollback"):
+            return 0  # nothing to finish; a failed rollback was already reported
+        if phase:
+            return self.recover()
         try:
             digest = self.host.registry_digest()
         except Exception:
@@ -624,11 +694,17 @@ class Updater:
             return 1
         if self.canary_only:
             log(f"CANARY_ONLY: candidate passed ({versions}); agents untouched.")
+            shutil.rmtree(generation, ignore_errors=True)
+            self.host.remove_image(candidate)
             return 0
 
-        # The start window counts from the checked candidate, not from the pull.
+        # The start window counts from the checked candidate, not from the pull,
+        # but a nightly run never starts a snapshot after LATEST_START.
         self.deadline = self.host.now() + START_WINDOW
+        if self.latest_start is not None:
+            self.deadline = min(self.deadline, self.latest_start)
         if not self.wait_for_idle(containers):
+            shutil.rmtree(generation, ignore_errors=True)
             busy = self.state.get("busy_nights", 0) + 1
             self.state["busy_nights"] = busy
             self.save()
@@ -644,45 +720,55 @@ class Updater:
         mcp_revision = mcp_schema_revision(schema)
         previous_id = containers[SERVICES[0]]["Image"]
         env_previous = read_env_value(env_path, ENV_KEY)
-        self.state.update(generation=generation.name, previous=previous, env_previous=env_previous,
-                          candidate=candidate)
+        self.state.update(generation=generation.name, previous=previous, previous_id=previous_id,
+                          env_previous=env_previous, candidate=candidate, snapshot_at=self.host.now(),
+                          pending={"managed": managed, "latest": latest, "mcp_revision": mcp_revision})
         volumes = self.volumes(containers)
         self.phase("snapshot")
         try:
             self.snapshot(volumes, generation)
         except Exception as error:
-            self.host.run("docker", "start", *SERVICES, check=False)
-            self.phase(None)
+            started = self.start_agents()
+            self.phase(None, required=False)
             self.cleanup(generation.name)
-            self.notify(f"Hermes: снимок данных не удался ({error}), обновление не установлено. Логи: {generation}")
+            self.notify(f"Hermes: снимок данных не удался ({error}), обновление не установлено"
+                        + ("" if started else "; агенты НЕ запустились, нужна ручная проверка")
+                        + f". Логи: {generation}")
             return 1
 
-        self.phase("apply")
-        problems: list[str] = []
         try:
+            self.phase("apply")
             set_env_value(env_path, ENV_KEY, candidate)
             self.host.compose_up()
-            if not self.healthy(candidate):
-                problems.append("агенты не стали healthy, не подключились к Telegram или перезапускаются")
-            else:
-                problems = self.post_start_problems()
+        except Exception as error:  # Docker or the host failed, not the candidate
+            return self.roll_back(generation, [f"{type(error).__name__}: {error}"], reject=False)
+        try:
+            healthy = self.healthy(candidate)
+            problems = self.post_start_problems() if healthy else \
+                ["агенты не стали healthy, не подключились к Telegram или перезапускаются"]
         except Exception as error:
-            problems.append(f"{type(error).__name__}: {error}")
+            return self.roll_back(generation, [f"{type(error).__name__}: {error}"], reject=False)
         if problems:
             return self.roll_back(generation, problems)
+        return self.finish(generation)
 
-        self.host.tag(previous_id, ROLLBACK_TAG)  # survives `docker image prune`
+    def finish(self, generation: pathlib.Path) -> int:
+        candidate, pending = self.state["candidate"], self.state.get("pending", {})
+        managed, latest = pending.get("managed"), pending.get("latest")
+        mcp_revision = pending.get("mcp_revision")
+        self.host.tag(self.state["previous_id"], ROLLBACK_TAG)  # survives `docker image prune`
         notices = []
-        if managed is not None and latest != managed and self.state.get("schema_notified") != latest:
+        if None not in (managed, latest) and latest != managed and self.state.get("schema_notified") != latest:
             notices.append(f"со сменой схемы конфигурации {managed}→{latest}: "
                            "синхронизируй управляемый конфиг в репозитории")
             self.state["schema_notified"] = latest
         if self.state.get("mcp_revision") not in (None, mcp_revision):
             notices.append("ревизия схемы MCP изменилась после прошлого обновления")
         self.state.update(current=candidate, config_version=latest, mcp_revision=mcp_revision)
-        self.state.pop("failed_digest", None)
+        for key in ("failed_digest", "pending", "snapshot_at"):
+            self.state.pop(key, None)
         self.phase(None)
-        self.notify(f"Hermes обновлён до {TAG} ({digest[7:19]})"
+        self.notify(f"Hermes обновлён до {TAG} ({candidate.split('@', 1)[1][7:19]})"
                     + (" " + "; ".join(notices) if notices else "") + ".")
         self.cleanup(generation.name)
         return 0
@@ -691,11 +777,15 @@ class Updater:
         """Restore the snapshot and the previous image; `reject` marks the candidate as failed."""
         candidate, previous = self.state["candidate"], self.state["previous"]
         log("Apply failed: " + "; ".join(problems))
-        with open(generation / "problems.log", "a", encoding="utf-8") as stream:
-            stream.write("\n".join(problems) + "\n")
+        try:
+            with open(generation / "problems.log", "a", encoding="utf-8") as stream:
+                stream.write("\n".join(problems) + "\n")
+        except OSError as error:
+            log(f"Could not write problems.log: {error}")
         if reject:
             self.state["failed_digest"] = candidate.split("@", 1)[1]
-        self.phase("rollback")
+        retry = RETRY if self.state.get("failed_digest") == candidate.split("@", 1)[1] else "Повторю следующей ночью."
+        self.phase("rollback", required=False)
         try:
             self.restore(generation)
             set_env_value(self.root / ".env", ENV_KEY, self.state.get("env_previous"))
@@ -708,13 +798,14 @@ class Updater:
             restored = False
         self.host.remove_image(candidate)
         if restored:
-            self.phase(None)
+            for key in ("pending", "snapshot_at"):
+                self.state.pop(key, None)
+            self.phase(None, required=False)
             self.cleanup(generation.name)
             self.notify(f"Hermes: новая версия не прошла проверку после запуска ({len(problems)} проблем), "
-                        f"откатил образ и данные на прежние. Логи: {generation}. "
-                        + (RETRY if reject else "Повторю следующей ночью."))
+                        f"откатил образ и данные на прежние. Логи: {generation}. {retry}")
             return 1
-        self.phase("rollback-failed")
+        self.phase("rollback-failed", required=False)
         self.notify("Hermes: обновление и откат не удались, агенты могут не работать. "
                     f"Нужна ручная проверка, снимок: {generation}")
         return 1
@@ -731,7 +822,16 @@ def main() -> int:
             return 1
         signal.signal(signal.SIGTERM, terminated)  # TimeoutStartSec: roll back, do not just die
         return Updater(Host(), dry_run=bool(os.environ.get("DRY_RUN")),
-                       canary_only=bool(os.environ.get("CANARY_ONLY"))).run()
+                       canary_only=bool(os.environ.get("CANARY_ONLY")),
+                       recover_only=bool(os.environ.get("RECOVER_ONLY")),
+                       latest_start=latest_start(time.time())).run()
+
+
+def latest_start(now: float) -> float | None:
+    """Today's LATEST_START for a run started in the night before it; none by day."""
+    local = time.localtime(now)
+    limit = time.mktime((*local[:3], *LATEST_START, 0, 0, 0, -1))
+    return limit if now < limit else None
 
 
 if __name__ == "__main__":

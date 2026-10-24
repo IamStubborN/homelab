@@ -24,7 +24,7 @@ if [ "${HERMES_HOME_TESTING:-}" = "1" ]; then
     service_url=http://media-service.test
 else
     media_bin=/usr/local/bin/media
-    token_file=/run/hermes-home-secrets/media_api_token
+    token_file=/run/secrets/media_api_token
     service_url=$(tr -d '\r\n' < /etc/hermes-home/media-service-url)
     test -s "$token_file"
 fi

@@ -25,19 +25,17 @@ def read(relative_path: str) -> str:
 
 
 class ImageContractTests(unittest.TestCase):
-    def test_hermes_uses_unmodified_official_pinned_image_without_watchtower(self):
+    def test_hermes_uses_the_unmodified_official_stable_image_with_watchtower(self):
         compose = yaml.safe_load(read("compose.yaml"))
         self.assertFalse((ROOT / "Dockerfile").exists())
         self.assertFalse((ROOT / "scripts/patch_hermes_telegram.py").exists())
         for profile in ("primary", "secondary"):
             service = compose["services"][f"hermes-{profile}"]
-            self.assertEqual(
-                service["image"],
-                "${HERMES_IMAGE:-nousresearch/hermes-agent@sha256:efb82540aeb8ac21c58ecb4482bd3eb103ea617da2af2c61f12526ed68f6c2d9}",
-            )
+            self.assertEqual(service["image"], "nousresearch/hermes-agent:stable")
+            self.assertNotIn("entrypoint", service)
             self.assertNotIn("pull_policy", service)
             self.assertEqual(
-                service["labels"]["com.centurylinklabs.watchtower.enable"], "false"
+                service["labels"]["com.centurylinklabs.watchtower.enable"], "true"
             )
 
     def test_external_tools_update_without_rebuilding_hermes(self):
@@ -68,11 +66,11 @@ class _ComposeContractBase:
         for profile, service in (("primary", primary), ("secondary", secondary)):
             mounts = "\n".join(service["volumes"])
             self.assertIn(
-                f"${{HERMES_{profile.upper()}_PROFILE_DIR:-./profiles/{profile}}}/config/config.yaml:/etc/hermes-home/config.yaml:ro",
+                f"${{HERMES_{profile.upper()}_PROFILE_DIR:-./profiles/{profile}}}/config/config.yaml:/etc/hermes/config.yaml:ro",
                 mounts,
             )
             self.assertIn(
-                "./scripts/hermes-home-entrypoint:/usr/local/bin/hermes-home-entrypoint:ro",
+                f"${{HERMES_{profile.upper()}_PROFILE_DIR:-./profiles/{profile}}}/SOUL.md:/opt/data/SOUL.md:ro",
                 mounts,
             )
             self.assertIn(f"hermes_{profile}_memory:/opt/data/memories", mounts)
@@ -435,7 +433,7 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
             hermes_hmac = next(
                 secret
                 for secret in hermes["secrets"]
-                if secret["target"] == "webhook_hmac"
+                if secret["target"] == "api_server_key"
             )
             notifier_hmac = next(
                 secret
@@ -498,11 +496,11 @@ class ComposeContractTests(_ComposeContractBase, unittest.TestCase):
             self.assertNotIn("SEARXNG_URL", service["environment"])
             self.assertNotIn("FIRECRAWL_API_URL", service["environment"])
             self.assertIn(
-                "./shared/plugins:/etc/hermes-home/shared-plugins:ro",
+                "./shared/plugins/telegram-home:/opt/data/plugins/telegram-home:ro",
                 service["volumes"],
             )
             self.assertIn(
-                "./shared/skills:/etc/hermes-home/skills:ro", service["volumes"]
+                "./shared/skills:/opt/data/skills/home:ro", service["volumes"]
             )
 
     def test_telegram_uses_working_docker_dns_instead_of_fallback_ip_transport(self):
@@ -652,7 +650,6 @@ class SkillContractTests(unittest.TestCase):
 
     def test_custom_skills_have_valid_compact_frontmatter(self):
         paths = list((ROOT / "shared/skills").glob("*/SKILL.md"))
-        paths += list((ROOT / "profiles/primary/skills").glob("*/SKILL.md"))
         for path in paths:
             content = path.read_text(encoding="utf-8")
             frontmatter = yaml.safe_load(content.split("---", 2)[1])
@@ -679,31 +676,13 @@ class SkillContractTests(unittest.TestCase):
             self.assertEqual(service["environment"]["HERMES_GID"], "10000")
             self.assertNotIn("group_add", service)
 
-        entrypoint = read("scripts/hermes-home-entrypoint")
-        self.assertIn(
-            "read_secret MEDIA_API_TOKEN /run/secrets/media_api_token", entrypoint
-        )
-        self.assertIn("/run/hermes-home-secrets", entrypoint)
-        self.assertIn("install -o 10000 -g 10000 -m 0400", entrypoint)
-        self.assertIn(
-            "for secret in media_api_token health_api_token broker_api_token webhook_hmac",
-            entrypoint,
-        )
-        self.assertIn('source="/run/secrets/$secret"', entrypoint)
-
-        self.assertIn(
-            "/run/hermes-home-secrets/media_api_token",
-            read("scripts/hermes-media"),
-        )
-        self.assertIn(
-            "/run/hermes-home-secrets/broker_api_token",
-            read("scripts/vaultwarden-safe"),
-        )
+        self.assertIn("/run/secrets/media_api_token", read("scripts/hermes-media"))
+        self.assertIn("/run/secrets/broker_api_token", read("scripts/vaultwarden-safe"))
         for profile in ("primary", "secondary"):
             service = compose["services"][f"hermes-{profile}"]
             self.assertEqual(
                 service["environment"]["WEBHOOK_SECRET_FILE"],
-                "/run/hermes-home-secrets/webhook_hmac",
+                "/run/secrets/api_server_key",
             )
             self.assertIn(
                 {"source": "tavily_api_key", "target": "tavily_api_key"},
@@ -716,8 +695,6 @@ class SkillContractTests(unittest.TestCase):
 
     def test_vaultwarden_browser_client_is_primary_only_and_requires_explicit_approval(self):
         client = read("scripts/vaultwarden-safe")
-        entrypoint = read("scripts/hermes-home-entrypoint")
-
         for command in (
             "login-request URL",
             "login-status ID",
@@ -739,75 +716,14 @@ class SkillContractTests(unittest.TestCase):
                 f"{client_command}) broker_command={broker_command} ;;",
                 client,
             )
-        self.assertFalse((ROOT / "profiles/primary/skills/vaultwarden-login/SKILL.md").exists())
-        self.assertFalse((ROOT / "profiles/secondary/skills/vaultwarden-login").exists())
-        self.assertIn(
-            "media-admin movies series trending watching vaultwarden-login search-ladder web-research",
-            entrypoint,
-        )
-        self.assertNotIn(
-            'install_skills /etc/hermes-home/personal-skills "vaultwarden-login"',
-            entrypoint,
-        )
-        self.assertNotIn("browser-sockets", entrypoint)
-        self.assertIn("install_plugins /etc/hermes-home/personal-plugins", entrypoint)
-        self.assertIn("rm -rf /opt/data/plugins/web", entrypoint)
-        self.assertIn("mkdir -p /opt/data/plugins", entrypoint)
-        self.assertIn("/command/s6-setuidgid hermes", entrypoint)
-        self.assertIn("media_mcp_schema_revision", entrypoint)
-        self.assertIn("hermes-mcp-schema-revision", entrypoint)
-        self.assertIn("rm -f", entrypoint)
-        self.assertIn("/opt/data/cache/mcp_schema_cache.json", entrypoint)
-        self.assertIn("/opt/data/cache/tool_discovery_cache.json", entrypoint)
         self.assertTrue((ROOT / "shared/skills/media/MCP_SCHEMA.json").is_file())
         self.assertFalse((ROOT / "shared/skills/media/MCP_SCHEMA_REVISION").exists())
         self.assertIn("vaultwarden-approval", read("profiles/primary/config/config.yaml"))
         self.assertFalse((ROOT / "profiles/secondary/plugins/vaultwarden-approval").exists())
-
-    def test_entrypoint_initializes_schema_cache_on_a_fresh_volume(self):
-        path = ROOT / "scripts/hermes-home-entrypoint"
-        entrypoint = path.read_text(encoding="utf-8")
-
-        self.assertTrue(os.access(path, os.X_OK))
-        create = "install -d -o 10000 -g 10000 -m 0755 /opt/data/cache"
-        write = '/tmp/media-mcp-schema-revision "$schema_revision_cache"'
-        self.assertIn(create, entrypoint)
-        self.assertLess(entrypoint.index(create), entrypoint.index(write))
-        subprocess.run(["sh", "-n", str(path)], check=True)
-
-    def test_media_mcp_schema_revision_tracks_only_the_tool_schema(self):
-        helper = ROOT / "scripts/hermes-mcp-schema-revision"
-        artifact = json.loads(read("shared/skills/media/MCP_SCHEMA.json"))
-
-        def revision(payload):
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as file:
-                json.dump(payload, file, ensure_ascii=False)
-                file.flush()
-                return subprocess.run(
-                    [sys.executable, str(helper), file.name],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
-
-        expected = hashlib.sha256(
-            json.dumps(
-                sorted(artifact["tools"], key=lambda tool: tool["name"]),
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
-        self.assertEqual(revision(artifact), expected)
-
-        metadata_only = dict(artifact, source_digest="0" * 64)
-        self.assertEqual(revision(metadata_only), expected)
-        reordered = dict(artifact, tools=list(reversed(artifact["tools"])))
-        self.assertEqual(revision(reordered), expected)
-
-        changed = json.loads(json.dumps(artifact))
-        changed["tools"][0]["description"] += " changed"
-        self.assertNotEqual(revision(changed), expected)
+        compose = yaml.safe_load(read("compose.yaml"))
+        approval = "/opt/data/plugins/vaultwarden-approval:ro"
+        self.assertIn(approval, "\n".join(compose["services"]["hermes-primary"]["volumes"]))
+        self.assertNotIn(approval, "\n".join(compose["services"]["hermes-secondary"]["volumes"]))
 
     def test_media_mcp_schema_artifact_matches_all_capabilities(self):
         artifact = json.loads(read("shared/skills/media/MCP_SCHEMA.json"))
@@ -1165,7 +1081,7 @@ class ProfileConfigTests(unittest.TestCase):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
 
-        self.assertEqual(top_level_classes, {"HomeTelegramAdapter"})
+        self.assertEqual(top_level_classes, {"HomeTelegramAdapter", "_HomePlatform"})
         self.assertEqual(
             top_level_functions,
             {
@@ -1187,7 +1103,7 @@ class ProfileConfigTests(unittest.TestCase):
         self.assertIn("from .media_search import", plugin)
         self.assertIn("from .media_callbacks import", plugin)
         self.assertIn("class HomeTelegramAdapter(TelegramAdapter)", plugin)
-        self.assertIn('ctx.register_platform(\n        name="telegram"', plugin)
+        self.assertIn("official_telegram.register(_HomePlatform(ctx))", plugin)
         self.assertNotIn("create_subprocess_exec", plugin)
         self.assertNotIn("/usr/local/bin/hermes-media", plugin)
 
@@ -1200,7 +1116,7 @@ class ProfileConfigTests(unittest.TestCase):
         self.assertIn("sendPhoto", notifier)
         self.assertIn("X-Webhook-Signature-V2", notifier)
         self.assertIn("class HomeTelegramAdapter(TelegramAdapter)", plugin)
-        self.assertIn('ctx.register_platform(\n        name="telegram"', plugin)
+        self.assertIn("official_telegram.register(_HomePlatform(ctx))", plugin)
         self.assertNotIn("handle_message", plugin)
         for profile in ("primary", "secondary"):
             service = compose["services"][f"media-notifier-{profile}"]
@@ -1216,7 +1132,7 @@ class ProfileConfigTests(unittest.TestCase):
         for profile in ("primary", "secondary"):
             config = yaml.safe_load(read(f"profiles/{profile}/config/config.yaml"))
             self.assertEqual(config["terminal"]["home_mode"], "profile")
-            self.assertIsNone(config["platforms"]["webhook"])
+            self.assertNotIn("webhook", config["platforms"])
             self.assertIn("telegram-home", config["plugins"]["enabled"])
             self.assertIn("native `clarify`", read(f"profiles/{profile}/SOUL.md"))
             self.assertEqual(config["browser"]["inactivity_timeout"], 120)
@@ -1257,83 +1173,8 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertEqual(config["auxiliary"]["background_review"]["model"], "gpt-6-luna")
             self.assertEqual(config["agent"]["reasoning_effort"], "medium")
             self.assertEqual(config["agent"]["image_input_mode"], "text")
-            self.assertIsNone(config["agent"]["reasoning_overrides"])
+            self.assertNotIn("reasoning_overrides", config["agent"])
             self.assertFalse(config["approvals"]["destructive_slash_confirm"])
-
-    def test_managed_shared_skills_are_pinned_at_startup(self):
-        entrypoint = read("scripts/hermes-home-entrypoint")
-        self.assertIn("for skill in /etc/hermes-home/skills/*", entrypoint)
-        self.assertIn('curator pin "$(basename "$skill")"', entrypoint)
-
-
-class ManagedConfigMergeTests(unittest.TestCase):
-    def test_managed_mcp_tools_remove_stale_discovery_filters(self):
-        path = ROOT / "scripts/merge_hermes_config.py"
-        spec = importlib.util.spec_from_file_location("merge_hermes_config", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        merged = module.merge(
-            {
-                "mcp_servers": {
-                    "media_admin": {
-                        "tools": {
-                            "include": ["old_tool"],
-                            "exclude": ["other_tool"],
-                            "resources": True,
-                        }
-                    }
-                }
-            },
-            {
-                "mcp_servers": {
-                    "media_admin": {
-                        "tools": {"resources": False, "prompts": False}
-                    }
-                }
-            },
-        )
-
-        tools = merged["mcp_servers"]["media_admin"]["tools"]
-        self.assertNotIn("include", tools)
-        self.assertNotIn("exclude", tools)
-        self.assertFalse(tools["resources"])
-        self.assertFalse(tools["prompts"])
-
-    def test_managed_null_removes_a_retired_config_key(self):
-        path = ROOT / "scripts/merge_hermes_config.py"
-        spec = importlib.util.spec_from_file_location("merge_hermes_config", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        merged = module.merge(
-            {"platforms": {"telegram": {}, "webhook": {"enabled": True}}},
-            {"platforms": {"webhook": None}},
-        )
-
-        self.assertNotIn("webhook", merged["platforms"])
-
-    def test_managed_config_updates_web_without_losing_oauth_model_settings(self):
-        path = ROOT / "scripts/merge_hermes_config.py"
-        spec = importlib.util.spec_from_file_location("merge_hermes_config", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        current = {
-            "model": {"provider": "custom:test-provider", "default": "gpt-6-luna"},
-            "agent": {"verify_on_stop": True, "reasoning_effort": "high"},
-        }
-        managed = {
-            "agent": {"verify_on_stop": False},
-            "web": {"search_backend": "searxng", "extract_backend": "firecrawl"},
-        }
-
-        merged = module.merge(current, managed)
-
-        self.assertEqual(merged["model"], current["model"])
-        self.assertEqual(merged["agent"]["reasoning_effort"], "high")
-        self.assertFalse(merged["agent"]["verify_on_stop"])
-        self.assertEqual(merged["web"], managed["web"])
 
 
 if __name__ == "__main__":

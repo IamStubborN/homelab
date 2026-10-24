@@ -4,10 +4,8 @@ x-watchtower: &watchtower
   com.centurylinklabs.watchtower.enable: "true"
 
 x-hermes-common: &hermes-common
-  # hermes/scripts/hermes-auto-update selects newer digests through HERMES_IMAGE
-  # in the ignored root .env; this pin is the reviewed default.
-  image: ${HERMES_IMAGE:-nousresearch/hermes-agent@sha256:efb82540aeb8ac21c58ecb4482bd3eb103ea617da2af2c61f12526ed68f6c2d9}
-  entrypoint: [/usr/local/bin/hermes-home-entrypoint]
+  # The official image and its own bootstrap; Watchtower follows the stable tag.
+  image: nousresearch/hermes-agent:stable
   command: [gateway, run]
   restart: unless-stopped
   read_only: true
@@ -22,8 +20,7 @@ x-hermes-common: &hermes-common
     # TMPDIR: the terminal tool snapshots the session environment, tokens
     # included, into hermes-snap-*.sh; it must never reach the volume.
     - /opt/data/tmp:rw,exec,nosuid,nodev,size=256m,mode=1777
-  labels:
-    com.centurylinklabs.watchtower.enable: "false"
+  labels: *watchtower
   extra_hosts:
     - api.telegram.org=149.154.167.220
   environment:
@@ -251,27 +248,24 @@ services:
       MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-primary:8644
       TELEGRAM_ALLOWED_USERS: ${PRIMARY_TELEGRAM_USER_ID:?set PRIMARY_TELEGRAM_USER_ID}
       TELEGRAM_HOME_CHANNEL: ${PRIMARY_TELEGRAM_CHAT_ID:?set PRIMARY_TELEGRAM_CHAT_ID}
-      WEBHOOK_SECRET_FILE: /run/hermes-home-secrets/webhook_hmac
+      WEBHOOK_SECRET_FILE: /run/secrets/api_server_key
     volumes:
       - hermes_primary_profile:/opt/data
       - hermes_primary_memory:/opt/data/memories
       - hermes_primary_browser:/opt/data/browser_auth
       - agent_browser_tools:/opt/tools:ro
-      - ./scripts/hermes-home-entrypoint:/usr/local/bin/hermes-home-entrypoint:ro
-      - ./scripts/merge_hermes_config.py:/usr/local/bin/merge-hermes-config:ro
-      - ./scripts/hermes-mcp-schema-revision:/usr/local/bin/hermes-mcp-schema-revision:ro
       - ./scripts/vaultwarden-safe:/usr/local/bin/vaultwarden-safe:ro
       - ./scripts/agent-browser:/usr/local/bin/agent-browser:ro
       - ./scripts/agent_browser_plugin_vaultwarden.py:/usr/local/bin/agent-browser-plugin-vaultwarden:ro
-      - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/config/config.yaml:/etc/hermes-home/config.yaml:ro
-      - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/SOUL.md:/etc/hermes-home/SOUL.md:ro
+      - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/config/config.yaml:/etc/hermes/config.yaml:ro
+      - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/SOUL.md:/opt/data/SOUL.md:ro
       - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/identity:/etc/hermes-home/profile-id:ro
       - ./config/media-service-url:/etc/hermes-home/media-service-url:ro
       - ${HERMES_VAULTWARDEN_SERVER_PATH:-./config/vaultwarden-server.example}:/etc/hermes-home/vaultwarden-server:ro
-      - ./shared/skills:/etc/hermes-home/skills:ro
-      - ./shared/plugins:/etc/hermes-home/shared-plugins:ro
-      - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/skills:/etc/hermes-home/personal-skills:ro
-      - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/plugins:/etc/hermes-home/personal-plugins:ro
+      # A category of its own: bundled skills already use names like media/.
+      - ./shared/skills:/opt/data/skills/home:ro
+      - ./shared/plugins/telegram-home:/opt/data/plugins/telegram-home:ro
+      - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/plugins/vaultwarden-approval:/opt/data/plugins/vaultwarden-approval:ro
       # Personal llm-wiki root. Host shared/ is an explicit nested bind (not a
       # copy) so /wiki/shared is the family tree. Bundled obsidian skill stays
       # disabled; official Sync is a separate host service — no OBSIDIAN_VAULT_PATH.
@@ -295,7 +289,7 @@ services:
       - source: primary_vaultwarden_broker_token
         target: broker_api_token
       - source: primary_webhook_hmac
-        target: webhook_hmac
+        target: api_server_key
     networks: [media, agent-tools, health-internal, primary-private]
 
   hermes-secondary:
@@ -328,24 +322,20 @@ services:
       MEDIA_NOTIFIER_CONTROL_URL: http://media-notifier-secondary:8644
       TELEGRAM_ALLOWED_USERS: ${SECONDARY_TELEGRAM_USER_ID:?set SECONDARY_TELEGRAM_USER_ID}
       TELEGRAM_HOME_CHANNEL: ${SECONDARY_TELEGRAM_CHAT_ID:?set SECONDARY_TELEGRAM_CHAT_ID}
-      WEBHOOK_SECRET_FILE: /run/hermes-home-secrets/webhook_hmac
+      WEBHOOK_SECRET_FILE: /run/secrets/api_server_key
     volumes:
       - hermes_secondary_profile:/opt/data
       - hermes_secondary_memory:/opt/data/memories
       - hermes_secondary_browser:/opt/data/browser_auth
       - agent_browser_tools:/opt/tools:ro
-      - ./scripts/hermes-home-entrypoint:/usr/local/bin/hermes-home-entrypoint:ro
-      - ./scripts/merge_hermes_config.py:/usr/local/bin/merge-hermes-config:ro
-      - ./scripts/hermes-mcp-schema-revision:/usr/local/bin/hermes-mcp-schema-revision:ro
       - ./scripts/agent-browser:/usr/local/bin/agent-browser:ro
-      - ${HERMES_SECONDARY_PROFILE_DIR:-./profiles/secondary}/config/config.yaml:/etc/hermes-home/config.yaml:ro
-      - ${HERMES_SECONDARY_PROFILE_DIR:-./profiles/secondary}/SOUL.md:/etc/hermes-home/SOUL.md:ro
+      - ${HERMES_SECONDARY_PROFILE_DIR:-./profiles/secondary}/config/config.yaml:/etc/hermes/config.yaml:ro
+      - ${HERMES_SECONDARY_PROFILE_DIR:-./profiles/secondary}/SOUL.md:/opt/data/SOUL.md:ro
       - ${HERMES_SECONDARY_PROFILE_DIR:-./profiles/secondary}/identity:/etc/hermes-home/profile-id:ro
       - ./config/media-service-url:/etc/hermes-home/media-service-url:ro
-      - ./shared/skills:/etc/hermes-home/skills:ro
-      - ./shared/plugins:/etc/hermes-home/shared-plugins:ro
-      - ${HERMES_SECONDARY_PROFILE_DIR:-./profiles/secondary}/skills:/etc/hermes-home/personal-skills:ro
-      - ${HERMES_SECONDARY_PROFILE_DIR:-./profiles/secondary}/plugins:/etc/hermes-home/personal-plugins:ro
+      # A category of its own: bundled skills already use names like media/.
+      - ./shared/skills:/opt/data/skills/home:ro
+      - ./shared/plugins/telegram-home:/opt/data/plugins/telegram-home:ro
       # Personal llm-wiki root + nested family shared bind (same layout as Primary).
       - ${HERMES_SECONDARY_WIKI_PATH:-${WIKI_ROOT:-/mnt/internal/wiki}/secondary}:/wiki
       - ${WIKI_ROOT:-/mnt/internal/wiki}/shared:/wiki/shared
@@ -365,7 +355,7 @@ services:
       - source: secondary_groq_api_key
         target: groq_api_key
       - source: secondary_webhook_hmac
-        target: webhook_hmac
+        target: api_server_key
     networks: [media, agent-tools, health-internal, secondary-private]
 
 networks:

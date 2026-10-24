@@ -29,7 +29,7 @@ else
 fi
 exec python3 -c '
 import sys, urllib.request
-token = open("/run/hermes-home-secrets/broker_api_token", encoding="utf-8").read().strip()
+token = open("/run/secrets/broker_api_token", encoding="utf-8").read().strip()
 request = urllib.request.Request(
     sys.argv[1], data=sys.argv[2].encode(),
     headers={"Content-Type": "application/json", "Authorization": "Bearer " + token}, method="POST")

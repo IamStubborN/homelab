@@ -3,9 +3,9 @@ set -eu
 
 python3 -m unittest discover -v tests
 ./scripts/deploy-preflight
-shellcheck scripts/hermes-home-entrypoint scripts/hermes-media scripts/vaultwarden-safe \
+shellcheck scripts/hermes-media scripts/vaultwarden-safe \
     scripts/agent-browser scripts/vaultwarden-broker-entrypoint \
-    scripts/init-primary-vaultwarden scripts/deploy-preflight scripts/check scripts/install-auto-update
+    scripts/init-primary-vaultwarden scripts/deploy-preflight scripts/check
 yamllint -d '{extends: default, rules: {line-length: disable, document-start: disable, truthy: disable}}' \
     compose.yaml profiles/primary/config/config.yaml profiles/secondary/config/config.yaml
 

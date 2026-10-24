@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 _DEFAULT_CONTROL_URL = "http://media-notifier:8644"
-_DEFAULT_SECRET_FILE = "/run/secrets/webhook_hmac"
+_DEFAULT_SECRET_FILE = "/run/secrets/api_server_key"
 _COMMANDS = frozenset({"expand", "collapse", "confirm-cancel", "dismiss-cancel"})
 
 

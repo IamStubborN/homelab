@@ -20,15 +20,8 @@ from types import SimpleNamespace
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputMediaPhoto
 from telegram.error import BadRequest, TelegramError
 
-from plugins.platforms.telegram.adapter import (
-    TelegramAdapter,
-    _apply_yaml_config,
-    _is_connected,
-    _resolve_notifications_mode,
-    _standalone_send,
-    check_telegram_requirements,
-    interactive_setup,
-)
+from plugins.platforms.telegram import adapter as official_telegram
+from plugins.platforms.telegram.adapter import TelegramAdapter, _resolve_notifications_mode
 
 from .media_action_store import (
     BusinessActionReceiptStore,
@@ -5002,6 +4995,19 @@ def _build_adapter(config):
     return adapter
 
 
+class _HomePlatform:
+    """Register the official Telegram platform entry with the home adapter."""
+
+    def __init__(self, ctx):
+        self._ctx = ctx
+
+    def register_platform(self, **entry):
+        self._ctx.register_platform(**{**entry, "adapter_factory": _build_adapter})
+
+    def __getattr__(self, name):
+        return getattr(self._ctx, name)
+
+
 def register(ctx) -> None:
     HomeTelegramAdapter._media_plugin_context = ctx
     ctx.register_hook("transform_llm_output", _suppress_download_confirmation)
@@ -5029,21 +5035,4 @@ def register(ctx) -> None:
             description=description,
             args_hint="[страница]",
         )
-    ctx.register_platform(
-        name="telegram",
-        label="Telegram",
-        adapter_factory=_build_adapter,
-        check_fn=check_telegram_requirements,
-        is_connected=_is_connected,
-        required_env=["TELEGRAM_BOT_TOKEN"],
-        install_hint="pip install 'hermes-agent[telegram]'",
-        setup_fn=interactive_setup,
-        apply_yaml_config_fn=_apply_yaml_config,
-        allowed_users_env="TELEGRAM_ALLOWED_USERS",
-        allow_all_env="TELEGRAM_ALLOW_ALL_USERS",
-        cron_deliver_env_var="TELEGRAM_HOME_CHANNEL",
-        standalone_sender_fn=_standalone_send,
-        max_message_length=4096,
-        emoji="✈️",
-        allow_update_command=True,
-    )
+    official_telegram.register(_HomePlatform(ctx))

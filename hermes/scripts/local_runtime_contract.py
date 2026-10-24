@@ -134,7 +134,7 @@ def collect(provenance):
     if schema_tools(tracked) != tools:
         raise ContractError("live local MCP contract differs from tracked tools")
     for profile in PROFILES:
-        mounted = json.loads(run("docker", "exec", profile, "cat", "/etc/hermes-home/skills/media/MCP_SCHEMA.json"))
+        mounted = json.loads(run("docker", "exec", profile, "cat", "/opt/data/skills/home/media/MCP_SCHEMA.json"))
         if schema_tools(mounted) != tools or mounted != tracked:
             raise ContractError(f"{profile} mounted MCP contract differs from live tools")
     return {"kind": "local-runtime", "schema_version": 1, "provenance": provenance,

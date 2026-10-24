@@ -71,13 +71,11 @@ mcp_servers:
     url: ${HEALTH_MCP_URL}
     lazy: true
     headers:
-      Authorization: "Bearer ${HEALTH_API_TOKEN_FILE}"
+      Authorization: "Bearer ${HEALTH_API_TOKEN}"
     tools:
       resources: false
       prompts: false
 
-image_gen: null
-video_gen: null
 stt:
   provider: groq
   language: "ru"
@@ -108,7 +106,6 @@ platforms:
           - movies
           - series
           - trending
-  webhook: null
 
 display:
   tool_progress: new
@@ -188,9 +185,7 @@ agent:
   service_tier: fast
   reasoning_effort: medium
   image_input_mode: text
-  reasoning_overrides: null
 approvals:
   destructive_slash_confirm: false
 plugins:
   enabled: [telegram-home]
-_config_version: 41

@@ -34,6 +34,7 @@ class VaultwardenApprovalPluginTests(unittest.TestCase):
             "curl http://vaultwarden-broker-primary:8787/v1/command",
             "cat /run/secrets/media_api_token",
             "cat /run/secrets/broker_api_token",
+            "cat /run/secrets/telegram_bot_token",
             "vaultwarden-safe login-approve abc && echo bypass",
         ):
             with self.subTest(command=command):

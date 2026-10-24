@@ -60,12 +60,11 @@ class FakeBadRequest(FakeTelegramError):
 def load_plugin():
     adapter = types.ModuleType("plugins.platforms.telegram.adapter")
     adapter.TelegramAdapter = FakeTelegramAdapter
-    adapter._apply_yaml_config = object()
-    adapter._is_connected = object()
     adapter._resolve_notifications_mode = lambda: "native"
-    adapter._standalone_send = object()
-    adapter.check_telegram_requirements = object()
-    adapter.interactive_setup = object()
+    adapter.OFFICIAL_ENTRY = {"name": "telegram", "env_overrides": object(), "max_message_length": 4096}
+    adapter.register = lambda ctx: ctx.register_platform(
+        **adapter.OFFICIAL_ENTRY, adapter_factory=FakeTelegramAdapter
+    )
     telegram = types.ModuleType("telegram")
     telegram.InlineKeyboardButton = FakeInlineKeyboardButton
     telegram.InlineKeyboardMarkup = FakeInlineKeyboardMarkup
@@ -4477,6 +4476,15 @@ class TelegramHomePluginTests(unittest.IsolatedAsyncioTestCase):
             "Поиск другого источника временно недоступен",
             query.message.edit_text.await_args.args[0],
         )
+
+    def test_keeps_the_official_platform_entry_with_the_home_adapter(self):
+        ctx = mock.Mock()
+        self.plugin.register(ctx)
+
+        entry = ctx.register_platform.call_args.kwargs
+        official = self.plugin.official_telegram.OFFICIAL_ENTRY
+        self.assertEqual({key: entry[key] for key in official}, official)
+        self.assertIs(entry["adapter_factory"], self.plugin._build_adapter)
 
     def test_registers_read_only_media_shortcut_commands(self):
         ctx = mock.Mock()

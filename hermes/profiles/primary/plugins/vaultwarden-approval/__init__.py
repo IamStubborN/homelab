@@ -7,10 +7,7 @@ import shlex
 REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 SENSITIVE_MARKERS = (
     "vaultwarden-broker-",
-    "/run/secrets/media_api_token",
-    "/run/secrets/broker_api_token",
-    "/run/hermes-home-secrets/media_api_token",
-    "/run/hermes-home-secrets/broker_api_token",
+    "/run/secrets/",
     "agent-browser-plugin-vaultwarden",
     "credential_resolve",
     "browser_credential_resolve",

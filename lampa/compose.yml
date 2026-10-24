@@ -161,10 +161,12 @@ services:
         max-size: "10m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "3", "http://127.0.0.1:9118/version?type=hash"]
+      # DeUnhealth restarts Lampa once this fails: allow slow answers under
+      # transcoding load, so only a hang of about 2.5 minutes restarts it.
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "10", "http://127.0.0.1:9118/version?type=hash"]
       interval: 30s
-      timeout: 5s
-      retries: 3
+      timeout: 12s
+      retries: 5
       start_period: 90s
     networks:
       - proxy

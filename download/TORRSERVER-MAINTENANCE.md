@@ -81,13 +81,14 @@ could read the torrent list or change settings, and a plain
 recreating the VPN container that carries TorrServer's labels:
 
 - `torrserver-shutdown*` refuses `/shutdown` on both hosts with 403
-  (`deny-all`). Restart TorrServer through Docker instead.
+  (`deny-all`), also behind extra slashes and as `/torrservershutdown`.
+  Restart TorrServer through Docker instead.
 - `torrserver-foreign*`, `lampa-torrserver-foreign` and
-  `lampa-torrserver-gst-foreign` match requests whose `Origin` is neither
-  Lampa nor TorrServer, or cross-site requests without an `Origin`. For now they
-  only forward and write an access log line, to confirm that no TV client sends
-  such requests; once confirmed, they get `deny-all` too.
+  `lampa-torrserver-gst-foreign` refuse with 403 requests whose `Origin` is
+  neither Lampa nor TorrServer, or cross-site requests without an `Origin`,
+  and write an access log line. TV playback sent none while they only logged.
 
-Check with `docker logs traefik | grep -- '-foreign@file'`. A `HEAD` request
+If a client stops playing, look for it with
+`docker logs traefik | grep -- '-foreign@file'`. A `HEAD` request
 tests the shutdown rule safely: TorrServer itself answers `HEAD /shutdown` with
 404, so 403 proves Traefik refused it.

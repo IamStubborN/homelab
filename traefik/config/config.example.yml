@@ -7,8 +7,8 @@ http:
     # behind extra slashes or /torrservershutdown, which the prefix strip turns
     # into /shutdown.
     # Requests from a foreign page (an Origin that is not Lampa or TorrServer,
-    # or a cross-site request without one) are logged by the *-foreign routers
-    # to confirm that no TV client sends them before they are refused too.
+    # or a cross-site request without one) are refused by the *-foreign
+    # routers and logged, so a client caught by them shows up in the log.
     torrserver-shutdown:
       rule: "(Host(`torrserver.${DOCKER_DOMAIN}`) && PathRegexp(`^/+shutdown(/|$)`)) || (Host(`lampa.${DOCKER_DOMAIN}`) && PathRegexp(`^/torrserver/*shutdown(/|$)`))"
       entryPoints: [https]
@@ -28,6 +28,7 @@ http:
       tls: {}
       priority: 250
       service: torrserver@docker
+      middlewares: [deny-all]
       observability:
         accessLogs: true
     torrserver-foreign-http:
@@ -35,6 +36,7 @@ http:
       entryPoints: [http]
       priority: 250
       service: torrserver@docker
+      middlewares: [deny-all]
       observability:
         accessLogs: true
     lampa-torrserver-foreign:
@@ -43,7 +45,7 @@ http:
       tls: {}
       priority: 250
       service: torrserver@docker
-      middlewares: [lampa-torrserver-strip@docker]
+      middlewares: [deny-all]
       observability:
         accessLogs: true
     # Below lampa-gst-sessions (120): only the paths that reach TorrServer.
@@ -53,6 +55,7 @@ http:
       tls: {}
       priority: 110
       service: torrserver@docker
+      middlewares: [deny-all]
       observability:
         accessLogs: true
 

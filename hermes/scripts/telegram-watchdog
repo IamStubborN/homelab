@@ -1,0 +1,50 @@
+#!/bin/sh
+# Reports to Telegram when a Hermes agent is not healthy or its Telegram
+# gateway is not connected on two checks in a row, and again on recovery.
+# Watchtower updates Hermes with no canary, so this is how a broken update
+# shows up. Run from cron every 5 minutes; reports go through the
+# disk-watchdog's bot and chat, which work without Hermes.
+set -u
+
+STATE_DIR=${HERMES_WATCHDOG_STATE:-$HOME/.cache/hermes-telegram-watchdog}
+mkdir -p "$STATE_DIR"
+
+notify() {
+  token=$(docker exec disk-watchdog cat /run/secrets/telegram_bot_token 2>/dev/null) || return 0
+  chat=$(docker exec disk-watchdog printenv TELEGRAM_CHAT_ID 2>/dev/null) || return 0
+  TELEGRAM_TOKEN=$token python3 - "$chat" "$1" <<'EOF' || echo "Telegram delivery failed: $1"
+import json, os, sys, urllib.request
+token = os.environ["TELEGRAM_TOKEN"].strip()
+body = json.dumps({"chat_id": sys.argv[1], "text": sys.argv[2]}).encode()
+request = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", body,
+                                 {"Content-Type": "application/json"})
+urllib.request.urlopen(request, timeout=15).read()
+EOF
+}
+
+status() {
+  health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null) || health=missing
+  telegram=$(docker exec "$1" python3 -c 'import json; print(json.load(open("/opt/data/gateway_state.json"))["platforms"]["telegram"]["state"])' 2>/dev/null) || telegram=unknown
+  echo "$health/$telegram"
+}
+
+for agent in hermes-primary hermes-secondary; do
+  now=$(status "$agent")
+  failures_file="$STATE_DIR/$agent.failures"
+  alerted_file="$STATE_DIR/$agent.alerted"
+  if [ "$now" = healthy/connected ]; then
+    rm -f "$failures_file"
+    if [ -e "$alerted_file" ]; then
+      rm -f "$alerted_file"
+      notify "Hermes: $agent снова работает, Telegram подключён."
+    fi
+    continue
+  fi
+  failures=$(( $(cat "$failures_file" 2>/dev/null || echo 0) + 1 ))
+  echo "$failures" > "$failures_file"
+  if [ "$failures" -ge 2 ] && [ ! -e "$alerted_file" ]; then
+    image=$(docker inspect -f '{{.Image}}' "$agent" 2>/dev/null | cut -c8-19)
+    notify "Hermes: $agent не работает ($now), образ $image. Если это после обновления Watchtower: docker logs $agent; откатиться можно, закрепив прежний digest в hermes/compose.yaml."
+    touch "$alerted_file"
+  fi
+done

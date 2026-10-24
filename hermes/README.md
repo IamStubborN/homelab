@@ -40,6 +40,15 @@ This is a personal bot: an update may interrupt a reply in progress, and there
 is no canary, snapshot, or rollback. To go back, pin an older digest in
 `compose.yaml` by hand.
 
+`scripts/telegram-watchdog` runs from the deployment user's crontab every five
+minutes. When an agent is not healthy or its Telegram gateway is not connected
+on two checks in a row, it reports through the disk-watchdog's bot, and again
+on recovery:
+
+```text
+*/5 * * * * /home/iamstubborn/homelab/hermes/scripts/telegram-watchdog 2>&1 | /usr/bin/logger -t hermes-telegram-watchdog
+```
+
 Everything else is attached through upstream extension points:
 
 | Mount | Purpose |

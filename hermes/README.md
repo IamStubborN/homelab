@@ -192,13 +192,15 @@ runs the canaries, then stops before touching the agents.
 Install as root on the Docker host after deploying this checkout:
 
 ```sh
-cd /home/iamstubborn/homelab/hermes
-DRY_RUN=1 python3 scripts/hermes-auto-update
-CANARY_ONLY=1 python3 scripts/hermes-auto-update
-install -m 0644 hermes-auto-update.service hermes-auto-update.timer /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now hermes-auto-update.timer
+sudo sh /home/iamstubborn/homelab/hermes/scripts/install-auto-update
 ```
+
+It installs the unit and timer, runs `DRY_RUN=1`, then one supervised update
+through `systemctl start` (so `ExecStopPost` and the stop timeout apply) and
+prints its journal and the agents' state. `--enable-timer` also enables the
+nightly timer, but only after that run succeeded. `CANARY_ONLY=1 python3
+scripts/hermes-auto-update` checks a candidate by hand without touching the
+agents.
 
 The guarded media-orchestrator deployment uses the same root `.env`, so it keeps
 the selected digest. Removing the `HERMES_IMAGE` line returns to the reviewed

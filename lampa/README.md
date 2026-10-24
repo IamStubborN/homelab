@@ -198,7 +198,8 @@ explicit rebuild. Use the [controlled update workflow](UPDATE.md) to stage a
 separately tagged candidate, check isolated startup, and retain a rollback
 checkpoint before applying it in an idle maintenance window. The CLI itself
 does not detect viewers; `lampac-auto-update.timer` runs it nightly at 03:00
-`Europe/Sofia` only after the access log shows no viewing, as described there.
+`Europe/Sofia` only after Lampa has sent almost nothing for five minutes, as
+described there.
 Watchtower is disabled for this service because it cannot rebuild a derived
 image; a plain `docker compose build` would retag `latest` and make the next
 staged update refuse, so rebuild only through that workflow.

@@ -1,25 +1,29 @@
+# Replace ${DOCKER_DOMAIN} with the domain, and ${DOCKER_DOMAIN_REGEX} with the
+# same domain with every dot written as [.] (a bare dot matches any character).
 http:
   routers:
     # TorrServer has no login and answers any origin (CORS *), so a web page in
-    # a LAN browser could read or change it. /shutdown is always refused.
+    # a LAN browser could read or change it. /shutdown is always refused, also
+    # behind extra slashes or /torrservershutdown, which the prefix strip turns
+    # into /shutdown.
     # Requests from a foreign page (an Origin that is not Lampa or TorrServer,
     # or a cross-site request without one) are logged by the *-foreign routers
     # to confirm that no TV client sends them before they are refused too.
     torrserver-shutdown:
-      rule: "(Host(`torrserver.${DOCKER_DOMAIN}`) && Path(`/shutdown`)) || (Host(`lampa.${DOCKER_DOMAIN}`) && Path(`/torrserver/shutdown`))"
+      rule: "(Host(`torrserver.${DOCKER_DOMAIN}`) && PathRegexp(`^/+shutdown(/|$)`)) || (Host(`lampa.${DOCKER_DOMAIN}`) && PathRegexp(`^/torrserver/*shutdown(/|$)`))"
       entryPoints: [https]
       tls: {}
       priority: 300
       service: torrserver@docker
       middlewares: [deny-all]
     torrserver-shutdown-http:
-      rule: "Host(`torrserver.${DOCKER_DOMAIN}`) && Path(`/shutdown`)"
+      rule: "Host(`torrserver.${DOCKER_DOMAIN}`) && PathRegexp(`^/+shutdown(/|$)`)"
       entryPoints: [http]
       priority: 300
       service: torrserver@docker
       middlewares: [deny-all]
     torrserver-foreign:
-      rule: "Host(`torrserver.${DOCKER_DOMAIN}`) && ((HeaderRegexp(`Origin`, `.`) && !HeaderRegexp(`Origin`, `^https?://(lampa|torrserver)[.]${DOCKER_DOMAIN}$`)) || (Header(`Sec-Fetch-Site`, `cross-site`) && !HeaderRegexp(`Origin`, `.`)))"
+      rule: "Host(`torrserver.${DOCKER_DOMAIN}`) && ((HeaderRegexp(`Origin`, `.`) && !HeaderRegexp(`Origin`, `^https?://(lampa|torrserver)[.]${DOCKER_DOMAIN_REGEX}$`)) || (Header(`Sec-Fetch-Site`, `cross-site`) && !HeaderRegexp(`Origin`, `.`)))"
       entryPoints: [https]
       tls: {}
       priority: 250
@@ -27,14 +31,14 @@ http:
       observability:
         accessLogs: true
     torrserver-foreign-http:
-      rule: "Host(`torrserver.${DOCKER_DOMAIN}`) && ((HeaderRegexp(`Origin`, `.`) && !HeaderRegexp(`Origin`, `^https?://(lampa|torrserver)[.]${DOCKER_DOMAIN}$`)) || (Header(`Sec-Fetch-Site`, `cross-site`) && !HeaderRegexp(`Origin`, `.`)))"
+      rule: "Host(`torrserver.${DOCKER_DOMAIN}`) && ((HeaderRegexp(`Origin`, `.`) && !HeaderRegexp(`Origin`, `^https?://(lampa|torrserver)[.]${DOCKER_DOMAIN_REGEX}$`)) || (Header(`Sec-Fetch-Site`, `cross-site`) && !HeaderRegexp(`Origin`, `.`)))"
       entryPoints: [http]
       priority: 250
       service: torrserver@docker
       observability:
         accessLogs: true
     lampa-torrserver-foreign:
-      rule: "Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/torrserver`) && ((HeaderRegexp(`Origin`, `.`) && !HeaderRegexp(`Origin`, `^https?://(lampa|torrserver)[.]${DOCKER_DOMAIN}$`)) || (Header(`Sec-Fetch-Site`, `cross-site`) && !HeaderRegexp(`Origin`, `.`)))"
+      rule: "Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/torrserver`) && ((HeaderRegexp(`Origin`, `.`) && !HeaderRegexp(`Origin`, `^https?://(lampa|torrserver)[.]${DOCKER_DOMAIN_REGEX}$`)) || (Header(`Sec-Fetch-Site`, `cross-site`) && !HeaderRegexp(`Origin`, `.`)))"
       entryPoints: [https]
       tls: {}
       priority: 250
@@ -44,7 +48,7 @@ http:
         accessLogs: true
     # Below lampa-gst-sessions (120): only the paths that reach TorrServer.
     lampa-torrserver-gst-foreign:
-      rule: "Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/gst`) && ((HeaderRegexp(`Origin`, `.`) && !HeaderRegexp(`Origin`, `^https?://(lampa|torrserver)[.]${DOCKER_DOMAIN}$`)) || (Header(`Sec-Fetch-Site`, `cross-site`) && !HeaderRegexp(`Origin`, `.`)))"
+      rule: "Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/gst`) && ((HeaderRegexp(`Origin`, `.`) && !HeaderRegexp(`Origin`, `^https?://(lampa|torrserver)[.]${DOCKER_DOMAIN_REGEX}$`)) || (Header(`Sec-Fetch-Site`, `cross-site`) && !HeaderRegexp(`Origin`, `.`)))"
       entryPoints: [https]
       tls: {}
       priority: 110

@@ -46,11 +46,14 @@ pending() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(
 mark_failed() { echo "$latest" > "$AUTO/failed-upstream"; }
 RETRY="Повторить следующей ночью: rm $AUTO/failed-upstream"
 
-lampa_tx() { docker exec lampa awk '/eth0/{print $10}' /proc/net/dev 2>/dev/null || echo 0; }
+# Bytes Lampa sent on every interface but lo (Docker does not keep the
+# interface order across recreates); empty when they cannot be read.
+lampa_tx() { docker exec lampa awk -F'[: ]+' 'NR>2 && $2!="lo"{s+=$11} END{print s+0}' /proc/net/dev 2>/dev/null || true; }
 
 # Lampa is idle when it sent less than IDLE_MIB_PER_MINUTE in each of the last
 # IDLE_MINUTES minutes. Browser (GST) and proxied online playback flow through
-# it; a paused player sends nothing and is not detected.
+# it; a paused player sends nothing and is not detected. A failed read or a
+# counter that went back counts as busy.
 wait_for_idle() {
   local idle=0 prev cur
   prev=$(lampa_tx)
@@ -58,7 +61,12 @@ wait_for_idle() {
     [ "$(date +%s)" -lt "$DEADLINE" ] || return 1
     sleep 60
     cur=$(lampa_tx)
-    if [ $(( (cur - prev) / 1048576 )) -lt "$IDLE_MIB_PER_MINUTE" ]; then idle=$((idle + 1)); else idle=0; fi
+    if [ -n "$prev" ] && [ -n "$cur" ] && [ "$cur" -ge "$prev" ] &&
+       [ $(( (cur - prev) / 1048576 )) -lt "$IDLE_MIB_PER_MINUTE" ]; then
+      idle=$((idle + 1))
+    else
+      idle=0
+    fi
     prev=$cur
   done
 }

@@ -15,6 +15,7 @@ memory:
   memory_char_limit: 4000
   user_char_limit: 1375
 
+# Upstream ignores this block; the hermes-session-reset-policy plugin applies it.
 session_reset:
   mode: idle
   idle_minutes: 1440
@@ -188,4 +189,4 @@ agent:
 approvals:
   destructive_slash_confirm: false
 plugins:
-  enabled: [telegram-home]
+  enabled: [telegram-home, hermes-session-reset-policy]

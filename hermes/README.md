@@ -59,6 +59,20 @@ Everything else is attached through upstream extension points:
 | `shared/plugins/telegram-home` → `/opt/data/plugins/telegram-home` | Telegram adapter with the media panel |
 | `profiles/primary/plugins/vaultwarden-approval` → `/opt/data/plugins/vaultwarden-approval` | Primary only |
 
+Upstream no longer applies `session_reset`, so both profiles enable the
+community plugin `hermes-session-reset-policy`, which resets a conversation on
+the first message after 1440 idle minutes. It is not mounted: it lives in each
+profile volume, pinned to a reviewed commit. Install it once per new volume:
+
+```sh
+for c in hermes-primary hermes-secondary; do
+  docker exec "$c" hermes plugins install hermes-session-reset-policy \
+    --ref 0f2ea5ad995f1e4ba7c92c2dbd21afa868b8ae21 --no-enable
+done
+```
+
+Review the source before changing the pinned commit.
+
 All mounts are read-only. Conversational media operations and Telegram
 callbacks use the media-service MCP endpoint.
 The media CLI is a trusted-host operator tool and is

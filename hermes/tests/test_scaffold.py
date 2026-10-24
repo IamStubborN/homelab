@@ -1141,9 +1141,12 @@ class ProfileConfigTests(unittest.TestCase):
             self.assertEqual(config["web"]["extract_backend"], "exa")
             enabled = config["plugins"]["enabled"]
             if profile == "primary":
-                self.assertEqual(enabled, ["telegram-home", "vaultwarden-approval"])
+                self.assertEqual(
+                    enabled,
+                    ["telegram-home", "vaultwarden-approval", "hermes-session-reset-policy"],
+                )
             else:
-                self.assertEqual(enabled, ["telegram-home"])
+                self.assertEqual(enabled, ["telegram-home", "hermes-session-reset-policy"])
             self.assertEqual(config["display"]["tool_progress"], "new")
             self.assertEqual(
                 config["display"]["platforms"]["telegram"]["tool_progress"], "off"

@@ -52,3 +52,7 @@ accessLog:
       ClientUsername: drop
     headers:
       defaultMode: drop
+      # Tells a TV client from a foreign page on the TorrServer guard routers.
+      names:
+        Origin: keep
+        Sec-Fetch-Site: keep

@@ -233,6 +233,28 @@ addresses or headers, so `docker logs traefik` shows which online stream or GST
 session a viewer played. They share Traefik's three 10 MiB console log files,
 which hold roughly days of playback, not a fixed period.
 
+The plugin also reports player events to `POST /extaudio/log`, and the
+sidecar prints each as one `client {...}` JSON line with a UTC `ts`:
+
+```bash
+docker logs lampa-extaudio 2>&1 | grep '^client '
+```
+
+`e` names the event: `play-start`/`play-stop`, `audio-switch` and
+`subtitle-switch` (`auto` true for a remembered choice), `hls-error` (fatal
+and notable load, buffer and parsing errors), `hls-recovery`, failed GST probe
+or task, external audio lookup, preparation and fallback, and JASSUB
+`ass-create`/`ass-destroy` with `why` (`mode`: Lampa or its menu set the
+track; `preference`, `drawn`, `new-video`; `replace`, `off`, `failed`,
+`clear`), `ass-failed` and `ass-fallback`. Each line carries the page session
+`s`, the first 8 hash characters `h`, the file `f` and the position `t` in
+seconds; URLs keep only their path and full hashes their prefix. The plugin
+drops a repeat within 5 s and sends at most 30 events a minute; `dropped` on
+the next event counts both kinds. The sidecar takes bodies up to 4 KiB of
+JSON, 120 a minute in all. The `lampa-extaudio-log` router limits each address
+to 60 a minute (burst 30) and keeps these posts out of Traefik's access log.
+Logging failures never affect playback.
+
 `init.conf` disables VeoVeo: its upstream host `api.rstprgapipt.com` no longer
 resolves. Lampac rereads `init.conf` when the file changes, but it is mounted as
 a single file and `git pull` replaces it, so recreate `lampa` to apply a pulled

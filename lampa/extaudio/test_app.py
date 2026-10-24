@@ -1,3 +1,4 @@
+import http.client
 import io
 import json
 import os
@@ -1305,6 +1306,73 @@ class HttpTests(unittest.TestCase):
             for _ in range(app.MAX_TRACK_LOOKUPS):
                 app._track_lookups.release()
         self.assertEqual((status, headers["Retry-After"]), (429, "5"))
+
+    def post(self, path, body, content_type="application/json"):
+        request = urllib.request.Request(self.base + path, data=body, method="POST", headers={"Content-Type": content_type})
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status
+        except urllib.error.HTTPError as error:
+            with error:
+                return error.code
+
+    def logged(self, *requests):
+        app._log_window.update(start=0.0, count=0)
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+            statuses = [self.post(*request) for request in requests]
+        return statuses, output.getvalue().splitlines()
+
+    def test_client_events_become_one_greppable_line_each(self):
+        event = {"e": "hls-error", "s": "k3j2", "h": "bc7b45c4", "f": 13, "t": 61.3, "fatal": True,
+                 "path": "/gst/501/seg7.m4s", "reason": "x" * 500, "ts": "forged", "nested": {"a": 1},
+                 "bad key": 1, "big": 10 ** 30}
+        statuses, lines = self.logged(("/extaudio/log", json.dumps(event).encode()))
+        self.assertEqual(statuses, [204])
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("client {"))
+        logged = json.loads(lines[0][len("client "):])
+        self.assertRegex(logged.pop("ts"), r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")
+        self.assertEqual(logged.pop("reason"), "x" * app.LOG_MAX_TEXT)
+        self.assertEqual(logged, {"e": "hls-error", "s": "k3j2", "h": "bc7b45c4", "f": 13, "t": 61.3, "fatal": True,
+                                  "path": "/gst/501/seg7.m4s"})
+
+    def test_client_events_reject_other_bodies(self):
+        statuses, lines = self.logged(
+            ("/extaudio/log", b'{"e": "x"}', "text/plain"),
+            ("/extaudio/log", b"not json"),
+            ("/extaudio/log", b"[1, 2]"),
+            ("/extaudio/log", b"[" * 3000),
+            ("/extaudio/log", json.dumps({"e": "x" * app.LOG_MAX_BYTES}).encode()),
+            ("/extaudio/other", b'{"e": "x"}'),
+        )
+        self.assertEqual(statuses, [415, 400, 400, 400, 413, 404])
+        self.assertEqual(lines, [])
+        self.assertEqual(self.get("/extaudio/log")[0], 404)
+
+    def test_client_event_text_cannot_split_the_line(self):
+        event = {"e": "ass-failed", "reason": "one\ntwo\r\u2028three\u2029four\x00five", "ts\n": 1, "Ts": "forged"}
+        statuses, lines = self.logged(("/extaudio/log", json.dumps(event).encode()))
+        self.assertEqual(statuses, [204])
+        self.assertEqual(len(lines), 1)
+        self.assertNotIn("\u2028", lines[0])
+        logged = json.loads(lines[0][len("client "):])
+        self.assertEqual(logged["reason"], "onetwothreefourfive")
+        self.assertEqual(set(logged), {"ts", "e", "reason"})
+
+    def test_client_events_need_a_content_length(self):
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
+        self.addCleanup(connection.close)
+        connection.putrequest("POST", "/extaudio/log")
+        connection.putheader("Content-Type", "application/json")
+        connection.endheaders()
+        self.assertEqual(connection.getresponse().status, 411)
+
+    def test_client_events_are_rate_limited(self):
+        with mock.patch.object(app, "LOG_PER_MINUTE", 2):
+            statuses, lines = self.logged(*[("/extaudio/log", b'{"e": "x"}')] * 3)
+        self.assertEqual(statuses, [204, 204, 429])
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(app.log_allowed(time.monotonic() + 61), "a new minute starts afresh")
 
 
 if __name__ == "__main__":

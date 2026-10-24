@@ -15,6 +15,8 @@ services:
       - cf_dns_api_token
     networks:
       proxy:
+        # Default route: Home Assistant (host network) trusts only proxy's subnet.
+        gw_priority: 1
         aliases:
           - freedium.${DOCKER_DOMAIN}
       jacred: {}

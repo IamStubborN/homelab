@@ -31,6 +31,8 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.s
     && strip --strip-unneeded -o /out/libgstmatroska.so build/gst/matroska/libgstmatroska.so \
     && echo "${version}" > /out/version
 
+# ffprobe (from ffmpeg) is what TorrServer's /ffp answers JacRed's track
+# analyses and media durations with; it looks the binary up in PATH.
 FROM debian:bookworm-slim
 
 ARG TORRSERVER_VERSION=MatriX.145
@@ -41,6 +43,7 @@ COPY --from=matroska /out /tmp/matroska
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes \
       ca-certificates \
+      ffmpeg \
       gstreamer1.0-tools \
       gstreamer1.0-libav \
       gstreamer1.0-plugins-base \
@@ -72,6 +75,7 @@ RUN apt-get update \
     && gst-inspect-1.0 avenc_aac >/dev/null \
     && gst-inspect-1.0 x264enc >/dev/null \
     && gst-discoverer-1.0 --help >/dev/null \
+    && ffprobe -version >/dev/null \
     && mkdir -p /opt/ts/config /opt/ts/log /opt/ts/torrents
 
 ENV TS_CONF_PATH=/opt/ts/config \

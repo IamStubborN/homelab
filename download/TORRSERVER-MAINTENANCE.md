@@ -55,3 +55,18 @@ The existing TorrServer image and entrypoint remain unchanged.
 If startup fails, restore the saved Compose/config, preserve any new logs, and
 recreate only TorrServer with the original image. Port-sync resumes once the
 server responds. Do not alter the VPN namespace to recover a logging change.
+
+## Rutor search and ffprobe
+
+`EnableRutorSearch` stays `false` in `settings.json`. TorrServer's own rutor
+index (used only by its web search and Telegram bot; Lampa searches through
+JacRed, which crawls rutor itself) reloads every three hours. MatriX.145 can
+run two reload loops after a quick double `set`, and its decoder never leaves a
+parse error: on 2026-10-22 a torn `rutor.tmp` left one loop spinning at about
+1.2 cores until the restart. Change the flag only in a stopped instance, as in
+the recreation procedure above.
+
+The image ships `ffprobe`, which TorrServer looks up in `PATH` for `/ffp`.
+Without it JacRed's track analyses (`tracks: true`) all fail while still making
+TorrServer fetch each file's head; with it Lampa's torrent list shows the audio
+and subtitle tracks of analysed releases.

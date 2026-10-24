@@ -61,6 +61,22 @@ class FakeAss {
 }
 FakeAss.instances = [];
 
+// The few jQuery calls the plugin makes on Lampa's player panel.
+function fakeElement(html = '') {
+  const classes = new Set((/class="([^"]*)"/.exec(html)?.[1] || '').split(/\s+/).filter(Boolean));
+  const handlers = {};
+  const element = {
+    length: 1, content: '', next: [],
+    on(name, fn) { (handlers[name] ||= []).push(fn); return element; },
+    trigger(name) { for (const fn of handlers[name] || []) fn.call(element); return element; },
+    toggleClass(name, on) { if (on) classes.add(name); else classes.delete(name); return element; },
+    hasClass: name => classes.has(name),
+    html(value) { element.content = value; return element; },
+    after(other) { element.next.push(other); return element; },
+  };
+  return element;
+}
+
 function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null, attachments = {}, library = null } = {}) {
   const notices = [];
   let work = false;
@@ -104,7 +120,9 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
     destroy() {}
   }
   let timerId = 0;
-  const player = subscription(), playerVideo = subscription(), panel = subscription(), settings = subscription();
+  const player = subscription(), playerVideo = subscription(), panel = subscription(), settings = subscription(), keypad = subscription();
+  const subsButton = fakeElement('<div class="player-panel__subs button selector hide"></div>');
+  let controller = 'player';
   const Lampa = {
     Storage: {
       get: (key, fallback) => storage.has(key) ? JSON.parse(storage.get(key)) : fallback,
@@ -113,7 +131,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       field: key => storage.has(key) ? JSON.parse(storage.get(key)) : undefined,
       listener: settings,
     },
-    Controller: { toggle() {} }, Platform: { is: name => android && name === 'android' },
+    Controller: { toggle() {}, enabled: () => ({ name: controller }) }, Keypad: { listener: keypad }, Platform: { is: name => android && name === 'android' },
     Player: { playdata: () => work, listener: player },
     PlayerVideo: {
       listener: playerVideo, video: () => video,
@@ -133,7 +151,10 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       subsview() {},
     },
     Noty: { show: message => notices.push(message) },
-    PlayerPanel: { listener: panel, setTracks: value => { audioMenu = value; }, setSubs: value => { subtitles = value; } },
+    PlayerPanel: {
+      listener: panel, setTracks: value => { audioMenu = value; }, setSubs: value => { subtitles = value; },
+      render: () => ({ find: selector => selector === '.player-panel__subs' ? subsButton : { length: 0 } }),
+    },
   };
   const browserStorage = {
     getItem: key => storage.get(key) ?? null,
@@ -145,7 +166,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
     setTimeout(fn, delay) { timers.set(++timerId, {fn, delay}); return timerId; },
     clearTimeout(id) { timers.delete(id); },
     window: {
-      Hls: TestHls, HomelabJassub: FakeAss,
+      Hls: TestHls, HomelabJassub: FakeAss, jQuery: fakeElement,
       MediaSource: { isTypeSupported: type => mse.some(codec => type === `audio/mp4; codecs="${codec}"`) },
       location: { origin: 'https://lampa.test', href: 'https://lampa.test/' },
       localStorage: browserStorage,
@@ -288,10 +309,11 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       request.resolve({ ok: true, json: async () => lampac ? {tracks: tracks.map(t => ({type:t.Type,index:t.Index || undefined,title:t.Title,language:t.Language,channels:t.Channels}))} : ({ Tracks: tracks }) });
       await new Promise(setImmediate);
     },
-    emitSubtitles(tracks, native = false) {
+    emitSubtitles(tracks, native = false, languages = false) {
       selectedSubtitle = -1;
       subtitles = tracks.filter(item => item.Type === 'subtitle').map((item, index) => {
         const sub = { index, label: item.Title, selected: false };
+        if (languages) sub.language = item.Language;
         const properties = native ? Object.create(Object.getPrototypeOf(sub)) : sub;
         if (native) Object.setPrototypeOf(sub, properties);
         Object.defineProperty(properties, 'mode', {
@@ -335,6 +357,9 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
     subtitleTitle: () => subtitles.find(item => item.mode === 'showing')?.label ?? null,
     subtitleMenu: () => Array.from(subtitles, item => item.label),
     subtitleList: () => subtitles,
+    signsButton: () => subsButton.next[0],
+    useController(name) { controller = name; },
+    press(code, modifiers = {}) { keypad.send('keydown', { code, enabled: true, event: { ...modifiers } }); },
     currentVideo: () => video,
     replaceVideo() { video = createVideo(); },
     timers,
@@ -1808,4 +1833,84 @@ test('a failing log request never breaks playback', async t => {
   await h.probe(firstEpisode);
   h.chooseAudio('Amediateka (Studio Band)');
   assert.equal(h.audioIndex(), 1);
+});
+
+test('one press switches an external ASS between signs and full and remembers the choice', async t => {
+  FakeAss.instances.length = 0;
+  const storage = new Map();
+  const h = harness(t, storage, { ass: assLookup, raw: { 25: new TextEncoder().encode(assText) } });
+  const button = h.signsButton();
+  assert.ok(button && button.hasClass('selector') && button.hasClass('hide'), 'the button sits beside the subtitle menu, hidden');
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  assert.ok(button.hasClass('hide'), 'no subtitles on screen, nothing to switch');
+  h.chooseSubtitle('YakuSub Studio: надписи (внешние)');
+  await h.settle();
+  assert.ok(!button.hasClass('hide'));
+  assert.match(button.content, /^Надп\./);
+  button.trigger('hover:enter');
+  await h.settle();
+  assert.equal(h.subtitleTitle(), 'YakuSub Studio: полные (внешние)');
+  assert.deepEqual(Array.from(h.subtitleList().filter(item => item.selected), item => item.label), ['YakuSub Studio: полные (внешние)']);
+  assert.equal(h.notices.at(-1), 'Субтитры: YakuSub Studio: полные (внешние)');
+  assert.match(button.content, /^Полн\./);
+  assert.ok(FakeAss.instances[0].destroyed && !FakeAss.instances[1].destroyed);
+  assert.equal(h.logs.filter(event => event.e === 'subtitle-switch').at(-1).track, 'YakuSub Studio: полные (внешние)');
+  h.start(14, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  assert.equal(h.subtitleTitle(), 'YakuSub Studio: полные (внешние)', 'the switch is remembered like a menu choice');
+  h.press(83);
+  await h.settle();
+  assert.equal(h.subtitleTitle(), 'YakuSub Studio: надписи (внешние)', 'S switches back');
+  h.chooseSubtitle(null);
+  assert.ok(button.hasClass('hide'), 'subtitles off hide the button');
+  h.destroy();
+  assert.ok(button.hasClass('hide'));
+});
+
+test('the switch pairs embedded tracks of the same language and ignores keys outside the player', async t => {
+  const h = harness(t, new Map(), { embedded: embeddedLookup, events: () => null });
+  const button = h.signsButton();
+  h.start(13, 'abc', true);
+  await h.probe(signsAndFull);
+  h.emitSubtitles(signsAndFull);
+  await h.settle();
+  h.chooseSubtitle('Русские: надписи');
+  await h.settle();
+  assert.ok(!button.hasClass('hide'));
+  h.press(83);
+  await h.settle();
+  assert.equal(h.subtitleTitle(), 'Русские: полные', 'Russian full, not the SRT of an unknown language');
+  h.press(83, { metaKey: true });
+  h.useController('select');
+  h.press(83);
+  button.trigger('hover:enter');
+  assert.equal(h.subtitleTitle(), 'Русские: надписи', 'only the panel button worked: a shortcut or an open menu keeps S');
+  h.useController('player_panel');
+  h.press(83);
+  assert.equal(h.subtitleTitle(), 'Русские: полные');
+  h.chooseSubtitle('SRT: полные');
+  assert.ok(button.hasClass('hide'), 'a track without a signs counterpart hides the button');
+  h.press(83);
+  assert.equal(h.subtitleTitle(), 'SRT: полные');
+});
+
+test('plain-text tracks pair by language and the group in their name', async t => {
+  const tracks = [track('audio', 0, 'Japanese', 'ja'), track('subtitle', 0, 'Надписи'), track('subtitle', 1, 'Full [Erai-raws]', 'en'),
+    track('subtitle', 2, 'English', 'en'), track('subtitle', 3, 'Signs [Erai-raws]', 'en'), track('subtitle', 4, 'Русские', 'ru')];
+  const h = harness(t);
+  h.start(1, 'abc', true);
+  await h.probe(tracks);
+  h.emitSubtitles(tracks, false, true);
+  h.chooseSubtitle('Надписи');
+  h.press(83);
+  assert.equal(h.subtitleTitle(), 'Русские');
+  h.chooseSubtitle('Signs [Erai-raws]');
+  h.press(83);
+  assert.equal(h.subtitleTitle(), 'Full [Erai-raws]', 'the same group, not the nearer English track');
+  h.chooseSubtitle('English');
+  h.press(83);
+  assert.equal(h.subtitleTitle(), 'Signs [Erai-raws]');
 });

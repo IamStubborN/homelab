@@ -481,13 +481,18 @@
       return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
     }
 
+    var LANGUAGE_ALIASES = {rus: 'ru', eng: 'en', jpn: 'ja', deu: 'de', ger: 'de', fra: 'fr', fre: 'fr', spa: 'es', ita: 'it', ukr: 'uk', por: 'pt'};
+
+    function languageCode(value) {
+      var language = normalized(value);
+      return LANGUAGE_ALIASES[language] || language;
+    }
+
     function identity(track) {
-      var language = normalized(track.language);
-      var aliases = {rus: 'ru', eng: 'en', jpn: 'ja', deu: 'de', ger: 'de', fra: 'fr', fre: 'fr', spa: 'es', ita: 'it', ukr: 'uk', por: 'pt'};
       // Lampa rewrites `title` with menu numbering; it is not track metadata.
       return {
         title: normalized(track.gstTitle === undefined ? track.label : track.gstTitle),
-        language: aliases[language] || language,
+        language: languageCode(track.language),
         external: Boolean(track.external)
       };
     }
@@ -538,6 +543,7 @@
         else active.work.voiceovers = active.previousTracks;
       }
       active = null;
+      updateSignsToggle();
     }
 
     function ownStream(state, url) {
@@ -1287,6 +1293,7 @@
       Lampa.PlayerVideo.subsview(true);
       // The menu's choice is remembered from this list.
       if (state.subtitles) state.subtitles = state.subtitles.map(function (sub) { return sub === item ? original : sub; });
+      updateSignsToggle();
     }
 
     function defineMode(state, item) {
@@ -1350,6 +1357,8 @@
         // A reload brings new hls.js tracks; the item stays the same.
         item.index = original.index;
         item.label = item.homelabLabel = subtitleLabel(sub.title, sub.language, false);
+        item.homelabSigns = signsTitle(sub.title);
+        item.homelabLanguage = sub.language || '';
         // Choices are remembered by GST's name, which a choice made before
         // this probe arrived also used.
         item.gstTitle = original.label;
@@ -1372,10 +1381,15 @@
       rus: 'Русские', ru: 'Русские', eng: 'Английские', en: 'Английские', jpn: 'Японские', ja: 'Японские',
       ukr: 'Украинские', uk: 'Украинские'
     };
+    function signsTitle(title) {
+      title = String(title || '');
+      // Full subtitles that mention signs ("Full + Signs") are still full.
+      return !title.match(FULL_WORDS) && !!title.match(SIGNS_WORDS);
+    }
+
     function subtitleLabel(title, language, external, signs) {
       title = String(title || '').replace(/["'«»]/g, '').trim();
-      // Full subtitles that mention signs ("Full + Signs") are still full.
-      if (signs === undefined) signs = !title.match(FULL_WORDS) && !!title.match(SIGNS_WORDS);
+      if (signs === undefined) signs = signsTitle(title);
       var lang = LANGUAGES[String(language || '').toLowerCase()] || '';
       var group = title.replace(NOISE_WORDS, '$1').replace(/[\[\]()]/g, ' ')
         .replace(/^[\s\-_.,:;|/+&]+|[\s\-_,:;|/+&]+$/g, '').replace(/\s+/g, ' ');
@@ -1411,7 +1425,7 @@
             index: 1000 + number * 2 + (signs ? 1 : 0), external: true, language: sub.language || '',
             label: subtitleLabel(sub.title, sub.language, true, signs),
             homelabLabel: subtitleLabel(sub.title, sub.language, true, signs),
-            homelabAss: {url: base + sub.file + '/raw', fonts: fonts, signs: signs}
+            homelabAss: {url: base + sub.file + '/raw', fonts: fonts, signs: signs}, homelabSigns: signs
           }));
         });
       });
@@ -1436,7 +1450,7 @@
         return sub.index !== -1 && (!sub.kind || sub.kind === 'subtitles' || sub.kind === 'captions') &&
           ['disabled', 'hidden', 'showing'].indexOf(sub.mode) !== -1;
       });
-      if (!subtitles.length) return;
+      if (!subtitles.length) return updateSignsToggle();
       state.subtitles = subtitles;
       var preference = state.preferences.subtitles || state.restoreSubtitle;
       if (preference) {
@@ -1457,6 +1471,94 @@
         Lampa.PlayerVideo.subsview(Boolean(selected));
         delete state.restoreSubtitle;
       }
+      updateSignsToggle();
+    }
+
+    // One press switches between signs only and full subtitles of the same
+    // release: the other item of an external file, or the embedded track of
+    // the same language that covers the other part.
+    function subtitleSigns(item) {
+      return item.homelabSigns !== undefined ? item.homelabSigns : signsTitle(item.label);
+    }
+
+    function subtitleLanguage(item) {
+      return languageCode(item.homelabLanguage !== undefined ? item.homelabLanguage : item.language || item.lang);
+    }
+
+    function subtitleFile(item) {
+      return item.homelabAss && item.homelabAss.url || null;
+    }
+
+    // "AniLibria" of "AniLibria: надписи".
+    function subtitleGroup(item) {
+      var label = item.homelabLabel || subtitleLabel(item.label, subtitleLanguage(item), false);
+      return label.slice(0, label.lastIndexOf(': '));
+    }
+
+    function showingSubtitle(state) {
+      return (state.subtitles || []).filter(function (sub) { return sub.mode === 'showing'; })[0] || null;
+    }
+
+    function counterpart(state, current) {
+      var list = state.subtitles || [];
+      var at = list.indexOf(current);
+      if (at === -1) return null;
+      var signs = subtitleSigns(current);
+      var file = subtitleFile(current);
+      var candidates = list.filter(function (sub) {
+        if (sub === current || subtitleSigns(sub) === signs || subtitleFile(sub) !== file) return false;
+        return file || subtitleLanguage(sub) === subtitleLanguage(current);
+      });
+      var group = subtitleGroup(current);
+      var same = candidates.filter(function (sub) { return subtitleGroup(sub) === group; });
+      // Of several, the nearest in the menu: a release lists its pair together.
+      return (same.length ? same : candidates).reduce(function (best, sub) {
+        return !best || Math.abs(list.indexOf(sub) - at) < Math.abs(list.indexOf(best) - at) ? sub : best;
+      }, null);
+    }
+
+    function toggleSigns() {
+      var state = active;
+      if (!state || Lampa.Player.playdata() !== state.work) return;
+      var target = counterpart(state, showingSubtitle(state));
+      if (!target) return;
+      // The steps of Lampa's subtitle menu: its subsview event remembers the choice.
+      (state.subtitleList || []).concat(state.subtitles).forEach(function (sub) {
+        if (sub === target) return;
+        sub.mode = 'disabled';
+        sub.selected = false;
+      });
+      target.mode = 'showing';
+      target.selected = true;
+      Lampa.PlayerPanel.listener.send('subsview', {status: true});
+      if (Lampa.Noty) Lampa.Noty.show('Субтитры: ' + target.label);
+    }
+
+    // A panel button beside the subtitle menu, shown while the track on
+    // screen has a counterpart. Lampa's controller and its mobile "more"
+    // menu pick up any `.button.selector` with a tooltip.
+    var signsButton = null;
+
+    function signsToggleButton() {
+      if (signsButton) return signsButton;
+      var jq = window.jQuery;
+      var panel = jq && Lampa.PlayerPanel.render && Lampa.PlayerPanel.render();
+      var menu = panel && panel.find('.player-panel__subs');
+      if (!menu || !menu.length) return null;
+      signsButton = jq('<div class="player-panel__homelab-signs button selector hide"></div>');
+      signsButton.on('hover:enter', toggleSigns);
+      menu.after(signsButton);
+      return signsButton;
+    }
+
+    function updateSignsToggle() {
+      var button = signsToggleButton();
+      if (!button) return;
+      var state = active && Lampa.Player.playdata() === active.work ? active : null;
+      var current = state && showingSubtitle(state);
+      var target = current && counterpart(state, current);
+      button.toggleClass('hide', !target);
+      if (target) button.html((subtitleSigns(current) ? 'Надп.' : 'Полн.') + '<div class="tooltip">Надписи / полные (S)</div>');
     }
 
     function adoptSubtitles(state) {
@@ -1683,13 +1785,21 @@
     });
     Lampa.PlayerPanel.listener.follow('subsview', function (event) {
       if (!active || Lampa.Player.playdata() !== active.work) return;
+      updateSignsToggle();
       if (!event.status) {
         report('subtitle-switch', {auto: false, off: true});
         return remember(active, 'subtitles', {off: true});
       }
-      var selected = (active.subtitles || []).find(function (sub) { return sub.mode === 'showing'; });
+      var selected = showingSubtitle(active);
       if (selected) report('subtitle-switch', {auto: false, track: selected.label});
       if (selected) remember(active, 'subtitles', identity(selected));
+    });
+    // S on a keyboard does what the panel button does, while the player has the controls.
+    if (Lampa.Keypad && Lampa.Keypad.listener) Lampa.Keypad.listener.follow('keydown', function (event) {
+      var key = event.event;
+      if (event.code !== 83 || !event.enabled || !key || key.metaKey || key.ctrlKey || key.altKey) return;
+      var controller = Lampa.Controller.enabled && Lampa.Controller.enabled();
+      if (controller && /^player(_panel|_rewind)?$/.test(controller.name)) toggleSigns();
     });
     Lampa.PlayerVideo.listener.follow('pause', function () {
       var work = Lampa.Player.playdata();
@@ -1713,7 +1823,8 @@
       pausedWork = null;
       clear();
     });
-    Lampa.HomelabGstAudio = {installCurrent: installCurrent};
+    Lampa.HomelabGstAudio = {installCurrent: installCurrent, toggleSigns: toggleSigns};
+    updateSignsToggle();
   }
 
   installGstAudio();

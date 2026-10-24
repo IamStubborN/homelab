@@ -121,6 +121,14 @@ WebVTT of some SRT streams comes out empty); the plugin styles it from Lampa's
 subtitle size, stroke and backdrop settings. Lampa's subtitle delay applies to
 every drawn track.
 
+While a track that has a counterpart is on screen, the player panel shows a
+`Надп.`/`Полн.` button next to the subtitle menu (`S` on a keyboard does the
+same). One press switches between signs only and full subtitles of the same
+release: the other item of an external file, or the embedded track of the same
+language (the same group first, else the nearest in the menu). It works like a
+menu choice, so the new track is remembered for the torrent, and a notice names
+it. Use it when a voice-over leaves parts untranslated.
+
 Fonts a release attaches or ships are also copied once, by content hash, into
 `extaudio-fonts/` (ignored; `FONT_LIBRARY_DIR`, capped by
 `FONT_LIBRARY_MAX_MB`). A release that names a font without attaching it gets

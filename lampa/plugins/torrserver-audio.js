@@ -989,6 +989,7 @@
         console.warn('Homelab ASS:', error && error.message);
         report('ass-failed', {track: item.label, reason: error && error.message}, state.work);
         hideAss(state, 'failed');
+        updateSignsToggle();
         Lampa.Noty.show('Не удалось показать ASS-субтитры');
       });
     }
@@ -1482,7 +1483,8 @@
     }
 
     function subtitleLanguage(item) {
-      return languageCode(item.homelabLanguage !== undefined ? item.homelabLanguage : item.language || item.lang);
+      var language = languageCode(item.homelabLanguage !== undefined ? item.homelabLanguage : item.language || item.lang);
+      return language === 'und' ? '' : language;
     }
 
     function subtitleFile(item) {
@@ -1511,17 +1513,30 @@
       });
       var group = subtitleGroup(current);
       var same = candidates.filter(function (sub) { return subtitleGroup(sub) === group; });
+      // Without a language only the same group is known to be the same release.
+      if (!file && !subtitleLanguage(current)) candidates = same;
       // Of several, the nearest in the menu: a release lists its pair together.
       return (same.length ? same : candidates).reduce(function (best, sub) {
         return !best || Math.abs(list.indexOf(sub) - at) < Math.abs(list.indexOf(best) - at) ? sub : best;
       }, null);
     }
 
+    // A second press returns to the track the first one came from.
+    function toggleTarget(state, current) {
+      var origin = state.signsOrigin;
+      if (origin && origin.to === current && (state.subtitles || []).indexOf(origin.from) !== -1) return origin.from;
+      return counterpart(state, current);
+    }
+
+    var toggling = false;
+
     function toggleSigns() {
       var state = active;
       if (!state || Lampa.Player.playdata() !== state.work) return;
-      var target = counterpart(state, showingSubtitle(state));
+      var current = showingSubtitle(state);
+      var target = current && toggleTarget(state, current);
       if (!target) return;
+      state.signsOrigin = {from: current, to: target};
       // The steps of Lampa's subtitle menu: its subsview event remembers the choice.
       (state.subtitleList || []).concat(state.subtitles).forEach(function (sub) {
         if (sub === target) return;
@@ -1530,7 +1545,8 @@
       });
       target.mode = 'showing';
       target.selected = true;
-      Lampa.PlayerPanel.listener.send('subsview', {status: true});
+      toggling = true;
+      try { Lampa.PlayerPanel.listener.send('subsview', {status: true}); } finally { toggling = false; }
       if (Lampa.Noty) Lampa.Noty.show('Субтитры: ' + target.label);
     }
 
@@ -1538,6 +1554,8 @@
     // screen has a counterpart. Lampa's controller and its mobile "more"
     // menu pick up any `.button.selector` with a tooltip.
     var signsButton = null;
+    var SIGNS_ICON = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">' +
+      '<path d="M4 8h13l-3-3M20 16H7l3 3"/></svg>';
 
     function signsToggleButton() {
       if (signsButton) return signsButton;
@@ -1556,9 +1574,10 @@
       if (!button) return;
       var state = active && Lampa.Player.playdata() === active.work ? active : null;
       var current = state && showingSubtitle(state);
-      var target = current && counterpart(state, current);
+      var target = current && toggleTarget(state, current);
       button.toggleClass('hide', !target);
-      if (target) button.html((subtitleSigns(current) ? 'Надп.' : 'Полн.') + '<div class="tooltip">Надписи / полные (S)</div>');
+      // Lampa's mobile "more" menu takes each button's icon from its svg.
+      if (target) button.html(SIGNS_ICON + (subtitleSigns(current) ? 'Надп.' : 'Полн.') + '<div class="tooltip">Надписи / полные (S)</div>');
     }
 
     function adoptSubtitles(state) {
@@ -1791,7 +1810,7 @@
         return remember(active, 'subtitles', {off: true});
       }
       var selected = showingSubtitle(active);
-      if (selected) report('subtitle-switch', {auto: false, track: selected.label});
+      if (selected) report('subtitle-switch', {auto: false, track: selected.label, via: toggling ? 'toggle' : null});
       if (selected) remember(active, 'subtitles', identity(selected));
     });
     // S on a keyboard does what the panel button does, while the player has the controls.

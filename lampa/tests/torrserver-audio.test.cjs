@@ -1848,15 +1848,16 @@ test('one press switches an external ASS between signs and full and remembers th
   h.chooseSubtitle('YakuSub Studio: надписи (внешние)');
   await h.settle();
   assert.ok(!button.hasClass('hide'));
-  assert.match(button.content, /^Надп\./);
+  assert.match(button.content, /<\/svg>Надп\./);
   button.trigger('hover:enter');
   await h.settle();
   assert.equal(h.subtitleTitle(), 'YakuSub Studio: полные (внешние)');
   assert.deepEqual(Array.from(h.subtitleList().filter(item => item.selected), item => item.label), ['YakuSub Studio: полные (внешние)']);
   assert.equal(h.notices.at(-1), 'Субтитры: YakuSub Studio: полные (внешние)');
-  assert.match(button.content, /^Полн\./);
   assert.ok(FakeAss.instances[0].destroyed && !FakeAss.instances[1].destroyed);
-  assert.equal(h.logs.filter(event => event.e === 'subtitle-switch').at(-1).track, 'YakuSub Studio: полные (внешние)');
+  const logged = h.logs.filter(event => event.e === 'subtitle-switch').at(-1);
+  assert.deepEqual([logged.track, logged.via], ['YakuSub Studio: полные (внешние)', 'toggle']);
+  assert.match(button.content, /^<svg[^>]*>.*<\/svg>Полн\./, 'an icon for the mobile menu, then the label');
   h.start(14, 'abc', true);
   await h.probe([japaneseAAC]);
   await h.settle();
@@ -1913,4 +1914,50 @@ test('plain-text tracks pair by language and the group in their name', async t =
   h.chooseSubtitle('English');
   h.press(83);
   assert.equal(h.subtitleTitle(), 'Signs [Erai-raws]');
+});
+
+test('language-less tracks pair only within their group', async t => {
+  const tracks = [track('audio', 0, 'Japanese', 'ja'), track('subtitle', 0, 'Signs', ''), track('subtitle', 1, 'Полные', 'und'),
+    track('subtitle', 2, 'Надписи [AniLibria]', ''), track('subtitle', 3, 'Полные [AniLibria]', '')];
+  const h = harness(t);
+  h.start(1, 'abc', true);
+  await h.probe(tracks);
+  h.emitSubtitles(tracks, false, true);
+  h.chooseSubtitle('Signs');
+  assert.ok(h.signsButton().hasClass('hide'), 'two groups of unknown language are not one release');
+  h.press(83);
+  assert.equal(h.subtitleTitle(), 'Signs');
+  h.chooseSubtitle('Надписи [AniLibria]');
+  h.press(83);
+  assert.equal(h.subtitleTitle(), 'Полные [AniLibria]');
+});
+
+test('a second press returns to the track the first came from', async t => {
+  const tracks = [track('audio', 0, 'Japanese', 'ja'), track('subtitle', 0, 'Full [Crunchyroll]', 'en'),
+    track('subtitle', 1, 'Signs [Erai-raws]', 'en'), track('subtitle', 2, 'Full [Erai-raws]', 'en')];
+  const h = harness(t);
+  h.start(1, 'abc', true);
+  await h.probe(tracks);
+  h.emitSubtitles(tracks, false, true);
+  h.chooseSubtitle('Full [Crunchyroll]');
+  h.press(83);
+  assert.equal(h.subtitleTitle(), 'Signs [Erai-raws]');
+  h.press(83);
+  assert.equal(h.subtitleTitle(), 'Full [Crunchyroll]', 'back where it started, not to the Erai-raws full');
+  h.chooseSubtitle('Signs [Erai-raws]');
+  h.press(83);
+  assert.equal(h.subtitleTitle(), 'Full [Erai-raws]', 'a menu choice starts over from its own counterpart');
+});
+
+test('a failed external ASS hides the switch', async t => {
+  const h = harness(t, new Map(), { ass: assLookup, raw: {} });
+  const button = h.signsButton();
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  h.chooseSubtitle('YakuSub Studio: надписи (внешние)');
+  assert.ok(!button.hasClass('hide'));
+  await h.settle();
+  assert.equal(h.subtitleTitle(), null);
+  assert.ok(button.hasClass('hide'));
 });

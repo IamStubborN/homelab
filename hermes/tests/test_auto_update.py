@@ -52,6 +52,7 @@ class FakeHost:
         self.healthy_after_up = True
         self.scan_result = (0, "")
         self.after_up = None
+        self.stop_effect = None
         self.hashes = {}
         self.images = {PINNED}
         self.containers = {}
@@ -67,7 +68,8 @@ class FakeHost:
                 directory.mkdir(parents=True, exist_ok=True)
             (profile / "state.db").write_bytes(b"before")
             (profile / "config.base.yaml").write_text("_config_version: 41\n", encoding="utf-8")
-            (profile / "gateway_state.json").write_text('{"active_agents": 0}', encoding="utf-8")
+            (profile / "gateway_state.json").write_text(
+                '{"active_agents": 0, "platforms": {"telegram": {"state": "connected"}}}', encoding="utf-8")
             (profile / "tmp" / "scratch").write_text("temporary", encoding="utf-8")
             (profile / ".cache" / "model.bin").write_text("cached", encoding="utf-8")
             (memory / "MEMORY.md").write_text("remembered", encoding="utf-8")
@@ -79,7 +81,8 @@ class FakeHost:
                 "Image": "sha256:" + "1" * 64,
                 "Config": {
                     "Image": PINNED,
-                    "Env": ["PATH=/usr/bin", f"TELEGRAM_HOME_CHANNEL={name}"],
+                    "Env": ["PATH=/usr/bin", f"TELEGRAM_HOME_CHANNEL={name}",
+                            "HERMES_GATEWAY_BOOTSTRAP_STATE=running"],
                     "Labels": {"com.docker.compose.config-hash": f"hash-{name}"},
                 },
                 "State": {"Health": {"Status": "healthy"}},
@@ -146,6 +149,8 @@ class FakeHost:
 
     def stop(self):
         self.calls.append(("stop",))
+        if self.stop_effect:
+            self.stop_effect()
 
     def start(self):
         self.calls.append(("start",))
@@ -233,6 +238,87 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(self.run_updater(), 1)
         self.assertIn("не завершено", self.host.messages[0])
         self.assertEqual(self.host.calls, [])
+
+    def test_interrupted_snapshot_restarts_the_agents(self):
+        (self.state / "state.json").write_text(json.dumps({"phase": "snapshot"}))
+        self.assertEqual(self.run_updater(), 1)
+        self.assertIn(("docker", "start"), self.host.calls)
+        self.assertNotIn("phase", self.saved_state())
+        self.assertIn("агенты снова запущены", self.host.messages[0])
+
+    def test_interrupted_apply_is_rolled_back_without_rejecting_the_digest(self):
+        def killed(host):
+            raise KeyboardInterrupt  # stands in for SIGKILL: nothing in the run handles it
+
+        self.host.after_up = killed
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_updater()
+        self.assertEqual(self.saved_state()["phase"], "apply")
+        self.host.after_up = None
+        self.assertEqual(self.run_updater(), 1)
+        state = self.saved_state()
+        self.assertNotIn("phase", state)
+        self.assertNotIn("failed_digest", state)
+        self.assertEqual(self.env_lines(), ["WIKI_ROOT=/srv/wiki"])
+        self.assertEqual((self.host.profile("hermes-primary") / "state.db").read_bytes(), b"before")
+        self.assertIn("Повторю следующей ночью", self.host.messages[-1])
+
+    def test_unexpected_error_during_restore_is_reported(self):
+        self.host.healthy_after_up = False
+        original = updater.restore_volume
+
+        def broken(*args):
+            raise EOFError("truncated archive")
+
+        updater.restore_volume = broken
+        self.addCleanup(setattr, updater, "restore_volume", original)
+        self.assertEqual(self.run_updater(), 1)
+        self.assertEqual(self.saved_state()["phase"], "rollback-failed")
+        self.assertIn("откат не удались", self.host.messages[-1])
+
+    def test_unexpected_error_during_snapshot_restarts_the_agents(self):
+        def broken():
+            raise EOFError("disk vanished")
+
+        self.host.stop_effect = broken
+        self.assertEqual(self.run_updater(), 1)
+        self.assertIn(("docker", "start"), self.host.calls)
+        self.assertNotIn("phase", self.saved_state())
+        self.assertIn("снимок данных не удался", self.host.messages[0])
+
+    def test_crash_outside_a_guarded_step_is_reported(self):
+        self.host.compose_hash = lambda service: (_ for _ in ()).throw(ValueError("bad compose"))
+        self.assertEqual(self.run_updater(), 1)
+        self.assertIn("автообновление упало (ValueError: bad compose)", self.host.messages[0])
+
+    def test_pull_failure_retries_the_digest_next_night(self):
+        self.host.pull = lambda ref: (_ for _ in ()).throw(updater.UpdateError("rate limited"))
+        self.assertEqual(self.run_updater(), 1)
+        self.assertFalse((self.state / "state.json").exists())
+        self.assertIn("повторю следующей ночью", self.host.messages[0])
+
+    def test_canary_crash_that_is_not_a_verdict_is_retried(self):
+        self.host.canary = lambda name, args: (_ for _ in ()).throw(OSError("docker gone"))
+        self.assertEqual(self.run_updater(), 1)
+        self.assertNotIn("failed_digest", self.saved_state() if (self.state / "state.json").exists() else {})
+        self.assertIn("Повторю следующей ночью", self.host.messages[0])
+
+    def test_canary_only_stops_before_the_agents(self):
+        updater_run = updater.Updater(self.host, self.host.root, self.state, canary_only=True)
+        self.assertEqual(updater_run.run(), 0)
+        self.assertIn(("canary", "hermes-canary-hermes-primary"), self.host.calls)
+        self.assertNotIn(("stop",), self.host.calls)
+        self.assertEqual(self.env_lines(), ["WIKI_ROOT=/srv/wiki"])
+
+    def test_candidate_offline_in_telegram_is_rolled_back(self):
+        def offline(host):
+            path = host.profile("hermes-secondary") / "gateway_state.json"
+            path.write_text('{"active_agents": 0, "platforms": {"telegram": {"state": "retrying"}}}')
+
+        self.host.after_up = offline
+        self.assertEqual(self.run_updater(), 1)
+        self.assertEqual(self.saved_state()["failed_digest"], NEW_DIGEST)
+        self.assertIn("откатил", self.host.messages[0])
 
     def test_failed_canary_marks_digest_and_keeps_current_version(self):
         self.host.canary_code = 1
@@ -343,6 +429,7 @@ class AutoUpdateTests(unittest.TestCase):
             self.assertIn("tools:/opt/tools:ro", args)
             env = pathlib.Path(args[args.index("--env-file") + 1]).read_text()
             self.assertNotIn("PATH=", env)
+            self.assertNotIn("HERMES_GATEWAY_BOOTSTRAP_STATE", env)
 
         for effect, expected in ((leak, 1), (backup, 1), (clean, 0)):
             with self.subTest(effect=effect.__name__):
@@ -381,6 +468,20 @@ class FilesystemTests(unittest.TestCase):
             self.assertEqual(os.stat(source / "sessions").st_mode & 0o777, 0o700)
             self.assertEqual((source / "home" / ".cache" / "blob").read_text(), "cache")
             self.assertEqual((root / "displaced" / "sessions" / "b.json").read_text(), "new")
+
+    def test_repeated_restore_keeps_every_displaced_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source, archive, displaced = root / "volume", root / "volume.tar.gz", root / "displaced" / "volume"
+            source.mkdir()
+            (source / "state.db").write_text("snapshot")
+            updater.snapshot_volume(source, archive)
+            for text in ("first attempt", "second attempt"):
+                (source / "state.db").write_text(text)
+                updater.restore_volume(source, archive, displaced)
+            self.assertEqual((source / "state.db").read_text(), "snapshot")
+            self.assertEqual((displaced / "state.db").read_text(), "first attempt")
+            self.assertEqual((root / "displaced" / "volume.2" / "state.db").read_text(), "second attempt")
 
     def test_env_value_is_set_replaced_and_removed_in_place(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -463,7 +564,8 @@ class ConfigMigrationEntrypointTests(unittest.TestCase):
         subprocess.run([sys.executable, str(ROOT / "scripts/merge_hermes_config.py"),
                         str(managed), str(root / "none.yaml"), str(base), "--sanitize-health"], check=True)
         (persistent / ".env").write_text("OPENROUTER_API_KEY=kept\n")
-        environment = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+        environment = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                       "TELEGRAM_BOT_TOKEN": "exported-secret"}
         result = subprocess.run(
             ["sh", "-c", self.function("migrate_hermes_config") + '\nmigrate_hermes_config "$@"', "probe",
              sys.executable, str(migrator), str(ROOT / "scripts/merge_hermes_config.py"), str(managed),
@@ -475,6 +577,7 @@ class ConfigMigrationEntrypointTests(unittest.TestCase):
 
     MIGRATOR = (
         "import os, pathlib, re\n"
+        "assert 'TELEGRAM_BOT_TOKEN' not in os.environ\n"
         "home = pathlib.Path(os.environ['HERMES_HOME'])\n"
         "config = home / 'config.yaml'\n"
         "for name in ('config.yaml', '.env'):\n"

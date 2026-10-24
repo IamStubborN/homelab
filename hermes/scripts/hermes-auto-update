@@ -7,7 +7,8 @@ them, snapshot their persistent volumes, select the candidate through the
 deployment's root `.env` (`HERMES_IMAGE`), recreate only the two agents and
 require them to become healthy without migration backups or persisted runtime
 secrets. Any failure after the snapshot restores the previous image and data.
-Reports go to Telegram through the disk-watchdog bot. DRY_RUN=1 only reports.
+Reports go to Telegram through the disk-watchdog bot. DRY_RUN=1 only reports;
+CANARY_ONLY=1 pulls and checks the candidate, then stops before the agents.
 """
 
 from __future__ import annotations
@@ -19,9 +20,11 @@ import pathlib
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.request
 
@@ -35,6 +38,7 @@ ENV_KEY = "HERMES_IMAGE"
 START_WINDOW = 20 * 60          # no snapshot/apply starts later than this
 IDLE_CHECKS = 3                 # consecutive idle samples, one per minute
 HEALTH_TIMEOUT = 420
+STABLE_FOR = 60                 # a healthy candidate must not restart for this long
 CANARY_TIMEOUT = 600
 KEEP_GENERATIONS = 3
 MAX_SNAPSHOT_BYTES = 6 * 1024**3
@@ -83,6 +87,14 @@ exit "$found"
 
 class UpdateError(Exception):
     pass
+
+
+class CandidateRejected(UpdateError):
+    """The candidate itself failed a check, so its digest is not retried."""
+
+
+def terminated(signum, frame):
+    raise UpdateError("terminated by systemd")
 
 
 def log(message: str) -> None:
@@ -166,6 +178,7 @@ class Host:
         return result.returncode, result.stdout
 
     def canary(self, name: str, args: list[str]) -> tuple[int, str]:
+        self.run("docker", "rm", "-f", name, check=False)
         try:
             result = self.run("docker", "run", "--rm", "--name", name, *args,
                               check=False, timeout=CANARY_TIMEOUT)
@@ -201,15 +214,24 @@ class Host:
 # ---------------------------------------------------------------- filesystem
 
 def write_atomic(path: pathlib.Path, text: str, mode=0o600, owner=None) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    with open(temporary, "w", encoding="utf-8") as stream:
-        stream.write(text)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.chmod(temporary, mode)
-    if owner is not None:
-        os.chown(temporary, *owner)
-    os.replace(temporary, path)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, mode)
+        if owner is not None:
+            os.chown(temporary, *owner)
+        os.replace(temporary, path)
+    except BaseException:
+        pathlib.Path(temporary).unlink(missing_ok=True)
+        raise
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def read_env_value(path: pathlib.Path, key: str) -> str | None:
@@ -255,11 +277,15 @@ def snapshot_volume(source: pathlib.Path, archive: pathlib.Path, excludes=()) ->
 
 
 def restore_volume(source: pathlib.Path, archive: pathlib.Path, displaced: pathlib.Path) -> None:
-    """Replace a stopped volume's contents with its archive; keep the old tree aside."""
+    """Replace a stopped volume's contents with its archive; keep the old tree aside.
+
+    A repeated restore never overwrites an earlier displaced tree."""
     displaced.parent.mkdir(parents=True, exist_ok=True)
+    base, attempt = displaced, 1
+    while displaced.exists():
+        attempt += 1
+        displaced = base.with_name(f"{base.name}.{attempt}")
     if source.exists():
-        if displaced.exists():
-            shutil.rmtree(displaced)
         os.rename(source, displaced)
     source.mkdir(mode=0o700)
     with tarfile.open(archive, "r:gz") as tar:
@@ -302,8 +328,9 @@ def find_secret(root: pathlib.Path, values: list[bytes]) -> list[str]:
 # ---------------------------------------------------------------- updater
 
 class Updater:
-    def __init__(self, host: Host, root=ROOT, state_dir=STATE, dry_run=False):
+    def __init__(self, host: Host, root=ROOT, state_dir=STATE, dry_run=False, canary_only=False):
         self.host, self.root, self.state_dir, self.dry_run = host, pathlib.Path(root), pathlib.Path(state_dir), dry_run
+        self.canary_only = canary_only
         self.state_file = self.state_dir / "state.json"
         self.state: dict = {}
         self.deadline = 0.0
@@ -360,18 +387,36 @@ class Updater:
                 self.host.sleep(60)
         return True
 
-    def healthy(self, image: str) -> bool:
+    def running(self, image: str, telegram: bool) -> dict | None:
+        """Restart counts when every agent runs `image` healthy (and online in Telegram)."""
+        try:
+            states = [self.host.inspect(name) for name in SERVICES]
+        except (UpdateError, IndexError, ValueError):
+            return None
+        for container in states:
+            if container["Config"]["Image"] != image or \
+                    (container["State"].get("Health") or {}).get("Status") != "healthy":
+                return None
+            if telegram:
+                path = pathlib.Path(self.mount(container, "/opt/data")["Source"], "gateway_state.json")
+                try:
+                    platform = json.loads(path.read_text()).get("platforms", {}).get("telegram", {})
+                except (OSError, ValueError):
+                    return None
+                if platform.get("state") != "connected":
+                    return None
+        return {c["Name"]: c.get("RestartCount", 0) for c in states}
+
+    def healthy(self, image: str, telegram=True) -> bool:
         end = self.host.now() + HEALTH_TIMEOUT
         while self.host.now() < end:
-            try:
-                states = [self.host.inspect(name) for name in SERVICES]
-            except (UpdateError, IndexError, ValueError):
-                states = []
-            if states and all(
-                c["Config"]["Image"] == image and (c["State"].get("Health") or {}).get("Status") == "healthy"
-                for c in states
-            ):
-                return True
+            counts = self.running(image, telegram)
+            if counts is not None:
+                if not telegram:
+                    return True
+                self.host.sleep(STABLE_FOR)
+                if self.running(image, telegram) == counts:
+                    return True
             self.host.sleep(10)
         return False
 
@@ -423,7 +468,10 @@ class Updater:
                 args += ["-v", f"{path}:{destination}"]
             image_env = set(self.host.image_env(container["Image"]))
             env_file = work / "env"
-            env_file.write_text("".join(f"{line}\n" for line in container["Config"]["Env"] if line not in image_env))
+            # Without the bootstrap seed the gateway slot stays down on the blank canary volume.
+            env_file.write_text("".join(f"{line}\n" for line in container["Config"]["Env"]
+                                        if line not in image_env
+                                        and not line.startswith("HERMES_GATEWAY_BOOTSTRAP_STATE=")))
             env_file.chmod(0o600)
             args += ["--env-file", str(env_file), "--entrypoint", "/usr/local/bin/hermes-home-entrypoint",
                      candidate, "/opt/hermes/.venv/bin/python", "-c", CANARY_PROBE]
@@ -431,12 +479,13 @@ class Updater:
             (work / "output.log").write_text(output)
             marker = [line for line in output.splitlines() if line.startswith("HERMES_CANARY ")]
             if code or not marker:
-                raise UpdateError(f"{name}: bootstrap canary failed (exit {code})")
+                raise CandidateRejected(f"{name}: bootstrap canary failed (exit {code})")
             versions[name] = json.loads(marker[-1].split(" ", 1)[1])
             backups = [p.name for pattern in BACKUP_GLOBS for p in data.glob(pattern)]
             leaks = find_secret(data, synthetic)
             if backups or leaks:
-                raise UpdateError(f"{name}: canary left migration backups or secrets: {len(backups)}/{len(leaks)}")
+                raise CandidateRejected(f"{name}: canary left migration backups or secrets: "
+                                        f"{len(backups)}/{len(leaks)}")
             shutil.rmtree(work)
         return versions
 
@@ -469,19 +518,47 @@ class Updater:
                            generation / "displaced" / volume["name"])
 
     def cleanup(self, keep: str) -> None:
+        """Keep the newest generations, `keep` and any whose rollback failed."""
+        protected = {keep}
+        if self.state.get("phase") == "rollback-failed":
+            protected.add(self.state.get("generation"))
         generations = sorted(p for p in self.state_dir.iterdir() if p.is_dir() and p.name.startswith("20"))
         for path in generations[:-KEEP_GENERATIONS]:
-            if path.name != keep:
+            if path.name not in protected:
                 shutil.rmtree(path, ignore_errors=True)
 
     # main flow --------------------------------------------------------------
     def run(self) -> int:
-        self.load()
-        self.deadline = self.host.now() + START_WINDOW
-        if self.state.get("phase"):
-            self.notify(f"Hermes: предыдущее автообновление не завершено (phase={self.state['phase']}), "
-                        f"нужна ручная проверка ({self.state_dir}).")
+        """Never leave the agents stopped silently: report any unexpected failure."""
+        try:
+            return self.update()
+        except Exception as error:
+            phase = self.state.get("phase")
+            log(f"Update crashed in phase {phase}: {type(error).__name__}: {error}")
+            self.notify(f"Hermes: автообновление упало ({type(error).__name__}: {error}), phase={phase or 'нет'}. "
+                        f"Нужна ручная проверка ({self.state_dir}).")
             return 1
+
+    def recover(self) -> int:
+        """Finish an operation that an earlier run could not (killed or crashed)."""
+        phase = self.state["phase"]
+        if phase == "snapshot":  # nothing was changed yet
+            self.host.run("docker", "start", *SERVICES, check=False)
+            self.phase(None)
+            self.notify("Hermes: прошлое автообновление прервалось во время снимка; агенты снова запущены, "
+                        "обновление не установлено.")
+            return 1
+        if phase in ("apply", "rollback") and self.state.get("candidate"):
+            return self.roll_back(self.state_dir / self.state["generation"],
+                                  [f"прошлый запуск прервался (phase={phase})"], reject=False)
+        self.notify(f"Hermes: предыдущее автообновление не завершено (phase={phase}), "
+                    f"нужна ручная проверка ({self.state_dir}).")
+        return 1
+
+    def update(self) -> int:
+        self.load()
+        if self.state.get("phase"):
+            return 1 if self.dry_run else self.recover()
         try:
             digest = self.host.registry_digest()
         except Exception:
@@ -526,18 +603,31 @@ class Updater:
         env_path = self.root / ".env"
         try:
             self.host.pull(candidate)
+        except Exception as error:  # registry or network: the candidate is not judged
+            shutil.rmtree(generation, ignore_errors=True)
+            self.notify(f"Hermes: не удалось скачать {TAG} ({error}), повторю следующей ночью.")
+            return 1
+        try:
             versions = self.run_canaries(containers, candidate, generation)
-        except (UpdateError, OSError, ValueError, subprocess.SubprocessError) as error:
+        except Exception as error:
+            rejected = isinstance(error, CandidateRejected)
             log(f"Candidate check failed: {error}")
             for copied in generation.glob("canary-*/data"):  # keep output.log only
                 shutil.rmtree(copied, ignore_errors=True)
-            self.state["failed_digest"] = digest
-            self.save()
+            if rejected:
+                self.state["failed_digest"] = digest
+                self.save()
             self.host.remove_image(candidate)
+            self.cleanup(generation.name)
             self.notify(f"Hermes: новая версия {TAG} не прошла проверку ({error}), работает текущая. "
-                        f"Логи: {generation}. {RETRY}")
+                        f"Логи: {generation}. " + (RETRY if rejected else "Повторю следующей ночью."))
             return 1
+        if self.canary_only:
+            log(f"CANARY_ONLY: candidate passed ({versions}); agents untouched.")
+            return 0
 
+        # The start window counts from the checked candidate, not from the pull.
+        self.deadline = self.host.now() + START_WINDOW
         if not self.wait_for_idle(containers):
             busy = self.state.get("busy_nights", 0) + 1
             self.state["busy_nights"] = busy
@@ -554,14 +644,16 @@ class Updater:
         mcp_revision = mcp_schema_revision(schema)
         previous_id = containers[SERVICES[0]]["Image"]
         env_previous = read_env_value(env_path, ENV_KEY)
-        self.state.update(generation=generation.name, previous=previous, env_previous=env_previous)
+        self.state.update(generation=generation.name, previous=previous, env_previous=env_previous,
+                          candidate=candidate)
         volumes = self.volumes(containers)
         self.phase("snapshot")
         try:
             self.snapshot(volumes, generation)
-        except (UpdateError, OSError, subprocess.SubprocessError) as error:
+        except Exception as error:
             self.host.run("docker", "start", *SERVICES, check=False)
             self.phase(None)
+            self.cleanup(generation.name)
             self.notify(f"Hermes: снимок данных не удался ({error}), обновление не установлено. Логи: {generation}")
             return 1
 
@@ -571,47 +663,56 @@ class Updater:
             set_env_value(env_path, ENV_KEY, candidate)
             self.host.compose_up()
             if not self.healthy(candidate):
-                problems.append("агенты не стали healthy")
+                problems.append("агенты не стали healthy, не подключились к Telegram или перезапускаются")
             else:
                 problems = self.post_start_problems()
-        except (UpdateError, OSError, subprocess.SubprocessError) as error:
-            problems.append(str(error))
-        if not problems:
-            self.host.tag(previous_id, ROLLBACK_TAG)  # survives `docker image prune`
-            notices = []
-            if managed is not None and latest != managed and self.state.get("schema_notified") != latest:
-                notices.append(f"со сменой схемы конфигурации {managed}→{latest}: "
-                               "синхронизируй управляемый конфиг в репозитории")
-                self.state["schema_notified"] = latest
-            if self.state.get("mcp_revision") not in (None, mcp_revision):
-                notices.append("ревизия схемы MCP изменилась после прошлого обновления")
-            self.state.update(current=candidate, config_version=latest, mcp_revision=mcp_revision)
-            self.state.pop("failed_digest", None)
-            self.phase(None)
-            self.notify(f"Hermes обновлён до {TAG} ({digest[7:19]})"
-                        + (" " + "; ".join(notices) if notices else "") + ".")
-            self.cleanup(generation.name)
-            return 0
+        except Exception as error:
+            problems.append(f"{type(error).__name__}: {error}")
+        if problems:
+            return self.roll_back(generation, problems)
 
+        self.host.tag(previous_id, ROLLBACK_TAG)  # survives `docker image prune`
+        notices = []
+        if managed is not None and latest != managed and self.state.get("schema_notified") != latest:
+            notices.append(f"со сменой схемы конфигурации {managed}→{latest}: "
+                           "синхронизируй управляемый конфиг в репозитории")
+            self.state["schema_notified"] = latest
+        if self.state.get("mcp_revision") not in (None, mcp_revision):
+            notices.append("ревизия схемы MCP изменилась после прошлого обновления")
+        self.state.update(current=candidate, config_version=latest, mcp_revision=mcp_revision)
+        self.state.pop("failed_digest", None)
+        self.phase(None)
+        self.notify(f"Hermes обновлён до {TAG} ({digest[7:19]})"
+                    + (" " + "; ".join(notices) if notices else "") + ".")
+        self.cleanup(generation.name)
+        return 0
+
+    def roll_back(self, generation: pathlib.Path, problems: list[str], reject=True) -> int:
+        """Restore the snapshot and the previous image; `reject` marks the candidate as failed."""
+        candidate, previous = self.state["candidate"], self.state["previous"]
         log("Apply failed: " + "; ".join(problems))
-        (generation / "problems.log").write_text("\n".join(problems) + "\n")
-        self.state["failed_digest"] = digest
+        with open(generation / "problems.log", "a", encoding="utf-8") as stream:
+            stream.write("\n".join(problems) + "\n")
+        if reject:
+            self.state["failed_digest"] = candidate.split("@", 1)[1]
         self.phase("rollback")
         try:
             self.restore(generation)
-            set_env_value(env_path, ENV_KEY, env_previous)
+            set_env_value(self.root / ".env", ENV_KEY, self.state.get("env_previous"))
             if not self.host.has_image(previous):
                 self.host.pull(previous)
             self.host.compose_up()
-            restored = self.healthy(previous)
-        except (UpdateError, OSError, subprocess.SubprocessError) as error:
-            log(f"Rollback failed: {error}")
+            restored = self.healthy(previous, telegram=False)
+        except Exception as error:
+            log(f"Rollback failed: {type(error).__name__}: {error}")
             restored = False
         self.host.remove_image(candidate)
         if restored:
             self.phase(None)
+            self.cleanup(generation.name)
             self.notify(f"Hermes: новая версия не прошла проверку после запуска ({len(problems)} проблем), "
-                        f"откатил образ и данные на прежние. Логи: {generation}. {RETRY}")
+                        f"откатил образ и данные на прежние. Логи: {generation}. "
+                        + (RETRY if reject else "Повторю следующей ночью."))
             return 1
         self.phase("rollback-failed")
         self.notify("Hermes: обновление и откат не удались, агенты могут не работать. "
@@ -628,7 +729,9 @@ def main() -> int:
         except BlockingIOError:
             log("Another Hermes update is running.")
             return 1
-        return Updater(Host(), dry_run=bool(os.environ.get("DRY_RUN"))).run()
+        signal.signal(signal.SIGTERM, terminated)  # TimeoutStartSec: roll back, do not just die
+        return Updater(Host(), dry_run=bool(os.environ.get("DRY_RUN")),
+                       canary_only=bool(os.environ.get("CANARY_ONLY"))).run()
 
 
 if __name__ == "__main__":

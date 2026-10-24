@@ -119,8 +119,11 @@ Docker host at 02:30 `Europe/Sofia`: before the Lampac update (03:00), the image
 retention observation (03:55) and Watchtower (04:00). It tracks the upstream
 `stable` tag (`HERMES_UPDATE_TAG` overrides it) and:
 
-1. stops with a Telegram alert when the previous run left an unfinished phase
-   or the agents are unhealthy or run different images;
+1. finishes what an interrupted run left: a run killed during the snapshot
+   only restarts the agents, one killed during apply or rollback is rolled back
+   (without marking the digest failed); after a failed rollback it stops with a
+   Telegram alert, as it does when the agents are unhealthy or run different
+   images;
 2. asks Docker Hub for the tag's digest without pulling and does nothing when
    it is the running one or one that already failed here;
 3. refuses, alerting once per reason, while a running agent's Compose
@@ -132,18 +135,20 @@ retention observation (03:55) and Watchtower (04:00). It tracks the upstream
    config base, `.env` and package directories, and no wiki. The official
    bootstrap and config migration must finish, the migrated schema must reach
    the image's latest version, and the canary data must hold no migration
-   backup and no synthetic secret;
+   backup and no synthetic secret. Only such a verdict marks the digest failed;
+   a failed pull or a Docker error is retried the next night;
 5. waits until both gateways report `active_agents: 0` in
    `gateway_state.json` for 3 consecutive minutes (a reply in progress counts;
-   a user typing does not). No snapshot starts after 02:50; a busy night is
-   retried the next night and the third in a row is reported;
+   a user typing does not). The wait ends 20 minutes after the canaries; a busy
+   night is retried the next night and the third in a row is reported;
 6. stops both agents and snapshots their read-write volumes (profile, memory,
    browser) without `tmp/`, `.cache/` and `home/.cache/`, refusing above 6 GiB
    or without twice that space free;
 7. writes `HERMES_IMAGE=<candidate>` to the root `.env`, keeping its other
    lines, mode and owner, and recreates only `hermes-primary` and
    `hermes-secondary` with `--no-deps --no-build --pull never`;
-8. requires both to become healthy within 7 minutes and then scans each
+8. requires both to become healthy and connected to Telegram within 7
+   minutes, without a restart for a further minute, and then scans each
    profile volume (except `tmp/`, a tmpfs that holds the terminal tool's
    environment snapshots and never reaches the disk) for migration backups and
    for the content of every mounted `/run/secrets/*` file.
@@ -158,27 +163,34 @@ contents to `<generation>/displaced/`, restores the snapshot (live caches are
 moved back), restores the previous `HERMES_IMAGE` value, recreates both agents
 and reports the outcome. A failed digest is not retried until upstream moves
 on or `failed_digest` is removed from `/var/lib/hermes-update/state.json`. A
-failed rollback leaves `phase` set and blocks later runs until checked.
+failed rollback leaves `phase` set and blocks later runs until checked. Any
+unexpected error is reported with its phase. The wiki bind mount is not part of
+the snapshot, so a candidate's wiki writes survive a rollback; conversations
+held between apply and rollback stay only in `displaced/`.
 
 Reports go to the disk-watchdog's Telegram bot and chat. The state directory is
 root-owned `0700`, outside Git, and holds private data: snapshots include the
 profiles' persistent credentials. It must share a filesystem with the Docker
 volumes. `DRY_RUN=1` only reports whether an update is due and whether the
-agents are idle; it writes nothing.
+agents are idle; it writes nothing. `CANARY_ONLY=1` pulls the candidate and
+runs the canaries, then stops before touching the agents.
 
 Install as root on the Docker host after deploying this checkout:
 
 ```sh
 cd /home/iamstubborn/homelab/hermes
 DRY_RUN=1 python3 scripts/hermes-auto-update
+CANARY_ONLY=1 python3 scripts/hermes-auto-update
 install -m 0644 hermes-auto-update.service hermes-auto-update.timer /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now hermes-auto-update.timer
 ```
 
 The guarded media-orchestrator deployment uses the same root `.env`, so it keeps
-the selected digest. To return to the reviewed pin, delete the `HERMES_IMAGE`
-line and recreate the two agents in an idle window.
+the selected digest. Removing the `HERMES_IMAGE` line returns to the reviewed
+pin only while the config schema is unchanged; after a schema migration that is
+an in-place downgrade, which is unsupported: restore the update's snapshot
+instead.
 
 ## Operator CLI artifact
 

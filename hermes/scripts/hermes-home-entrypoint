@@ -121,7 +121,9 @@ migrate_hermes_config() {
     if [ -f "$env_file" ]; then
         install -o 10000 -g 10000 -m 0600 "$env_file" "$work/.env"
     fi
-    if HERMES_HOME=$work "$as_hermes" hermes "$python" "$migrator"; then
+    # A clean environment: the secrets exported above never reach the migrator.
+    if env -i PATH="$PATH" HOME="$work" HERMES_HOME="$work" \
+            "$as_hermes" hermes "$python" "$migrator"; then
         if ! cmp -s "$work/config.yaml" "$persistent_base"; then
             "$python" "$merger" "$managed" "$work/config.yaml" "$work/base.yaml" --sanitize-health
             install -o 10000 -g 10000 -m 0640 "$work/base.yaml" "$persistent_base"

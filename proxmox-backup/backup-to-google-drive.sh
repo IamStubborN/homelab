@@ -9,8 +9,10 @@ readonly LOCK_FILE=/run/lock/homelab-google-drive-backup.lock
 readonly RCLONE_BIND=0.0.0.0
 
 exec 9>"${LOCK_FILE}"
-if ! flock -n 9; then
-  echo "Another homelab backup job is already running" >&2
+# The nightly backups run minutes apart: wait for the previous one (or the
+# host update) instead of skipping, up to 30 minutes.
+if ! flock -w 1800 9; then
+  echo "Another homelab backup job held the lock for 30 minutes" >&2
   exit 75
 fi
 

@@ -22,7 +22,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /etc/localtime:/etc/localtime:ro
     # Keep previous images available for rollback after nightly updates.
-    command: ["--label-enable", "--schedule", "0 0 4 * * *", "--cleanup=false", "--include-restarting", "--update-on-start=false"]
+    command: ["--label-enable", "--schedule", "0 45 5 * * *", "--cleanup=false", "--include-restarting", "--update-on-start=false"]
 
 secrets:
   watchtower_notification_url:

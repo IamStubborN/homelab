@@ -1,9 +1,9 @@
 [Unit]
-Description=Observe images before and after the 04:00 Sofia Watchtower update
+Description=Observe images before and after the 05:45 Sofia Watchtower update
 
 [Timer]
-OnCalendar=*-*-* 03:55:00 Europe/Sofia
-OnCalendar=*-*-* 05:00:00 Europe/Sofia
+OnCalendar=*-*-* 05:40:00 Europe/Sofia
+OnCalendar=*-*-* 06:25:00 Europe/Sofia
 AccuracySec=1s
 Persistent=false
 Unit=image-retention.service

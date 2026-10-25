@@ -1,8 +1,9 @@
 # Proxmox host updates
 
-`homelab-host-update.timer` runs at 04:45 `Europe/Sofia`, after Watchtower
-(04:00) and the Docker guest's Ubuntu updates (04:30), inside the nightly
-04:00–05:00 update window described in `watchtower/README.md`.
+`homelab-host-update.timer` runs at 06:50 `Europe/Sofia`, the last job of the
+nightly 04:00–08:00 window described in `watchtower/README.md`: after the
+backups, Watchtower (05:45), the Docker guest's package updates (06:10) and
+OPNsense's firmware update (06:30), so its possible reboot comes last.
 
 The script takes the shared backup lock, finishes any interrupted `dpkg` run,
 and runs `apt-get full-upgrade` with the default answers for configuration
@@ -31,7 +32,8 @@ running one and 7 days old, and only after these checks pass:
 - the EFI partition has at least 200 MiB free;
 - the Docker guest's `apt-daily-upgrade.service` is not running (otherwise it
   reboots the next night);
-- it is still 04:xx.
+- it is still before 07:45, so the reboot and boot check end before the
+  monthly 08:00 backup.
 
 The reboot is scheduled a minute ahead (`shutdown -r +1`), so the unit
 finishes and records success first; `shutdown -c` cancels it.

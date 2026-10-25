@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/usr/local/sbin/homelab-host-update
 # Never kill dpkg mid-upgrade. While this runs it holds the backup lock, so
-# an overrun makes the 05:20 backup skip (exit 75) until the next run.
+# an overrun makes the next night's 04:00 backup skip (exit 75) until the next run.
 TimeoutStartSec=infinity
 # Failures reach the owner through the backup monitor's Telegram alerts.
 ExecStopPost=-/usr/local/libexec/homelab-backup-monitor record host-update

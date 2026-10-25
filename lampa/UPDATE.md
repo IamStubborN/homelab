@@ -7,7 +7,7 @@ pruning or automatic rollback; `auto-update.sh` adds those around it (below).
 ## Automatic nightly update
 
 `lampac-auto-update.timer` runs `auto-update.sh` as root on the Docker host at
-03:00 `Europe/Sofia`, before Watchtower (04:00). It:
+04:40 `Europe/Sofia`, before Watchtower (05:45). It:
 
 1. stops with a Telegram alert when the last operation is unfinished or Lampa
    still runs from a rollback's saved model (reconcile it as described under
@@ -21,8 +21,8 @@ pruning or automatic rollback; `auto-update.sh` adds those around it (below).
    as failed;
 3. waits until Lampa sent under 3 MiB in each of 5 consecutive minutes, then
    runs `stage` and `check`, waits for idle again and runs
-   `apply --maintenance-window`. No build starts later than 03:15 and no
-   apply later than 03:45;
+   `apply --maintenance-window`. No build starts later than 04:55 and no
+   apply later than 05:25;
 4. requires Lampa to answer HTTP within 10 minutes (a new version's first
    start compiles every module, about 5 minutes; the healthcheck's 600s
    `start_period` keeps DeUnhealth from restarting it meanwhile) and then

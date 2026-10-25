@@ -1,7 +1,7 @@
 # Bounded Watchtower image retention
 
 Watchtower keeps `--cleanup=false`, its existing image references, and the
-04:00 `Europe/Sofia` schedule. The separate Python 3 standard-library CLI records
+05:45 `Europe/Sofia` schedule. The separate Python 3 standard-library CLI records
 image IDs actually used by explicitly enrolled, Watchtower-enabled Compose
 services. It retains the current and one previous distinct observed ID per
 service/replica. Histories are independent even when services share repositories;
@@ -56,8 +56,8 @@ Shared executable directories such as `/usr/local/libexec` must remain mode
 the script as 0755, and restrict only the private state directory to 0700
 and its state file to 0600.
 
-The two daily observations bracket the normal update: 03:55 captures the old ID
-before 04:00; 05:00 records the replacement. Initialize before the first update.
+The two daily observations bracket the normal update: 05:40 captures the old ID
+before 05:45; 06:25 records the replacement. Initialize before the first update.
 If an update finishes later, the next observation captures it. Missed observations
 or extra manual updates can leave unknown intermediates; those remain untouched.
 The timer is not a substitute for Watchtower scheduling and does not trigger an
@@ -97,17 +97,20 @@ job into another's window.
 
 | Time | Job |
 | --- | --- |
-| 02:30 | OPNsense firmware auto-update (its cron job; a reboot drops the internet for a few minutes) |
-| 03:00–03:45 | Lampac update when upstream changed and Lampa is idle (`lampa/UPDATE.md`) |
-| 03:55 | Image retention records the running images |
-| 04:00 | Watchtower updates containers |
-| 04:20 | Docker cleanup: untagged images, build cache older than 7 days |
-| 04:30 | Docker host package updates: Ubuntu and Docker CE |
-| 04:45 | Proxmox host updates, reboot for a new kernel (`proxmox-update/`) |
-| 05:00 | Image retention records the replacements |
-| 05:20–08:00 | Backups (see `proxmox-backup/README.md`); JacRed starts no crawls |
+| 04:00–04:45 | Backups (each waits for the previous one): daily OPNsense config (04:00) and app data (04:05), Sunday host config (04:20) and OPNsense VM (04:25); see `proxmox-backup/README.md`. JacRed starts no crawls 04:00–04:59 |
+| 04:40–05:25 | Lampac update when upstream changed and Lampa is idle (`lampa/UPDATE.md`) |
+| 05:40 | Image retention records the running images |
+| 05:45 | Watchtower updates containers |
+| 06:05 | Docker cleanup: untagged images, build cache older than 7 days |
+| 06:10 | Docker host package updates: Ubuntu and Docker CE (a Docker update restarts every container) |
+| 06:25 | Image retention records the replacements |
+| 06:30 | OPNsense firmware auto-update (its cron job; a reboot drops the internet for a few minutes) |
+| 06:50 | Proxmox host updates, reboot for a new kernel before 07:45 (`proxmox-update/`) |
+| first Sunday 08:00 | Monthly Docker guest backup (about an hour, snapshot mode); JacRed starts no crawls on Sundays 08:00–11:59 |
 
-Updates stay inside 04:00–05:00 and finish before the first backup.
+Nobody uses the homelab between 04:00 and 08:00. Backups run first, so they
+copy the last working state; downloads (Lampac, Watchtower, packages) come
+next; the jobs that can drop the internet, OPNsense and Proxmox, come last.
 
 ## Failure notifications
 
@@ -126,10 +129,10 @@ printf 'telegram://%s@telegram?chats=%s&preview=No\n' \
 ## Nightly Docker cleanup
 
 `docker-prune.timer` runs `docker image prune -f` and
-`docker builder prune -f --filter until=168h` at 04:20. Only untagged images
+`docker builder prune -f --filter until=168h` at 06:05. Only untagged images
 that no container (even a stopped one) uses are removed, so tags such as
 `latest` and Lampa's candidate/rollback tags stay. An image Watchtower replaced
-at 04:00 loses its tag and is removed the same night; roll back by pulling the
+at 05:45 loses its tag and is removed the same night; roll back by pulling the
 previous digest (`image-retention.py plan` lists them). Install as root on the
 Docker host:
 
@@ -141,10 +144,10 @@ systemctl enable --now docker-prune.timer
 
 ## Nightly host package updates
 
-Container updates (04:00) and the Docker host's Ubuntu `unattended-upgrades`
+Container updates (05:45) and the Docker host's Ubuntu `unattended-upgrades`
 both run at night, so neither restarts services during the day. Ubuntu's
 `apt-daily-upgrade.timer` defaults to 06:00 UTC plus up to an hour of random
-delay. `apt-daily-upgrade.override.conf` moves it to 04:30 `Europe/Sofia`.
+delay. `apt-daily-upgrade.override.conf` moves it to 06:10 `Europe/Sofia`.
 Install it as root on the Docker host:
 
 ```sh

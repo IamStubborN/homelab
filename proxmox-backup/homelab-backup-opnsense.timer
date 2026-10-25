@@ -2,7 +2,7 @@
 Description=Weekly OPNsense backup to Google Drive
 
 [Timer]
-OnCalendar=Sun *-*-* 07:00:00 Europe/Sofia
+OnCalendar=Sun *-*-* 04:25:00 Europe/Sofia
 Persistent=true
 Unit=homelab-backup@opnsense.service
 

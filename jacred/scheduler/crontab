@@ -17,7 +17,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 45 3 * * 0 /usr/local/bin/run-job.sh maintenance-check http://jacred:9117/cron/maintenance/Check?mode=report 60
 # Resume incomplete checkpoints once nightly; do not add a daytime resume loop.
 10 0 * * 1-6 /usr/local/bin/run-job.sh parseall-resume http://jacred:9117/cron/maintenance/ResumeParseAll 60
-# Sunday resumes after the UTC backup window, not before it overnight.
+# Sunday resumes after the Sunday backup window, not before it overnight.
 10 14 * * 0 /usr/local/bin/run-job.sh parseall-resume http://jacred:9117/cron/maintenance/ResumeParseAll 60
 # Tracker refreshes: cheap recent-page fetches keep daytime search reasonably fresh.
 20 0 * * * /usr/local/bin/run-job.sh rutracker-parse http://jacred:9117/cron/rutracker/parse 3600
@@ -25,27 +25,27 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 35 1 * * 4 /usr/local/bin/run-job.sh kinozal-UpdateTasksParse http://jacred:9117/cron/kinozal/UpdateTasksParse 60
 # Kinozal allows one request a minute (reqMinute: 1), so refresh every six hours.
 48 2,8,14,20 * * * /usr/local/bin/run-job.sh kinozal-parse http://jacred:9117/cron/kinozal/parse 3600
-1 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh rutor-parse http://jacred:9117/cron/rutor/parse 900
+1 0,5,8,12,16,20 * * * /usr/local/bin/run-job.sh rutor-parse http://jacred:9117/cron/rutor/parse 900
 30 0 * * 1 /usr/local/bin/run-job.sh rutor-UpdateTasksParse http://jacred:9117/cron/rutor/UpdateTasksParse 60
 0 1 * * 1 /usr/local/bin/run-job.sh rutor-ParseAllTask http://jacred:9117/cron/rutor/ParseAllTask 60
-10 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh bitru-parse http://jacred:9117/cron/bitru/parse 900
-20 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh nnmclub-parse http://jacred:9117/cron/nnmclub/parse 900
+10 0,5,8,12,16,20 * * * /usr/local/bin/run-job.sh bitru-parse http://jacred:9117/cron/bitru/parse 900
+20 0,5,8,12,16,20 * * * /usr/local/bin/run-job.sh nnmclub-parse http://jacred:9117/cron/nnmclub/parse 900
 30 0 * * 2 /usr/local/bin/run-job.sh nnmclub-UpdateTasksParse http://jacred:9117/cron/nnmclub/UpdateTasksParse 60
 0 1 * * 2 /usr/local/bin/run-job.sh nnmclub-ParseAllTask http://jacred:9117/cron/nnmclub/ParseAllTask 60
 8 2,6,10,14,18 * * * /usr/local/bin/run-job.sh megapeer-parse http://jacred:9117/cron/megapeer/parse 900
 30 0 * * 3 /usr/local/bin/run-job.sh megapeer-UpdateTasksParse http://jacred:9117/cron/megapeer/UpdateTasksParse 60
 0 1 * * 3 /usr/local/bin/run-job.sh megapeer-ParseAllTask http://jacred:9117/cron/megapeer/ParseAllTask 60
-27 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh torrentby-parse http://jacred:9117/cron/torrentby/parse 900
+27 0,5,8,12,16,20 * * * /usr/local/bin/run-job.sh torrentby-parse http://jacred:9117/cron/torrentby/parse 900
 30 0 * * 4 /usr/local/bin/run-job.sh torrentby-UpdateTasksParse http://jacred:9117/cron/torrentby/UpdateTasksParse 60
 0 1 * * 4 /usr/local/bin/run-job.sh torrentby-ParseAllTask http://jacred:9117/cron/torrentby/ParseAllTask 60
-44 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh toloka-parse http://jacred:9117/cron/toloka/parse 900
+44 0,5,8,12,16,20 * * * /usr/local/bin/run-job.sh toloka-parse http://jacred:9117/cron/toloka/parse 900
 30 0 * * 5 /usr/local/bin/run-job.sh toloka-UpdateTasksParse http://jacred:9117/cron/toloka/UpdateTasksParse 60
 0 1 * * 5 /usr/local/bin/run-job.sh toloka-ParseAllTask http://jacred:9117/cron/toloka/ParseAllTask 60
 10 2 * * * /usr/local/bin/run-job.sh mazepa-parse http://jacred:9117/cron/mazepa/parse 2400
 9 2,6,10,14,18 * * * /usr/local/bin/run-job.sh selezen-parse http://jacred:9117/cron/selezen/parse 900
-2 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh animelayer-parse http://jacred:9117/cron/animelayer/parse 900
+2 0,5,8,12,16,20 * * * /usr/local/bin/run-job.sh animelayer-parse http://jacred:9117/cron/animelayer/parse 900
 40 2,8,14,20 * * * /usr/local/bin/run-job.sh rudub-parse "http://jacred:9117/cron/rudub/parse?limit_page=10" 1800
-35 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh subsplease-parse "http://jacred:9117/cron/subsplease/parse?pages=2" 900
+35 0,5,8,12,16,20 * * * /usr/local/bin/run-job.sh subsplease-parse "http://jacred:9117/cron/subsplease/parse?pages=2" 900
 25 2 * * * /usr/local/bin/run-job.sh subsplease-ParseShows "http://jacred:9117/cron/subsplease/ParseShows?limit=200" 5400
 4 2,6,10,14,18 * * * /usr/local/bin/run-job.sh anidub-parse http://jacred:9117/cron/anidub/parse 900
 6 2,6,10,14,18 * * * /usr/local/bin/run-job.sh aniliberty-parse http://jacred:9117/cron/aniliberty/parse 900
@@ -56,7 +56,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 40 2 * * * /usr/local/bin/run-job.sh anistar-parse "http://jacred:9117/cron/anistar/parse?limit_page=3" 900
 45 2 * * * /usr/local/bin/run-job.sh leproduction-parse "http://jacred:9117/cron/leproduction/parse?limit_page=3" 900
 5 3 * * * /usr/local/bin/run-job.sh anifilm-parse http://jacred:9117/cron/anifilm/parse 1800
-29 0,4,8,12,16,20 * * * /usr/local/bin/run-job.sh anibelka-parse http://jacred:9117/cron/anibelka/parse 900
+29 0,5,8,12,16,20 * * * /usr/local/bin/run-job.sh anibelka-parse http://jacred:9117/cron/anibelka/parse 900
 30 0 * * 6 /usr/local/bin/run-job.sh anibelka-UpdateTasksParse http://jacred:9117/cron/anibelka/UpdateTasksParse 60
 0 1 * * 6 /usr/local/bin/run-job.sh anibelka-ParseAllTask http://jacred:9117/cron/anibelka/ParseAllTask 60
 0 2 * * 6 /usr/local/bin/run-job.sh anibelka-ParseLatest http://jacred:9117/cron/anibelka/ParseLatest 900

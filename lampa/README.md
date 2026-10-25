@@ -197,7 +197,7 @@ The derived image is also tagged `latest`, but upstream updates require an
 explicit rebuild. Use the [controlled update workflow](UPDATE.md) to stage a
 separately tagged candidate, check isolated startup, and retain a rollback
 checkpoint before applying it in an idle maintenance window. The CLI itself
-does not detect viewers; `lampac-auto-update.timer` runs it nightly at 03:00
+does not detect viewers; `lampac-auto-update.timer` runs it nightly at 04:40
 `Europe/Sofia` only after Lampa has sent almost nothing for five minutes, as
 described there.
 Watchtower is disabled for this service because it cannot rebuild a derived

@@ -97,10 +97,10 @@ eight minutes), request
 `/cron/aniliberty/parse?parseFrom=1&parseTo=<total_pages>` through
 `run-job.sh`.
 
-The HTTP runner skips new crawler submissions daily at **05:00–05:59** and
-on Sundays at **06:00–11:59** (`Europe/Sofia`, like the backup timers). They
+The HTTP runner skips new crawler submissions daily at **04:00–04:59** and
+on Sundays at **08:00–11:59** (`Europe/Sofia`, like the backup timers). They
 reserve the daily configuration/application-backup hour and additional time
-for weekly/monthly guest backups. Incremental refreshes retry
+for the monthly guest backup. Incremental refreshes retry
 at their next normal cron slot; skips do not change failure backoff. Saves,
 log rotation and the report-only maintenance check remain enabled. The Sunday
 resume was moved to 14:10 Sofia so it does not immediately start new work just

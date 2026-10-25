@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nightly Proxmox host update inside the 04:00-05:00 Europe/Sofia window.
+# Nightly Proxmox host update at the end of the 04:00-08:00 Europe/Sofia window.
 # Installs package updates nightly. A new kernel is installed, and the host
 # rebooted into it, only once that kernel has been known for KERNEL_AGE_DAYS.
 # DRY_RUN=1 prints the decisions without installing, holding or rebooting.
@@ -12,7 +12,14 @@ KERNEL_AGE_DAYS=7
 EFI_MIN_FREE_KB=$((200 * 1024))
 DRY_RUN=${DRY_RUN:-}
 
-in_window() { [ "$(TZ=Europe/Sofia date +%H)" = 04 ]; }
+# Reboot only 06:00-07:44: the timer starts at 06:50, waiting for the Docker
+# guest's 06:10 package updates can take the run past 07:00, and the reboot
+# (a minute later) and boot check must end before the monthly 08:00 backup.
+in_window() {
+  local now
+  now=$(TZ=Europe/Sofia date +%H%M)
+  (( 10#$now >= 600 && 10#$now < 745 ))
+}
 
 # When a kernel version became known: first seen as an upgrade candidate or,
 # for a kernel installed before that, when its package was installed.
@@ -150,7 +157,7 @@ if [ "${#problems[@]}" -gt 0 ]; then
   exit 1
 fi
 
-# Let the Docker guest finish its own 04:30 package updates before rebooting.
+# Let the Docker guest finish its own 06:10 package updates before rebooting.
 # A oneshot unit is "activating" while it runs; a stopped guest counts as idle.
 guest_busy=1
 for _ in $(seq 60); do
@@ -166,7 +173,7 @@ if [ "$guest_busy" = 1 ]; then
 fi
 
 if [ -n "$DRY_RUN" ]; then
-  echo "DRY_RUN: would reboot from $running into $newest during 04:xx."
+  echo "DRY_RUN: would reboot from $running into $newest before 07:45."
   exit 0
 fi
 if ! in_window; then

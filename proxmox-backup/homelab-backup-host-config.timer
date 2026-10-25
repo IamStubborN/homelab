@@ -2,7 +2,7 @@
 Description=Weekly Proxmox host configuration backup to Google Drive
 
 [Timer]
-OnCalendar=Sun *-*-* 06:30:00 Europe/Sofia
+OnCalendar=Sun *-*-* 04:20:00 Europe/Sofia
 Persistent=true
 Unit=homelab-backup@host-config.service
 

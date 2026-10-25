@@ -185,11 +185,11 @@ if ! wait_for_idle; then
   skipped=$(( $(cat "$AUTO/busy-nights" 2>/dev/null || echo 0) + 1 ))
   echo "$skipped" > "$AUTO/busy-nights"
   echo "Lampa was not idle before the deadline; trying again next night."
-  [ "$skipped" -ne 3 ] || notify "Lampac: третью ночь подряд Lampa занята с 03:00 до 04:00, обновление не установлено."
+  [ "$skipped" -ne 3 ] || notify "Lampac: третью ночь подряд Lampa занята всё окно обновления (04:40–05:25), обновление не установлено."
   exit 0
 fi
 rm -f "$AUTO/busy-nights"
-# Building and checking take a while; do not let them run into Watchtower (04:00).
+# Building and checking take a while; do not let them run into Watchtower (05:45).
 if [ $(( DEADLINE - $(date +%s) )) -lt 1800 ]; then
   echo "Too close to the deadline to build; trying again next night."
   exit 0

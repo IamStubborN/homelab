@@ -33,6 +33,9 @@ running one and 7 days old, and only after these checks pass:
   reboots the next night);
 - it is still 04:xx.
 
+The reboot is scheduled a minute ahead (`shutdown -r +1`), so the unit
+finishes and records success first; `shutdown -c` cancels it.
+
 It reboots once per kernel: if the host comes back on another kernel, the unit
 fails instead of rebooting every night. A reboot stops every guest, including
 OPNsense and with it the internet, for a few minutes. Both guests start on boot

@@ -174,5 +174,7 @@ if ! in_window; then
   exit 0
 fi
 echo "$newest" > "$STATE/reboot-target"
-echo "Rebooting from kernel $running into $newest."
-systemctl reboot
+echo "Rebooting from kernel $running into $newest in a minute."
+# A reboot from inside this unit would kill it, and the backup monitor would
+# record the signal as a failed run: schedule it and exit cleanly instead.
+shutdown -r +1 "homelab-host-update: rebooting into kernel $newest"

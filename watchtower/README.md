@@ -97,6 +97,7 @@ job into another's window.
 
 | Time | Job |
 | --- | --- |
+| 02:30 | OPNsense firmware auto-update (its cron job; a reboot drops the internet for a few minutes) |
 | 03:00–03:45 | Lampac update when upstream changed and Lampa is idle (`lampa/UPDATE.md`) |
 | 03:55 | Image retention records the running images |
 | 04:00 | Watchtower updates containers |

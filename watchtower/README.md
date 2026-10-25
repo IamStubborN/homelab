@@ -109,6 +109,20 @@ job into another's window.
 
 Updates stay inside 04:00–05:00 and finish before the first backup.
 
+## Failure notifications
+
+Watchtower reports failed updates (log level `error`) to the disk-watchdog's
+Telegram bot and chat. The URL holds the bot token, so it lives in the ignored
+`watchtower/secrets/notification_url`; create it on the Docker host from the
+disk-watchdog's own secret:
+
+```sh
+umask 077; mkdir -p watchtower/secrets
+printf 'telegram://%s@telegram?chats=%s&preview=No\n' \
+  "$(docker exec disk-watchdog cat /run/secrets/telegram_bot_token | tr -d '[:space:]')" \
+  "$(docker exec disk-watchdog printenv TELEGRAM_CHAT_ID)" > watchtower/secrets/notification_url
+```
+
 ## Nightly Docker cleanup
 
 `docker-prune.timer` runs `docker image prune -f` and

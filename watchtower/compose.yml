@@ -7,6 +7,14 @@ services:
       - no-new-privileges:true
     environment:
       TZ: ${TIMEZONE:-Europe/Sofia}
+      # Failed updates only, to the disk-watchdog's Telegram bot and chat. The
+      # secret holds telegram://TOKEN@telegram?chats=CHAT_ID (README).
+      WATCHTOWER_NOTIFICATION_URL: /run/secrets/watchtower_notification_url
+      WATCHTOWER_NOTIFICATIONS_LEVEL: error
+      WATCHTOWER_NOTIFICATIONS_HOSTNAME: homelab
+      WATCHTOWER_NO_STARTUP_MESSAGE: "true"
+    secrets:
+      - watchtower_notification_url
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
@@ -15,3 +23,7 @@ services:
       - /etc/localtime:/etc/localtime:ro
     # Keep previous images available for rollback after nightly updates.
     command: ["--label-enable", "--schedule", "0 0 4 * * *", "--cleanup=false", "--include-restarting", "--update-on-start=false"]
+
+secrets:
+  watchtower_notification_url:
+    file: ./secrets/notification_url

@@ -14,6 +14,11 @@ pruning or automatic rollback; `auto-update.sh` adds those around it (below).
    Failure recovery first);
 2. pulls upstream `latest` and does nothing if its digest is the one deployed
    or one that already failed here;
+   when a new one is due but the running container does not match the root
+   Compose model (config-hash, Compose files or project directory, for example
+   an edit pulled but not applied) or the model does not build, it alerts once
+   with what to run and retries every night; this does not mark the upstream
+   as failed;
 3. waits until Lampa sent under 3 MiB in each of 5 consecutive minutes, then
    runs `stage` and `check`, waits for idle again and runs
    `apply --maintenance-window`. No apply starts later than 03:55;

@@ -7,7 +7,7 @@
 set -euo pipefail
 
 ROOT=${LAMPA_ROOT:-/home/iamstubborn/homelab}
-STATE=/var/lib/lampac-update
+STATE=${LAMPAC_UPDATE_STATE:-/var/lib/lampac-update}
 AUTO=$STATE/auto                 # this script's own state
 UPSTREAM=ghcr.io/lampac-nextgen/lampac
 DEADLINE=$(( $(date +%s) + 55 * 60 ))   # last moment to start an apply
@@ -16,7 +16,7 @@ IDLE_MIB_PER_MINUTE=3
 KEEP_GENERATIONS=3
 DRY_RUN=${DRY_RUN:-}
 
-tool() { python3 "$ROOT/lampa/update-runtime.py" --root "$ROOT" "$@"; }
+tool() { python3 "$ROOT/lampa/update-runtime.py" "$@" --root "$ROOT" --state-dir "$STATE"; }
 
 notify() {
   echo "$1"
@@ -136,6 +136,38 @@ if [ "$latest" = "$(cat "$AUTO/failed-upstream" 2>/dev/null)" ]; then
   exit 0
 fi
 echo "New Lampac upstream: $latest (running $(pending upstream))."
+
+# stage refuses while the Lampa container does not match the root Compose
+# model (config-hash, Compose files, project directory). That is an unapplied
+# local edit, not a bad upstream: report it once per mismatch and retry every
+# night without marking the upstream failed.
+compose_files=(-f compose.yml)
+expected_files=$ROOT/compose.yml
+if [ -e "$ROOT/compose.override.yml" ]; then
+  compose_files+=(-f compose.override.yml)
+  expected_files+=",$ROOT/compose.override.yml"
+fi
+model_hash=$(cd "$ROOT" && docker compose -p homelab "${compose_files[@]}" config --hash lampa 2>/dev/null \
+               | sed -nE 's/^lampa[[:blank:]]+([0-9a-f]{64})$/\1/p') || model_hash=
+deployed=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}} {{index .Config.Labels "com.docker.compose.project.config_files"}} {{index .Config.Labels "com.docker.compose.project.working_dir"}}' lampa 2>/dev/null) || deployed=
+if [ -z "$model_hash" ]; then
+  drift=invalid
+  message="Lampac: Compose-модель Lampa не собирается (или нет config --hash), обновление ждёт. Проверь: cd $ROOT && sudo docker compose config --quiet"
+elif [ "$deployed" != "$model_hash $expected_files $ROOT" ]; then
+  drift="$model_hash $deployed"
+  message="Lampac: правки Compose для Lampa не применены к контейнеру, обновление ждёт. В простое: cd $ROOT && sudo docker compose config --quiet && sudo docker compose up -d --no-deps --no-build --pull never --force-recreate lampa"
+else
+  drift=
+fi
+if [ -n "$drift" ]; then
+  if [ "$(cat "$AUTO/drift-notified" 2>/dev/null)" != "$drift" ]; then
+    notify "$message"
+    [ -n "$DRY_RUN" ] || echo "$drift" > "$AUTO/drift-notified"
+  fi
+  exit 1
+fi
+rm -f "$AUTO/drift-notified"
+
 if [ -n "$DRY_RUN" ]; then
   echo "DRY_RUN: would wait for idle, stage, check and apply."
   exit 0

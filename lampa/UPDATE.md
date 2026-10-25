@@ -21,8 +21,12 @@ pruning or automatic rollback; `auto-update.sh` adds those around it (below).
    as failed;
 3. waits until Lampa sent under 3 MiB in each of 5 consecutive minutes, then
    runs `stage` and `check`, waits for idle again and runs
-   `apply --maintenance-window`. No apply starts later than 03:55;
-4. requires the container to become healthy within 5 minutes, otherwise runs
+   `apply --maintenance-window`. No build starts later than 03:15 and no
+   apply later than 03:45;
+4. requires Lampa to answer HTTP within 10 minutes (a new version's first
+   start compiles every module, about 5 minutes; the healthcheck's 600s
+   `start_period` keeps DeUnhealth from restarting it meanwhile) and then
+   to become healthy within 5 minutes, otherwise runs
    `rollback --maintenance-window` (only when apply got as far as stopping
    Lampa);
 5. after success keeps only the candidate/rollback tags of the running and

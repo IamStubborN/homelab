@@ -6,7 +6,7 @@ Requires=docker.service
 [Service]
 Type=oneshot
 ExecStart=/home/iamstubborn/homelab/lampa/auto-update.sh
-# The script starts a build by 03:25 and an apply by 03:55; a normal run ends
-# by about 04:10. This only stops a hung build or rollback, before the nightly
+# The script starts a build by 03:15 and an apply by 03:45; a failed apply and
+# its rollback end by about 04:10. This only stops a hung build or rollback, before the nightly
 # build-cache prune (04:20). Next night reports the unfinished phase.
 TimeoutStartSec=75min

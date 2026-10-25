@@ -177,8 +177,14 @@ def snapshot(mounts, destination):
     os.sync()
 
 
+# The first start of a new version compiles every enabled module before it
+# listens: about 5 minutes on production data, against 1 minute afterwards.
+READY_SECONDS = 600
+
+
 def http_ready(name, endpoints=("/version?type=hash",)):
-    for _ in range(60):
+    deadline = time.monotonic() + READY_SECONDS
+    while True:
         state = inspect("container", name)["State"]
         if not state["Running"]:
             return False
@@ -189,8 +195,9 @@ def http_ready(name, endpoints=("/version?type=hash",)):
                 require(bool(body.strip()), "Empty HTTP probe response.")
             return True
         except RuntimeError:
+            if time.monotonic() >= deadline:
+                return False
             time.sleep(2)
-    return False
 
 
 def stage(root, state):

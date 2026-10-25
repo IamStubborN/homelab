@@ -10,7 +10,9 @@ ROOT=${LAMPA_ROOT:-/home/iamstubborn/homelab}
 STATE=${LAMPAC_UPDATE_STATE:-/var/lib/lampac-update}
 AUTO=$STATE/auto                 # this script's own state
 UPSTREAM=ghcr.io/lampac-nextgen/lampac
-DEADLINE=$(( $(date +%s) + 55 * 60 ))   # last moment to start an apply
+# Last moment to start an apply: a failed one waits up to 10 minutes for HTTP,
+# and its rollback must still finish before systemd's 75-minute limit.
+DEADLINE=$(( $(date +%s) + 45 * 60 ))
 IDLE_MINUTES=5
 IDLE_MIB_PER_MINUTE=3
 KEEP_GENERATIONS=3

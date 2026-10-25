@@ -97,11 +97,11 @@ job into another's window.
 
 | Time | Job |
 | --- | --- |
-| 03:00–03:55 | Lampac update when upstream changed and Lampa is idle (`lampa/UPDATE.md`) |
+| 03:00–03:45 | Lampac update when upstream changed and Lampa is idle (`lampa/UPDATE.md`) |
 | 03:55 | Image retention records the running images |
 | 04:00 | Watchtower updates containers |
 | 04:20 | Docker cleanup: untagged images, build cache older than 7 days |
-| 04:30 | Docker host Ubuntu package updates |
+| 04:30 | Docker host package updates: Ubuntu and Docker CE |
 | 04:45 | Proxmox host updates, reboot for a new kernel (`proxmox-update/`) |
 | 05:00 | Image retention records the replacements |
 | 05:20–08:00 | Backups (see `proxmox-backup/README.md`); JacRed starts no crawls |
@@ -140,5 +140,16 @@ systemctl restart apt-daily-upgrade.timer
 systemctl list-timers apt-daily-upgrade.timer
 ```
 
-Docker Engine comes from `download.docker.com`, which `unattended-upgrades`
-does not cover; it is updated manually.
+By default `unattended-upgrades` installs only Ubuntu's security updates.
+`52homelab-unattended-upgrades` adds Ubuntu's regular updates (`noble-updates`)
+and Docker CE from `download.docker.com`, major versions included. A Docker
+Engine update restarts `dockerd` and every container with it for a minute or
+two, inside the update window; all containers come back on their own, as after
+a host reboot. Packages whose configuration files were changed locally are
+skipped rather than prompted. Install it as root on the Docker host and check
+the plan:
+
+```sh
+install -m 0644 watchtower/52homelab-unattended-upgrades /etc/apt/apt.conf.d/
+unattended-upgrade --dry-run
+```

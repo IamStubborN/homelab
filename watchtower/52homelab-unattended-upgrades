@@ -1,0 +1,8 @@
+// Docker host: besides Ubuntu's security updates (50unattended-upgrades),
+// install its regular updates and Docker CE from download.docker.com at
+// 04:30 (apt-daily-upgrade.override.conf). A Docker Engine update restarts
+// dockerd and with it every container for a minute or two.
+Unattended-Upgrade::Allowed-Origins {
+	"${distro_id}:${distro_codename}-updates";
+	"Docker:${distro_codename}";
+};

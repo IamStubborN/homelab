@@ -129,7 +129,9 @@ if ! docker pull -q "$UPSTREAM:latest" >/dev/null 2>&1 \
   notify "Lampac: не удалось получить upstream-образ, обновление пропущено."
   exit 1
 fi
-if [ "$latest" = "$(pending upstream)" ] && { [ "$phase" = applied ] || [ "$phase" = rolled-back ]; }; then
+# A rolled-back digest is not deployed: failed-upstream alone keeps it from
+# being retried, so removing that file retries it.
+if [ "$latest" = "$(pending upstream)" ] && [ "$phase" = applied ]; then
   echo "Lampac upstream unchanged ($latest, $phase)."
   exit 0
 fi

@@ -65,4 +65,14 @@ DRY_RUN=1 run
 test ! -e "$TMP/code"
 grep -q 'DRY_RUN: would wait' "$TMP/out"
 test ! -e "$TMP/state/auto/drift-notified"
+# After a rollback the failed digest is pending; it is retried once
+# failed-upstream is removed, and skipped while it is there.
+printf '%s\n' '{"phase":"rolled-back","upstream":"ghcr.io/lampac-nextgen/lampac@sha256:new"}' > "$TMP/state/pending.json"
+mkdir -p "$TMP/state/auto"
+echo 'ghcr.io/lampac-nextgen/lampac@sha256:new' > "$TMP/state/auto/failed-upstream"
+DRY_RUN=1 run
+grep -q 'failed here before' "$TMP/out"
+rm "$TMP/state/auto/failed-upstream"
+DRY_RUN=1 run
+grep -q 'DRY_RUN: would wait' "$TMP/out"
 echo "Lampac auto-update drift tests passed"

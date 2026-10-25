@@ -29,8 +29,10 @@ pruning or automatic rollback; `auto-update.sh` adds those around it (below).
    to become healthy within 5 minutes, otherwise runs
    `rollback --maintenance-window` (only when apply got as far as stopping
    Lampa);
-5. after success keeps only the candidate/rollback tags of the running and
-   previous images and the 3 newest generation directories.
+5. after every outcome except a failed rollback keeps only the
+   candidate/rollback tags of the images in `pending.json` (after success the
+   running and previous ones, after a failure the failed candidate and the
+   running one) and the 3 newest generation directories.
 
 Every outcome other than "nothing new" or "busy tonight" is reported to the
 disk-watchdog's Telegram bot and chat; three busy nights in a row are reported

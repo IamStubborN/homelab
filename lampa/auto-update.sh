@@ -83,8 +83,10 @@ healthy() {
   return 1
 }
 
-# Keep image tags and state for the running image and its rollback baseline;
-# drop older candidate/rollback tags and generations. Failures only log.
+# Keep image tags and state for pending.json's candidate and previous image
+# (after a failure: the failed candidate, kept for diagnosis, and the running
+# image); drop older candidate/rollback tags and generations. Runs after every
+# outcome except a failed rollback. Failures only log.
 cleanup() {
   local keep_current keep_previous tag id generation
   keep_current=$(pending candidate)
@@ -196,11 +198,13 @@ fi
 if ! tool stage; then
   mark_failed
   notify "Lampac: stage новой версии не удался (сборка или несовпадение с развёрнутым Compose), работает текущая. Логи в $STATE (последняя папка). $RETRY"
+  cleanup
   exit 1
 fi
 if ! tool check; then
   mark_failed
   notify "Lampac: новая версия не прошла проверку, работает текущая. Логи: $STATE/$(pending generation). $RETRY"
+  cleanup
   exit 1
 fi
 if ! wait_for_idle; then
@@ -220,11 +224,13 @@ case "$phase" in
   stopping|backed-up|applied|restoring) ;;
   *)
     notify "Lampac: установка отказалась начинаться (phase=$phase), работает текущая версия. Логи: $STATE/$(pending generation). $RETRY"
+    cleanup
     exit 1
     ;;
 esac
 if tool rollback --maintenance-window && healthy; then
   notify "Lampac: новая версия не запустилась, откатил на прежнюю. Автообновление ждёт ручной сверки Compose (UPDATE.md, Failure recovery). Логи: $STATE/$(pending generation)"
+  cleanup
 else
   notify "Lampac: обновление и откат не удались, Lampa может не работать. Нужна ручная проверка."
 fi

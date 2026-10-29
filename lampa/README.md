@@ -173,6 +173,18 @@ The server-side bootstrap also enables Lampac's built-in Dorama section.
 
 The bootstrap sets the parser mode and local service URLs on every Lampa start.
 
+## Account synchronization
+
+The bootstrap installs `plugins/account-sync.js` alongside the playback plugin.
+It uses Lampa's native account APIs to fetch history/bookmarks and playback
+progress on focus, return to the foreground, section navigation and player
+close, plus once a minute while visible and outside the player. Event bursts
+are debounced and attempts are spaced by at least 15 seconds. Changed bookmark
+lists notify Lampa to refresh its cached screens; unchanged lists do not.
+Synchronization still requires the user's account sync setting. Android may
+suspend the client in the background; returning to the app schedules a check.
+Existing clients must reload once to load the plugin after deployment.
+
 ## Intel runtime and updates
 
 `runtime/Dockerfile` extends `ghcr.io/lampac-nextgen/lampac:latest` with the Intel

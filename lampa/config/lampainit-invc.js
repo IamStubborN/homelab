@@ -110,6 +110,12 @@ var lampainit_invc = {};
         author: 'lampac'
       },
       {
+        url: origin + '/plugins/homelab/account-sync.js',
+        status: 1,
+        name: 'Account sync',
+        author: 'Homelab'
+      },
+      {
         url: origin + '/plugins/homelab/torrserver-audio.js',
         status: 1,
         name: 'TorrServer audio tracks',

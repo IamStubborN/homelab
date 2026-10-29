@@ -235,7 +235,11 @@ def complete_capture(path):
     manifest = capture_manifest(path)
     if path.parent != STAGING_ROOT or not manifest:
         raise RuntimeError("Unexpected completed capture")
-    (path / ".uploaded").touch(mode=0o600)
+    # The uploaded archive is the backup; a second copy only fills the guest disk.
+    current = STAGING_ROOT / "current"
+    if current.is_symlink() and current.resolve() == path:
+        current.unlink()
+    shutil.rmtree(path)
     return manifest["completed_utc"]
 
 

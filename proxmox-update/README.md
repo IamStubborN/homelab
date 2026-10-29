@@ -84,3 +84,17 @@ systemctl enable homelab-host-boot-check.service
 Check runs with `journalctl -u homelab-host-update -u homelab-host-boot-check`.
 `DRY_RUN=1 homelab-host-update` prints the plan and decisions without
 installing, holding or rebooting.
+
+## Docker guest TRIM
+
+CT 300's rootfs is a thin volume on `local-lvm`. Blocks freed inside the
+container stay allocated in the pool until they are trimmed, and the container
+cannot trim its own rootfs. `homelab-guest-fstrim.timer` runs
+`pct fstrim 300 --ignore-mountpoints 1` at 06:20, after the Docker cleanup at
+06:05. Install as root on Proxmox:
+
+```sh
+install -m 0644 proxmox-update/homelab-guest-fstrim.service proxmox-update/homelab-guest-fstrim.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now homelab-guest-fstrim.timer
+```

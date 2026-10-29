@@ -1,0 +1,7 @@
+[Unit]
+Description=Return the Docker guest's freed blocks to the thin pool
+
+[Service]
+Type=oneshot
+# CT 300 cannot trim its own rootfs; bind mounts are not on local-lvm.
+ExecStart=/usr/sbin/pct fstrim 300 --ignore-mountpoints 1

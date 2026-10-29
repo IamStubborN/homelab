@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly Docker guest TRIM at 06:20 Europe/Sofia, after Docker cleanup
+
+[Timer]
+OnCalendar=*-*-* 06:20:00 Europe/Sofia
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -36,11 +36,11 @@ Drive archives are not deleted by a schedule change.
 `app-data-backup.py` runs inside CT 300 as
 `/usr/local/sbin/homelab-app-data-backup`. It creates a private capture under
 `/var/lib/homelab-app-backup`. The host packs that completed capture into one
-`.tar.zst`, uploads it directly to Drive, then marks the capture uploaded.
+`.tar.zst`, uploads it directly to Drive, then deletes the capture.
 The host script reuses an unfinished capture on retry. If that capture is from
 an earlier UTC day, the same run then creates and uploads a fresh capture.
-It keeps one uploaded capture locally until the next run. Its staging path is
-excluded from full Docker guest backups.
+No uploaded capture stays on the guest disk. Its staging path is excluded from
+full Docker guest backups.
 
 The capture contains selected application bind state under the homelab
 repository, configured Docker volumes, online SQLite copies and native

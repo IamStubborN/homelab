@@ -371,3 +371,18 @@ test('devices without fetch get a visible notice instead of a missing button', t
   assert.equal(buttons.length, 1); buttons[0].handler();
   assert.match(notices[0], /недоступен/);
 });
+
+test('movie recovery uses the dub from the saved match instead of a release-tag voice_name', t => {
+  const h = setup(t), movie = {id: 7, title: 'Film', original_title: 'Film'}, pushes = [];
+  h.L.Player = {opened: () => false}; h.L.Activity.push = value => pushes.push(value);
+  const online = {provider: 'one', voice: 'WEB-DL', text: 'MVO Studio', match: {index: 1, count: 2, text: 'MVO Studio', translate: 'MVO Studio', voice_name: 'WEB-DL'}};
+  assert.equal(h.window.HomelabSources.resume({card: 'movie_7', episode: 1, position: 40, online}, movie), true);
+  assert.equal(pushes[0].homelab_recovery.voice, 'MVO Studio');
+  assert.equal(h.window.HomelabSources.resume({card: 'movie_7', position: 40, online: {provider: 'one', voice: 'WEB-DL', match: {text: 'Film'}}}, movie), true);
+  assert.equal(pushes[1].homelab_recovery.voice, '', 'a tag or the film title never filters the picker');
+  const activity = {}, work = {card: movie, homelab_online: online}; let opened = true; pushes.length = 0;
+  h.L.Player = {playdata: () => work, opened: () => opened, close() { opened = false; }};
+  h.L.Activity = {active: () => activity, push: value => pushes.push(value)};
+  assert.equal(h.window.HomelabSources.recover(work, {position: 71, duration: 120}, false), true); h.tick(0);
+  assert.equal(pushes[0].homelab_recovery.voice, 'MVO Studio');
+});

@@ -542,11 +542,22 @@
       L.Activity.push({component: COMPONENT, title: 'Общий', movie: movie, season: context && context.season, page: 1});
     }); container.prepend(button);
   }
+  // Movie rows carry the dub in match.translate/text; their voice_name is often a release tag (WEB-DL) that matches no row.
+  function sourceVoice(source, card) {
+    var match = source && source.match || {}, pick = function (value) { return typeof value === 'string' ? value.trim() : ''; };
+    var voice = pick(source && source.voice);
+    if (ITEM_TAG.test(voice)) voice = '';
+    if (card && !card.name) {
+      var text = pick(match.text) || pick(source && source.text);
+      if (text && (text === card.title || text === card.original_title)) text = '';
+      voice = pick(match.translate) || text || voice;
+    }
+    return /^(неизвестно|оригинал|по умолчанию|дублированный|озвучка источника)$/i.test(voice) || ITEM_TAG.test(voice) ? '' : voice;
+  }
   function resumeSource(item, movie) {
     if (!item || !movie || !Number.isInteger(movie.id) || item.card !== (movie.name ? 'tv_' : 'movie_') + movie.id || L.Player.opened()) return false;
     if (movie.name && (!Number.isInteger(item.season) || item.season < 0 || !Number.isInteger(item.episode) || item.episode <= 0)) return false;
-    var voice = item.online && typeof item.online.voice === 'string' ? item.online.voice : '';
-    if (/^(неизвестно|оригинал|по умолчанию|дублированный|озвучка источника)$/i.test(voice)) voice = '';
+    var voice = sourceVoice(item.online, movie);
     L.Activity.push({component: COMPONENT, title: 'Выбор источника', movie: movie, homelab_recovery: {
       scope: sync.scope(), season: movie.name ? item.season : 0, episode: item.episode || 1, voice: voice, excludeProvider: '',
       position: Number.isFinite(item.position) ? Math.max(0, item.position) : 0,
@@ -559,8 +570,7 @@
     if (work.card.name && (!Number.isInteger(work.season) || work.season < 0 || !Number.isInteger(work.episode) || work.episode <= 0)) return false;
     var scope = sync.scope(), activity = L.Activity.active(), source = work.homelab_online, movie = Object.assign({}, work.card), pref = preferences();
     var tracks = L.HomelabGstAudio && L.HomelabGstAudio.preferences ? L.HomelabGstAudio.preferences(work) : work.homelab_track_preferences;
-    var voice = source && source.voice || tracks && tracks.audio && tracks.audio.title || '';
-    if (/^(неизвестно|оригинал|по умолчанию|дублированный|озвучка источника)$/i.test(voice)) voice = '';
+    var voice = sourceVoice(source, work.card) || sourceVoice({voice: tracks && tracks.audio && tracks.audio.title}, work.card);
     var context = {scope: scope, season: work.card.name ? work.season : 0, episode: +work.episode || 1, voice: voice, excludeProvider: source && source.provider || '',
       position: Number.isFinite(snapshot.position) ? Math.max(0, snapshot.position) : 0, duration: Number.isFinite(snapshot.duration) ? snapshot.duration : 0, quality: quality(Object.keys(work.quality || {}).length === 1 ? Object.keys(work.quality)[0] : '') || pref.quality};
     var modal = L.Modal, torrentModal = modal && modal.opened && modal.opened() && modal.render && modal.render().find('.torrent-files').length ? modal.render()[0] : null;

@@ -9,7 +9,7 @@
   function scope() { return window.HomelabSync ? window.HomelabSync.scope() : L.Timeline.filename(); }
   function valid(s) { return state === s && L.Player.opened() && L.Player.playdata() === s.work && scope() === s.scope; }
   function currentVideo(s) { return valid(s) && s.video && s.video === L.PlayerVideo.video(); }
-  function canChoose(s) { return s.work.card && Number.isInteger(s.work.card.id) && (!s.work.card.name || Number.isInteger(s.work.season) && s.work.season >= 0 && +s.work.episode > 0) && window.HomelabSources && typeof window.HomelabSources.recover === 'function'; }
+  function canChoose(s) { return s.work.card && Number.isInteger(s.work.card.id) && (!s.work.card.name || Number.isInteger(s.work.season) && s.work.season >= 0 && Number.isInteger(s.work.episode) && s.work.episode > 0) && window.HomelabSources && typeof window.HomelabSources.recover === 'function'; }
   function gstRetry(s) {
     var audio = L.HomelabGstAudio; if (!audio || typeof audio.retryCurrent !== 'function') return false;
     return typeof audio.canRetry === 'function' ? !!audio.canRetry(s.work) : true;

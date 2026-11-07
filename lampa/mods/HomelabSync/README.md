@@ -37,7 +37,12 @@ are cached per app session (bounded, survives episode switches; misses retry
 after 5 min). Valid existing thumbnails are preserved. A guarded re-set of the
 same native playlist updates the Next renderer without changing media URLs,
 order, or the current index. Closing the player, replacing the playlist, or
-changing profile invalidates late callbacks.
+changing profile invalidates late callbacks. On the last episode the season
+stills are still loaded for the list. The native playlist (a Select of the
+playlist items) is decorated through `Select` `preshow`/`onDraw` only when it
+shows the active player playlist: each row gets its saved timeline progress bar
+on the still, «Просмотрено» with a check mark from 90%, «осталось N мин», and the
+current row a «Сейчас» marker with live progress instead of the native check.
 
 `HomelabSync` is a local dynamic Lampac module. It serves its own JavaScript at
 `/homelab-sync.js` (or `/homelab-sync/js/{token}`), without modifying Lampac or
@@ -78,6 +83,12 @@ URLs are not automatically converted to token routes. Never commit tokens.
   including rewatches. The open owned panel updates without a PWA reload.
   Background polls repaint the progress line of shown cards in place, so TV
   focus, scroll and loaded pages are kept; new cards appear on the next visit.
+  Cards show the newest position in Continue wording («С1 · Е20 · осталось
+  12 мин»), the watched-episode count with relative time («вчера») and a poster
+  progress bar. The per-card panel groups events under day headers («Сегодня»,
+  «Вчера», «5 ноября») with the clock time; the newest event of each episode
+  shows its saved progress bar or a watched mark. When the card is in Continue,
+  the panel also offers **Продолжить**.
 - Leave CUB's own history screen available. This extension does not replace its
   component or patch generated JavaScript. Snapshot-derived events are the latest
   saved position per file, not a reconstruction of every historical viewing;
@@ -98,8 +109,24 @@ An episode past 90% (Lampa's own watched mark) is offered as the next episode
 from its start: within the season, or episode 1 of the next season when TMDB
 season counts say the season ended; a finished series and watched movies leave the
 row. A torrent continuation finds that episode in the same release; online keeps
-the provider/voice within the season. A long press offers **Убрать из «Продолжить
-просмотр»**: the server stores a tombstone and a later viewing brings the card back.
+the provider/voice within the season.
+
+Each tile is drawn from the cached record alone (no request): a poster progress
+bar, «С1 · Е29 · осталось 12 мин» (or «Следующая: Е30» once the previous episode
+is past 90%), a source badge (online provider or «Торрент») and relative time
+(«вчера», «3 дня назад») with the year. The focus overlay lists up to five
+episodes from the current one: the current episode is highlighted with its
+progress, other episodes of the same season show a watched mark or partial
+progress from the native timeline rows.
+
+A long press opens **Убрать из ряда** (the server stores a tombstone and a later
+viewing brings the card back), **Отметить просмотренным** (stores the shown episode
+or movie at its end with the captured source, so the row advances to the next
+episode or drops the movie; offered only for records with a server-valid captured
+source) and **Выбрать источник** (opens `HomelabSources.resume` for the exact
+episode and position, or the card when the picker is unavailable). Focus moves
+to a neighbour only when the card leaves the row. `window.homelabContinue` also
+exposes `watched(item)` and `resume(item, {choose: true})`.
 
 Records distinguish torrent and online sources. A newer observation replaces the
 whole source for the same card, so switching from a torrent to online cannot leave

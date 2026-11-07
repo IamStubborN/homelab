@@ -16,7 +16,7 @@ test('five episode overlay uses the exact season and only current source progres
   const h = await setup(t); let gets = 0;
   h.L.TimeTable = {get(card, done) { done(season(2, 1, 20)); }};
   h.L.Api.sources.tmdb.get = (path, params, done) => { gets++; assert.equal(path, 'tv/42/season/1'); done({episodes: season(1, 1, 20).reverse()}); };
-  h.focus(); assert.deepEqual(h.lines().map(x => x.find('span').content), ['10 - Episode 10', '11 - Episode 11', '12 - Episode 12', '13 - Episode 13', '14 - Episode 14']);
+  h.focus(); assert.deepEqual(h.lines().map(x => x.find('span').content), ['10 · Episode 10', '11 · Episode 11', '12 · Episode 12', '13 · Episode 13', '14 · Episode 14']);
   assert.equal(h.lines()[0].children.length, 1); assert.equal(h.lines()[0].children[0].find('div').attrs['style:width'], '25%');
   assert.ok(h.lines().slice(1).every(x => x.children.length === 0));
   h.tile().trigger('hover:focus'); h.tick(1000); assert.equal(gets, 1);
@@ -25,7 +25,7 @@ test('five episode overlay uses the exact season and only current source progres
 test('Specials use the season-zero episode list in the Continue overlay', async t => {
   const h = await setup(t, {...item, season: 0, episode: 1});
   h.L.Api.sources.tmdb.get = (path, params, done) => { assert.equal(path, 'tv/42/season/0'); done({episodes: season(0, 1, 5)}); };
-  h.focus(); assert.equal(h.lines().length, 5); assert.equal(h.lines()[0].find('span').content, '1 - Episode 1');
+  h.focus(); assert.equal(h.lines().length, 5); assert.equal(h.lines()[0].find('span').content, '1 · Episode 1');
 });
 
 test('end of a season has fewer rows and never invents episodes or crosses seasons', async t => {
@@ -33,7 +33,7 @@ test('end of a season has fewer rows and never invents episodes or crosses seaso
   h.L.TimeTable = {get(card, done) { done(season(1, 1, 26)); }};
   h.L.Utils.splitEpisodesIntoSeasons = rows => ({1: rows});
   h.L.Api.sources.tmdb.get = () => assert.fail('valid native cache must not fetch');
-  h.focus(); assert.equal(h.lines().length, 4); assert.equal(h.lines().at(-1).find('span').content, '26 - Episode 26');
+  h.focus(); assert.equal(h.lines().length, 4); assert.equal(h.lines().at(-1).find('span').content, '26 · Episode 26');
 });
 
 test('metadata failure retains current episode and destroyed cards ignore late responses', async t => {

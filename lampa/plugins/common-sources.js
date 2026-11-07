@@ -18,7 +18,7 @@
     });
     return;
   }
-  // probeCache: per page session, bounded; reopening the picker reuses measured qualities instead of re-probing.
+  // probeCache: per page session, bounded, 30 min TTL; reopening the picker reuses measured qualities and own 404/410s.
   var parserOwner = null, nextRequestAt = 0, probeCache = {keys: [], values: {}};
   // Tizen/webOS <= 5 lack AbortController; their fetch ignores the signal, and request() rejects on abort itself.
   function Abort() {
@@ -201,25 +201,41 @@
       add({key: 'source:' + source.key, kind: 'online', provider: source.key, providerName: source.name, voice: label || 'Выбрать в источнике', native: true, qualities: []});
     }
     // Rows without quality ask their source once, after the catalog is done: the call JSON or the HLS master
-    // (RESOLUTION) gives the real height. Only an own-Lampac 4xx or an explicit error/accsdb answer means the source
-    // hands out no video; rch/ws handshakes, timeouts and foreign CDN refusals change nothing. Media is never read.
-    var probeQueue = [], probing = 0, probes = 0;
+    // (RESOLUTION) gives the real height. The UI asks only for each voice card's leader (at most 12 per search) and,
+    // lazily, for the alternatives of a card whose source list is opened (24 in total). Only an own-Lampac 404/410 or an
+    // explicit "not found" error means the source hands out no video; auth/quota answers (401/403, accsdb, other
+    // errors), rch/ws handshakes, timeouts and foreign CDN refusals change nothing. Media is never read.
+    var probeQueue = [], probing = 0, probes = 0, leaders = 0, probeUrls = {}, probed = {}, PROBE_TTL = 30 * 60000;
     function probeApply(row, value) {
       if (value.unavailable) row.unavailable = true;
       else { row.qualities = value.qualities.slice(); row.measured = true; }
     }
-    function probe(row, raw) {
+    function probeCached(key) {
+      var entry = probeCache.values[key];
+      if (entry && Date.now() - entry.at < PROBE_TTL) return entry.value;
+    }
+    // Catalog rows only remember where they could be probed; a cached answer applies at once without a request.
+    function probeable(row, raw) {
       // Without a native AbortController a hung or media response could not be stopped: skip probing entirely.
       if (row.native || row.qualities.length || typeof raw !== 'string' || !raw || !window.AbortController) return;
-      var key = scope + '\n' + row.provider + '\n' + raw;
-      if (probeCache.values[key]) return probeApply(row, probeCache.values[key]);
-      if (probes >= 24) return;
-      probes++; probeQueue.push({row: row, url: raw, key: key}); probeNext();
+      var key = scope + '\n' + row.provider + '\n' + raw, cached = probeCached(key);
+      if (cached) return probeApply(row, cached);
+      probeUrls[row.key] = {url: raw, key: key};
     }
     function probeRemember(key, value) {
       if (!probeCache.values[key]) { probeCache.keys.push(key); if (probeCache.keys.length > 200) delete probeCache.values[probeCache.keys.shift()]; }
-      probeCache.values[key] = value;
+      probeCache.values[key] = {value: value, at: Date.now()};
     }
+    // lazy: alternatives the user asked to see; they do not use the leader budget.
+    this.probe = function (rows, lazy) {
+      (rows || []).forEach(function (row) {
+        var target = row && probeUrls[row.key];
+        if (!live() || !target || probed[row.key] || row.qualities.length || row.unavailable || probes >= 24 || !lazy && leaders >= 12) return;
+        probed[row.key] = true; probes++; if (!lazy) leaders++;
+        probeQueue.push({row: row, url: target.url, key: target.key});
+      });
+      probeNext();
+    };
     function probeRead(response, abort) {
       var type = String(response.headers.get('content-type') || '').toLowerCase(), length = Number(response.headers.get('content-length'));
       var known = response.headers.get('content-length') != null && response.headers.get('content-length') !== '' && Number.isFinite(length);
@@ -268,7 +284,7 @@
       var row = job.row;
       return probeFetch(raw).then(function (result) {
         if (!live()) return;
-        if (result.status >= 400 && result.status < 500 && result.status !== 429) {
+        if (result.status === 404 || result.status === 410) {
           if (result.trusted) { probeRemember(job.key, {unavailable: true}); row.unavailable = true; notify(); }
           return;
         }
@@ -278,7 +294,8 @@
           var found = qualities({quality: json.quality || json.qualitys, maxquality: json.maxquality});
           if (found.length) { probeRemember(job.key, {qualities: found}); row.qualities = found; row.measured = true; return notify(); }
           if (typeof json.url === 'string' && json.url && !hop) return probeJob(job, json.url, 1);
-          if (json.error || json.accsdb) { probeRemember(job.key, {unavailable: true}); row.unavailable = true; notify(); }
+          // Explicit "file not found" style errors only; not cached, since providers reuse error texts for quota.
+          if (!json.accsdb && /not\s*found|не\s*найден|удал[её]н|removed|deleted|нет\s+видео|no\s+video/i.test(typeof json.error === 'string' ? json.error : '')) { row.unavailable = true; notify(); }
           return;
         }
         var best = /^\s*#EXTM3U/.test(result.text) ? hlsQuality(result.text) : 0;
@@ -344,7 +361,7 @@
           row.voice = labels[label] > 1 ? label + ' · вариант ' + labels[label] : label;
           row.identityVoice = identityVoice;
           add(row);
-          if (self.rows[self.rows.length - 1] === row) probe(row, file.url);
+          if (self.rows[self.rows.length - 1] === row) probeable(row, file.url);
         });
         if (!matching.length && !voices.length) fallback(source, 'Уточнить серию в источнике');
         voices.forEach(function (choice) { if (!choice.active && choice.url && choice.text && !voiceSeen(source, state.seasonIndex, choice.text)) enqueue(source, choice.url, {seasonIndex: state.seasonIndex, voice: choice.text}, 1); });
@@ -649,6 +666,7 @@
     // Right / long press: every source behind the card, and the favourite voice toggle.
     function sourceMenu(item) {
       var row = item.best, items = [];
+      if (search) search.probe(item.rows, true);
       if (row.release) items.push({title: row.release.Title, subtitle: row.providerName, noenter: true}, {title: 'Смотреть', open: row});
       else item.rows.forEach(function (entry) {
         var extra = entry.voice.indexOf(entry.identityVoice) === 0 ? entry.voice.slice(entry.identityVoice.length).replace(/^\s*·\s*/, '') : '';
@@ -697,6 +715,7 @@
       var loading = search.onlinePending || search.torrentPending;
       showPlaceholder(items.length ? '' : loading ? 'loading' : 'empty:' + q + ':' + kind, loading);
       var wanted = {}, page = items.slice(0, shown);
+      search.probe(page.map(function (item) { return item.best; }));
       page.forEach(function (item, index) {
         wanted[item.key] = true;
         var tile = tiles[item.key] || (tiles[item.key] = card(item.key));

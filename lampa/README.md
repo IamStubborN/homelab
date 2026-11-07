@@ -33,12 +33,16 @@ Refresh restarts it. Recovery pickers skip the torrent search. Devices without
 `AbortController` get a button that explains the picker is unavailable.
 
 Rows without a quality are probed once the live discovery and every catalog page
-are done: two at a time, own-Lampac requests paced like catalog pages, results
-cached per page session (at most 200 URLs). Only JSON, HLS, HTML or small plain
-text bodies under 256 KB are read, so media is never downloaded; without a native
-`AbortController` nothing is probed. A row is marked as having no video only on an
-own-Lampac (`/lite/`, `/proxy/`) 4xx or an explicit `error`/`accsdb` answer; rch/ws
-handshakes, timeouts and foreign CDN refusals change nothing.
+are done, two at a time, own-Lampac requests paced like catalog pages. Only the
+leading source of each card on screen is probed (at most 12 per search); the other
+sources of a voice are probed when its source list is opened (at most 24 probes in
+total). Measured qualities and own 404/410 answers are cached per page session for
+30 minutes (at most 200 URLs). Only JSON, HLS, HTML or small plain text bodies under
+256 KB are read, so media is never downloaded; without a native `AbortController`
+nothing is probed. A row is marked as having no video only on an own-Lampac
+(`/lite/`, `/proxy/`) 404/410 or an explicit "not found" error; 401/403, `accsdb`,
+quota or other errors, rch/ws handshakes, timeouts and foreign CDN refusals change
+nothing.
 
 `playback-status.js` shows a small state card below the native loader in the
 embedded player. Preparation, buffering and GST recovery show one line with an

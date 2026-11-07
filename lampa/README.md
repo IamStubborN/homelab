@@ -11,16 +11,34 @@ were installed on 2026-11-01 after explicit approval; a source checkout alone
 does not install them. Clients need one reload to load the new plugins.
 
 The independent `common-sources.js` picker offers online voices and native torrent
-results together. Torrent rows show available voice metadata, codec, quality,
-size and seeds; Right/long press opens the full release title. Favorite voice
-and quality are stored per HomelabSync profile on this device and reused across
-providers. Results rank favorites first, followed by concrete online variants,
-seeded torrents and native provider fallbacks. Once a result receives focus,
-late results append without moving it or recentering the scroll. Online voices whose
-quality is only known at playback stay visible under every quality tab, marked
-as to be clarified. Leaving mid-search marks the list as interrupted; Refresh
-restarts it. Recovery pickers skip the torrent search. Devices without
+results together. By default it shows one card per online voice: Enter plays the
+best source of that voice (playable first, highest quality, a measured height over
+a declared one), the card names how many other sources stand behind it, and Right
+or a long press lists every source plus a toggle for the favourite voice (shown as
+a star and a chip that can change or clear it). The view chip switches to a flat
+list of every source; recovery pickers start flat. The top card is highlighted as
+the recommendation and, until the first key press, keeps the focus so one OK plays
+it. Quality is a single badge (4K, 1080p, ...) marked as measured or declared; rows
+whose source hands out no video are dimmed and sorted last. Torrent cards carry
+seeds, size and codec badges; Right/long press shows the full release title. A
+status line with a spinner and bar reports how many online providers have answered
+and whether torrents are still searched; an empty result explains what to change.
+Favorite voice and quality are stored per HomelabSync profile on this device and
+reused across providers. Results rank favorites first, followed by concrete online
+variants, seeded torrents and native provider fallbacks. Once a result receives
+focus, late results append without moving it or recentering the scroll. Online
+voices whose quality is only known at playback stay visible under every quality
+tab, marked as to be clarified. Leaving mid-search marks the list as interrupted;
+Refresh restarts it. Recovery pickers skip the torrent search. Devices without
 `AbortController` get a button that explains the picker is unavailable.
+
+Rows without a quality are probed once the live discovery and every catalog page
+are done: two at a time, own-Lampac requests paced like catalog pages, results
+cached per page session (at most 200 URLs). Only JSON, HLS, HTML or small plain
+text bodies under 256 KB are read, so media is never downloaded; without a native
+`AbortController` nothing is probed. A row is marked as having no video only on an
+own-Lampac (`/lite/`, `/proxy/`) 4xx or an explicit `error`/`accsdb` answer; rch/ws
+handshakes, timeouts and foreign CDN refusals change nothing.
 
 Playback recovery actions replace the permanent status button: Retry and Other
 source appear only after a fatal error or 30 seconds of stalled loading in the

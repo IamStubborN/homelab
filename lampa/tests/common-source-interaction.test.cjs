@@ -74,7 +74,7 @@ function setup(t, options = {}) {
   const component = new registry.homelab_sources(object); component.create(); component.start();
   return {...h, component, parser, pages, metadata, fire, requests,
     rows: () => component.render()[0].querySelectorAll('.homelab-common-result'),
-    status: () => component.render()[0].querySelectorAll('.homelab-common-status')[0].text(),
+    status: () => component.render()[0].querySelectorAll('.homelab-common-status-text')[0].text(),
     more: () => component.render()[0].querySelectorAll('.homelab-common-more')[0],
     control: text => h.elements.find(node => node.offsetParent !== null && node.classes.has('homelab-common-chip') && node.content === text),
     focused: () => focused, focusCalls: () => focusCalls, scrollCalls: () => scrollCalls,
@@ -216,4 +216,95 @@ test('Right on the "more" button is a no-op', async t => {
   const before = h.L.Controller.enabled().name;
   h.L.Controller.controllers.content.right();
   assert.equal(h.focused(), more); assert.equal(h.L.Controller.enabled().name, before);
+});
+
+const twoProviders = [{balanser: 'one', name: 'One', show: true, url: '/lite/one'}, {balanser: 'two', name: 'Two', show: true, url: '/lite/two'}, {balanser: 'three', name: 'Three', show: true, url: '/lite/three'}];
+async function grouped(t, options) {
+  const h = setup(t, options);
+  h.parser[0].done({Results: []});
+  await h.finish('/lite/events', twoProviders);
+  assert.match(h.status(), /ответили 0 из 3/);
+  h.pages.set('one', episodePage('Studio A')); h.pages.set('two', episodePage('Studio A', {method: 'play', quality: {'1080p': '/media'}})); h.pages.set('three', episodePage('Studio B', {method: 'play', quality: {'720p': '/media'}}));
+  await h.finish('/lite/one', 'one'); await h.finish('/lite/two', 'two');
+  assert.match(h.status(), /Ищем.*ответили 2 из 3/);
+  await h.finish('/lite/three', 'three'); h.tick(150);
+  return h;
+}
+const voice = row => row.find('.homelab-common-voice').text();
+
+test('one card per voice plays its best source and names how many sources stand behind it', async t => {
+  const h = await grouped(t), picked = [];
+  h.window.HomelabOnlineResume = {select: row => { picked.push(row.provider); return true; }};
+  assert.deepEqual(h.rows().map(voice), ['Studio A', 'Studio B']);
+  const [top] = h.rows();
+  assert.ok(top.classes.has('is-hero') || [...top.classes].some(name => /is-hero/.test(name)), 'the top card is the recommendation');
+  assert.equal(top.find('.homelab-common-pick').text(), 'Рекомендуем');
+  assert.match(top.find('.homelab-common-details').text(), /^Two · ещё 1 источник$/);
+  assert.equal(top.find('.homelab-common-q').text(), '1080p');
+  assert.match(h.status(), /Найдено: 2 варианта · 3 источника/);
+  h.fire(top, 'hover:enter'); assert.deepEqual(picked, ['two'], 'Enter plays the best source of the voice');
+});
+
+test('focus follows the recommendation until the first key press, then never jumps', async t => {
+  const h = setup(t);
+  h.parser[0].done({Results: []});
+  await h.finish('/lite/events', twoProviders);
+  h.pages.set('one', episodePage('Studio A', {method: 'play', quality: {'720p': '/media'}})); h.pages.set('two', episodePage('Studio B', {method: 'play', quality: {'1080p': '/media'}}));
+  await h.finish('/lite/one', 'one'); h.tick(150);
+  assert.equal(h.focused(), h.rows()[0], 'focus sits on the only card');
+  await h.finish('/lite/two', 'two'); h.tick(150);
+  assert.equal(voice(h.focused()), 'Studio B', 'a better recommendation takes the top and the focus while untouched');
+  h.L.Controller.controllers.content.down(); const second = h.focused(); assert.equal(voice(second), 'Studio A');
+  h.pages.set('three', episodePage('Studio C', {method: 'play', quality: {'2160p': '/media'}}));
+  await h.finish('/lite/three', 'three'); h.tick(150);
+  assert.equal(h.focused(), second, 'after a key press late results never move the focus');
+  assert.equal(voice(h.rows().at(-1)), 'Studio C', 'late results append below');
+});
+
+test('Right lists every source of a voice and long press sets the favourite shown as a star', async t => {
+  const h = await grouped(t), picked = [];
+  h.window.HomelabOnlineResume = {select: row => { picked.push(row.provider); return true; }};
+  h.L.Controller.controllers.content.right();
+  const menu = h.select(); assert.match(menu.title, /2 источника · Studio A/);
+  assert.deepEqual(JSON.parse(JSON.stringify(menu.items.map(item => item.title))), ['Two · лучший', 'One', '★ Сделать любимой озвучкой']);
+  assert.match(menu.items[0].subtitle, /1080p · заявлено/); assert.equal(menu.items[1].subtitle, 'Качество уточняется');
+  menu.onSelect(menu.items[1]); assert.deepEqual(picked, ['one'], 'an alternative source can be chosen explicitly');
+  h.L.Controller.toggle('content');
+  h.fire(h.rows()[1], 'hover:long'); h.select().onSelect(h.select().items.at(-1));
+  assert.equal(h.window.HomelabSources.preferences().voice, 'Studio B');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.rows().map(voice))), ['★ Studio B', 'Studio A'], 'the favourite voice moves first');
+  assert.ok(h.control('★ Studio B'), 'a chip shows the favourite and lets it be changed');
+  h.fire(h.rows()[0], 'hover:long'); assert.equal(h.select().items.at(-1).title, 'Убрать из любимых');
+});
+
+test('the view chip switches between voice cards and every source', async t => {
+  const h = await grouped(t);
+  h.fire(h.control('По озвучкам'), 'hover:enter');
+  assert.deepEqual(h.rows().map(voice), ['Studio A', 'Studio B', 'Studio A']);
+  assert.ok(h.control('Все источники'));
+});
+
+test('recovery lists every provider by default', async t => {
+  const h = setup(t, {recovery: {voice: 'Studio A'}});
+  await h.finish('/lite/events', twoProviders.slice(0, 2));
+  h.pages.set('one', episodePage('Studio A')); h.pages.set('two', episodePage('Studio A'));
+  await h.finish('/lite/one', 'one'); await h.finish('/lite/two', 'two'); h.tick(150);
+  assert.equal(h.rows().length, 2);
+});
+
+test('a finished empty search explains itself instead of a blank list', async t => {
+  const h = setup(t, {quality: 2160});
+  h.parser[0].done({Results: [{Title: 'Series S01 720p', Link: 'magnet:fixture', Tracker: 'T'}]});
+  await h.finish('/lite/events', []); h.tick(150);
+  assert.equal(h.rows().length, 0);
+  const empty = h.component.render()[0].querySelectorAll('.homelab-common-empty-hint')[0];
+  assert.match(empty.text(), /4K/); assert.match(h.status(), /Ничего не найдено/);
+});
+
+test('torrent cards carry seeds, size and codec as badges', async t => {
+  const h = setup(t);
+  h.parser[0].done({Results: [{Title: 'Series S01 2160p HEVC', Link: 'magnet:fixture', Tracker: 'Tracker', Seeders: 21, Size: 3221225472}]}); h.tick(150);
+  const badges = h.rows()[0].find('.homelab-common-badges').children.map(node => node.text());
+  assert.deepEqual(badges, ['21 сид', '3,0 ГБ', 'HEVC']);
+  assert.equal(h.rows()[0].find('.homelab-common-q').text(), '4K');
 });

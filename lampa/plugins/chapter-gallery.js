@@ -11,36 +11,64 @@
       core.current, core.subscribe, core.retryMetadata, core.setEnabled].every(function (fn) { return typeof fn === 'function'; })) return;
     window.homelabChapterGallery = {version: 1};
     var gallery = null, retired = [], retireTimer, activeModal = null, skipButton = null, skipFocusTimer;
+    var cache = null, skipped = {}, grabbed = '', skipScope = '';
     $('<style>.homelab-skip{position:absolute;right:1.5em;bottom:2em;z-index:4;display:flex;align-items:center;gap:.6em;padding:.65em 1em;border:1px solid #ffffff99;border-radius:.35em;background:rgba(20,22,27,.9);color:#fff;font-size:.9em;white-space:nowrap;max-width:90vw}.homelab-skip svg{width:1.2em;height:1.2em;flex-shrink:0}.homelab-skip.focus{color:#111;background:#fff;box-shadow:0 0 0 .12em #fff}.homelab-skip.hide{display:none}body.true--mobile .homelab-skip{font-size:14px;min-height:44px;right:16px}</style>').appendTo('head');
     $('<style>.homelab-chapter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(12em,1fr));gap:1em}.homelab-chapter-tile{background:#333;padding:.4em;border-radius:.5em}.homelab-chapter-tile.focus,.homelab-chapter-edit.focus{outline:.18em solid white}.homelab-chapter-tile img{width:100%;aspect-ratio:16/9;object-fit:cover;background:#17191f}.homelab-chapter-current{box-shadow:inset 0 0 0 .15em #9cd7ff}.homelab-chapter-title{font-size:1.25em}.homelab-chapter-time{font-size:1em;opacity:.8}.homelab-chapter-edit{font-size:1.15em;margin-top:.3em;padding:.5em;background:#444;border-radius:.3em}.homelab-chapter-note{margin-bottom:1em;opacity:.8}.homelab-chapter-tools{display:flex;gap:1em;margin-bottom:1em}.homelab-chapter-tools .selector{padding:.6em;background:#444;border-radius:.3em}</style>').appendTo('head');
     function scope() { return L.Timeline.filename() + '|' + String(L.Storage.get('lampac_profile_id', '') || ''); }
     function valid(g) { var now = core.current(); return gallery === g && now && now.key === g.key && scope() === g.scope; }
-    function kind(title) {
+    function kind(title, length) {
       var text = String(title || '').toLowerCase().trim().replace(/^[\d.\-\s]+|[.\-\s]+$/g, '');
-      if (/^(?:op\d*|opening(?:\s+(?:theme|credits))?|intro|заставка|опенинг|オープニング)$/.test(text)) return 'intro';
+      if (/^(?:op\d*|intro|заставка|опенинг|オープニング)$/.test(text)) return 'intro';
+      // Movie discs call their first story chapter "Opening"; only a song-length one is an intro.
+      if (/^opening(?:\s+(?:theme|credits))?$/.test(text)) return length <= 180 ? 'intro' : '';
       if (/^(?:ed\d*|ending(?:\s+(?:theme|credits))?|outro|end credits|credits|титры|эндинг|エンディング)$/.test(text)) return 'outro';
       return '';
     }
     function time(at) { return L.Utils.secondsToTime(at); }
     function chapters() {
       var current = core.current(); if (!current || !current.info) return [];
+      // timeupdate runs this several times a second; storage changes reset it.
+      var id = current.key + '|' + scope();
+      if (cache && cache.id === id && cache.info === current.info) return cache.list;
       var saved = L.Storage.get('homelab_chapter_edits_' + scope(), {}), edits = saved[current.key] || {};
-      return current.info.chapters.map(function (chapter, index) {
-        var override = edits[index], result = Object.assign({kind: kind(chapter.title)}, chapter, {index: index, skipStart: chapter.start, skipEnd: chapter.end});
+      var list = current.info.chapters.map(function (chapter, index) {
+        var override = edits[index], result = Object.assign({kind: kind(chapter.title, chapter.end - chapter.start)}, chapter, {index: index, skipStart: chapter.start, skipEnd: chapter.end});
         if (override && Number.isFinite(override.start) && Number.isFinite(override.end) && override.start >= 0 && override.start < override.end && override.end <= current.info.duration && ['', 'intro', 'outro'].indexOf(override.kind) >= 0) Object.assign(result, {skipStart: override.start, skipEnd: override.end, kind: override.kind});
         return result;
       });
+      cache = {id: id, info: current.info, list: list};
+      return list;
+    }
+    function frameSlot(chapter, step, duration) {
+      // Boundaries usually sit on fades; look a little into the chapter.
+      var length = chapter.end - chapter.start, target = chapter.start + Math.min(15, length * 0.3);
+      var low = Math.ceil(chapter.start / step), high = Math.ceil(chapter.end / step) - 1;
+      var slot = low <= high ? Math.max(low, Math.min(high, Math.round(target / step))) : Math.round((chapter.start + length / 2) / step);
+      if (duration > 0 && slot * step >= duration) slot = Math.max(0, Math.ceil(duration / step) - 1);
+      return slot;
+    }
+    function remember(g, index) {
+      var at = g.order.indexOf(index); if (at >= 0) g.order.splice(at, 1);
+      g.order.push(index);
     }
     function stopThumb(g) { if (!g) return; clearTimeout(g.timer); if (g.job) { clearTimeout(g.job.deadline); g.job.abort.abort(); } g.job = null; g.loading = null; g.busy = false; g.queue = []; }
     function release(g) {
       if (g.released) return;
       g.released = true; stopThumb(g);
       Object.keys(g.images).forEach(function (key) { URL.revokeObjectURL(g.images[key]); });
-      g.images = {};
+      g.images = {}; g.order = [];
     }
-    function afterClose() {
-      if (typeof L.Modal.opened === 'function' && L.Modal.opened()) L.Controller.toggle('modal');
-      else L.Controller.toggle(typeof L.Player.opened === 'function' && !L.Player.opened() ? 'content' : 'player');
+    function afterClose(g) {
+      if (typeof L.Modal.opened === 'function' && L.Modal.opened()) return L.Controller.toggle('modal');
+      if (typeof L.Player.opened === 'function' && !L.Player.opened()) return L.Controller.toggle('content');
+      // The gallery button lives in the panel; return there like a native player window.
+      if (g && g.from === 'player_panel') { L.PlayerPanel.reveal(); L.Controller.toggle('player_panel'); }
+      else L.Controller.toggle('player');
+    }
+    function settle(g) {
+      // Native Modal keeps refocusing params.select on every later toggle;
+      // re-register without it so returning from a selector keeps the last focus.
+      if (gallery === g && typeof L.Modal.toggle === 'function' && L.Controller.enabled().name === 'modal') L.Modal.toggle();
     }
     function ownsTop(g) {
       var name = L.Controller.enabled().name;
@@ -69,11 +97,12 @@
       if (g.html) g.html.empty().text('Просмотр завершён');
       // A selector or another modal may cover this frame. Keep its identity
       // until native Modal restores it, then dismiss only that owned frame.
-      if (ownsTop(g)) { L.Modal.close(); afterClose(); }
+      if (ownsTop(g)) { L.Modal.close(); afterClose(g); }
       else scheduleSweep();
     }
     function queueThumb(g, index) {
-      if (!valid(g) || !g.visible || g.images[index] || g.loading === index || g.queue.indexOf(index) >= 0) return;
+      if (g.images[index]) return remember(g, index);
+      if (!valid(g) || !g.visible || g.loading === index || g.queue.indexOf(index) >= 0) return;
       g.queue.unshift(index); g.queue = g.queue.slice(0, 3); pump(g);
     }
     function pump(g) {
@@ -81,26 +110,30 @@
       var index = g.queue.shift(), chapter = chapters()[index];
       if (!chapter) return pump(g);
       var current = core.current(), step = current && current.info && current.info.step || 5;
-      var at = Math.ceil(chapter.start / step) * step;
-      // A frame before the chapter would depict the previous scene.
-      if (at >= chapter.end) return pump(g);
+      var slot = frameSlot(chapter, step, current && current.info && current.info.duration);
       g.busy = true; g.loading = index;
-      var deadline = Date.now() + 55000, job = g.job = {abort: new AbortController()};
+      var deadline = Date.now() + 55000, job = g.job = {abort: new AbortController(), failures: 0};
       function finish() { if (g.job !== job) return; clearTimeout(job.deadline); clearTimeout(g.timer); g.job = null; g.busy = false; g.loading = null; if (valid(g)) pump(g); }
       job.deadline = setTimeout(function () { job.abort.abort(); finish(); }, 55000);
       function request() {
         if (g.job !== job) return;
         if (!valid(g) || !g.visible || Date.now() > deadline) return finish();
-        fetch(g.key + 'frame/' + Math.floor(at / step) + '.jpg' + (step === 5 ? '' : '?step=' + step), {signal: job.abort.signal}).then(function (r) {
+        fetch(g.key + 'frame/' + slot + '.jpg' + (step === 5 ? '' : '?step=' + step), {signal: job.abort.signal}).then(function (r) {
           if (!valid(g) || !g.visible || g.job !== job) return finish();
           if (r.status === 202) { g.timer = setTimeout(request, 1000); return; }
+          if (r.status === 429 || r.status >= 500) {
+            // A busy shared decoder recovers; back off instead of dropping the tile.
+            var delay = 1000 * Math.pow(2, job.failures++);
+            if (job.failures > 4 || Date.now() + delay >= deadline) return finish();
+            g.timer = setTimeout(request, delay); return;
+          }
           if (!r.ok) throw new Error('frame');
           return r.blob().then(function (blob) {
             if (!valid(g) || !g.visible || g.job !== job || blob.type !== 'image/jpeg' || blob.size > 512 * 1024) return finish();
             var url = URL.createObjectURL(blob); g.images[index] = url;
             g.html.find('[data-chapter="' + index + '"] img').attr('src', url);
-            var keys = Object.keys(g.images);
-            if (keys.length > 12) { var old = keys.find(function (key) { return +key !== index; }); g.html.find('[data-chapter="' + old + '"] img').attr('src', './img/img_broken.svg'); URL.revokeObjectURL(g.images[old]); delete g.images[old]; }
+            remember(g, index);
+            if (g.order.length > 12) { var old = g.order.shift(); g.html.find('[data-chapter="' + old + '"] img').attr('src', './img/img_broken.svg'); URL.revokeObjectURL(g.images[old]); delete g.images[old]; }
             finish();
           });
         }).catch(finish);
@@ -142,12 +175,13 @@
       if (!valid(g)) return;
       if (g.params && (!g.visible || L.Controller.enabled().name !== 'modal')) { g.dirty = true; return; }
       g.dirty = false;
-      var current = core.current(), list = chapters(), html = $('<div class="homelab-chapter-gallery"></div>');
+      var current = core.current(), list = chapters(), html = $('<div class="homelab-chapter-gallery"></div>'), keyed = {};
+      function mark(node, name) { keyed[name] = node; return node.attr('data-focus', name).on('hover:focus hover:hover', function () { g.focusKey = name; }); }
       var note = $('<div class="homelab-chapter-note"></div>').text(!current.info ? current.failed ? 'Главы временно недоступны. Можно повторить запрос.' : 'Читаем главы…' : list.length ? 'Выберите главу для перехода. Кнопка ниже задаёт границы пропуска.' : 'В этом видео нет встроенных глав');
       html.append(note);
       var tools = $('<div class="homelab-chapter-tools"></div>');
-      tools.append($('<div class="selector"></div>').text('Кадры при перемотке: ' + (current.enabled ? 'вкл.' : 'выкл.')).on('hover:enter', function () { core.setEnabled(!core.current().enabled); }));
-      tools.append($('<div class="selector">Обновить главы</div>').on('hover:enter', function () { core.retryMetadata(); }));
+      tools.append(mark($('<div class="selector"></div>').text('Кадры при перемотке: ' + (current.enabled ? 'вкл.' : 'выкл.')), 'tool:frames').on('hover:enter', function () { core.setEnabled(!core.current().enabled); }));
+      tools.append(mark($('<div class="selector">Обновить главы</div>'), 'tool:retry').on('hover:enter', function () { core.retryMetadata(); }));
       html.append(tools);
       var grid = $('<div class="homelab-chapter-grid"></div>'), video = L.PlayerVideo.video(), position = video && video.currentTime || 0, selected;
       list.forEach(function (chapter) {
@@ -156,32 +190,55 @@
         tile.find('.homelab-chapter-time').text(time(chapter.start) + ' — ' + time(chapter.end));
         tile.find('img').attr('src', g.images[chapter.index] || './img/img_broken.svg');
         if (position >= chapter.start && position < chapter.end) { tile.addClass('homelab-chapter-current'); selected = tile; }
-        tile.on('hover:focus', function () { queueThumb(g, chapter.index); });
+        mark(tile, 'tile:' + chapter.index);
+        // Mouse sends hover:hover and touch hover:touch; neither sends hover:focus.
+        tile.on('hover:focus hover:hover hover:touch', function () { queueThumb(g, chapter.index); });
         tile.on('hover:enter', function (event) { event.stopImmediatePropagation(); if (valid(g)) { close(g); L.PlayerVideo.to(chapter.start); } });
-        cell.append(tile).append($('<div class="homelab-chapter-edit selector">Настроить пропуск</div>').on('hover:enter', function () { edit(g, chapter.index); }));
+        cell.append(tile).append(mark($('<div class="homelab-chapter-edit selector">Настроить пропуск</div>'), 'edit:' + chapter.index).on('hover:enter', function () { edit(g, chapter.index); }));
         grid.append(cell);
       });
       html.append(grid); g.html = html;
       if (!g.params) g.params = {title: 'Главы', html: html, size: 'large', onBack: function () { close(g); }};
-      g.params.html = html; g.params.select = selected ? selected[0] : html.find('.selector')[0];
+      var target = g.focusKey && keyed[g.focusKey] || selected || keyed['tool:frames'];
+      g.params.html = html; g.params.select = target[0];
       g.initialIndex = Math.max(0, list.findIndex(function (item) { return position >= item.start && position < item.end; }));
-      if (g.visible && L.Controller.enabled().name === 'modal') L.Modal.update(html);
+      if (g.visible && L.Controller.enabled().name === 'modal') { L.Modal.update(html); settle(g); }
     }
     function open() {
       close(); var current = core.current(); if (!current) return;
-      var g = gallery = {key: current.key, scope: scope(), images: {}, queue: [], visible: false};
-      draw(g); L.Modal.open(g.params);
+      var g = gallery = {key: current.key, scope: scope(), images: {}, order: [], queue: [], visible: false, from: L.Controller.enabled().name};
+      draw(g); L.Modal.open(g.params); settle(g);
+    }
+    function segment(item) { return item.index + '|' + item.skipStart + '|' + item.skipEnd; }
+    function nativeSkip() {
+      // Native Skip renders .player-skip in the same corner of the player root.
+      var root = L.Player.render(), nodes = root && root[0] && typeof root[0].querySelectorAll === 'function' ? root[0].querySelectorAll('.player-skip') : [];
+      for (var i = 0; i < nodes.length; i++) {
+        var node = $(nodes[i]);
+        if (!node.hasClass('hide')) return node.hasClass('player-skip--preview') ? 'preview' : 'active';
+      }
+      return '';
     }
     function updateSkip() {
-      var current = core.current(), video = L.PlayerVideo.video();
-      if (!current || !video || !skipButton) return skipButton && skipButton.addClass('hide');
-      var chapter = chapters().find(function (item) { return item.kind && video.currentTime >= item.skipStart && video.currentTime < item.skipEnd; });
+      if (!skipButton) return;
+      var current = core.current(), video = L.PlayerVideo.video(), name = L.Controller.enabled().name;
+      var list = current && video ? chapters().filter(function (item) { return item.kind; }) : [];
+      if (current && current.key !== skipScope) { skipScope = current.key; skipped = {}; grabbed = ''; }
+      var at = video ? video.currentTime : 0, native = list.length ? nativeSkip() : '';
+      list.forEach(function (item) {
+        // Re-offer after a real rewind, not after a seek that snapped just short of the end.
+        if (skipped[segment(item)] && (at < item.skipStart || at < item.skipEnd - 10)) delete skipped[segment(item)];
+      });
+      var chapter = native ? null : list.find(function (item) { return !skipped[segment(item)] && at >= item.skipStart && at < item.skipEnd; });
       skipButton.toggleClass('hide', !chapter);
-      if (!chapter && L.Controller.enabled().name === 'homelab_chapter_skip') L.Controller.toggle('player');
-      if (chapter) {
-        var label = chapter.kind === 'intro' ? 'Пропустить заставку' : 'Пропустить титры';
-        skipButton.find('.homelab-skip-label').text(label); skipButton.attr('aria-label', label).data('end', chapter.skipEnd);
+      if (!chapter) {
+        if (name === 'homelab_chapter_skip') L.Controller.toggle(native === 'active' ? 'player_skip' : 'player');
+        return;
       }
+      var label = chapter.kind === 'intro' ? 'Пропустить заставку' : 'Пропустить титры';
+      skipButton.find('.homelab-skip-label').text(label); skipButton.attr('aria-label', label).data('end', chapter.skipEnd).data('segment', segment(chapter));
+      // Like native Skip: a bare player takes OK for the visible button, once per segment.
+      if (name === 'player' && grabbed !== segment(chapter)) { grabbed = segment(chapter); L.Controller.toggle('homelab_chapter_skip'); }
     }
     function skipPosition(event) {
       var root = L.Player.render(), panel = L.PlayerPanel.render();
@@ -192,8 +249,16 @@
     }
     function activateSkip() {
       if (!skipButton || skipButton.hasClass('hide')) return;
-      L.PlayerVideo.to(skipButton.data('end')); L.Controller.toggle('player');
+      var end = skipButton.data('end'), video = L.PlayerVideo.video(), current = core.current(), playlist = L.PlayerPlaylist;
+      var duration = video && Number.isFinite(video.duration) && video.duration > 0 ? video.duration : current && current.info && current.info.duration || 0;
+      skipped[skipButton.data('segment')] = true; skipButton.addClass('hide');
+      L.Controller.toggle('player');
+      if (!(duration > 0 && end >= duration - 2)) return L.PlayerVideo.to(end);
+      // Seeking to the exact end may stall instead of ending; mirror native end-skip.
+      if (playlist && typeof playlist.canNext === 'function' && typeof playlist.next === 'function' && playlist.canNext()) playlist.next();
+      else L.PlayerVideo.to(-1);
     }
+    function leaveSkip() { if (typeof L.Player.toggle === 'function') L.Player.toggle(); else L.Controller.toggle('player'); }
     function panel() {
       var root = L.Player.render(); if (!root || !root.length) return;
       if (!skipButton) skipButton = $('<div class="selector hide homelab-skip" role="button"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 4l10 8L4 20V4m12 0h4v16h-4z"/></svg><span class="homelab-skip-label"></span></div>').on('hover:enter', activateSkip);
@@ -204,9 +269,13 @@
       toggle: function () { var root = L.Player.render(); L.Controller.collectionSet(root); L.Controller.collectionFocus(skipButton[0], root); },
       enter: activateSkip,
       gone: function () { if (skipButton) skipButton.removeClass('focus'); },
-      down: function () { L.PlayerPanel.toggle(); }, back: function () { L.PlayerPanel.toggle(); },
-      left: function () { L.PlayerPanel.toggle(); }, right: function () { L.PlayerPanel.toggle(); },
-      up: function () { L.Controller.toggle('player'); }
+      // Same keys as native player_skip.
+      down: function () { L.PlayerPanel.toggle(); }, left: leaveSkip, right: leaveSkip,
+      back: function () { if (typeof L.Player.close === 'function') L.Player.close(); else leaveSkip(); },
+      up: function () {
+        if (typeof L.PlayerPanel.visibleStatus === 'function' && typeof L.PlayerPanel.hide === 'function' && L.PlayerPanel.visibleStatus()) L.PlayerPanel.hide();
+        else L.PlayerPanel.reveal();
+      }
     });
     L.Keypad.listener.follow('keydown', function (event) {
       if (!event.enabled || (event.code !== 38 && event.code !== 29460) || L.Controller.enabled().name !== 'player_rewind' || !skipButton || skipButton.hasClass('hide')) return;
@@ -249,7 +318,7 @@
       L.Select.listener.follow('hide', scheduleSweep); L.Select.listener.follow('close', scheduleSweep);
     }
     if (L.Controller.listener && typeof L.Controller.listener.follow === 'function') L.Controller.listener.follow('toggle', scheduleSweep);
-    L.Storage.listener.follow('change', function () { if (gallery && gallery.scope !== scope()) close(); updateSkip(); });
+    L.Storage.listener.follow('change', function () { cache = null; if (gallery && gallery.scope !== scope()) close(); updateSkip(); });
     panel(); updateSkip();
   }
   install(); window.addEventListener('homelab:seek-ready', install);

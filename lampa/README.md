@@ -42,8 +42,9 @@ handshakes, timeouts and foreign CDN refusals change nothing.
 
 `playback-status.js` shows a small state card below the native loader in the
 embedded player. Preparation, buffering and GST recovery show one line with an
-elapsed timer ("Подготовка видео… 8 с") after 700 ms, so short buffering blips
-never flash; GST recovery shows only while the picture is actually stuck. For
+elapsed timer ("Подготовка видео… 8 с"): a start after 2.5 s, which Lampa's own
+loader covers until then, and mid-play buffering after 700 ms, so short blips
+never flash; the card hides while a Lampa menu is open; GST recovery shows only while the picture is actually stuck. For
 torrents the card adds peers, download speed and read-ahead from Lampa's own
 TorrServer `/cache` request ("Торрент: 12 пиров · 3,4 МБ/с · буфер 40%"),
 polled at most every 2 seconds and only while the card is visible. The card
@@ -55,11 +56,13 @@ receives data and a seek that never completes; a user pause is not a stall.
 After 20 seconds of preparation the card also suggests Other source. Retry is
 shown only when the current source can be retried and GST is not already
 recovering on its own, and Lampa's own switch to a reserve URL is not a failure.
-The card takes the remote only from the bare player (or from the panel once
-playback is stuck), never from a menu, and offers it once per state: Retry is
-focused first, Other source after a retry that did not help. Left/Right move
-between the actions, Down opens the panel, Back hides the card while the panel
-keeps the actions. Phase changes never produce notifications or raw error text,
+The card takes the remote only from the bare player, never from the panel (the
+user may be seeking away from a broken spot) or a menu, and once per state:
+Retry is focused first, Other source after a retry that did not help. Left/Right
+move between the actions and hand off to the panel at the edges, Down opens the
+panel. Back on an automatically focused card hides it and still acts as the
+player's Back; after the user moved focus, Back only hides it. The panel keeps
+the actions. Phase changes never produce notifications or raw error text,
 and recovery never switches automatically. Online retry resolves a fresh
 URL from the same provider. Other source opens concrete online variants for the
 same episode and known voice. Exact voice labels rank first; whole-label aliases

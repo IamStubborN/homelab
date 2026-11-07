@@ -5,8 +5,9 @@
   if (![L.Player.playdata, L.Player.listener.follow, L.PlayerVideo.video,
     L.PlayerVideo.listener.follow, L.PlayerPanel.render, L.Noty.show, L.Player.opened].every(function (fn) { return typeof fn === 'function'; })) return;
   window.homelabPlaybackStatus = {version: 5};
-  // Short buffering blips stay invisible; a long start suggests another source.
-  var DEBOUNCE = 700, ESCALATE = 20000, STATS_EVERY = 2000, CTRL = 'homelab_playback_card';
+  // Short buffering blips stay invisible, Lampa's own loader covers a fast
+  // start; a long start suggests another source.
+  var DEBOUNCE = 700, START_DELAY = 2500, ESCALATE = 20000, STATS_EVERY = 2000, CTRL = 'homelab_playback_card';
   var state = null, boundAudio = null, retryButton = null, sourceButton = null, card = null;
   function scope() { return window.HomelabSync ? window.HomelabSync.scope() : L.Timeline.filename(); }
   function valid(s) { return state === s && L.Player.opened() && L.Player.playdata() === s.work && scope() === s.scope; }
@@ -69,17 +70,23 @@
     if (state && state.attempts && !card.source.hasClass('hide')) return card.source;
     return buttons()[0];
   }
+  function toPanel() { if (state) state.autoFocus = false; if (typeof L.PlayerPanel.toggle === 'function') L.PlayerPanel.toggle(); else L.Controller.toggle('player'); }
   function moveFocus(step) {
     var list = buttons(), index = -1;
     list.forEach(function (b, i) { if (b.hasClass('focus')) index = i; });
     var next = list[index + step];
-    if (next) L.Controller.collectionFocus(next[0], card.actions);
+    // The edges hand the remote to the panel instead of trapping it.
+    if (next) L.Controller.collectionFocus(next[0], card.actions); else toPanel();
   }
   function release() { if (controller() === CTRL && L.Player.opened()) L.Controller.toggle('player'); }
   function dismiss() {
-    if (state) state.dismissed = true;
+    var auto = state && state.autoFocus;
+    if (state) { state.dismissed = true; state.autoFocus = false; }
     hideCard(); if (controller() === CTRL) L.Controller.toggle('player');
+    // The user never asked for the card's focus: Back still means the player's Back.
+    if (auto && controller() === 'player' && typeof L.Controller.back === 'function') L.Controller.back();
   }
+  function menuOpen() { return !!(L.Select && typeof L.Select.opened === 'function' && L.Select.opened()); }
   function cardView() {
     if (card) return card;
     var root = typeof L.Player.render === 'function' && L.Player.render(); if (!root || !root.length) return null;
@@ -103,9 +110,13 @@
         L.Controller.collectionSet(card.actions); L.Controller.collectionFocus(preferred()[0], card.actions);
       },
       left: function () { moveFocus(-1); }, right: function () { moveFocus(1); }, up: function () {},
-      down: function () { if (typeof L.PlayerPanel.toggle === 'function') L.PlayerPanel.toggle(); else L.Controller.toggle('player'); },
+      down: toPanel,
       gone: function () { card.retry.removeClass('focus'); card.source.removeClass('focus'); },
       back: dismiss
+    });
+    // Lampa's menus stack above the player; the card steps aside meanwhile.
+    if (L.Select && L.Select.listener && typeof L.Select.listener.follow === 'function') ['toggle', 'fullshow', 'hide', 'close'].forEach(function (name) {
+      L.Select.listener.follow(name, function () { setTimeout(render, 0); });
     });
     return card;
   }
@@ -180,13 +191,14 @@
     var kind = kindOf(s), now = Date.now(), waiting = kind === 'preparing' || kind === 'buffering' || kind === 'recovering';
     if (kind !== s.kind) {
       if (waiting || !kind) s.since = now;
-      s.kind = kind; s.dismissed = false; s.offered = false;
+      s.kind = kind; s.dismissed = false; s.offered = false; s.autoFocus = false;
       if (s.escalated) { s.escalated = false; actions(s, s.actionable); }
     }
-    if (!kind || s.dismissed) return hideCard();
+    if (!kind || s.dismissed || menuOpen()) return hideCard();
     var elapsed = now - s.since;
     if (kind === 'preparing' && !s.escalated && elapsed >= ESCALATE && canChoose(s)) { s.escalated = true; actions(s, s.actionable); }
-    if (waiting && elapsed < DEBOUNCE) { hideCard(); c.timer = setTimeout(render, DEBOUNCE - elapsed); return; }
+    var delay = kind === 'preparing' ? START_DELAY : DEBOUNCE;
+    if (waiting && elapsed < delay) { hideCard(); c.timer = setTimeout(render, delay - elapsed); return; }
     var retry = retryShown(s), source = sourceShown(s), text = content(s, kind, elapsed, retry, source);
     var layout = (waiting ? 'wait' : 'alert') + (retry ? ':retry' : '') + (source ? ':source' : ''), changed = c.layout !== layout;
     line(c.title, 'title', text.title); line(c.detail, 'detail', text.detail || ''); line(c.hint, 'hint', text.hint);
@@ -201,9 +213,9 @@
     var name = controller();
     if (!retry && !source) { if (name === CTRL) L.Controller.toggle('player'); return; }
     if (name === CTRL) { if (changed) L.Controller.toggle(CTRL); return; }
-    // Take the remote only from the bare player, never from a menu; from the
-    // panel only once playback is stuck for good.
-    if (!s.offered && (name === 'player' || name === 'player_panel' && !waiting)) { s.offered = true; L.Controller.toggle(CTRL); }
+    // Take the remote only from the bare player: in the panel the user may be
+    // seeking away from a broken spot, and the panel has the same actions.
+    if (!s.offered && name === 'player') { s.offered = true; s.autoFocus = true; L.Controller.toggle(CTRL); }
   }
 
   function capture(s) {

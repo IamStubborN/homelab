@@ -198,7 +198,9 @@ test('preparation shows a live timer and after twenty seconds suggests another s
   realistic(h); h.run('plugins/playback-status.js'); const log = focusLog(h);
   h.start({card: {id: 7}, homelab_torrent_hash: hash});
   const c = card(h), panelButtons = buttons(h);
-  h.tick(8000); assert.equal(c.title.text(), 'Подготовка видео… 8 с');
+  h.tick(2400); assert.ok(!shown(c.root), "Lampa's loader covers a fast start");
+  h.tick(100); assert.ok(shown(c.root)); assert.equal(c.title.text(), 'Подготовка видео… 2 с');
+  h.tick(5500); assert.equal(c.title.text(), 'Подготовка видео… 8 с');
   assert.equal(c.detail.text(), 'Подключаемся к раздаче'); assert.ok(!shown(c.hint) && !shown(c.source));
   assert.equal(controllerName(h), 'player', 'nothing to focus yet');
   h.tick(12000);
@@ -234,8 +236,9 @@ test('the failure card focuses Retry first, Other source after a retry that fail
   h.L.Controller.controllers.homelab_playback_card.down(); assert.equal(controllerName(h), 'player_panel');
   h.video().fire('pause'); h.videoEvent('error', {fatal: true}); assert.equal(controllerName(h), 'player_panel', 'the card does not pull the remote back');
   h.L.Controller.toggle('homelab_playback_card');
+  let backs = 0; h.L.Controller.back = () => { backs++; };
   h.L.Controller.controllers.homelab_playback_card.back();
-  assert.ok(!shown(c.root)); assert.equal(controllerName(h), 'player');
+  assert.ok(!shown(c.root)); assert.equal(controllerName(h), 'player'); assert.equal(backs, 0, 'once the user moved focus, Back only hides the card');
   assert.ok(shown(buttons(h).retry) && shown(buttons(h).source), 'the panel keeps the actions');
   assert.equal(h.notices.length, 0);
 });
@@ -249,7 +252,10 @@ test('the card never takes the remote from a menu and left/right move between it
   assert.ok(shown(c.root)); assert.equal(controllerName(h), 'select');
   h.L.Controller.toggle('homelab_playback_card'); assert.equal(log.at(-1), c.retry);
   c.retry.addClass('focus'); h.L.Controller.controllers.homelab_playback_card.right(); assert.equal(log.at(-1), c.source);
-  c.retry.removeClass('focus'); c.source.addClass('focus'); h.L.Controller.controllers.homelab_playback_card.right(); assert.equal(log.at(-1), c.source, 'stops at the edge');
+  c.retry.removeClass('focus'); c.source.addClass('focus'); h.L.Controller.controllers.homelab_playback_card.right();
+  assert.equal(controllerName(h), 'player_panel', 'the last action hands off to the panel');
+  h.L.Controller.toggle('homelab_playback_card'); c.source.removeClass('focus'); c.retry.addClass('focus');
+  h.L.Controller.controllers.homelab_playback_card.left(); assert.equal(controllerName(h), 'player_panel', 'so does the first');
 });
 
 test('a stall card names a stuck seek and a started playback differently', t => {
@@ -278,7 +284,7 @@ test('torrent statistics come from Lampa TorrServer cache only while the card is
   h.L.Torserver.url = () => 'https://lampa.test/torrserver';
   h.L.Torserver.cache = (value, ok, fail) => asked.push({value, ok, fail});
   const video = realistic(h); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
-  h.tick(600); assert.equal(asked.length, 0, 'nothing is polled behind a hidden card');
+  h.tick(2400); assert.equal(asked.length, 0, 'nothing is polled behind a hidden card');
   h.tick(100); assert.equal(asked.length, 1); assert.equal(asked[0].value, hash);
   asked[0].ok({Torrent: {active_peers: 12, download_speed: 3.4 * 1048576}, Readers: [{Reader: 100, End: 110}],
     Pieces: {100: {Completed: true}, 101: {Completed: true}, 102: {Completed: true}, 103: {Completed: true}, 105: {Completed: true}}});
@@ -296,4 +302,35 @@ test('online playback shows no torrent statistics', t => {
   h.L.Torserver.url = () => 'https://lampa.test/torrserver'; h.L.Torserver.cache = (...args) => asked.push(args);
   realistic(h); h.run('plugins/playback-status.js'); h.start({card: {id: 7}, homelab_online: {provider: 'one'}});
   h.tick(5000); assert.equal(asked.length, 0); assert.equal(card(h).detail.text(), 'Загружаем видео');
+});
+
+test('Back on an automatically focused card hides it and still reaches the player', t => {
+  const h = harness(t); h.window.HomelabSources = {recover: () => true};
+  realistic(h); h.run('plugins/playback-status.js');
+  const backs = []; h.L.Controller.back = () => backs.push(controllerName(h));
+  h.start({card: {id: 7}, homelab_torrent_hash: hash});
+  h.videoEvent('error', {fatal: true}); assert.equal(controllerName(h), 'homelab_playback_card');
+  h.L.Controller.controllers.homelab_playback_card.back();
+  assert.ok(!shown(card(h).root)); assert.deepEqual(backs, ['player'], "one Back is the player's Back");
+});
+
+test('the card never takes the remote from the panel', t => {
+  const h = harness(t); h.window.HomelabSources = {recover: () => true};
+  const video = realistic(h); h.run('plugins/playback-status.js'); h.start({card: {id: 7}, homelab_torrent_hash: hash});
+  video.play(); video.data(); video.advance(2);
+  h.L.PlayerPanel.toggle(); assert.equal(controllerName(h), 'player_panel');
+  video.readyState = 2; video.fire('waiting'); h.tick(30000);
+  assert.ok(shown(card(h).root) && shown(card(h).retry)); assert.equal(controllerName(h), 'player_panel');
+  h.videoEvent('error', {fatal: true}); assert.equal(controllerName(h), 'player_panel');
+  assert.ok(shown(buttons(h).retry) && shown(buttons(h).source));
+});
+
+test('mid-play buffering keeps the short delay and the card steps aside while a menu is open', t => {
+  const h = harness(t); let open = false; h.L.Select.opened = () => open;
+  const video = realistic(h); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
+  video.play(); video.data(); video.advance(2);
+  video.readyState = 2; video.fire('waiting'); h.tick(700); assert.ok(shown(card(h).root));
+  open = true; h.L.Select.show({items: []}); h.tick(0); assert.ok(!shown(card(h).root));
+  h.tick(3000); assert.ok(!shown(card(h).root), 'the timer does not bring it back');
+  open = false; h.L.Select.closeAll(); h.tick(0); assert.ok(shown(card(h).root));
 });

@@ -15,7 +15,11 @@ size and seeds; Right/long press opens the full release title. Favorite voice
 and quality are stored per HomelabSync profile on this device and reused across
 providers. Results rank favorites first, followed by concrete online variants,
 seeded torrents and native provider fallbacks. Once a result receives focus,
-late results append without moving it or recentering the scroll.
+late results append without moving it or recentering the scroll. Online voices whose
+quality is only known at playback stay visible under every quality tab, marked
+as to be clarified. Leaving mid-search marks the list as interrupted; Refresh
+restarts it. Recovery pickers skip the torrent search. Devices without
+`AbortController` get a button that explains the picker is unavailable.
 
 Playback recovery actions replace the permanent status button: Retry and Other
 source appear only after a fatal error or 30 seconds of stalled loading in the

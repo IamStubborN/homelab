@@ -61,9 +61,10 @@ test('common picker discovers voices for exactly one episode with two catalog re
   await h.finish('/lite/events', [h.source('one'), h.source('two'), h.source('three')]);
   assert.equal(h.requests.filter(r => r.url.pathname.startsWith('/lite/') && !r.completed).length, 2);
   h.pages.set('seasons', {'.videos__item': [{method: 'link', text: 'Сезон 1', url: '/lite/one?s=1'}, {method: 'link', text: 'Сезон 2', url: '/lite/one?s=2'}]});
-  h.pages.set('episode', {'.videos__item': [{method: 'call', text: 'Episode 2', season: 2, episode: 2}, {method: 'call', text: 'Episode 3', season: 2, episode: 3, quality: {'1080p': '/media'}}],
+  h.pages.set('episode', {'.videos__item': [{method: 'call', text: 'Episode 2', season: 2, episode: 2}, {method: 'play', text: 'Episode 3', season: 2, episode: 3, url: '/media', quality: {'1080p': '/media'}}],
     '.videos__button': [{active: true, text: 'Preferred', url: '/lite/one?s=2'}, {text: 'Alternate', url: '/lite/one?s=2&voice=alternate'}]});
-  h.pages.set('alternate', {'.videos__item': [{method: 'call', text: 'Episode 3', season: 2, episode: 3}], '.videos__button': [{active: true, text: 'Alternate', url: '/lite/one?s=2&voice=alternate'}]});
+  // Realistic Lampac "call" items carry no quality map: quality stays unknown until playback.
+  h.pages.set('alternate', {'.videos__item': [{method: 'call', text: 'Episode 3', season: 2, episode: 3, url: '/lite/one/video?e=3'}], '.videos__button': [{active: true, text: 'Alternate', url: '/lite/one?s=2&voice=alternate'}]});
   await h.finish('/lite/one', 'seasons');
   await h.finish('/lite/two', {rch: true});
   await h.finish('/lite/three', {rch: true});
@@ -72,7 +73,7 @@ test('common picker discovers voices for exactly one episode with two catalog re
   const rows = h.search.rows.filter(r => !r.native);
   assert.deepEqual(Array.from(rows, r => r.voice), ['Preferred', 'Alternate']);
   assert.equal(rows[0].seasonIndex, 1); assert.equal(rows[0].identityVoice, 'Preferred');
-  assert.deepEqual(Array.from(rows[0].qualities), [1080]);
+  assert.deepEqual(Array.from(rows[0].qualities), [1080]); assert.deepEqual(Array.from(rows[1].qualities), []);
   assert.equal(h.search.onlinePending, false); assert.equal(h.peak(), 2);
   assert.ok(h.requests.every(r => !r.url.pathname.includes('media')));
   assert.ok(!h.requests.some(r => r.url.searchParams.get('s') === '1'));
@@ -265,4 +266,90 @@ test('unknown catalog episode identities cannot masquerade as episode one', asyn
   h.pages.set('unknown-episode', {'.videos__item': [null, '', false, true].map(episode => ({method: 'call', text: 'Episode', season: 0, episode, voice_name: 'Preferred'}))});
   await h.finish('/lite/events', [h.source('one')]); await h.finish('/lite/one', 'unknown-episode');
   assert.equal(h.search.rows.length, 1); assert.equal(h.search.rows[0].native, true); h.search.cancel();
+});
+
+test('recovery searches skip the parser entirely', async t => {
+  const h = setup(t);
+  const search = new h.window.HomelabSources.Search(h.movie, h.selection, () => {}, {torrents: false});
+  search.start(); await flush();
+  assert.equal(h.parser.length, 0); assert.equal(search.torrentPending, false);
+  search.cancel();
+});
+
+test('multi-voice movie catalogs become one row per voice item, matching native voice names', async t => {
+  const h = setup(t); delete h.movie.name; h.movie.title = 'Film';
+  const search = new h.window.HomelabSources.Search(h.movie, {season: 1, episode: 1}, () => {});
+  search.start(); await flush();
+  h.parser[0].done({Results: []});
+  h.pages.set('film', {'.videos__item': [
+    {method: 'play', text: 'Studio Alpha', url: '/media/a', quality: {'1080p': '/media/a', '720p': '/media/a7'}},
+    {method: 'play', text: 'Studio Beta', url: '/media/b', quality: {'1080p': '/media/b'}},
+    {method: 'play', text: '720p', url: '/media/c'}]});
+  await h.finish('/lite/events', [h.source('one')]); await h.finish('/lite/one', 'film');
+  assert.deepEqual(Array.from(search.rows, r => r.identityVoice), ['Studio Alpha', 'Studio Beta', 'Film']);
+  assert.deepEqual(Array.from(search.rows[0].qualities), [1080, 720]);
+  search.cancel();
+});
+
+test('live discovery keeps its full window when externalids and events are slow', async t => {
+  const h = setup(t); delete h.movie.kinopoisk_id;
+  const search = new h.window.HomelabSources.Search(h.movie, h.selection, () => {});
+  search.start(); await flush();
+  h.tick(4000); await flush(); // externalids times out
+  h.tick(7200); await flush();
+  await h.finish('/lite/events', {life: true, memkey: 'fixture'});
+  await h.finish('/lifeevents', {ready: false, online: []});
+  await h.finish('/lifeevents', {ready: false, online: []});
+  await h.finish('/lifeevents', {ready: false, online: []});
+  assert.ok(Date.now() > 15000, 'the old construction-time window has elapsed');
+  assert.equal(search.onlinePending, true, 'polling continues for 15 s after it started');
+  await h.finish('/lifeevents', {ready: true, online: [h.source('one')]});
+  assert.ok(h.requests.some(r => r.url.pathname === '/lite/one'));
+  search.cancel();
+});
+
+test('voice pages are fetched once per provider, season and voice, after first pages of other providers', async t => {
+  const h = setup(t); await h.start();
+  await h.finish('/lite/events', [h.source('one'), h.source('two')]);
+  const buttons = active => ['A', 'B', 'C'].map(v => ({text: 'Studio ' + v, active: v === active, url: '/lite/one?s=2&t=' + v}));
+  const episodes = voice => [{method: 'call', text: '3 серия', season: 2, episode: 3, url: '/lite/one/video?t=' + voice}];
+  h.pages.set('seasons', {'.videos__item': [{method: 'link', text: '1 сезон', url: '/lite/one?s=1'}, {method: 'link', text: '2 сезон', url: '/lite/one?s=2'}]});
+  h.pages.set('season-a', {'.videos__item': episodes('A'), '.videos__button': buttons('A')});
+  h.pages.set('voice-b', {'.videos__item': episodes('B'), '.videos__button': buttons('B')});
+  h.pages.set('voice-c', {'.videos__item': episodes('C'), '.videos__button': buttons('C')});
+  await h.finish('/lite/one', 'seasons');
+  await h.finish('/lite/one', 'season-a');
+  // provider two's first page has priority over provider one's voice pages
+  const pending = h.requests.filter(r => !r.completed && !r.options.signal.aborted).map(r => r.url.pathname + r.url.search);
+  assert.ok(pending.some(p => p.startsWith('/lite/two')), pending.join());
+  await h.finish('/lite/two', {rch: true});
+  await h.finish('/lite/one', 'voice-b');
+  await h.finish('/lite/one', 'voice-c');
+  h.tick(5000); await flush();
+  const voices = h.requests.filter(r => r.url.searchParams.has('t')).map(r => r.url.searchParams.get('t'));
+  assert.deepEqual(voices.sort(), ['B', 'C'], 'the already visited active voice is never re-fetched');
+  assert.deepEqual(Array.from(h.search.rows.filter(r => !r.native), r => r.voice), ['Studio A', 'Studio B', 'Studio C']);
+  assert.equal(h.search.onlinePending, false);
+  h.search.cancel();
+});
+
+test('cancelling an unfinished search marks it interrupted', async t => {
+  const h = setup(t); await h.start();
+  h.search.cancel(); assert.equal(h.search.interrupted, true);
+  const done = new h.window.HomelabSources.Search(h.movie, h.selection, () => {}, {torrents: false});
+  done.cancel(); assert.equal(done.interrupted, false, 'a search that never started is not interrupted');
+});
+
+test('devices without fetch abort support get a visible notice instead of a missing button', t => {
+  const follows = {}, notices = [], buttons = [];
+  const node = () => ({on(name, fn) { this.handler = fn; return this; }, find: () => ({length: 0}), prepend(b) { buttons.push(b); }});
+  const L = {Listener: {follow: (name, fn) => { follows[name] = fn; }}, Noty: {show: text => notices.push(text)}, Activity: {active: () => null}};
+  const $ = () => { const n = node(); n.length = 1; return n; };
+  const window = {appready: true, Lampa: L, $, HomelabSync: {scope: () => 'a'}, fetch() {}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../plugins/common-sources.js'), 'utf8'), {window, Lampa: L, document: {}, console});
+  assert.ok(follows.full, 'the full card still receives a button');
+  const render = {find: selector => selector === '.buttons--container' ? Object.assign(node(), {length: 1}) : {length: 0}};
+  follows.full({type: 'complite', data: {movie: {id: 1}}, object: {activity: {render: () => render}}});
+  assert.equal(buttons.length, 1); buttons[0].handler();
+  assert.match(notices[0], /недоступен/);
 });

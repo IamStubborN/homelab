@@ -24,7 +24,9 @@ the separate history extension.
   own pending frame; closing the list sends a cancel for that id. A 202 is polled
   for at most 20 seconds; a 429/5xx or network error stops thumbnails until the
   list is reopened. Disabled frames request none. Up to 64 thumbnails are kept
-  per file and double as exact seek frames.
+  per file and double as exact seek frames. An evicted object URL that is still
+  the card image or a painted row of the open list is revoked only once nothing
+  references it; closing playback revokes all of them.
 - With two or more chapters the timeline shows thin chapter ticks in their own
   layer (Lampa's ad/skip segments are untouched) and the current chapter name
   next to the elapsed time. `timeupdate` only compares against the current

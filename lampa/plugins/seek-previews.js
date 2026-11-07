@@ -179,10 +179,27 @@
       view.flags[name] = on;
       if (on) overlay.addClass('homelab-seek-preview--' + name); else overlay.removeClass('homelab-seek-preview--' + name);
     }
+    // Evicted object URLs that are still on screen (card image, a painted
+    // chapter row) are retired, not revoked, until nothing references them.
+    function inUse(state, url) {
+      return url === state.blob || url === view.src || !!(strip && strip.state === state && strip.painted[url]);
+    }
+    function drop(state, url) {
+      if (inUse(state, url)) state.retired.push(url); else URL.revokeObjectURL(url);
+    }
+    function sweep(state) {
+      if (!state || !state.retired.length) return;
+      state.retired = state.retired.filter(function (url) {
+        if (inUse(state, url)) return true;
+        URL.revokeObjectURL(url);
+        return false;
+      });
+    }
     function card(url, nearSlot, pending, failed, step) {
       if (url !== view.src) {
         if (url) parts.img.attr('src', url); else parts.img.removeAttr('src');
         view.src = url || '';
+        sweep(current);
       }
       flag('image', !!url);
       flag('near', !!url && nearSlot != null);
@@ -239,6 +256,8 @@
         stopPreparation(current);
         (current.frames || []).forEach(function (entry) { URL.revokeObjectURL(entry.url); });
         Object.keys(current.thumbs).forEach(function (slot) { URL.revokeObjectURL(current.thumbs[slot]); });
+        current.retired.forEach(function (url) { URL.revokeObjectURL(url); });
+        current.retired = [];
         if (current.metaRequest) current.metaRequest.abort.abort();
         clearTimeout(current.metaTimer); clearTimeout(current.metaDeadline);
       }
@@ -311,15 +330,18 @@
       return entry ? entry.url : null;
     }
     function keepThumb(state, slot, url) {
-      if (state.thumbs[slot]) URL.revokeObjectURL(state.thumbs[slot]);
+      if (state.thumbs[slot]) drop(state, state.thumbs[slot]);
       else state.thumbOrder.push(slot);
       state.thumbs[slot] = url;
       while (state.thumbOrder.length > THUMB_KEEP) {
         var old = state.thumbOrder.shift();
-        URL.revokeObjectURL(state.thumbs[old]); delete state.thumbs[old];
+        var stale = state.thumbs[old];
+        delete state.thumbs[old];
+        drop(state, stale);
       }
     }
-    function paintThumb(node, url) {
+    function paintThumb(s, node, url) {
+      s.painted[url] = true;
       node.removeClass('homelab-chapter-thumb--loading').addClass('homelab-chapter-thumb--ready')
         .find('.homelab-chapter-thumb__img').css('background-image', 'url("' + url + '")');
     }
@@ -331,10 +353,11 @@
       if (s.abort) s.abort.abort();
       if (s.used) fetch('/previews/cancel', {method: 'POST', keepalive: true, headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({client: chapterClient, n: ++chapterOrder})}).catch(function () {});
+      sweep(s.state);
     }
     function stripOpen(state) {
       stripStop();
-      strip = {state: state, nodes: {}, focus: -1, failed: {}, slot: null};
+      strip = {state: state, nodes: {}, painted: {}, focus: -1, failed: {}, slot: null};
     }
     function stripNode(state, index, item) {
       // Lampa draws rows in order: the first chapter row starts a fresh list.
@@ -342,7 +365,7 @@
       var node = item.find('.homelab-chapter-thumb');
       strip.nodes[index] = node;
       var url = cachedFrame(state, chapterSlot(state, index));
-      if (url) paintThumb(node, url);
+      if (url) paintThumb(strip, node, url);
     }
     function stripFocus(state, index) {
       var s = strip;
@@ -404,7 +427,7 @@
           if (blob.type !== 'image/jpeg' || blob.size > 512 * 1024) return done(true);
           var url = URL.createObjectURL(blob);
           keepThumb(state, slot, url);
-          Object.keys(s.nodes).forEach(function (index) { if (chapterSlot(state, Number(index)) === slot) paintThumb(s.nodes[index], url); });
+          Object.keys(s.nodes).forEach(function (index) { if (chapterSlot(state, Number(index)) === slot) paintThumb(s, s.nodes[index], url); });
           done(false);
         });
       }).catch(function (error) {
@@ -575,7 +598,7 @@
     function remember(state, slot, url) {
       state.frames = state.frames || [];
       state.frames.push({slot: slot, url: url});
-      while (state.frames.length > 16) URL.revokeObjectURL(state.frames.shift().url);
+      while (state.frames.length > 16) drop(state, state.frames.shift().url);
     }
     function frame(state, slot, request, deadline) {
       if (!live(state) || state.request !== request) return;
@@ -681,7 +704,7 @@
       seekControls();
       var base = identity(data);
       if (!base || !panelElements()) return;
-      var state = current = {data: data, base: base, metaAttempts: 0, slot: null, thumbs: {}, thumbOrder: [], nowIndex: -1, labelIndex: -1};
+      var state = current = {data: data, base: base, metaAttempts: 0, slot: null, thumbs: {}, thumbOrder: [], retired: [], nowIndex: -1, labelIndex: -1};
       button.removeClass('hide');
       startMetadata(state);
       bindPreparation(state);

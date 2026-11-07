@@ -219,19 +219,25 @@ playback progress from Premium accounts, so without Premium the timeline pull
 brings nothing new; cross-device progress then comes from `HomelabSync`.
 
 Event bursts are debounced. Attempts are spaced at least 15 seconds apart;
-triggers inside that window are deferred to its end rather than dropped. A
-30-second watchdog releases an attempt whose native callback never arrives
+triggers inside that window, or while a request is in flight, are deferred and
+run once rather than dropped. A backward system-clock jump resets the spacing.
+A 30-second watchdog releases an attempt whose native callback never arrives
 (Lampa's `Account.Api.clear()` silently drops pending CUB requests, for example
 while typing in Search). Late callbacks from released attempts are ignored.
 
 Open screens are refreshed only when folder membership changes: a card added,
 removed or moved between bookmark folders. History and ordering changes, which
-occur on every playback, do not reload screens. Native favorite notifications
-(including this device's own edits) update the comparison baseline, so they are
-not refreshed a second time. After a profile selection or a profile change in
-the stored account, the in-flight attempt is abandoned and sync pauses for up to
-10 seconds while native code reloads the profile; the first list afterwards is
-taken as the new baseline.
+occur on every playback, do not reload screens. A native profile, read or clear
+notification resets the comparison baseline; a native add/remove notification
+updates only the card it names, so changes native code pulled silently (socket
+or its 5-minute timer) are still refreshed.
+
+Around a profile switch (profile selection, a different profile in the stored
+account, or one noticed when a request completes) the plugin ignores its own
+pending result, starts no new sync for up to 10 seconds while native code
+reloads the profile, and takes the first list afterwards as the new baseline.
+It cannot cancel native CUB requests already in flight; if one completes after
+the switch, native code may still apply it to the newly selected profile.
 
 Synchronization still requires the user's account sync setting and a selected
 profile. Android may suspend the client in the background; returning to the app

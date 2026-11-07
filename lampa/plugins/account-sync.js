@@ -15,7 +15,7 @@
   var SPACING = 15000, DEBOUNCE = 300, WATCHDOG = 30000, QUIET = 10000;
   var account = Lampa.Account;
   var generation = 0, running = 0, watchdog, timer;
-  var lastAttempt = -Infinity, quietUntil = 0, announcing = false;
+  var lastAttempt = -Infinity, quietUntil = -Infinity, announcing = false, rerun = false;
   var knownProfile = profileId();
   var snapshot = signature();
 
@@ -28,34 +28,48 @@
     return !document.hidden && !Lampa.Player.opened() && account.Permit.sync && profileId() !== '';
   }
 
+  function cardKey(item) {
+    return (item.name !== undefined || item.original_name !== undefined ? 't' : 'm') + item.id;
+  }
+
   // Folder membership only: history and order change on every playback and must not reload screens.
   function signature() {
-    var all = Lampa.Favorite.all() || {}, parts = [];
-    Object.keys(all).sort().forEach(function (type) {
+    var all = Lampa.Favorite.all() || {}, result = {};
+    Object.keys(all).forEach(function (type) {
       var list = all[type];
       if (type === 'history' || !list || !list.length) return;
-      var keys = [];
-      for (var i = 0; i < list.length; i++) {
-        var item = list[i];
-        if (item) keys.push((item.name !== undefined || item.original_name !== undefined ? 't' : 'm') + item.id);
-      }
-      parts.push(type + ':' + keys.sort().join(','));
+      var keys = result[type] = {};
+      for (var i = 0; i < list.length; i++) if (list[i]) keys[cardKey(list[i])] = true;
     });
-    return parts.join(';');
+    return result;
+  }
+
+  function serialize(value) {
+    return Object.keys(value).sort().map(function (type) {
+      var keys = Object.keys(value[type]).sort();
+      return keys.length ? type + ':' + keys.join(',') : '';
+    }).filter(Boolean).join(';');
   }
 
   function release(id) {
     if (!id || running !== id) return false;
     running = 0;
     clearTimeout(watchdog);
+    // A trigger arrived while this attempt was in flight; run it once spacing allows.
+    if (rerun) { rerun = false; schedule(0); }
     return true;
   }
 
   function sync() {
-    if (running || !active()) return;
-    var wait = Math.max(lastAttempt + SPACING, quietUntil) - Date.now();
+    if (running) { rerun = true; return; }
+    if (!active()) return;
+    var now = Date.now();
+    // A clock moved backwards must not stall sync for the size of the jump.
+    if (lastAttempt > now + SPACING) lastAttempt = -Infinity;
+    if (quietUntil > now + QUIET) quietUntil = -Infinity;
+    var wait = Math.max(lastAttempt + SPACING, quietUntil) - now;
     if (wait > 0) return schedule(wait);
-    lastAttempt = Date.now();
+    lastAttempt = now;
     var id = running = ++generation;
     // Native callbacks are lost when Account.Api.clear() runs (search typing, profile loader cancel).
     watchdog = setTimeout(function () {
@@ -66,11 +80,11 @@
       account.Timeline.update();
       account.Bookmarks.update(function () {
         if (!release(id)) return;
-        if (profileId() !== profile) { snapshot = null; return; }
+        if (profileId() !== profile) return profileSwitched();
         if (!active()) return;
-        var next = signature();
-        if (snapshot === null || next === snapshot) { snapshot = next; return; }
+        var next = signature(), changed = snapshot !== null && serialize(next) !== serialize(snapshot);
         snapshot = next;
+        if (!changed) return;
         // Native periodic sync updates its cache but does not refresh open lists.
         announcing = true;
         try { Lampa.Listener.send('state:changed', { target: 'favorite', reason: 'read' }); }
@@ -104,11 +118,17 @@
   if (Lampa.Storage && Lampa.Storage.listener) Lampa.Storage.listener.follow('change', function (event) {
     if (event && event.name === 'account' && profileId() !== knownProfile) profileSwitched();
   });
-  // Native favorite notifications already refreshed what they changed; adopt that state as seen.
+  // Native favorite notifications already refreshed what they name; adopt only that as seen.
+  // A local 'update' can follow a silent native pull (socket, 5-minute timer) that still needs a refresh.
   Lampa.Listener.follow('state:changed', function (event) {
     if (announcing || !event || event.target !== 'favorite') return;
-    if (event.reason === 'profile') quietUntil = 0;
-    if (profileId() === knownProfile && account.Permit.sync) snapshot = signature();
+    if (event.reason === 'profile') quietUntil = -Infinity;
+    if (profileId() !== knownProfile || !account.Permit.sync) return;
+    if (event.reason === 'profile' || event.reason === 'read' || event.reason === 'clear') { snapshot = signature(); return; }
+    if (event.reason !== 'update' || snapshot === null || !event.type || event.type === 'history' || !event.card) return;
+    var keys = snapshot[event.type] = snapshot[event.type] || {}, key = cardKey(event.card);
+    if (event.method === 'remove') delete keys[key];
+    else if (event.method === 'add' || event.method === 'added') keys[key] = true;
   });
 
   document.addEventListener('visibilitychange', trigger);

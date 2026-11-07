@@ -6,11 +6,13 @@ const { test } = require('node:test');
 const source = fs.readFileSync(path.join(__dirname, '../plugins/account-sync.js'), 'utf8');
 
 // Fake clock that honours delays, so debounce, deferral and watchdog timing is real.
+// `wall` moves Date.now() without moving timers, like a user or NTP changing the system clock.
 function clock() {
-  let now = 0, id = 0;
+  let now = 0, id = 0, offset = 0;
   const timers = new Map();
   return {
-    now: () => now,
+    now: () => now + offset,
+    wall(ms) { offset += ms; },
     setTimeout(fn, ms) { timers.set(++id, { fn, at: now + (ms || 0) }); return id; },
     clearTimeout(key) { timers.delete(key); },
     setInterval(fn, ms) {
@@ -84,7 +86,9 @@ function harness({ ready = true } = {}) {
     refreshes: () => calls.filter(call => Array.isArray(call) && call[0] === 'state:changed'),
     get bookmarkReads() { return bookmarkReads; }, get intervalCount() { return intervals; },
     get requests() { return calls.filter(call => call === 'bookmarks').length; },
-    tick: c.tick,
+    tick: c.tick, wall: c.wall,
+    // Native code eventually calls back every request it still knows about, in order.
+    completeAll(next) { if (next) store = next; pending.splice(0).forEach(callback => callback()); },
     set(next) { store = next; },
     // Native Bookmarks.update replaced its cache and calls back the newest request.
     complete(next) {
@@ -98,14 +102,64 @@ function harness({ ready = true } = {}) {
 
 const card = (id, extra = {}) => Object.assign({ id, title: 'Fictional title ' + id }, extra);
 
-test('first sync runs after the debounce and requests do not overlap', () => {
+test('first sync runs after the debounce; triggers during a request rerun once after it', () => {
   const h = harness();
   h.tick(299);
   assert.equal(h.requests, 0);
   h.tick(1);
   assert.deepEqual(h.calls, ['timeline', 'bookmarks']);
-  h.emit('focus'); h.tick(20000);
+  h.emit('focus'); h.tick(5000); h.emit('activity', { type: 'start' }); h.tick(5000);
   assert.equal(h.requests, 1, 'no overlapping request while one is in flight');
+  h.complete();
+  h.tick(4999);
+  assert.equal(h.requests, 1, 'the rerun still honours the 15-second spacing');
+  h.tick(1);
+  assert.equal(h.requests, 2, 'triggers during the request were not dropped');
+  h.complete();
+  h.tick(30000);
+  assert.equal(h.requests, 2, 'a burst of triggers reruns only once');
+});
+
+test('native code calling back abandoned attempts as well refreshes only once', () => {
+  for (const order of ['old-first', 'new-first']) {
+    const h = harness();
+    h.tick(300);
+    h.tick(30000);
+    h.emit('focus'); h.tick(300);
+    assert.equal(h.requests, 2, order);
+    if (order === 'new-first') h.pending.reverse();
+    h.completeAll(categories({ book: [card(60)] }));
+    assert.equal(h.refreshes().length, 1, order);
+  }
+});
+
+test('a local history or bookmark notification does not swallow a silently pulled remote change', () => {
+  const h = harness();
+  h.tick(300); h.complete();
+  // Native socket or 5-minute update pulled a remote bookmark without notifying anyone.
+  h.set(categories({ book: [card(50)], history: [card(52)] }));
+  h.emit('state:changed', { target: 'favorite', reason: 'update', method: 'add', type: 'history', card: card(52) });
+  h.set(categories({ book: [card(50), card(51)], history: [card(52)] }));
+  h.emit('state:changed', { target: 'favorite', reason: 'update', method: 'add', type: 'book', card: card(51) });
+  h.tick(60000); h.complete();
+  assert.equal(h.refreshes().length, 1, 'the remote bookmark still refreshes');
+  h.set(categories({ book: [card(50)], history: [card(52)] }));
+  h.emit('state:changed', { target: 'favorite', reason: 'update', method: 'remove', type: 'book', card: card(51) });
+  h.tick(60000); h.complete();
+  assert.equal(h.refreshes().length, 1, 'a local removal is not refreshed again');
+});
+
+test('a backward clock jump does not stall sync', () => {
+  const h = harness();
+  h.tick(300); h.complete();
+  h.wall(-3600000);
+  h.emit('focus'); h.tick(300);
+  assert.equal(h.requests, 2, 'an attempt stamped in the future is not waited for');
+  h.complete();
+  h.emit('focus'); h.tick(300);
+  assert.equal(h.requests, 2, 'spacing applies again from the new clock');
+  h.tick(14700);
+  assert.equal(h.requests, 3);
 });
 
 test('a dropped native callback is released by the watchdog and its late callback is ignored', () => {
@@ -152,7 +206,7 @@ test('native favorite notifications resnapshot, so this device’s own changes a
   const h = harness();
   h.tick(300); h.complete();
   h.set(categories({ book: [card(5)] }));
-  h.emit('state:changed', { target: 'favorite', reason: 'update', method: 'add', type: 'book' });
+  h.emit('state:changed', { target: 'favorite', reason: 'update', method: 'add', type: 'book', card: card(5) });
   h.tick(60000); h.complete();
   assert.equal(h.refreshes().length, 0);
 });
@@ -221,6 +275,8 @@ test('profile switch abandons the in-flight attempt, waits for native reload and
   const h = harness();
   h.tick(300);
   h.permit.account.profile = { id: 2 };
+  // Native selection stores the account first, then announces the profile.
+  h.emit('storage:change', { name: 'account' });
   h.emit('account:profile_select', { profile: { id: 2 } });
   h.set(categories({ book: [card(20)] }));
   h.complete();
@@ -250,11 +306,15 @@ test('a profile change noticed through storage pauses sync like a profile select
 
 test('a profile change detected at completion is not treated as a bookmark change', () => {
   const h = harness();
-  h.tick(300);
+  h.tick(20300);
   h.permit.account.profile = { id: 3 };
   h.complete(categories({ book: [card(30)] }));
   assert.equal(h.refreshes().length, 0);
-  h.tick(60000); h.complete();
+  h.emit('focus'); h.tick(9000);
+  assert.equal(h.requests, 1, 'treated as a profile switch: sync pauses');
+  h.tick(1300);
+  assert.equal(h.requests, 2, 'resumes after the quiet window');
+  h.complete();
   assert.equal(h.refreshes().length, 0, 'snapshot was retaken for the new profile');
 });
 

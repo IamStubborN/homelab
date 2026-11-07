@@ -5,9 +5,25 @@
     return;
   }
   var L = window.Lampa, sync = window.HomelabSync, $ = window.$;
-  if (window.HomelabSources || !L || !sync || !$ || !window.fetch || !window.AbortController || !L.Component || !L.Component.add || !L.Parser || !L.Parser.get || !L.Parser.clear || !L.Scroll || !L.Controller || !L.Controller.collectionFocus) return;
   var COMPONENT = 'homelab_sources', PLAY = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>';
+  if (window.HomelabSources || !L || !sync || !$) return;
+  if (!window.fetch || typeof URL !== 'function' || !('searchParams' in URL.prototype) || typeof Promise !== 'function' || !L.Component || !L.Component.add || !L.Parser || !L.Parser.get || !L.Parser.clear || !L.Scroll || !L.Controller || !L.Controller.collectionFocus) {
+    // Very old TV webviews keep a visible button that explains why instead of silently missing.
+    window.HomelabSources = {unsupported: true};
+    if (L.Listener && L.Noty) L.Listener.follow('full', function (event) {
+      if (event.type === 'complite') addButton(event.data.movie, event.object.activity.render(), function () { L.Noty.show('Общий недоступен на этом устройстве: браузер ТВ устарел. Используйте обычные источники'); });
+    });
+    return;
+  }
   var parserOwner = null, nextRequestAt = 0;
+  // Tizen/webOS <= 5 lack AbortController; their fetch ignores the signal, and request() rejects on abort itself.
+  function Abort() {
+    if (window.AbortController) return new window.AbortController();
+    var listeners = [], signal = {aborted: false, addEventListener: function (name, fn) { if (name === 'abort') listeners.push(fn); }};
+    return {signal: signal, abort: function () { if (signal.aborted) return; signal.aborted = true; listeners.splice(0).forEach(function (fn) { fn(); }); }};
+  }
+  function always(promise, fn) { return promise.then(function (value) { fn(); return value; }, function (error) { fn(); throw error; }); }
+  var ITEM_TAG = /^(?:web[\s-]?dl|webrip|hdrip|bdrip|blu[\s-]?ray|hdtv|camrip|ts|4k|uhd|hdr|sdr|\d{3,4}[pi])$/i;
   function voiceKey(value) { return String(value || '').toLowerCase().replace(/[\s._-]+/g, ' ').trim(); }
   function voiceStudio(value) {
     var text = voiceKey(value).replace(/ё/g, 'е')
@@ -76,6 +92,7 @@
     var found = Object.keys(file.quality || file.qualitys || {}).map(quality).filter(Boolean);
     var named = quality(file.text || file.Title || file.title) || quality(file.info && file.info.quality);
     if (named) found.push(named);
+    if (!found.length && file.maxquality) { named = quality(file.maxquality); if (named) found.push(named); }
     return found.filter(function (q, i) { return found.indexOf(q) === i; }).sort(function (a, b) { return b - a; });
   }
   function covers(release, selection) {
@@ -106,11 +123,12 @@
     if (movie.name) movie.title = movie.name;
     return movie;
   }
-  function Search(movie, selection, changed) {
-    movie = movieCard(movie);
-    var self = this, scope = sync.scope(), alive = true, queue = [], requests = [], timers = [], running = 0, discovered = {}, seenRows = {}, visited = {};
-    var sourceCount = {}, deadline = Date.now() + 60000, pollUntil = Date.now() + 15000, parserTimer, parserPending = false;
-    this.rows = []; this.onlinePending = true; this.torrentPending = false; this.errors = [];
+  function Search(movie, selection, changed, options) {
+    movie = movieCard(movie); options = options || {};
+    // Two lanes: first pages of every provider go before alternate-voice pages, so all providers show up early.
+    var self = this, scope = sync.scope(), alive = true, queue = [], voiceQueue = [], requests = [], timers = [], running = 0, discovered = {}, seenRows = {}, visited = {}, voicesSeen = {};
+    var sourceCount = {}, deadline = Date.now() + 60000, pollUntil = 0, parserTimer, parserPending = false, started = false;
+    this.rows = []; this.onlinePending = true; this.torrentPending = false; this.errors = []; this.interrupted = false;
     function live() { return alive && sync.scope() === scope; }
     function notify() { if (live()) changed(self); }
     function later(fn, delay) { var timer = setTimeout(function () { if (live()) fn(); }, delay); timers.push(timer); }
@@ -139,7 +157,7 @@
       if (!live()) return Promise.reject(new Error('cancelled'));
       var url;
       try { url = address(raw, metadata); } catch (error) { return Promise.reject(error); }
-      var abort = new AbortController(), timer = setTimeout(function () { abort.abort(); }, timeout || 8000);
+      var abort = Abort(), timer = setTimeout(function () { abort.abort(); }, timeout || 8000);
       requests.push(abort);
       var headers = {}, kit = L.Storage.get('kit_aesgcmkey', ''); if (kit) headers['X-Kit-AesGcm'] = kit;
       var delay = Math.max(0, nextRequestAt - Date.now()); nextRequestAt = Date.now() + delay + 350;
@@ -148,19 +166,26 @@
           if (!live() || abort.signal.aborted) return reject(new Error('cancelled'));
           fetch(url, {signal: abort.signal, credentials: 'same-origin', cache: 'no-store', headers: headers}).then(resolve, reject);
         };
-        if (delay) { var wait = setTimeout(start, delay); timers.push(wait); abort.signal.addEventListener('abort', function () { clearTimeout(wait); reject(new Error('cancelled')); }, {once: true}); }
+        var wait;
+        abort.signal.addEventListener('abort', function () { clearTimeout(wait); reject(new Error('cancelled')); }, {once: true});
+        if (delay) { wait = setTimeout(start, delay); timers.push(wait); }
         else start();
       });
-      return fetching.then(function (response) {
+      return always(fetching.then(function (response) {
         if (!response.ok) throw new Error('request'); return response.text();
-      }).then(function (text) { if (!live()) throw new Error('cancelled'); return text; }).finally(function () {
+      }).then(function (text) { if (!live() || abort.signal.aborted) throw new Error('cancelled'); return text; }), function () {
         clearTimeout(timer); requests = requests.filter(function (entry) { return entry !== abort; });
       });
     }
     function fallback(source, label) {
       add({key: 'source:' + source.key, kind: 'online', provider: source.key, providerName: source.name, voice: label || 'Выбрать в источнике', native: true, qualities: []});
     }
-    function enqueue(source, url, state) {
+    function voiceSeen(source, seasonIndex, text) {
+      var key = source.key + ':' + seasonIndex + ':' + voiceKey(text);
+      if (voicesSeen[key]) return true;
+      voicesSeen[key] = true; return false;
+    }
+    function enqueue(source, url, state, lane) {
       var absolute;
       try { absolute = address(url, false); } catch (_) { fallback(source); return; }
       var key = source.key + ':' + absolute;
@@ -169,7 +194,7 @@
       // ponytail: cap catalog traversal per provider; remaining choices stay available natively.
       if ((sourceCount[source.key] || 0) >= 32) { fallback(source, 'Другие варианты в источнике'); return; }
       sourceCount[source.key] = (sourceCount[source.key] || 0) + 1;
-      queue.push({source: source, url: absolute, state: state}); pump();
+      (lane ? voiceQueue : queue).push({source: source, url: absolute, state: state}); pump();
     }
     function catalog(job, text) {
       var source = job.source, state = job.state, json;
@@ -180,16 +205,34 @@
       if (files.length) {
         var active = voices.find(function (voice) { return voice.active; });
         var voice = active ? active.text : state.voice || '';
+        if (voice) voiceSeen(source, state.seasonIndex, voice);
+        if (state.voice && state.voice !== voice) voiceSeen(source, state.seasonIndex, state.voice);
         var matching = files.filter(function (file) { return !movie.name || Number.isInteger(file.season) && file.season >= 0 && Number.isInteger(file.episode) && file.episode > 0 && file.season === selection.season && file.episode === selection.episode; });
+        var labels = {};
         matching.forEach(function (file) {
-          var filmText = /\d+p/i.test(file.text) || file.text === 'По умолчанию' ? movie.title : file.text;
-          var identityVoice = voice || file.voice_name || (movie.name ? 'Неизвестно' : filmText) || 'Неизвестно';
-          var name = identityVoice;
-          add({key: source.key + ':' + state.seasonIndex + ':' + name + ':' + qualities(file).join(','), kind: 'online', provider: source.key, providerName: source.name,
-            voice: name, identityVoice: identityVoice, seasonIndex: state.seasonIndex, qualities: qualities(file)});
+          var row = {kind: 'online', provider: source.key, providerName: source.name, seasonIndex: state.seasonIndex, qualities: qualities(file)}, identityVoice;
+          if (movie.name) {
+            identityVoice = voice || file.voice_name || 'Неизвестно';
+            row.key = source.key + ':' + state.seasonIndex + ':' + identityVoice + ':' + row.qualities.join(',');
+          } else {
+            // Movie items often keep a release tag (WEB-DL, 2160p) in voice_name and the dub in translate/text.
+            var index = files.indexOf(file), translate = typeof file.translate === 'string' ? file.translate.trim() : '';
+            var filmText = /\d+p/i.test(file.text) || file.text === 'По умолчанию' ? movie.title : file.text;
+            var tag = typeof file.voice_name === 'string' ? file.voice_name.trim() : '';
+            identityVoice = voice || translate || filmText || (tag && !ITEM_TAG.test(tag) ? tag : '') || movie.title || 'Неизвестно';
+            row.key = source.key + ':' + state.seasonIndex + ':' + index + ':' + identityVoice + ':' + row.qualities.join(',');
+            row.tag = tag && tag !== identityVoice ? tag : '';
+            // Exact native draw identity for the bridge: same item index among play/call items, URL and texts.
+            row.match = {index: index, count: files.length, url: typeof file.url === 'string' ? file.url : '', text: filmText || '', translate: translate, voice_name: tag};
+          }
+          var label = identityVoice + (row.tag ? ' · ' + row.tag : '');
+          labels[label] = (labels[label] || 0) + 1;
+          row.voice = labels[label] > 1 ? label + ' · вариант ' + labels[label] : label;
+          row.identityVoice = identityVoice;
+          add(row);
         });
         if (!matching.length && !voices.length) fallback(source, 'Уточнить серию в источнике');
-        voices.forEach(function (choice) { if (!choice.active && choice.url) enqueue(source, choice.url, {seasonIndex: state.seasonIndex, voice: choice.text}); });
+        voices.forEach(function (choice) { if (!choice.active && choice.url && choice.text && !voiceSeen(source, state.seasonIndex, choice.text)) enqueue(source, choice.url, {seasonIndex: state.seasonIndex, voice: choice.text}, 1); });
       } else {
         var folders = items.filter(function (item) { return item.method === 'link' && !item.similar; });
         var selected = folders.findIndex(function (folder) {
@@ -202,15 +245,15 @@
       }
     }
     var discoveryDone = false;
-    function settle() { self.onlinePending = live() && (!discoveryDone || running > 0 || queue.length > 0); notify(); }
+    function settle() { self.onlinePending = live() && (!discoveryDone || running > 0 || queue.length > 0 || voiceQueue.length > 0); notify(); }
     function pump() {
       if (!live()) return;
-      while (running < 2 && queue.length) {
-        if (Date.now() >= deadline) { queue.splice(0).forEach(function (job) { fallback(job.source, 'Другие варианты в источнике'); }); break; }
+      while (running < 2 && (queue.length || voiceQueue.length)) {
+        if (Date.now() >= deadline) { queue.splice(0).concat(voiceQueue.splice(0)).forEach(function (job) { fallback(job.source, 'Другие варианты в источнике'); }); break; }
         (function (job) {
           running++;
-          request(job.url, false).then(function (text) { catalog(job, text); }).catch(function () { if (live()) fallback(job.source); }).finally(function () { running--; pump(); settle(); });
-        })(queue.shift());
+          always(request(job.url, false).then(function (text) { catalog(job, text); }).catch(function () { if (live()) fallback(job.source); }), function () { running--; pump(); settle(); });
+        })(queue.length ? queue.shift() : voiceQueue.shift());
       }
       settle();
     }
@@ -224,6 +267,8 @@
       });
     }
     function poll(memkey, seen) {
+      // The live window starts with polling itself, as in native Lampac, not when the picker opened.
+      if (!pollUntil) pollUntil = Date.now() + 15000;
       request(server('/lifeevents').href + '&memkey=' + encodeURIComponent(memkey) + '&seen=' + seen, true, 4000).then(function (text) {
         var json = JSON.parse(text); sources(json.online);
         if (!json.ready && Date.now() < pollUntil) later(function () { poll(memkey, (json.online || []).length); }, 750);
@@ -238,7 +283,7 @@
       }).catch(function () { discoveryDone = true; self.errors.push('Онлайн-поиск недоступен'); settle(); });
     }
     function torrents() {
-      if (!L.Storage.field('parser_use') || window.lampa_settings && window.lampa_settings.torrents_use === false) return;
+      if (options.torrents === false || !L.Storage.field('parser_use') || window.lampa_settings && window.lampa_settings.torrents_use === false) return;
       parserOwner = self; parserPending = true; self.torrentPending = true;
       function done(result, failed) {
         if (!live() || parserOwner !== self || !parserPending) return;
@@ -256,14 +301,15 @@
       catch (_) { done(null, true); }
     }
     this.cancel = function () {
-      alive = false; timers.forEach(clearTimeout); clearTimeout(parserTimer); requests.forEach(function (abort) { abort.abort(); }); queue = [];
+      if (alive && started && (self.onlinePending || self.torrentPending)) self.interrupted = true;
+      alive = false; timers.forEach(clearTimeout); clearTimeout(parserTimer); requests.forEach(function (abort) { abort.abort(); }); queue = []; voiceQueue = [];
       if (parserOwner === self && parserPending) L.Parser.clear();
       if (parserOwner === self) parserOwner = null;
       parserPending = false;
       self.onlinePending = false; self.torrentPending = false;
     };
     this.start = function () {
-      torrents();
+      started = true; torrents();
       var ids = Promise.resolve();
       if (!movie.imdb_id || !movie.kinopoisk_id) ids = request(server('/externalids').href + '&id=' + encodeURIComponent(movie.id) + '&serial=' + (movie.name ? 1 : 0), false, 4000).then(function (text) {
         var data = JSON.parse(text); ['imdb_id', 'kinopoisk_id', 'tmdb_id'].forEach(function (key) { if (typeof data[key] === 'string' || Number.isInteger(data[key])) movie[key] = data[key]; });
@@ -290,7 +336,7 @@
     function active() { return !dead && L.Activity.active() === object; }
     function focus(background) { restoringFocus = !!background; L.Controller.collectionSet(root, false, true); L.Controller.collectionFocus(last && root[0].contains(last) ? last : false, root, true); restoringFocus = false; }
     function button(text, cls, fn) {
-      return $('<div class="selector ' + cls + '"></div>').text(text).on('hover:focus', function () { last = this; }).on('hover:enter', fn);
+      return $('<div class="selector ' + cls + '"></div>').text(text).on('hover:focus', function () { last = this; if (!restoringFocus && body[0].contains(this)) scroll.update(this, true); }).on('hover:enter', fn);
     }
     function choose(titleText, values, onSelect) {
       values = values.map(function (value) {
@@ -358,22 +404,33 @@
       }));
       controls.append(button('Обновить', 'homelab-common-refresh', restart));
     }
+    function directIdentity(row) {
+      return /^[a-z0-9_.-]{1,80}$/i.test(row.provider) && typeof row.identityVoice === 'string' && row.identityVoice.length <= 200 && Number.isInteger(row.seasonIndex) && row.seasonIndex >= 0 && row.seasonIndex <= 999;
+    }
+    function openNative(row) {
+      L.Activity.push({component: 'lampac', movie: movie, title: 'Онлайн', search: movie.title || movie.name, search_one: movie.title || movie.name, search_two: movie.original_title || movie.original_name, page: 1, lampac_custom_select: row.provider});
+    }
     function open(row) {
       if (!active() || sync.scope() !== currentScope) return;
       if (recovery && (row.native || row.kind !== 'online' || row.provider === recovery.excludeProvider || recovery.voice && !voiceMatch(recovery.voice, row.identityVoice))) return;
-      cancel();
+      // Online handoffs push an activity, whose pause() cancels the search; a refused handoff keeps it running.
       if (row.kind === 'torrent') {
+        cancel(); draw();
         var release = Object.assign({}, row.release, {title: row.release.Title, poster: movie.img || (movie.poster_path ? L.Api.img(movie.poster_path) : '')});
         L.Torrent.back(function () { if (active()) self.start(); }); L.Torrent.start(release, movie);
       } else if (row.native) {
-        L.Activity.push({component: 'lampac', movie: movie, title: 'Онлайн', search: movie.title || movie.name, search_one: movie.title || movie.name, search_two: movie.original_title || movie.original_name, page: 1, lampac_custom_select: row.provider});
+        openNative(row);
+      } else if (!directIdentity(row)) {
+        // The bridge only accepts bounded identities; open the provider natively rather than claim it is loading.
+        L.Noty.show('Этот вариант откроется в источнике');
+        openNative(row);
       } else if (!window.HomelabOnlineResume || !window.HomelabOnlineResume.select(row, movie, selection, q || recovery && recovery.quality, recovery)) {
         L.Noty.show('Онлайн-источник ещё загружается. Повторите выбор');
       }
     }
     function draw() {
       if (dead || !search || sync.scope() !== currentScope) return;
-      var candidates = search.rows.filter(function (row) { return (kind === 'all' || row.kind === kind) && (!q || row.native && !row.qualities.length || row.qualities.indexOf(q) >= 0) && (!recovery || !row.native && row.kind === 'online' && row.provider !== recovery.excludeProvider); });
+      var candidates = search.rows.filter(function (row) { return (kind === 'all' || row.kind === kind) && (!q || row.kind === 'online' && !row.qualities.length || row.qualities.indexOf(q) >= 0) && (!recovery || !row.native && row.kind === 'online' && row.provider !== recovery.excludeProvider); });
       var exact = recovery && recovery.voice ? candidates.filter(function (row) { return voiceMatch(recovery.voice, row.identityVoice) === 2; }).length : 0;
       var available = candidates.filter(function (row) { return !recovery || !recovery.voice || voiceMatch(recovery.voice, row.identityVoice) > 0; }).sort(function (a, b) {
         var match = recovery && recovery.voice ? voiceMatch(recovery.voice, b.identityVoice) - voiceMatch(recovery.voice, a.identityVoice) : 0;
@@ -416,7 +473,7 @@
         more.text('Ещё варианты · ' + (rows.length - shown)); body.append(more);
       } else if (more) { more.remove(); more = null; }
       var loading = search.onlinePending || search.torrentPending;
-      status.text((loading ? 'Ищем варианты… · ' : '') + 'Найдено: ' + rows.length + (!loading && recovery && recovery.voice && !exact ? rows.length ? ' · Точного совпадения нет; показаны похожие озвучки' : ' · Других подходящих источников нет' : !loading && !rows.length ? ' · Попробуйте другое качество или источник' : '') + (search.errors.length ? ' · ' + search.errors.join(' · ') : ''));
+      status.text((loading ? 'Ищем варианты… · ' : '') + 'Найдено: ' + rows.length + (search.interrupted && !loading ? ' · Поиск прерван, нажмите «Обновить»' : '') + (!loading && recovery && recovery.voice && !exact ? rows.length ? ' · Точного совпадения нет; показаны похожие озвучки' : ' · Других подходящих источников нет' : !loading && !rows.length ? ' · Попробуйте другое качество или источник' : '') + (search.errors.length ? ' · ' + search.errors.join(' · ') : ''));
       if (L.Controller.own(self)) focus(true);
     }
     function detailsMenu(row) {
@@ -432,20 +489,30 @@
     function restart() {
       cancel(); currentScope = sync.scope(); Object.keys(tiles).forEach(function (key) { tiles[key].remove(); }); tiles = {}; shown = 20;
       body.empty(); scroll.reset(); more = null; order = []; locked = false; last = null; selectors();
-      search = new Search(Object.assign({}, movie), selection, changed); search.start(); draw();
+      search = new Search(Object.assign({}, movie), selection, changed, {torrents: !recovery}); search.start(); draw();
     }
+    function visibleNode(node) { return node.offsetParent !== null; }
     function move(dx, dy) {
-      var all = Array.prototype.filter.call(root[0].querySelectorAll('.selector'), function (node) { return node.offsetParent !== null; });
-      var from = last && root[0].contains(last) ? last : all[0]; if (!from) return;
+      var all = Array.prototype.filter.call(root[0].querySelectorAll('.selector'), visibleNode), list = Array.prototype.filter.call(body[0].querySelectorAll('.selector'), visibleNode);
+      var from = last && root[0].contains(last) && visibleNode(last) ? last : all[0]; if (!from) return;
+      var index = list.indexOf(from);
+      // Inside the single-column list, Up/Down follow list order (the tile's focus handler scrolls it into view).
+      if (index >= 0 && dy && list[index + dy]) return L.Controller.collectionFocus(list[index + dy], root, true);
+      if (index >= 0 && dy > 0) return;
+      if (index >= 0 && dx < 0) return L.Controller.toggle('menu');
+      var view = scroll.render(true).getBoundingClientRect();
       var a = from.getBoundingClientRect(), x = a.left + a.width / 2, y = a.top + a.height / 2, best, distance = Infinity;
       all.forEach(function (node) {
         if (node === from) return; var b = node.getBoundingClientRect(), px = b.left + b.width / 2, py = b.top + b.height / 2;
+        // List entries are reachable from outside only while visible; scrolled-out tiles may sit behind the header.
+        if (list.indexOf(node) >= 0 && (index >= 0 || !(py >= view.top && py <= view.bottom))) return;
         if (dx && (px - x) * dx <= 1 || dy && (py - y) * dy <= 1) return;
         var along = dx ? Math.abs(px - x) : Math.abs(py - y), across = dx ? Math.abs(py - y) : Math.abs(px - x), score = along + across * 4;
         if (score < distance) { distance = score; best = node; }
       });
       if (best) L.Controller.collectionFocus(best, root, true);
       else if (dy < 0) L.Controller.toggle('head');
+      else if (dx < 0) L.Controller.toggle('menu');
     }
     this.create = function () {
       scroll.minus(root.find('.homelab-common-head')); selectors();
@@ -457,7 +524,7 @@
     this.start = function () {
       if (!active()) return;
       if (sync.scope() !== currentScope) { cancel(); return L.Activity.backward(); }
-      L.Controller.add('content', {link: self, invisible: true, toggle: function () { focus(false); }, up: function () { move(0, -1); }, down: function () { move(0, 1); }, left: function () { move(-1, 0); }, right: function () { if (last && last.classList.contains('homelab-common-result')) $(last).trigger('hover:long'); else move(1, 0); }, back: function () { cancel(); L.Activity.backward(); }});
+      L.Controller.add('content', {link: self, invisible: true, toggle: function () { focus(false); }, up: function () { move(0, -1); }, down: function () { move(0, 1); }, left: function () { move(-1, 0); }, right: function () { if (last && last.classList.contains('homelab-common-result')) $(last).trigger('hover:long'); else if (!(last && body[0].contains(last))) move(1, 0); }, back: function () { cancel(); L.Activity.backward(); }});
       L.Controller.toggle('content');
       if (!started) { started = true; restart(); }
       else draw();
@@ -467,11 +534,11 @@
     var unsubscribe = sync.subscribe(function () { if (sync.scope() !== currentScope) { cancel(); if (active()) L.Activity.backward(); } });
     this.destroy = function () { dead = true; cancel(); unsubscribe(); scroll.destroy(); root.remove(); };
   }
-  function addButton(movie, render) {
+  function addButton(movie, render, unsupported) {
     if (!movie || !render || render.find('.view--homelab-sources').length) return;
     var container = render.find('.buttons--container'); if (!container.length) return;
     var button = $('<div class="full-start__button selector view--homelab-sources">' + PLAY + '<span>Общий</span></div>');
-    button.on('hover:enter', function (_, context) {
+    button.on('hover:enter', unsupported || function (_, context) {
       L.Activity.push({component: COMPONENT, title: 'Общий', movie: movie, season: context && context.season, page: 1});
     }); container.prepend(button);
   }

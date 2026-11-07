@@ -5,21 +5,22 @@ const path = require('node:path');
 const vm = require('node:vm');
 const {flush} = require('./ux-harness.cjs');
 
-function setup(t) {
+function setup(t, options = {}) {
   t.mock.timers.enable({apis: ['setTimeout', 'Date']});
+  const noAbort = !!options.noAbort; // old webviews: no AbortController and fetch ignores signals
   const requests = [], pages = new Map(), registry = {}, parser = [], notifications = [], storage = new Map();
   let scope = 'profile-a', clears = 0, active = 0, peak = 0;
   const dollar = () => ({append() { return this; }, text() { return this; }});
   const L = {Storage: {get: (key, value) => storage.get(key) ?? value, set: (key, value) => storage.set(key, value), field: () => true}, Utils: {hash: value => 'hash:' + value}, Component: {add: (name, ctor) => { registry[name] = ctor; }},
     Scroll() {}, Controller: {collectionFocus() {}}, Listener: {follow() {}}, Activity: {active: () => null},
     Parser: {get: (object, done, fail) => parser.push({object, done, fail}), clear: () => clears++}};
-  const window = {appready: true, Lampa: L, $: dollar, fetch: request, AbortController,
+  const window = {appready: true, Lampa: L, $: dollar, fetch: request, AbortController: options.noAbort ? undefined : AbortController,
     HomelabSync: {scope: () => scope, url: pathname => 'https://lampac.test' + pathname + '?token=private-fixture&profile_id=' + scope}};
   function request(url, options) {
     return new Promise((resolve, reject) => {
       active++; peak = Math.max(peak, active); let settled = false;
       const job = {url: new URL(url), options, started: Date.now(), finish(body) { if (settled) return; settled = true; active--; resolve({ok: true, text: async () => typeof body === 'string' ? body : JSON.stringify(body)}); }};
-      options.signal.addEventListener('abort', () => { if (!settled) { settled = true; active--; reject(new Error('aborted')); }});
+      if (!noAbort) options.signal.addEventListener('abort', () => { if (!settled) { settled = true; active--; reject(new Error('aborted')); }});
       requests.push(job);
     });
   }
@@ -33,7 +34,7 @@ function setup(t) {
     }))}; return template;
   }};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../plugins/common-sources.js'), 'utf8'),
-    {window, Lampa: L, document, fetch: request, AbortController, URL, setTimeout, clearTimeout, Date, console});
+    {window, Lampa: L, document, fetch: request, AbortController: options.noAbort ? undefined : AbortController, URL, setTimeout, clearTimeout, Date, console});
   const movie = {id: 42, name: 'Series', original_title: 'Original', imdb_id: 'tt42', kinopoisk_id: '42'};
   const selection = {season: 2, episode: 3};
   const search = new window.HomelabSources.Search(movie, selection, value => notifications.push(value.rows.length));
@@ -61,9 +62,10 @@ test('common picker discovers voices for exactly one episode with two catalog re
   await h.finish('/lite/events', [h.source('one'), h.source('two'), h.source('three')]);
   assert.equal(h.requests.filter(r => r.url.pathname.startsWith('/lite/') && !r.completed).length, 2);
   h.pages.set('seasons', {'.videos__item': [{method: 'link', text: 'Сезон 1', url: '/lite/one?s=1'}, {method: 'link', text: 'Сезон 2', url: '/lite/one?s=2'}]});
-  h.pages.set('episode', {'.videos__item': [{method: 'call', text: 'Episode 2', season: 2, episode: 2}, {method: 'call', text: 'Episode 3', season: 2, episode: 3, quality: {'1080p': '/media'}}],
+  h.pages.set('episode', {'.videos__item': [{method: 'call', text: 'Episode 2', season: 2, episode: 2}, {method: 'play', text: 'Episode 3', season: 2, episode: 3, url: '/media', quality: {'1080p': '/media'}}],
     '.videos__button': [{active: true, text: 'Preferred', url: '/lite/one?s=2'}, {text: 'Alternate', url: '/lite/one?s=2&voice=alternate'}]});
-  h.pages.set('alternate', {'.videos__item': [{method: 'call', text: 'Episode 3', season: 2, episode: 3}], '.videos__button': [{active: true, text: 'Alternate', url: '/lite/one?s=2&voice=alternate'}]});
+  // Realistic Lampac "call" items carry no quality map: quality stays unknown until playback.
+  h.pages.set('alternate', {'.videos__item': [{method: 'call', text: 'Episode 3', season: 2, episode: 3, url: '/lite/one/video?e=3'}], '.videos__button': [{active: true, text: 'Alternate', url: '/lite/one?s=2&voice=alternate'}]});
   await h.finish('/lite/one', 'seasons');
   await h.finish('/lite/two', {rch: true});
   await h.finish('/lite/three', {rch: true});
@@ -72,7 +74,7 @@ test('common picker discovers voices for exactly one episode with two catalog re
   const rows = h.search.rows.filter(r => !r.native);
   assert.deepEqual(Array.from(rows, r => r.voice), ['Preferred', 'Alternate']);
   assert.equal(rows[0].seasonIndex, 1); assert.equal(rows[0].identityVoice, 'Preferred');
-  assert.deepEqual(Array.from(rows[0].qualities), [1080]);
+  assert.deepEqual(Array.from(rows[0].qualities), [1080]); assert.deepEqual(Array.from(rows[1].qualities), []);
   assert.equal(h.search.onlinePending, false); assert.equal(h.peak(), 2);
   assert.ok(h.requests.every(r => !r.url.pathname.includes('media')));
   assert.ok(!h.requests.some(r => r.url.searchParams.get('s') === '1'));
@@ -265,4 +267,107 @@ test('unknown catalog episode identities cannot masquerade as episode one', asyn
   h.pages.set('unknown-episode', {'.videos__item': [null, '', false, true].map(episode => ({method: 'call', text: 'Episode', season: 0, episode, voice_name: 'Preferred'}))});
   await h.finish('/lite/events', [h.source('one')]); await h.finish('/lite/one', 'unknown-episode');
   assert.equal(h.search.rows.length, 1); assert.equal(h.search.rows[0].native, true); h.search.cancel();
+});
+
+test('recovery searches skip the parser entirely', async t => {
+  const h = setup(t);
+  const search = new h.window.HomelabSources.Search(h.movie, h.selection, () => {}, {torrents: false});
+  search.start(); await flush();
+  assert.equal(h.parser.length, 0); assert.equal(search.torrentPending, false);
+  search.cancel();
+});
+
+test('movie call items take their dub from translate/text, never a release tag in voice_name, and keep duplicates apart', async t => {
+  const h = setup(t); delete h.movie.name; h.movie.title = 'Film';
+  const search = new h.window.HomelabSources.Search(h.movie, {season: 1, episode: 1}, () => {});
+  search.start(); await flush();
+  h.parser[0].done({Results: []});
+  // Fictional, structure-only fixture: many Lampac movie providers put the release tag in voice_name and the dub in translate/text.
+  h.pages.set('film', {'.videos__item': [
+    {method: 'call', text: 'Studio Alpha', translate: 'Studio Alpha', voice_name: 'WEB-DL', url: '/lite/one/video?i=0', maxquality: '1080p'},
+    {method: 'call', text: 'Studio Alpha - cut', translate: 'Studio Alpha - cut', voice_name: 'WEB-DL', url: '/lite/one/video?i=1'},
+    {method: 'call', text: 'Licensed Dub', voice_name: '2160p', url: '/lite/one/video?i=2'},
+    {method: 'call', text: 'Licensed Dub', voice_name: '2160p', url: '/lite/one/video?i=3'},
+    {method: 'play', text: '720p', url: '/media/c'}]});
+  await h.finish('/lite/events', [h.source('one')]); await h.finish('/lite/one', 'film');
+  assert.deepEqual(Array.from(search.rows, r => r.identityVoice), ['Studio Alpha', 'Studio Alpha - cut', 'Licensed Dub', 'Licensed Dub', 'Film']);
+  assert.ok(search.rows.every(r => !/WEB-DL|2160p/.test(r.voice.split(' · ')[0])), 'release tags never become the voice title');
+  assert.equal(new Set(search.rows.map(r => r.key)).size, 5, 'identical dubs stay separate rows');
+  assert.notEqual(search.rows[2].voice, search.rows[3].voice, 'identical dubs get distinguishable labels');
+  assert.deepEqual(Array.from(search.rows[0].qualities), [1080], 'maxquality is used when no quality map exists');
+  assert.deepEqual(JSON.parse(JSON.stringify(search.rows[3].match)), {index: 3, count: 5, url: '/lite/one/video?i=3', text: 'Licensed Dub', translate: '', voice_name: '2160p'});
+  assert.equal(search.rows[4].match.text, 'Film', 'match text mirrors native movie-title substitution');
+  search.cancel();
+});
+
+test('the picker works without a native AbortController and still times out hung requests', async t => {
+  const h = setup(t, {noAbort: true}); await h.start();
+  assert.ok(h.window.HomelabSources.Search, 'installed');
+  h.tick(8100); await flush();
+  assert.equal(h.search.onlinePending, false, 'a hung events request is abandoned after its timeout');
+  assert.ok(h.search.errors.length);
+  h.search.cancel();
+});
+
+test('live discovery keeps its full window when externalids and events are slow', async t => {
+  const h = setup(t); delete h.movie.kinopoisk_id;
+  const search = new h.window.HomelabSources.Search(h.movie, h.selection, () => {});
+  search.start(); await flush();
+  h.tick(4000); await flush(); // externalids times out
+  h.tick(7200); await flush();
+  await h.finish('/lite/events', {life: true, memkey: 'fixture'});
+  await h.finish('/lifeevents', {ready: false, online: []});
+  await h.finish('/lifeevents', {ready: false, online: []});
+  await h.finish('/lifeevents', {ready: false, online: []});
+  assert.ok(Date.now() > 15000, 'the old construction-time window has elapsed');
+  assert.equal(search.onlinePending, true, 'polling continues for 15 s after it started');
+  await h.finish('/lifeevents', {ready: true, online: [h.source('one')]});
+  assert.ok(h.requests.some(r => r.url.pathname === '/lite/one'));
+  search.cancel();
+});
+
+test('voice pages are fetched once per provider, season and voice, after first pages of other providers', async t => {
+  const h = setup(t); await h.start();
+  await h.finish('/lite/events', [h.source('one'), h.source('two')]);
+  const buttons = active => ['A', 'B', 'C'].map(v => ({text: 'Studio ' + v, active: v === active, url: '/lite/one?s=2&t=' + v}));
+  const episodes = voice => [{method: 'call', text: '3 серия', season: 2, episode: 3, url: '/lite/one/video?t=' + voice}];
+  h.pages.set('seasons', {'.videos__item': [{method: 'link', text: '1 сезон', url: '/lite/one?s=1'}, {method: 'link', text: '2 сезон', url: '/lite/one?s=2'}]});
+  h.pages.set('season-a', {'.videos__item': episodes('A'), '.videos__button': buttons('A')});
+  h.pages.set('voice-b', {'.videos__item': episodes('B'), '.videos__button': buttons('B')});
+  h.pages.set('voice-c', {'.videos__item': episodes('C'), '.videos__button': buttons('C')});
+  await h.finish('/lite/one', 'seasons');
+  await h.finish('/lite/one', 'season-a');
+  // provider two's first page has priority over provider one's voice pages
+  const pending = h.requests.filter(r => !r.completed && !r.options.signal.aborted).map(r => r.url.pathname + r.url.search);
+  assert.ok(pending.some(p => p.startsWith('/lite/two')), pending.join());
+  await h.finish('/lite/two', {rch: true});
+  await h.finish('/lite/one', 'voice-b');
+  await h.finish('/lite/one', 'voice-c');
+  h.tick(5000); await flush();
+  const voices = h.requests.filter(r => r.url.searchParams.has('t')).map(r => r.url.searchParams.get('t'));
+  assert.deepEqual(voices.sort(), ['B', 'C'], 'the already visited active voice is never re-fetched');
+  assert.deepEqual(Array.from(h.search.rows.filter(r => !r.native), r => r.voice), ['Studio A', 'Studio B', 'Studio C']);
+  assert.equal(h.search.onlinePending, false);
+  h.search.cancel();
+});
+
+test('cancelling an unfinished search marks it interrupted', async t => {
+  const h = setup(t); await h.start();
+  h.search.cancel(); assert.equal(h.search.interrupted, true);
+  const done = new h.window.HomelabSources.Search(h.movie, h.selection, () => {}, {torrents: false});
+  done.cancel(); assert.equal(done.interrupted, false, 'a search that never started is not interrupted');
+});
+
+test('devices without fetch get a visible notice instead of a missing button', t => {
+  const follows = {}, notices = [], buttons = [];
+  const node = () => ({on(name, fn) { this.handler = fn; return this; }, find: () => ({length: 0}), prepend(b) { buttons.push(b); }});
+  const L = {Listener: {follow: (name, fn) => { follows[name] = fn; }}, Noty: {show: text => notices.push(text)}, Activity: {active: () => null}};
+  const $ = () => { const n = node(); n.length = 1; return n; };
+  const window = {appready: true, Lampa: L, $, HomelabSync: {scope: () => 'a'}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../plugins/common-sources.js'), 'utf8'), {window, Lampa: L, document: {}, console});
+  assert.ok(follows.full, 'the full card still receives a button');
+  const render = {find: selector => selector === '.buttons--container' ? Object.assign(node(), {length: 1}) : {length: 0}};
+  follows.full({type: 'complite', data: {movie: {id: 1}}, object: {activity: {render: () => render}}});
+  assert.equal(buttons.length, 1); buttons[0].handler();
+  assert.match(notices[0], /недоступен/);
 });

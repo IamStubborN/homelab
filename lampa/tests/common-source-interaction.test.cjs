@@ -70,9 +70,12 @@ function setup(t, options = {}) {
   if (options.quality) h.window.HomelabSources.preferences({quality: options.quality});
   const movie = {id: 42, name: 'Series', original_title: 'Original', number_of_seasons: 2, imdb_id: 'tt42', kinopoisk_id: '42', ...options.movie};
   object = {component: 'homelab_sources', season: options.season, movie};
+  if (options.recovery) object.homelab_recovery = {scope: h.sync.scope(), season: 1, episode: 1, voice: '', excludeProvider: '', position: 30, duration: 0, quality: 0, ...options.recovery};
   const component = new registry.homelab_sources(object); component.create(); component.start();
   return {...h, component, parser, pages, metadata, fire, requests,
     rows: () => component.render()[0].querySelectorAll('.homelab-common-result'),
+    status: () => component.render()[0].querySelectorAll('.homelab-common-status')[0].text(),
+    more: () => component.render()[0].querySelectorAll('.homelab-common-more')[0],
     control: text => h.elements.find(node => node.offsetParent !== null && node.classes.has('homelab-common-chip') && node.content === text),
     focused: () => focused, focusCalls: () => focusCalls, scrollCalls: () => scrollCalls,
     leave() { object = {component: 'main'}; },
@@ -97,7 +100,7 @@ for (const event of ['hover:hover', 'hover:touch']) test(`${event} freezes exist
   const row = h.rows()[0], focused = h.focused(), focusCalls = h.focusCalls(), scrollCalls = h.scrollCalls();
   h.fire(row, event);
   assert.equal(h.focused(), focused); assert.equal(h.focusCalls(), focusCalls); assert.equal(h.scrollCalls(), scrollCalls);
-  h.pages.set('online', {'.videos__item': [{method: 'call', text: 'Episode', voice_name: 'High', season: 1, episode: 1, quality: {'1080p': '/never-fetched'}}]});
+  h.pages.set('online', {'.videos__item': [{method: 'call', text: '1 серия', voice_name: 'High', season: 1, episode: 1, url: '/lite/one/video?e=1'}]});
   await h.finish('/lite/events', [{balanser: 'one', name: 'One', show: true, url: '/lite/one'}]); await h.finish('/lite/one', 'online');
   assert.equal(h.rows()[0], row); assert.equal(h.rows().length, 2); assert.equal(h.scrollCalls(), scrollCalls);
   assert.equal(h.focused(), focused, 'asynchronous results must preserve the native keyboard focus');
@@ -120,4 +123,97 @@ test('season metadata resolves asynchronously and a departed picker cannot open 
   assert.deepEqual(Array.from(h.select().items, item => item.value), [0, 2]);
   h.L.Select.close(); h.L.Controller.toggle('content'); h.leave(); h.metadata[0].done({id: 42, seasons: [{season_number: 9}]});
   assert.equal(h.select(), null);
+});
+
+const episodePage = (voice, extra = {}) => ({'.videos__item': [{method: 'call', text: '1 серия', season: 1, episode: 1, url: '/lite/x/video', ...extra}],
+  '.videos__button': [{active: true, text: voice, url: '/lite/x?s=1&t=' + voice}]});
+
+test('a saved quality keeps unknown-quality online voices visible and labelled, but hides other known qualities', async t => {
+  const h = setup(t, {quality: 1080});
+  h.pages.set('unknown', episodePage('Studio A'));
+  h.pages.set('lower', episodePage('Studio B', {method: 'play', quality: {'720p': '/media'}}));
+  await h.finish('/lite/events', [{balanser: 'one', name: 'One', show: true, url: '/lite/one'}, {balanser: 'two', name: 'Two', show: true, url: '/lite/two'}]);
+  await h.finish('/lite/one', 'unknown'); await h.finish('/lite/two', 'lower');
+  assert.equal(h.rows().length, 1);
+  assert.equal(h.rows()[0].find('.homelab-common-voice').text(), 'Studio A');
+  assert.match(h.rows()[0].find('.homelab-common-details').text(), /Качество уточняется/);
+});
+
+test('focusing "more" inside the list scrolls it into view', async t => {
+  const h = setup(t);
+  h.parser[0].done({Results: Array.from({length: 22}, (_, i) => ({Title: 'Series S01 720p ' + i, Link: 'magnet:' + i, Tracker: 'T'}))}); h.tick(150);
+  const more = h.more(); assert.ok(more); const before = h.scrollCalls();
+  h.fire(more, 'hover:focus');
+  assert.equal(h.scrollCalls(), before + 1);
+});
+
+test('recovery mode never starts a torrent search', async t => {
+  const h = setup(t, {recovery: {voice: 'Studio A'}});
+  assert.equal(h.parser.length, 0);
+  await h.finish('/lite/events', [{balanser: 'one', name: 'One', show: true, url: '/lite/one'}]);
+  h.pages.set('a', episodePage('Studio A')); await h.finish('/lite/one', 'a'); h.tick(150);
+  assert.doesNotMatch(h.status(), /Ищем|Торрент/);
+});
+
+test('a refused online handoff keeps the search running; leaving mid-search shows an interrupted state', async t => {
+  const h = setup(t);
+  await h.finish('/lite/events', [{balanser: 'one', name: 'One', show: true, url: '/lite/one'}, {balanser: 'two', name: 'Two', show: true, url: '/lite/two'}]);
+  h.pages.set('a', episodePage('Studio A')); await h.finish('/lite/one', 'a'); h.tick(150);
+  const pending = h.requests.find(r => r.url.pathname === '/lite/two' && !r.finished);
+  h.window.HomelabOnlineResume = {select: () => false};
+  h.fire(h.rows().find(row => row.find('.homelab-common-voice').text() === 'Studio A'), 'hover:enter');
+  assert.ok(h.notices.some(text => /загружается/.test(text)));
+  assert.equal(pending.options.signal.aborted, false, 'the search is not cancelled by a refused handoff');
+  h.component.pause(); h.component.start();
+  assert.match(h.status(), /прерван/);
+  assert.doesNotMatch(h.status(), /Ищем/);
+});
+
+test('remote navigation ignores scrolled-out tiles, walks the list in order and Left at the edge opens the menu', async t => {
+  const h = setup(t);
+  h.parser[0].done({Results: [0, 1, 2].map(i => ({Title: 'Series S01 720p ' + i, Link: 'magnet:' + i, Tracker: 'T'}))}); h.tick(150);
+  const rect = (top, left = 0, width = 100, height = 20) => ({top, left, width, height, bottom: top + height, right: left + width});
+  const view = h.component.render()[0].querySelectorAll('.scroll')[0]; view.rect = rect(100, 0, 400, 300);
+  for (const node of h.component.render()[0].querySelectorAll('.selector')) node.rect = rect(-1000, 0);
+  const tab = h.component.render()[0].querySelectorAll('.homelab-common-tab')[0], chip = h.component.render()[0].querySelectorAll('.homelab-common-chip').find(node => node.content === 'Сезон 1');
+  chip.rect = rect(10, 0); tab.rect = rect(60, 0);
+  const [first, second, third] = h.rows();
+  first.rect = rect(40, 200); second.rect = rect(110, 200); third.rect = rect(140, 200); // first is scrolled out above the viewport
+  h.L.Controller.collectionFocus(tab, h.component.render());
+  h.L.Controller.controllers.content.up(); assert.equal(h.focused(), chip, 'a hidden tile behind the header is not a target');
+  h.L.Controller.collectionFocus(tab, h.component.render());
+  h.L.Controller.controllers.content.down(); assert.equal(h.focused(), second, 'down enters the first visible tile');
+  h.L.Controller.controllers.content.up(); assert.equal(h.focused(), first, 'inside the list Up follows list order');
+  h.L.Controller.controllers.content.left(); assert.equal(h.L.Controller.enabled().name, 'menu');
+});
+
+test('opening a torrent redraws the status so it is not left as searching', async t => {
+  const h = setup(t);
+  h.L.Torrent = {back() {}, start() {}};
+  h.parser[0].done({Results: [{Title: 'Series S01 720p', Link: 'magnet:fixture', Tracker: 'T'}]}); h.tick(150);
+  assert.match(h.status(), /Ищем/);
+  h.fire(h.rows()[0], 'hover:enter');
+  assert.doesNotMatch(h.status(), /Ищем/); assert.match(h.status(), /прерван/);
+});
+
+test('an online row whose identity the bridge cannot accept opens the native source instead of claiming it is loading', async t => {
+  const h = setup(t), long = 'Studio '.repeat(40).trim();
+  await h.finish('/lite/events', [{balanser: 'one', name: 'One', show: true, url: '/lite/one'}]);
+  h.pages.set('long', episodePage(long)); await h.finish('/lite/one', 'long'); h.tick(150);
+  let selected = 0; h.window.HomelabOnlineResume = {select: () => { selected++; return false; }};
+  const pushes = []; const push = h.L.Activity.push; h.L.Activity.push = value => { pushes.push(value); push(value); };
+  h.fire(h.rows().find(row => row.find('.homelab-common-voice').text() === long), 'hover:enter');
+  assert.equal(selected, 0); assert.equal(pushes[0].component, 'lampac'); assert.equal(pushes[0].lampac_custom_select, 'one');
+  assert.ok(!h.notices.some(text => /загружается/.test(text)));
+});
+
+test('Right on the "more" button is a no-op', async t => {
+  const h = setup(t);
+  h.parser[0].done({Results: Array.from({length: 22}, (_, i) => ({Title: 'Series S01 720p ' + i, Link: 'magnet:' + i, Tracker: 'T'}))}); h.tick(150);
+  const more = h.more(), box = (top, left) => ({top, left, width: 100, height: 20, bottom: top + 20, right: left + 100});
+  for (const node of h.component.render()[0].querySelectorAll('.selector')) node.rect = box(0, 400); // controls to the upper right
+  more.rect = box(300, 0); h.L.Controller.collectionFocus(more, h.component.render());
+  const before = h.L.Controller.enabled().name;
+  h.L.Controller.controllers.content.right();
+  assert.equal(h.focused(), more); assert.equal(h.L.Controller.enabled().name, before);
 });

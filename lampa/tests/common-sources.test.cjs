@@ -19,7 +19,13 @@ function setup(t, options = {}) {
   function request(url, options) {
     return new Promise((resolve, reject) => {
       active++; peak = Math.max(peak, active); let settled = false;
-      const job = {url: new URL(url), options, started: Date.now(), finish(body) { if (settled) return; settled = true; active--; const status = body && body.__status || 200; resolve({ok: status < 400, status, headers: {get: () => body && body.__type || ''}, text: async () => typeof body === 'string' ? body : JSON.stringify(body)}); }};
+      const job = {url: new URL(url), options, started: Date.now(), finish(body) {
+        if (settled) return; settled = true; active--; const status = body && body.__status || 200, text = typeof body === 'string' ? body : JSON.stringify(body);
+        // Realistic headers: JSON for objects, an HLS type for playlists; __type/__length override them (null = absent).
+        const type = body && body.__type !== undefined ? body.__type : typeof body === 'string' ? /^#EXTM3U/.test(body) ? 'application/vnd.apple.mpegurl' : 'text/html' : 'application/json; charset=utf-8';
+        const length = body && body.__length !== undefined ? body.__length : String(text.length);
+        job.read = false;
+        resolve({ok: status < 400, status, headers: {get: name => name.toLowerCase() === 'content-type' ? type : name.toLowerCase() === 'content-length' ? length : null}, text: async () => { job.read = true; return text; }}); }};
       if (!noAbort) options.signal.addEventListener('abort', () => { if (!settled) { settled = true; active--; reject(new Error('aborted')); }});
       requests.push(job);
     });
@@ -415,4 +421,106 @@ test('rows without quality learn the real height from the source once the catalo
   const order = h.search.rows.slice().sort((a, b) => h.window.HomelabSources.compareRows(a, b, {}));
   assert.equal(order[order.length - 1].voice, 'Studio B');
   h.search.cancel();
+});
+
+async function probeFixture(h, items) {
+  await h.start();
+  await h.finish('/lite/events', [h.source('one')]);
+  h.pages.set('probe', {'.videos__item': items.map(([voice, url]) => ({method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: voice, url}))});
+  await h.finish('/lite/one', 'probe');
+  return voice => h.search.rows.find(r => r.voice === voice);
+}
+
+test('rch/ws handshakes keep a row available; only an explicit error marks it unavailable', async t => {
+  const h = setup(t), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a'], ['Studio B', '/lite/one/video?f=b']]);
+  await h.finish('/lite/one/video', {rch: true, ws: 'wss://lampac.test/ws', nws: true});
+  assert.ok(!row('Studio A').unavailable, 'an rch handshake is not a missing video');
+  await h.finish('/lite/one/video', {error: 'blocked'});
+  assert.equal(row('Studio B').unavailable, true);
+  h.search.cancel();
+});
+
+test('a foreign CDN refusal never marks a row unavailable, an own /proxy/ refusal does', async t => {
+  const h = setup(t), row = await probeFixture(h, [['Studio A', 'https://cdn.test/a.m3u8'], ['Studio B', '/proxy/b.m3u8']]);
+  await h.finish('/a.m3u8', {__status: 403});
+  assert.ok(!row('Studio A').unavailable);
+  const foreign = h.requests.find(r => r.url.origin === 'https://cdn.test');
+  assert.equal(foreign.options.credentials, 'omit'); assert.ok(!foreign.url.searchParams.has('token'), 'identity stays on Lampac');
+  await h.finish('/proxy/b.m3u8', {__status: 404});
+  assert.equal(row('Studio B').unavailable, true);
+  h.search.cancel();
+});
+
+test('without a native AbortController nothing is probed', async t => {
+  const h = setup(t, {noAbort: true}), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a']]);
+  h.tick(5000); await flush();
+  assert.ok(!h.requests.some(r => r.url.pathname === '/lite/one/video'));
+  assert.deepEqual(Array.from(row('Studio A').qualities), []); assert.equal(h.search.checking(), 0);
+  h.search.cancel();
+});
+
+test('bodies without an allowed content type or above the size cap are never read', async t => {
+  const h = setup(t), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a'], ['Studio B', '/lite/one/video?f=b'], ['Studio C', '/lite/one/video?f=c']]);
+  const job = () => h.requests.find(r => r.url.pathname === '/lite/one/video' && !r.completed);
+  let pending = job(); await h.finish('/lite/one/video', {__type: null, quality: {'1080p': '/x'}});
+  assert.equal(pending.read, false, 'no content type: the body may be media'); assert.deepEqual(Array.from(row('Studio A').qualities), []);
+  pending = job(); await h.finish('/lite/one/video', {__length: '9000000', quality: {'1080p': '/x'}});
+  assert.equal(pending.read, false, 'oversized answer');
+  pending = job(); await h.finish('/lite/one/video', {__type: 'text/plain', __length: null, quality: {'1080p': '/x'}});
+  assert.equal(pending.read, false, 'plain text of unknown size');
+  assert.ok(['Studio A', 'Studio B', 'Studio C'].every(voice => !row(voice).unavailable && !row(voice).qualities.length));
+  h.search.cancel();
+});
+
+test('probes wait for live discovery to finish and share the catalog pacing', async t => {
+  const h = setup(t); await h.start();
+  await h.finish('/lite/events', {life: true, memkey: 'fixture'});
+  h.pages.set('probe', {'.videos__item': [{method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio A', url: '/lite/one/video?f=a'}]});
+  await h.finish('/lifeevents', {ready: false, online: [h.source('one')]});
+  await h.finish('/lite/one', 'probe');
+  h.tick(400); await flush();
+  assert.ok(!h.requests.some(r => r.url.pathname === '/lite/one/video'), 'discovery is still running');
+  assert.deepEqual({...h.search.providers}, {total: 1, done: 1});
+  await h.finish('/lifeevents', {ready: true, online: [h.source('one')]});
+  const probe = h.requests.find(r => r.url.pathname === '/lite/one/video'); assert.ok(probe);
+  const previous = h.requests[h.requests.indexOf(probe) - 1];
+  assert.ok(probe.started - previous.started >= 350, 'own probes are paced like catalog pages');
+  h.search.cancel();
+});
+
+test('measured results are cached for the session, so a reopened picker does not probe again', async t => {
+  const h = setup(t), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a']]);
+  await h.finish('/lite/one/video', {quality: {'1080p': '/x'}});
+  assert.equal(row('Studio A').measured, true); h.search.cancel();
+  const again = new h.window.HomelabSources.Search(h.movie, h.selection, () => {});
+  again.start(); await flush();
+  await h.finish('/lite/events', [h.source('one')]); await h.finish('/lite/one', 'probe');
+  h.tick(5000); await flush();
+  assert.equal(h.requests.filter(r => r.url.pathname === '/lite/one/video').length, 1, 'no second probe');
+  const cached = again.rows.find(r => r.voice === 'Studio A');
+  assert.deepEqual(Array.from(cached.qualities), [1080]); assert.equal(cached.measured, true);
+  again.cancel();
+});
+
+test('a probe whose address cannot be built still releases its slot', async t => {
+  const h = setup(t), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a']]);
+  // probeFixture ran the catalog; the probe was queued and is fetching. Rebuild with a failing identity.
+  h.search.cancel();
+  const search = new h.window.HomelabSources.Search(h.movie, h.selection, () => {});
+  search.start(); await flush(); await h.finish('/lite/events', [h.source('one')]);
+  const url = h.window.HomelabSync.url; let broken = false; h.window.HomelabSync.url = path => broken ? '' : url(path);
+  h.pages.set('probe2', {'.videos__item': [{method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio Z', url: '/lite/one/video?f=z'}]});
+  const job = h.requests.find(r => r.url.pathname === '/lite/one' && !r.completed); job.completed = true; broken = true; job.finish('probe2');
+  await flush(); h.tick(1000); await flush();
+  assert.equal(search.checking(), 0, 'the failed probe left the queue'); assert.ok(row('Studio A'));
+  assert.ok(search.rows.some(r => r.voice === 'Studio Z') && !search.rows.some(r => r.native), 'a synchronous failure never escapes into the catalog handler');
+  search.cancel();
+});
+
+test('rows group by voice with the best playable source first; torrents and native fallbacks stay single', t => {
+  const group = setup(t).window.HomelabSources.groupRows, row = (key, voice, qualities, extra = {}) => ({key, kind: 'online', provider: key, providerName: key, identityVoice: voice, voice, qualities, ...extra});
+  const groups = group([row('a', 'Dub', [2160], {unavailable: true}), row('b', 'Dub', [1080]), row('c', 'dub', [1080], {measured: true}), row('d', 'Other', []),
+    row('t', 'Dub', [1080], {kind: 'torrent'}), row('n', 'Dub', [], {native: true})]);
+  assert.deepEqual(JSON.parse(JSON.stringify(groups.map(g => g.rows.map(r => r.key)))), [['c', 'b', 'a'], ['d'], ['t'], ['n']]);
+  assert.equal(groups[0].best.key, 'c', 'measured beats declared at the same height; unavailable is last');
 });

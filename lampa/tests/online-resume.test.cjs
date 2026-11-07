@@ -2,7 +2,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {harness, flush} = require('./ux-harness.cjs');
 
-function setup(t) {
+function setup(t, options = {}) {
   const h = harness(t), registry = {}, choices = {}, starts = [];
   let active = null, requests = [], draws = [];
   function Native(object) {
@@ -12,7 +12,13 @@ function setup(t) {
     this.toPlayElement = file => ({url: file.url, title: file.title, timeline: {hash: '123', percent: 42, time: 50}, season: file.season, episode: file.episode});
     this.getFileUrl = (file, done) => { requests.push(() => done({url: 'fresh-url'})); };
     this.setDefaultQuality = work => { if (work.quality) work.url = work.quality['2160p']; };
-    this.draw = (items, params) => { draws.push(() => items.forEach(file => { file.timeline = {hash: '123'}; file.mark = () => {}; params.onRender?.(file, {}, {}); })); };
+    // Lampac display(): with voice filter buttons the choice names the active
+    // (default first) button and every row takes that name.
+    this.draw = (items, params) => { draws.push(() => items.forEach(file => {
+      if (options.buttons) {
+        const choice = choices.kinobase || {}, name = options.buttons.includes(choice.voice_name) ? choice.voice_name : options.buttons[0];
+        choices.kinobase = {...choice, voice_name: name}; file.voice_name = name;
+      } file.timeline = {hash: '123'}; file.mark = () => {}; params.onRender?.(file, {}, {}); })); };
     this.destroy = () => {};
   }
   registry.lampac = Native;
@@ -287,10 +293,12 @@ test('identical movie rows are never guessed between', async t => {
   assert.deepEqual(failures, ['ambiguous']); assert.equal(h.work(), null);
 });
 
-test('movie continuation does not seed the native voice name that would rename unlabeled rows', async t => {
-  const h = setup(t); delete h.movie.name; h.movie.title = 'Film';
+test('movie continuation seeds the saved voice so a provider with voice buttons opens that voice', async t => {
+  const h = setup(t, {buttons: ['Default Dub', 'Preferred']}); delete h.movie.name; h.movie.title = 'Film';
   await h.open({...h.item, card: 'movie_42', season: 0, episode: 0, online: {provider: 'kinobase', voice: 'Preferred', season_index: 0}});
-  assert.equal(h.choices.kinobase.voice_name, undefined); assert.equal(h.choices.kinobase.voice_url, '');
+  assert.equal(h.choices.kinobase.voice_name, 'Preferred'); assert.equal(h.choices.kinobase.voice_url, '');
+  h.draw([{text: 'Film 1080p', url: 'a'}]); h.render(); h.tick(0);
+  assert.equal(h.starts.length, 1, 'a saved non-default voice is not reported as changed');
 });
 
 test('series continuation still seeds the saved voice button', async t => {

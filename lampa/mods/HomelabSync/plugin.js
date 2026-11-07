@@ -133,7 +133,13 @@
       cursor = Number.isFinite(dump.version) ? dump.version : null; cursorKey = ctx.key;
       if (!full && dump.truncated === true && cursor !== null && ++pending.pages < 20) return fetchPage(pending);
       repair(); finish(pending); publish();
-    }, function () { if (request === pending) finish(pending, new Error('network')); });
+    }, function (xhr) {
+      if (request !== pending) return;
+      var status = xhr && xhr.status;
+      // An older Lampac answers the unknown changelog route with a client error.
+      if (!full && status >= 400 && status < 500 && [401, 403, 429].indexOf(status) < 0) { incremental = false; return fetchPage(pending); }
+      finish(pending, new Error('network'));
+    });
   }
   function finish(pending, error) {
     if (request === pending) request = null;

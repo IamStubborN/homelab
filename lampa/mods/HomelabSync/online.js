@@ -290,11 +290,10 @@
       comp.destroy = function () { disposed = true; requestId++; if (intent && !intent.finished) { intent.cancelled = true; clearTimeout(intent.timer); } return destroy.apply(comp, arguments); };
       if (intent) {
         // Native choices are movie/provider scoped; seed only the requested source.
-        // Native display() names unlabeled rows after choice.voice_name, so a
-        // seeded name would make every movie row look like the saved voice.
-        var seed = {season: intent.item.online.season_index, voice_url: ''};
-        if (intent.item.card.indexOf('tv_') === 0) seed.voice_name = intent.item.online.voice;
-        comp.replaceChoice(seed, intent.item.online.provider);
+        // The voice name selects the matching voice button; providers without
+        // buttons reset it before display(), and movie rows are still
+        // confirmed by translation/text/match.
+        comp.replaceChoice({season: intent.item.online.season_index, voice_url: '', voice_name: intent.item.online.voice}, intent.item.online.provider);
       }
       return comp;
     }

@@ -226,3 +226,12 @@ test('background polls repaint visible history progress in place without rebuild
   assert.equal(h.refreshes, 0, 'no Activity.refresh: focus and scroll are retained');
   assert.equal(h.built.results[0].homelab_summary, 'Серии: 2');
 });
+
+test('an unknown changelog route (HTTP 404) falls back to full dumps instead of failing as offline', () => {
+  const h = harness();
+  h.sync.pull(); h.resolve([row(1)], 0, { version: 5 });
+  h.pull(); h.requests[1].fail({ status: 404 }, 'error');
+  assert.equal(h.requests.length, 3); assert.match(h.requests[2].url, /\/timecode\/dump\?/);
+  h.resolve([row(1), row(2)], 2, { version: 6 });
+  assert.equal(h.sync.rows().length, 2); assert.equal(h.sync.error(), '');
+});

@@ -66,6 +66,8 @@ public class SaveResult
     public bool ok;
     public bool stale;
     public long observed;
+    // The scope cap is reached: retryable, unlike an invalid item.
+    public bool full;
 }
 
 public static class ResumeStore
@@ -152,7 +154,7 @@ public static class ResumeStore
         lock (gate)
         {
             var file = FileName(scope);
-            if (!File.Exists(file) && Directory.Exists(Folder) && Directory.EnumerateFiles(Folder, "*.json").Count() >= MaxScopes) return null;
+            if (!File.Exists(file) && Directory.Exists(Folder) && Directory.EnumerateFiles(Folder, "*.json").Count() >= MaxScopes) return new SaveResult { full = true };
             var list = Load(scope).ToList();
             var old = list.FirstOrDefault(i => i.card == item.card);
             // A dismissal always wins over the record it dismisses.

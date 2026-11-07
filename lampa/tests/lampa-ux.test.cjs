@@ -156,14 +156,15 @@ test('a newer later native episode replaces the captured one without its source;
   h.window.homelabContinue.load(); const item = entry(); item.observed = 100; item.position = 60;
   h.calls[0].finish({version: 1, items: [item]}); await flush();
   // An external player or a client without the extension watched episode 3.
-  h.syncRows([{watched_at: 200, hash: '789', position: 40, duration: 120, extra: JSON.stringify({card: 'tv_42', season: 1, episode: 3})}]);
+  // (Stamped beyond the two-minute native save interval, viewed over a minute.)
+  h.syncRows([{watched_at: 200000, hash: '789', position: 70, duration: 120, extra: JSON.stringify({card: 'tv_42', season: 1, episode: 3})}]);
   let value = h.window.homelabContinue.list()[0];
-  assert.equal(value.episode, 3); assert.equal(value.position, 40); assert.equal(value.timeline, '789');
+  assert.equal(value.episode, 3); assert.equal(value.position, 70); assert.equal(value.timeline, '789');
   assert.equal(value.torrent, undefined, 'the captured release belongs to episode 2 only'); assert.equal(value.title, 'Series');
   // Native TimeCode re-stamps a stale paused device closing an earlier episode.
-  h.syncRows([{watched_at: 300, hash: '111', position: 10, duration: 120, extra: JSON.stringify({card: 'tv_42', season: 1, episode: 1})}]);
+  h.syncRows([{watched_at: 300000, hash: '111', position: 70, duration: 120, extra: JSON.stringify({card: 'tv_42', season: 1, episode: 1})}]);
   value = h.window.homelabContinue.list()[0]; assert.equal(value.episode, 2); assert.equal(value.position, 60); assert.equal(value.torrent, hash);
-  h.syncRows([{watched_at: 300, hash: '456', position: 50, duration: 120, extra: JSON.stringify({card: 'tv_42', season: 1, episode: 2})}]);
+  h.syncRows([{watched_at: 300000, hash: '456', position: 110, duration: 120, extra: JSON.stringify({card: 'tv_42', season: 1, episode: 2})}]);
   assert.equal(h.window.homelabContinue.list()[0].position, 60, 'positions from another cut are not combined with the captured source');
 });
 

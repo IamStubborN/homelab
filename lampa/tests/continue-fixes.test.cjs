@@ -143,3 +143,69 @@ test('a captured source without a usable release opens the source picker with th
   h.window.homelabContinue.resume(h.window.homelabContinue.list()[0]);
   assert.equal(picked.length, 1); assert.equal(picked[0].item.episode, 2); assert.equal(picked[0].item.position, 30);
 });
+
+const native = (extra, values) => ({hash: '123', duration: 120, extra: JSON.stringify({card: 'tv_42', ...extra}), ...values});
+test('newer native progress on the captured episode moves the position forward and keeps the source', async t => {
+  const h = await loaded(t, [saved]);
+  h.syncRows([native({season: 1, episode: 2}, {watched_at: 2000, position: 80})]);
+  const [item] = h.window.homelabContinue.list();
+  assert.equal(item.position, 80); assert.equal(item.torrent, hash); assert.equal(item.observed, 2000);
+  h.syncRows([native({season: 1, episode: 2}, {watched_at: 3000, position: 40})]);
+  assert.equal(h.window.homelabContinue.list()[0].position, 30, 'a rewind or stale close does not move it back');
+});
+
+test('newer native progress on a captured movie is used once it is watched', async t => {
+  const h = await loaded(t, [{...saved, card: 'movie_42', season: 0, episode: 0}]);
+  h.syncRows([{hash: '123', duration: 120, extra: JSON.stringify({card: 'movie_42'}), watched_at: 2000, position: 115}]);
+  assert.equal(h.window.homelabContinue.list().length, 0);
+});
+
+test('a later native episode stamped within the native save interval does not replace an active capture', async t => {
+  const h = await loaded(t, [saved]);
+  h.syncRows([native({season: 1, episode: 5}, {hash: '9', watched_at: 1000 + 60000, position: 300})]);
+  assert.equal(h.window.homelabContinue.list()[0].episode, 2);
+  h.syncRows([native({season: 0, episode: 1}, {hash: '9', watched_at: 1000 + 200000, position: 20})]);
+  assert.equal(h.window.homelabContinue.list()[0].episode, 2, 'a special barely opened does not win');
+  h.syncRows([native({season: 0, episode: 1}, {hash: '9', watched_at: 1000 + 200000, position: 70})]);
+  assert.equal(h.window.homelabContinue.list()[0].season, 0);
+});
+
+test('a key press while a torrent launch is being prepared cancels it without navigating', async t => {
+  const h = await loaded(t, [saved]); const routes = [];
+  h.L.Router.call = (name, value) => routes.push(name);
+  h.window.homelabContinue.resume(h.window.homelabContinue.list()[0]);
+  h.tick(600); h.L.Keypad.listener.send('keydown', {code: 40});
+  h.tick(20000);
+  assert.deepEqual(routes, []); assert.equal(h.work(), null);
+});
+
+test('a permanently rejected write is dropped instead of being shown as saved', async t => {
+  const h = harness(t); h.run('mods/HomelabSync/continue.js');
+  h.start({card: {id: 42, name: 'Series'}, season: 1, episode: 2, timeline: {hash: '123'}, homelab_torrent_hash: hash, homelab_file_index: 1});
+  h.video().currentTime = 50; h.videoEvent('timeupdate');
+  assert.equal(h.window.homelabContinue.list().length, 1);
+  h.calls[0].finish({}, 400); await flush();
+  assert.equal(h.window.homelabContinue.list().length, 0);
+});
+
+test('a full server (507) keeps retrying the write', async t => {
+  const h = harness(t); h.run('mods/HomelabSync/continue.js');
+  h.start({card: {id: 42, name: 'Series'}, season: 1, episode: 2, timeline: {hash: '123'}, homelab_torrent_hash: hash, homelab_file_index: 1});
+  h.video().currentTime = 50; h.videoEvent('timeupdate');
+  for (const wait of [5000, 15000, 60000, 300000]) { h.calls.at(-1).finish({}, 507); await flush(); const before = h.calls.length; h.tick(wait); assert.equal(h.calls.length, before + 1); }
+});
+
+test('a dismissal is stamped after the newest native viewing of the card', async t => {
+  const h = await loaded(t, [saved]);
+  h.syncRows([native({season: 1, episode: 4}, {hash: '9', watched_at: Date.now() + 500000, position: 40})]);
+  h.window.homelabContinue.dismiss('tv_42');
+  const body = JSON.parse(h.calls.at(-1).options.body);
+  assert.ok(body.observed > Date.now() + 500000); assert.equal(h.window.homelabContinue.list().some(item => item.card === 'tv_42'), false);
+});
+
+test('a record whose zero position the server omitted still shadows older native progress', async t => {
+  const {position, ...rest} = saved;
+  const h = await loaded(t, [rest]);
+  h.syncRows([native({season: 1, episode: 1}, {hash: '9', watched_at: 500, position: 40})]);
+  assert.equal(h.window.homelabContinue.list().length, 0);
+});

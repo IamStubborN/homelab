@@ -46,7 +46,8 @@ uses Lampac's existing assigned identity and optional route token. Progress read
 go directly to the existing authenticated `/timecode/dump` endpoint once, then to
 its incremental `/timecode/changelog?since=` (including tombstones; truncated
 pages continue in the same pull). A full dump is repeated every six hours and on
-profile change; a Lampac without the changelog falls back to dumps. The owned
+profile change; a Lampac without the changelog (no rows, or a client error such as
+404 on that route) falls back to dumps. The owned
 Continue Watching row additionally reads/writes `/homelab-sync/resume`, using
 Lampac’s existing identity and profile namespace. It introduces no account system
 or direct connection to the native SQLite database.
@@ -130,8 +131,9 @@ voice is matched across every row of a native draw (movies list translations as
 rows); only a whole draw without it reports a change, and a draw of another season
 (a shifted season index) reports a missing episode at once. Movie rows are also
 identified by their translation text, because some providers put a release tag in
-`voice_name`; several equal rows are never guessed between, and the saved voice
-name is not seeded for movies (native display would rename unlabeled rows). A movie
+`voice_name`; several equal rows are never guessed between. The saved voice name is
+seeded for movies too, so providers with voice buttons open that voice (native
+display names every row after the active button). A movie
 row chosen in the source picker is reopened by its exact URL, else by its index when
 the page has the same row count, each confirmed by translation/text/tag; a capture
 saves only index, count and texts (never the resolver URL). Any key, click or touch
@@ -155,16 +157,26 @@ reports older observations as `stale` (the client then keeps the server record),
 clamps a client stamp more than five minutes from its clock to its own time and
 returns the stored stamp, and rejects invalid identities and oversized requests
 (16 KiB, including chunked bodies). An unreadable store file is set aside as
-`*.corrupt-<time>` and replaced, and at most 500 user/profile files are created. Atomic JSON files under the existing writable
+`*.corrupt-<time>` and replaced, and at most 500 user/profile files are created (a new one beyond that is answered
+507, which clients retry; rejected writes are dropped and not shown as saved). Atomic JSON files under the existing writable
 `database/homelab-sync-resume/` bind retain at most 50 entries per hashed user/profile.
 The updater’s database snapshot therefore includes this state.
 
 Captured records keep their source for their own episode. Native TimeCode can
-assign a new time to a stale paused player’s close, so a newer native row replaces
-a captured record only when it is a later episode (or a special, or a viewing after
-a dismissal); the row then shows that episode without the captured source, whose
-release or voice belonged to another episode. Native progress for the captured
-episode itself (another cut, a stale close) never replaces its position. Native
+assign a new time to a stale paused player’s close, so:
+
+- newer native progress of the captured episode or movie (same cut) moves the
+  position forward only when it is watched (90%) or more than 30 s further, and
+  keeps the source; a rewind or another cut does not;
+- another episode replaces the record (without the captured source) only when it is
+  a later episode, or a special involved on either side, viewed at least a minute,
+  and stamped more than two minutes after the capture (the native player saves
+  every two minutes, so an active viewing keeps stamping);
+- after a dismissal, any newer viewing brings the card back; a dismissal is stamped
+  after the newest native viewing of the card.
+
+Any key, click or touch while a torrent or picker launch is still being prepared
+cancels it. Native
 progress supplies historical fallback for cards never captured by the extension;
 matching deletion markers remain honoured.
 Audio/subtitle restoration requires the matching track to exist in that source.

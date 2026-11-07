@@ -225,20 +225,10 @@ embedded player for its controls.
 
 ## Additional player UX (deployed 2026-11-01)
 
-`chapter-gallery.js` consumes the guarded version-2 interface of
-`seek-previews.js`. Its responsive owned modal shows embedded chapters, current
-chapter and on-demand frames. A chapter frame is sampled on the five-second grid
-inside that chapter. Short chapters without a grid point show a placeholder.
-One client request runs at a time, with at most three queued chapters, a 55-second
-request deadline and twelve retained object URLs. Closing the gallery or changing
-file/profile cancels requests and releases images. Server worker limits remain
-unchanged; this is not a full-file scene detector or background scan.
-
-Only explicit OP/ED, opening/ending, intro/credits labels offer a manual skip
-button. There is no automatic skipping or inferred boundary detection. The user
-can edit the skip type/start/end, explicitly save or reset them; those edits do
-not alter the original chapter’s navigation or preview. Edits are local to the
-client/profile, bounded to thirty files, and do not synchronise between devices.
+`chapter-gallery.js` (chapter frame gallery with manual intro/credits skip) was
+retired on 2026-11-08. The bootstrap removes its client registration; the
+previews service still accepts any valid client id, and `seek-previews.js` keeps
+its own chapter list.
 
 `playback-status.js` adds preparation, buffering, recovery and failure states
 from native video events and the existing audio bridge. It offers manual retry

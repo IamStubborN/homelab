@@ -147,3 +147,20 @@ test('Android player changes switch HLS immediately with one listener across rep
   h.set('unrelated_preference', 'value');
   assert.equal(h.writes.length, before + 1, 'unrelated changes do not reconfigure playback');
 });
+
+test('retired homelab plugins are removed from the client registry', () => {
+  const h = harness(false), loaded = [
+    { url: 'https://lampa.test/plugins/homelab/chapter-gallery.js', status: 1 },
+    { url: 'https://other.example/stunnorm/x.js', status: 1 },
+    { url: 'https://lampa.test/plugins/homelab/seek-previews.js', status: 1 },
+  ];
+  h.Lampa.Plugins = {
+    get: () => loaded, add: plugin => loaded.push(plugin), push() {}, save() {},
+    remove: plugin => loaded.splice(loaded.indexOf(plugin), 1),
+  };
+  h.Lampa.Utils = { putScriptAsync() {} };
+  h.hooks.appready();
+  const urls = loaded.map(plugin => plugin.url);
+  assert.ok(!urls.some(url => /chapter-gallery|stunnorm/.test(url)), urls.join(', '));
+  assert.ok(urls.includes('https://lampa.test/plugins/homelab/seek-previews.js'));
+});

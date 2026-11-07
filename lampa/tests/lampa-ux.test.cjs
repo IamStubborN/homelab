@@ -6,83 +6,6 @@ const data = {key, enabled: true, info: {duration: 120, step: 5, version: 1, cha
   {start: 0, end: 8, title: 'OP'}, {start: 8, end: 90, title: 'Opening Scene'}, {start: 90, end: 120, title: 'Ending'},
 ]}};
 
-test('actual seek core wakes the chapter gallery when its script loads later', t => {
-  const h = harness(t);
-  delete h.window.homelabSeekPreviews;
-  h.window.CustomEvent = function (type) { this.type = type; };
-  h.run('plugins/chapter-gallery.js');
-  assert.equal(h.window.homelabChapterGallery, undefined);
-  h.run('plugins/seek-previews.js');
-  assert.ok(h.window.homelabChapterGallery);
-  assert.equal(typeof h.window.homelabSeekPreviews.openChapters, 'function');
-});
-
-test('gallery loaded after metadata immediately offers skip on a paused intro', async t => {
-  const h = harness(t);
-  delete h.window.homelabSeekPreviews;
-  h.run('plugins/seek-previews.js');
-  h.video().paused = true;
-  h.start({homelab_torrent_hash: hash, homelab_file_index: 1});
-  h.calls[0].finish({...data.info, step: 10}); await flush();
-  h.run('plugins/chapter-gallery.js');
-  assert.equal(h.elements.find(e => e.classes.has('homelab-skip')).hasClass('hide'), false);
-});
-
-test('chapter gallery samples inside the chapter and keeps thumbnail generation serial', async t => {
-  const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data);
-  h.video().currentTime = 10; h.core.openChapters();
-  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].url.split('&client=')[0], key + 'frame/5.jpg?step=5', 'the 8s chapter samples 15s inside it, not the preceding scene');
-  h.calls[0].finish({type: 'image/jpeg', size: 100}); await flush();
-  assert.equal(h.calls.length, 2, 'only one decoder request runs at a time');
-  h.L.Modal.close(); assert.equal(h.calls[1].options.signal.aborted, true);
-  assert.equal(h.calls[2].url, '/previews/cancel', 'the aborted tile releases its server job');
-  h.calls[1].finish({type: 'image/jpeg', size: 100}); await flush();
-  assert.equal(h.calls.length, 3); assert.equal(h.revoked.length, 1);
-});
-
-test('chapter gallery respects the negotiated ten-second grid', t => {
-  const h = harness(t); h.run('plugins/chapter-gallery.js');
-  h.coreState({...data, info: {...data.info, step: 10}}); h.video().currentTime = 10; h.core.openChapters();
-  assert.equal(h.calls[0].url.split('&client=')[0], key + 'frame/2.jpg?step=10', 'the 8s chapter samples the ten-second grid inside it');
-});
-
-test('skip buttons never auto-seek and conservative labels leave story chapters alone', t => {
-  const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data);
-  h.L.PlayerPanel.listener.follow('to_end', () => h.L.PlayerVideo.to(-1)); // native without a next episode
-  const button = h.elements.find(e => e.classes.has('homelab-skip'));
-  assert.equal(h.selected(), undefined); assert.equal(button.hasClass('hide'), false);
-  button.trigger('hover:enter'); assert.equal(h.selected(), 8);
-  h.video().currentTime = 10; h.videoEvent('timeupdate'); assert.equal(button.hasClass('hide'), true, 'Opening Scene is not an intro marker');
-  h.video().currentTime = 100; h.videoEvent('timeupdate'); assert.equal(button.hasClass('hide'), false);
-  button.trigger('hover:enter'); assert.equal(h.selected(), -1, 'tail credits use native end position');
-});
-
-test('manual chapter edits require explicit save and reject invalid boundaries or another profile', t => {
-  const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data); h.core.openChapters();
-  h.elements.filter(e => e.classes.has('homelab-chapter-edit'))[1].trigger('hover:enter');
-  h.choose(h.select().items[0]); h.input().callback('200');
-  assert.equal(h.storage.size, 0, 'typing/back from input does not persist edits');
-  h.choose(h.select().items.find(i => i.save)); assert.equal(h.storage.size, 0); assert.ok(h.notices.length);
-  h.elements.filter(e => e.classes.has('homelab-chapter-edit'))[1].trigger('hover:enter');
-  h.choose(h.select().items.find(i => i.type));
-  h.choose(h.select().items.find(i => i.save));
-  assert.equal(h.storage.get('homelab_chapter_edits_profile-a|')[key][1].kind, 'intro');
-  h.elements.filter(e => e.classes.has('homelab-chapter-edit')).at(-2).trigger('hover:enter');
-  const old = h.select(); h.profile('profile-b'); old.onSelect(old.items.find(i => i.save));
-  assert.equal(h.storage.has('homelab_chapter_edits_profile-b|'), false);
-});
-
-test('another modal cancels thumbnail work and late responses cannot corrupt the restored gallery', async t => {
-  const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data); h.core.openChapters();
-  const owned = h.modal(); h.L.Modal.open({title: 'Other', html: {}});
-  assert.equal(h.calls[0].options.signal.aborted, true);
-  assert.equal(h.calls[1].url, '/previews/cancel');
-  h.L.Modal.open(owned); assert.equal(h.calls.length, 3);
-  h.calls[0].finish({type: 'image/jpeg', size: 100}); await flush();
-  h.calls[2].finish({type: 'image/jpeg', size: 100}); await flush();
-  assert.equal(h.calls.length, 4, 'the active thumbnail queue keeps running');
-});
-
 test('playback recovery stays silent through preparation, buffering, recovery and failure while retaining one manual retry', t => {
   const h = harness(t); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
   const retry = h.elements.find(e => e.classes.has('homelab-playback-retry'));
@@ -200,32 +123,6 @@ test('only the latest continue intent may launch or fall back after asynchronous
   assert.equal(h.L.routed, undefined); assert.equal(h.work().card.id, 43);
 });
 
-test('manual Lampac areas isolate skip edits without changing the native timeline profile', t => {
-  const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data);
-  h.L.Storage.set('lampac_profile_id', 'a'); h.core.openChapters();
-  h.elements.filter(e => e.classes.has('homelab-chapter-edit'))[1].trigger('hover:enter');
-  h.choose(h.select().items.find(i => i.type)); h.choose(h.select().items.find(i => i.save));
-  h.video().currentTime = 20; h.videoEvent('timeupdate');
-  const button = h.elements.find(e => e.classes.has('homelab-skip')); assert.equal(button.hasClass('hide'), false);
-  h.L.Storage.set('lampac_profile_id', 'b'); h.videoEvent('timeupdate');
-  assert.equal(button.hasClass('hide'), true);
-});
-
-test('editing skip boundaries leaves chapter navigation times and sampled scene intact', async t => {
-  const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data); h.core.openChapters();
-  h.calls[0].finish({type: 'image/jpeg', size: 100}); await flush();
-  h.elements.filter(e => e.classes.has('homelab-chapter-edit'))[0].trigger('hover:enter');
-  h.choose(h.select().items[0]); h.input().callback('20');
-  h.choose(h.select().items[1]); h.input().callback('40');
-  h.choose(h.select().items.find(i => i.save));
-  const tile = h.elements.filter(e => e.attrs['data-chapter'] === 0).at(-1);
-  assert.equal(tile.find('.homelab-chapter-time').content, '00:00 — 00:08');
-  h.video().currentTime = 25; h.videoEvent('timeupdate');
-  const button = h.elements.find(e => e.classes.has('homelab-skip')); button.trigger('hover:enter'); assert.equal(h.selected(), 40);
-  tile.trigger('hover:enter'); assert.equal(h.selected(), 0);
-});
-
-
 test('owned continue row uses exported focus APIs for remote navigation without a private Navigator', async t => {
   const h = harness(t); h.run('mods/HomelabSync/continue.js');
   let row;
@@ -241,43 +138,6 @@ test('owned continue row uses exported focus APIs for remote navigation without 
   let left = 0; row.use({onLeft() { left++; }});
   h.L.Controller.controllers.homelab_resume.left(); assert.equal(left, 1);
   row.destroy();
-});
-
-
-test('manual skip is a separate action above controls rather than a fixed-size toolbar circle', t => {
-  const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data);
-  const button = h.elements.find(e => e.classes.has('homelab-skip'));
-  assert.equal(button.classes.has('button'), false);
-  assert.ok(h.L.Player.render().children.includes(button));
-});
-
-
-test('skip action survives native player cleanup and is reachable with remote Up without taking native skip focus', t => {
-  const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data);
-  const button = h.elements.find(e => e.classes.has('homelab-skip'));
-  h.L.Player.render().empty(); h.coreState(null); h.coreState(data);
-  assert.ok(h.L.Player.render().children.includes(button), 'reattach after native root cleanup');
-  h.L.Controller.toggle('player_rewind');
-  h.L.Keypad.listener.send('keydown', {code: 38, enabled: true}); h.L.Controller.toggle('player_skip'); h.tick(0);
-  assert.equal(h.L.Controller.enabled().name, 'player_skip', 'native skip retains priority');
-  h.L.Controller.toggle('player_rewind');
-  h.L.Keypad.listener.send('keydown', {code: 38, enabled: true}); h.L.Controller.toggle('player'); h.tick(0);
-  assert.equal(h.L.Controller.enabled().name, 'homelab_chapter_skip');
-  h.L.Controller.controllers.homelab_chapter_skip.enter(); assert.equal(h.selected(), 8);
-  assert.equal(h.L.Controller.enabled().name, 'player');
-});
-
-
-test('skip positioning follows native visibility event order and leaving its controller clears focus', t => {
-  const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data);
-  const button = h.elements.find(e => e.classes.has('homelab-skip')), panel = h.L.PlayerPanel.render();
-  panel.rect.height = 200;
-  h.L.PlayerPanel.listener.send('visible', {status: true});
-  assert.equal(button.attrs['style:bottom'], 212, 'native sends visible before changing its CSS class');
-  panel.addClass('panel--visible'); h.L.PlayerPanel.listener.send('visible', {status: false});
-  assert.equal(button.attrs['style:bottom'], 24);
-  h.L.Controller.toggle('homelab_chapter_skip'); button.addClass('focus');
-  h.L.Controller.controllers.homelab_chapter_skip.left(); assert.equal(button.hasClass('focus'), false);
 });
 
 

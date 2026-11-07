@@ -3,8 +3,9 @@
 Embedded torrent chapters and sparse seek thumbnails are implemented as a
 separate side service; see [previews/README.md](previews/README.md) for scope,
 resource limits, tests and the guarded deployment procedure. The locally prepared
-UX additions include a chapter gallery, editable manual intro/credits skipping
-and playback status/retry. Cross-device continuation and household history live
+UX additions include playback status/retry. The chapter gallery with manual
+intro/credits skipping was retired on 2026-11-08; the bootstrap removes its
+client registration, and seek-previews keeps its own chapter list. Cross-device continuation and household history live
 in the separate [HomelabSync module](mods/HomelabSync/README.md). These additions
 were installed on 2026-11-01 after explicit approval; a source checkout alone
 does not install them. Clients need one reload to load the new plugins.

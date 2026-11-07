@@ -88,12 +88,13 @@ var lampainit_invc = {};
     // The plugin registry is ready only after Lampa opens its IndexedDB.
     if (!Lampa.Plugins || typeof Lampa.Plugins.get !== 'function') return;
 
-    Lampa.Plugins.get().forEach(function (plugin) {
+    var retired = [origin + '/plugins/homelab/chapter-gallery.js'];
+    // Copy first: remove() mutates the registry array that get() returns.
+    Lampa.Plugins.get().slice().forEach(function (plugin) {
       if (typeof plugin.url !== 'string') return;
-      // Remove only the known obsolete third-party plugin host. The old
-      // malformed marker `la,padocker` was never a valid URL match and could
-      // not reliably clean stale installations.
-      if (plugin.url.indexOf('stunnorm') === -1) return;
+      // Remove the known obsolete third-party plugin host (the old malformed
+      // marker `la,padocker` never matched a URL) and retired homelab plugins.
+      if (plugin.url.indexOf('stunnorm') === -1 && retired.indexOf(plugin.url) === -1) return;
       if (typeof Lampa.Plugins.remove === 'function') Lampa.Plugins.remove(plugin);
     });
 
@@ -138,12 +139,6 @@ var lampainit_invc = {};
         url: origin + '/plugins/homelab/seek-previews.js',
         status: 1,
         name: 'Главы и кадры перемотки',
-        author: 'Homelab'
-      },
-      {
-        url: origin + '/plugins/homelab/chapter-gallery.js',
-        status: 1,
-        name: 'Галерея глав и пропуски',
         author: 'Homelab'
       },
       {

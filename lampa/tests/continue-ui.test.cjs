@@ -96,3 +96,21 @@ test('choose source opens the picker for the exact episode and position instead 
   assert.equal(picks.length, 1); assert.equal(picks[0].item.episode, 2); assert.equal(picks[0].item.position, 30);
   assert.equal(h.L.sourceLookup, undefined, 'the captured torrent is not opened');
 });
+
+test('an online next episode in another season cannot be marked watched with the old season index', async t => {
+  const online = {...saved, kind: 'online', torrent: null, index: 0, online: {provider: 'fictional', voice: 'Voice', season_index: 0}, title: undefined, season: 1, episode: 2, position: 115};
+  const h = await row(t, [online], h => { h.L.Api.sources.tmdb.get = (path, params, done) => done({id: 42, name: 'Series', original_name: 'Series', seasons: [{season_number: 1, episode_count: 2}, {season_number: 2, episode_count: 5}]}); });
+  const [item] = h.window.homelabContinue.list();
+  assert.equal(item.season, 2); assert.equal(item.episode, 1);
+  assert.equal(h.window.homelabContinue.watched(item), false);
+  h.elements.filter(e => e.classes.has('homelab-resume-card')).at(-1).trigger('hover:long');
+  assert.deepEqual([...h.select().items].map(x => x.title), ['Убрать из ряда', 'Выбрать источник']);
+});
+
+test('the focus overlay does not repeat the remaining time shown under the poster', async t => {
+  const h = await row(t, [{...saved, card: 'movie_7', season: 0, episode: 0, position: 600, duration: 6000}, saved]);
+  const overlays = h.all('homelab-resume-progress'), metas = h.all('homelab-resume-meta');
+  assert.equal(metas[0].text(), 'осталось 1 ч 30 мин');
+  assert.equal(overlays[0].find('.card-watched__body').children[0].find('span').content, 'Продолжить просмотр');
+  assert.equal(overlays[1].find('.card-watched__body').children[0].find('span').content, 'С1 · Е2');
+});

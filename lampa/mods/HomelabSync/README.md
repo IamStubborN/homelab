@@ -123,7 +123,9 @@ A long press opens **Убрать из ряда** (the server stores a tombstone
 viewing brings the card back), **Отметить просмотренным** (stores the shown episode
 or movie at its end with the captured source, so the row advances to the next
 episode or drops the movie; offered only for records with a server-valid captured
-source) and **Выбрать источник** (opens `HomelabSources.resume` for the exact
+source, and not for an online next episode in another season, whose captured
+season index would not match; it updates only the Continue record, not Lampa's
+native Timeline marks) and **Выбрать источник** (opens `HomelabSources.resume` for the exact
 episode and position, or the card when the picker is unavailable). Focus moves
 to a neighbour only when the card leaves the row. `window.homelabContinue` also
 exposes `watched(item)` and `resume(item, {choose: true})`.

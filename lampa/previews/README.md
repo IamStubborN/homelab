@@ -23,10 +23,18 @@ the separate history extension.
 - Mouse hover, TV rewind and mobile native scrub gestures request a 320×180 JPEG
   on a ten-second grid after 450 ms without a change of grid cell. Chapters are
   shown with the target time. Sixteen object URLs per playing file are kept in a
-  client LRU: revisiting one is immediate. Unprepared frames display only the
-  time, without a permanent loading message. Closing the file releases all URLs.
-- The player reports playback state every 15 seconds, with one request in flight
-  and a five-second timeout. Background preparation starts after ten stable
+  client LRU: revisiting one is immediate. An unprepared frame shows the nearest
+  cached frame within 30 seconds, dimmed, or only the time. The overlay hides when
+  the panel hides, 2.5 s after the last TV/button rewind and 1.5 s after a touch
+  release (the pending request survives a quick release). The plugin uses one
+  frame `client` id for its lifetime, with an increasing `n`, so the worker keeps
+  only its latest seek across files; closing or changing a file (after a frame
+  request) and disabling frames send a cancel. Closing the file releases all URLs.
+- The player reports playback state every 15 seconds, with one request in flight,
+  a five-second timeout, at least three seconds between reports (the last phase
+  wins) and an increasing `seq`. A 422 (unsupported release) stops its reports.
+  Tizen AVPlay/Orsay `<object>` wrappers, whose native `removeEventListener`
+  cannot remove Lampa's listeners, are supported: the handlers become inert on close. Background preparation starts after ten stable
   seconds. The current series file is first, then naturally sorted following
   files, then previous files. Only supported video files of the existing torrent
   are included; no torrent is added. A new current file takes priority.
@@ -44,7 +52,12 @@ the separate history extension.
 
 Resource limits: one ffmpeg/ffprobe process at a time, one thread, one CPU and
 768 MiB RAM. Foreground retains two waiting jobs and a 25-second subprocess
-limit. Background has at most four releases, 500 videos per release, 32 client
+limit. A request with `client` supersedes that client's previous job: a queued
+one is dropped and a running one is interrupted. A request whose `n` is not
+newer than that client's last one is ignored. Requests without `client`
+(legacy clients) are never superseded, and a job shared with them keeps running.
+One device may use several client ids (for example seek and gallery); at most
+256 are tracked, beyond which requests get 503. Background has at most four releases, 500 videos per release, 32 client
 leases, and 15-minute resumable process slices. Its lower-priority process reads
 at most eight media seconds per wall second (`BATCH_READ_RATE`, clamped to
 0.25–16), or two in software mode. This bounds decoding pace, not absolute
@@ -69,18 +82,30 @@ All endpoints are served on the existing Lampa origin behind Traefik:
 
 - `GET /previews/health`
 - `GET /previews/{40-hex-infohash}/{one-based-file-index}/metadata?step=10`
-- `GET /previews/{40-hex-infohash}/{one-based-file-index}/frame/{slot}.jpg?step=10`
+- `GET /previews/{40-hex-infohash}/{one-based-file-index}/frame/{slot}.jpg?step=10[&client=ID[&n=N]]`
+- `POST /previews/cancel` with JSON `{"client": ID, "n": N}` (`n` optional):
+  releases that client's job; returns 202, or 400 for an invalid body
 - `POST /previews/{40-hex-infohash}/{one-based-file-index}/prepare`
 - `GET /previews/{40-hex-infohash}/{one-based-file-index}/status`
 
 `slot = floor(seconds / step)`. A request returns 202 with Retry-After while queued,
-200 when ready, or 503 for an unavailable/busy job. Metadata version 1 supplies
+200 when ready, 503 with Retry-After when busy or the source is temporarily
+unavailable (TorrServer errors, timeouts, missing statistics; such failures back
+off for 10 seconds), or 422 with Retry-After when decoding failed or the file is
+unsupported (do not poll before Retry-After; 60 seconds). Backoff is counted
+from the job's completion. A superseded job
+returns no status of its own: its key is forgotten, so a later request gets 202
+(new job), 200 or 503. An invalid `client` returns 400. Metadata version 1 supplies
 `duration`, `step:10` and `chapters:[{start,end,title}]` in seconds. The frontend
 ignores late responses from previous playback and cancels polling on close.
 
 Preparation accepts at most 2 KiB of JSON, with `client` (8–64 alphanumeric,
 underscore/hyphen characters) and `state` (`playing`, `buffering`, `paused`, or
-`closed`), returning 202 on acceptance. Client IDs are ephemeral playback leases,
+`closed`) and an optional integer `seq`, returning 202 on acceptance. A report
+whose `seq` is not newer than the lease's last one, or than its `closed`
+report, is ignored, so a late request cannot resurrect a closed lease. A release
+without supported videos returns 422 and is remembered for ten minutes, so
+heartbeats stop querying TorrServer; missing torrent statistics stay a 503. Client IDs are ephemeral playback leases,
 not credentials. Release membership and video count are validated by the worker.
 Status is read-only and reports queued file count, current-file active state and
 completion. Bare metadata/frame URLs retain their five-second meaning for older

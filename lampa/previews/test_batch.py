@@ -40,13 +40,7 @@ class BatchTest(unittest.TestCase):
                         patch.object(app, "BATCH_RATE", 0), patch.object(app, "DEVICE", os.environ.get("PREVIEW_TEST_VAAPI", ""))]
         for item in self.patches:
             item.start()
-        with app.lock:
-            app.jobs.clear()
-            app.releases.clear()
-            app.clients.clear()
-            app.active_batch = None
-            app.pause_until = 0
-            app.generation = 0
+        app.reset_state()
         self.stop = threading.Event()
         self.worker = None
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
@@ -208,7 +202,7 @@ class BatchTest(unittest.TestCase):
             wait_for(cancelled)
             interrupted.set()
             raise app.Interrupted()
-        def prepare(h, i, slot, step):
+        def prepare(h, i, slot, step, cancelled=None):
             self.assertTrue(interrupted.is_set())
             foreground.set()
             return app.CACHE / "frame.jpg"
@@ -224,10 +218,10 @@ class BatchTest(unittest.TestCase):
         with patch.object(app, "torrent", return_value={"file_stats": FILES}):
             self.assertEqual(self.post(payload={"client": [], "state": "playing"}), 400)
             self.assertEqual(self.post(payload={"client": "test-client", "state": "unsafe"}), 400)
-            self.assertEqual(self.post(index=999), 503)
+            self.assertEqual(self.post(index=999), 422)
             self.assertEqual(self.post(payload={"client": "x" * 3000, "state": "playing"}), 413)
         with patch.object(app, "torrent", return_value={"file_stats": [{"id": i, "path": f"{i}.mkv"} for i in range(1, app.MAX_FILES + 2)]}):
-            self.assertEqual(self.post(), 503)
+            self.assertEqual(self.post(client="other-client"), 422)
         with self.assertRaises(urllib.error.HTTPError) as error:
             urllib.request.urlopen(self.url + "prepare")
         self.assertEqual(error.exception.code, 405)

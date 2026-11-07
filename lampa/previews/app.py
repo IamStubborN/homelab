@@ -42,8 +42,21 @@ lock = threading.Lock()
 decode_lock = threading.Lock()
 wake = threading.Event()
 jobs = {}
+# Foreground ownership: a client id owns at most one live job; anonymous
+# (legacy/gallery) requests are owned by None and are never superseded.
+job_owners = {}
+job_cancel = {}
+client_jobs = {}
+client_order = {}
 releases = []
 clients = {}
+closed_clients = {}
+unsupported = {}
+CLIENT = re.compile(r"[a-zA-Z0-9_-]{8,64}")
+FAILURE_BACKOFF = 60
+TRANSIENT_BACKOFF = 10
+MAX_CLIENT_JOBS = 256
+UNSUPPORTED_TTL = 600
 active_batch = None
 generation = 0
 pause_until = 0
@@ -57,6 +70,30 @@ class Interrupted(Exception):
     pass
 
 
+class Busy(Unavailable):
+    """Temporary capacity limit or source outage: retry soon (HTTP 503)."""
+
+    def __init__(self, message, retry_after=2):
+        super().__init__(message)
+        self.retry_after = max(1, int(math.ceil(retry_after)))
+
+
+class Temporary(Unavailable):
+    """TorrServer has no usable answer yet; not a property of the file."""
+
+
+class Failed(Unavailable):
+    """The work itself failed or cannot be done: do not poll (HTTP 422)."""
+
+    def __init__(self, message, retry_after=FAILURE_BACKOFF):
+        super().__init__(message)
+        self.retry_after = max(1, int(math.ceil(retry_after)))
+
+
+class Unsupported(Unavailable):
+    """The release or file can never be prepared (HTTP 422)."""
+
+
 def torrent(torrent_hash, cancelled=None):
     for attempt in range(2):
         if cancelled and cancelled():
@@ -66,7 +103,7 @@ def torrent(torrent_hash, cancelled=None):
         with urllib.request.urlopen(request, timeout=8) as response:
             data = json.loads(response.read(2 * 1024 * 1024))
         if not isinstance(data, dict):
-            raise Unavailable("invalid torrent metadata")
+            raise Temporary("invalid torrent metadata")
         # An existing idle torrent can return before its file statistics are ready.
         if data.get("file_stats") or data.get("hash") != torrent_hash or attempt:
             return data
@@ -74,19 +111,21 @@ def torrent(torrent_hash, cancelled=None):
 
 
 def playable(files):
-    if not isinstance(files, list) or len(files) > 10000:
-        raise Unavailable("invalid release")
+    if not isinstance(files, list) or not files:
+        raise Temporary("statistics unavailable")
+    if len(files) > 10000:
+        raise Unsupported("invalid release")
     videos = [f for f in files if isinstance(f, dict) and type(f.get("id")) is int and 1 <= f["id"] <= 999999
               and isinstance(f.get("path"), str) and len(f["path"]) <= 4096 and Path(f["path"]).suffix.lower() in VIDEO]
     if not videos or len(videos) > MAX_FILES or len({f["id"] for f in videos}) != len(videos):
-        raise Unavailable("invalid videos")
+        raise Unsupported("invalid videos")
     return sorted(videos, key=lambda f: [(1, int(s)) if s.isdigit() else (0, s.casefold()) for s in re.split(r"(\d+)", f["path"])])
 
 
 def source(torrent_hash, index, cancelled=None):
     files = [f for f in playable(torrent(torrent_hash, cancelled).get("file_stats")) if f["id"] == index]
     if not files or Path(files[0].get("path", "")).suffix.lower() not in VIDEO:
-        raise Unavailable("unknown video")
+        raise Unsupported("unknown video")
     return BASE + "/stream/?" + urllib.parse.urlencode({"link": torrent_hash, "index": index, "play": ""})
 
 
@@ -220,10 +259,10 @@ def prune():
             total -= size
 
 
-def prepare(torrent_hash, index, slot, step=STEP):
+def prepare(torrent_hash, index, slot, step=STEP, cancelled=None):
     path = directory(torrent_hash, index, step)
-    url = source(torrent_hash, index)
-    info = ensure_metadata(path, url, step=step)
+    url = source(torrent_hash, index, cancelled)
+    info = ensure_metadata(path, url, cancelled, step=step)
     if slot is None:
         return path / "metadata.json"
     at = slot * step
@@ -233,11 +272,11 @@ def prepare(torrent_hash, index, slot, step=STEP):
     partial = path / f"{slot}.part"
     try:
         try:
-            run(ffmpeg_args(url, at, partial, step=step))
+            run(ffmpeg_args(url, at, partial, step=step), cancelled)
         except subprocess.CalledProcessError:
             if not DEVICE:
                 raise
-            run(ffmpeg_args(url, at, partial, software=True, step=step))
+            run(ffmpeg_args(url, at, partial, software=True, step=step), cancelled)
         if not 0 < partial.stat().st_size < 512 * 1024:
             raise Unavailable("invalid frame")
         partial.replace(result)
@@ -325,33 +364,160 @@ def generate_batch(torrent_hash, index, cancelled):
                 partial.unlink(missing_ok=True)
 
 
-def foreground(torrent_hash, index, slot, step):
+def foreground(torrent_hash, index, slot, step, cancel=None):
+    cancelled = cancel.is_set if cancel else (lambda: False)
     with decode_lock:
-        return prepare(torrent_hash, index, slot, step)
+        if cancelled():
+            raise Interrupted()
+        return prepare(torrent_hash, index, slot, step, cancelled=cancelled)
 
 
-def request_job(torrent_hash, index, slot, step=STEP):
+def forget_job(key):
+    jobs.pop(key, None)
+    job_owners.pop(key, None)
+    job_cancel.pop(key, None)
+
+
+def interrupted(future):
+    return future.cancelled() or isinstance(future.exception(), Interrupted)
+
+
+def transient(error):
+    # Source outages and slow torrent reads; decode and file problems are final.
+    return isinstance(error, (OSError, Temporary, subprocess.TimeoutExpired))
+
+
+def backoff(future):
+    """Seconds a finished job blocks its key, counted from its completion."""
+    if interrupted(future) or future.exception() is None:
+        return 0
+    return TRANSIENT_BACKOFF if transient(future.exception()) else FAILURE_BACKOFF
+
+
+def finished(future, since):
+    return getattr(future, "finished_at", since)
+
+
+def cancel_job(key):
+    """Called with lock held once no owner wants the job any more."""
+    if key not in jobs:
+        return
+    job_cancel[key].set()
+    if jobs[key][0].cancel():
+        forget_job(key)
+
+
+def release(client, keep=None):
+    """Drop the client's claim on its job unless it is `keep`."""
+    previous = client_jobs.pop(client, None)
+    if previous is None or previous == keep or previous not in job_owners:
+        return
+    owners = job_owners[previous]
+    owners.discard(client)
+    if not owners:
+        cancel_job(previous)
+
+
+def retarget(client, key):
+    """Latest wins: a client's new request releases its previous one."""
+    release(client, key)
+    client_jobs[client] = key
+
+
+def newer(client, n):
+    """Requests of one client can overtake each other on a threaded server."""
+    if n is None:
+        return True
+    if n <= client_order.get(client, -1):
+        return False
+    client_order.pop(client, None)
+    client_order[client] = n
+    while len(client_order) > MAX_CLIENT_JOBS:
+        client_order.pop(next(iter(client_order)))
+    return True
+
+
+def cancel_client(client, n=None):
+    with lock:
+        if newer(client, n):
+            release(client)
+
+
+def live(key):
+    cancel = job_cancel.get(key)
+    return not jobs[key][0].done() and not (cancel and cancel.is_set())
+
+
+def cleanup_jobs(now):
+    # Finished failures back off; successes and interrupted work need no entry.
+    for old, (future, since) in list(jobs.items()):
+        if future.done() and now - finished(future, since) >= backoff(future):
+            forget_job(old)
+    for client in [c for c, key in client_jobs.items() if key not in jobs]:
+        del client_jobs[client]
+
+
+def request_job(torrent_hash, index, slot, step=STEP, client=None, n=None):
     key = (torrent_hash, index, step, slot)
     path = directory(torrent_hash, index, step) / ("metadata.json" if slot is None else f"{slot}.jpg")
     with lock:
+        now = time.monotonic()
+        cleanup_jobs(now)
+        current = client is None or newer(client, n)
+        if client is not None and current:
+            if client not in client_jobs and len(client_jobs) >= MAX_CLIENT_JOBS:
+                raise Busy("client budget")
+            retarget(client, key)
         if path.exists():
             touch(path.parent)
             return path
-        # Finished failures back off for a minute; cached successes need no job entry.
-        for old, (future, since) in list(jobs.items()):
-            if future.done() and (future.exception() is None or time.monotonic() - since > 60):
-                del jobs[old]
+        if not current:
+            return None  # Overtaken by a newer request of the same client.
         if key in jobs:
-            future = jobs[key][0]
+            future, since = jobs[key]
             if future.done():
-                raise Unavailable("retry later")
-            return None
-        # ponytail: one worker and at most two waiting seeks for the household.
-        if sum(not future.done() for future, _ in jobs.values()) >= 3 or len(jobs) >= 64:
-            raise Unavailable("busy")
-        jobs[key] = (executor.submit(foreground, torrent_hash, index, slot, step), time.monotonic())
+                remaining = backoff(future) - (now - finished(future, since))
+                if transient(future.exception()):
+                    raise Busy("source unavailable", remaining)
+                raise Failed("retry later", remaining)
+            if job_cancel[key].is_set():
+                # Superseded but still unwinding: queue a fresh job afterwards.
+                forget_job(key)
+            else:
+                job_owners[key].add(client)
+                return None
+        # ponytail: one worker and at most two waiting seeks for the household;
+        # each client owns at most one of them, so scrubbing cannot starve the gallery.
+        if sum(live(k) for k in jobs) >= 3 or len(jobs) >= 64:
+            if client is not None:
+                client_jobs.pop(client, None)
+            raise Busy("busy")
+        cancel = threading.Event()
+        job_cancel[key] = cancel
+        job_owners[key] = {client}
+        future = executor.submit(foreground, torrent_hash, index, slot, step, cancel)
+        # Backoff runs from completion; a slow failure must not expire early.
+        future.add_done_callback(lambda done: setattr(done, "finished_at", time.monotonic()))
+        jobs[key] = (future, now)
         wake.set()
     return None
+
+
+def cancel_all():
+    with lock:
+        for key in list(jobs):
+            cancel_job(key)
+
+
+def reset_state():
+    global active_batch, pause_until, generation
+    with lock:
+        for collection in (jobs, job_owners, job_cancel, client_jobs, client_order, clients, closed_clients, unsupported):
+            collection.clear()
+        releases.clear()
+        active_batch = None
+        pause_until = 0
+        generation = 0
 
 
 def persist_queue():
@@ -379,25 +545,45 @@ def restore_queue():
         pass
 
 
-def playback(torrent_hash, index, client, state):
+def playback(torrent_hash, index, client, state, seq=None):
     global generation, pause_until
     now = time.monotonic()
-    if not isinstance(client, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{8,64}", client) or not isinstance(state, str) or state not in {"playing", "buffering", "paused", "closed"}:
+    if not isinstance(client, str) or not CLIENT.fullmatch(client) or not isinstance(state, str) or state not in {"playing", "buffering", "paused", "closed"}:
         raise ValueError("invalid playback")
+    if seq is not None and (type(seq) is not int or not 0 <= seq < 2 ** 53):
+        raise ValueError("invalid sequence")
     with lock:
         for key in list(clients):
             if now - clients[key]["seen"] >= 45:
                 del clients[key]
+        for key in [k for k, (_, at) in closed_clients.items() if now - at >= 120]:
+            del closed_clients[key]
+        for key in [k for k, at in unsupported.items() if now - at >= UNSUPPORTED_TTL]:
+            del unsupported[key]
         previous = clients.get(client)
+        if seq is not None:
+            # A request overtaken by a newer one (for example a heartbeat that
+            # arrives after "closed") must not change or resurrect the lease.
+            last = max(previous.get("seq", -1) if previous else -1, closed_clients.get(client, (-1, 0))[0])
+            if seq <= last:
+                return
         if state == "closed":
             if previous and (previous["hash"], previous["index"]) == (torrent_hash, index):
                 del clients[client]
+            if seq is not None:
+                if client not in closed_clients and len(closed_clients) >= 256:
+                    closed_clients.pop(next(iter(closed_clients)))
+                closed_clients[client] = (seq, now)
             wake.set()
             return
+        if (torrent_hash, index) in unsupported:
+            raise Unsupported("unsupported release")
         if client not in clients and len(clients) >= 32:
             raise Unavailable("client budget")
         registered = previous and (previous["hash"], previous["index"]) == (torrent_hash, index) and previous.get("registered", False)
         lease = clients[client] = {"hash": torrent_hash, "index": index, "state": state, "seen": now, "registered": bool(registered)}
+        if seq is not None:
+            lease["seq"] = seq
         if state == "buffering":
             pause_until = max(pause_until, now + BATCH_GRACE)
         releases[:] = [p for p in releases if time.time() - p["updated"] < TTL]
@@ -410,10 +596,20 @@ def playback(torrent_hash, index, client, state):
             return
     if state == "buffering":
         return  # Do not fetch release metadata while playback needs the source.
-    videos = playable(torrent(torrent_hash).get("file_stats"))
-    ids = [f["id"] for f in videos]
-    if index not in ids:
-        raise Unavailable("unknown video")
+    try:
+        videos = playable(torrent(torrent_hash).get("file_stats"))
+        ids = [f["id"] for f in videos]
+        if index not in ids:
+            raise Unsupported("unknown video")
+    except Unsupported:
+        # Remember the verdict so heartbeats stop querying TorrServer.
+        with lock:
+            if len(unsupported) >= 256:
+                unsupported.pop(next(iter(unsupported)))
+            unsupported[(torrent_hash, index)] = time.monotonic()
+            if clients.get(client) is lease:
+                del clients[client]
+        raise
     at = ids.index(index)
     order = ids[at:] + ids[:at]
     with lock:
@@ -513,19 +709,30 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, json.dumps(value).encode(), "application/json")
         try:
             # Bare URLs keep their original five-second meaning for cached clients.
-            steps = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("step", ["5"])
-            if len(steps) != 1 or steps[0] not in {"5", "10"}:
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            steps, owner, order = query.get("step", ["5"]), query.get("client", [None]), query.get("n", [None])
+            if (len(steps) != 1 or steps[0] not in {"5", "10"} or len(owner) != 1 or len(order) != 1
+                    or (owner[0] is not None and not CLIENT.fullmatch(owner[0]))
+                    or (order[0] is not None and not re.fullmatch(r"[0-9]{1,15}", order[0]))):
                 return self.reply(400)
-            result = request_job(torrent_hash, int(index), None if slot is None else int(slot), int(steps[0]))
+            result = request_job(torrent_hash, int(index), None if slot is None else int(slot), int(steps[0]), owner[0],
+                                 None if order[0] is None else int(order[0]))
             if result is None:
                 return self.reply(202, b'{"status":"pending"}', "application/json")
             self.reply(200, result.read_bytes(), "application/json" if operation == "metadata" else "image/jpeg")
+        except Busy as error:
+            self.reply(503, b'{"status":"busy"}', "application/json", retry_after=error.retry_after)
+        except Failed as error:
+            self.reply(422, b'{"status":"failed"}', "application/json", retry_after=error.retry_after)
+        except Unsupported:
+            self.reply(422, b'{"status":"failed"}', "application/json", retry_after=FAILURE_BACKOFF)
         except (OSError, Unavailable):
-            self.reply(503, b'{"status":"unavailable"}', "application/json")
+            self.reply(503, b'{"status":"unavailable"}', "application/json", retry_after=5)
 
     def do_POST(self):
-        match = ROUTE.fullmatch(urllib.parse.urlsplit(self.path).path)
-        if not match or match.group(3) != "prepare":
+        path = urllib.parse.urlsplit(self.path).path
+        match = ROUTE.fullmatch(path)
+        if path != "/previews/cancel" and (not match or match.group(3) != "prepare"):
             return self.reply(404)
         try:
             self.connection.settimeout(5)
@@ -537,21 +744,30 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(length))
             if not isinstance(data, dict):
                 raise ValueError("body")
-            playback(match.group(1), int(match.group(2)), data.get("client"), data.get("state"))
+            if not match:
+                # {"client": ID, "n": optional counter}: release that client's job.
+                client, n = data.get("client"), data.get("n")
+                if not isinstance(client, str) or not CLIENT.fullmatch(client) or (n is not None and (type(n) is not int or not 0 <= n < 10 ** 15)):
+                    raise ValueError("cancel")
+                cancel_client(client, n)
+                return self.reply(202, b'{"status":"accepted"}', "application/json")
+            playback(match.group(1), int(match.group(2)), data.get("client"), data.get("state"), data.get("seq"))
             self.reply(202, b'{"status":"accepted"}', "application/json")
         except (ValueError, TypeError):
             self.reply(400)
+        except Unsupported:
+            self.reply(422, b'{"status":"unsupported"}', "application/json")
         except (OSError, Unavailable):
             self.reply(503, b'{"status":"unavailable"}', "application/json")
 
-    def reply(self, status, data=b"", content_type="text/plain"):
+    def reply(self, status, data=b"", content_type="text/plain", retry_after=None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "private, max-age=300" if status == 200 and content_type == "image/jpeg" else "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        if status == 202:
-            self.send_header("Retry-After", "1")
+        if status == 202 or retry_after:
+            self.send_header("Retry-After", str(retry_after or 1))
         self.end_headers()
         self.wfile.write(data)
 

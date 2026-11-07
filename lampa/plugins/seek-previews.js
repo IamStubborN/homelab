@@ -19,7 +19,7 @@
       subscribe: function (fn) { subscribers.push(fn); return function () { subscribers = subscribers.filter(function (value) { return value !== fn; }); }; },
       setEnabled: function (value) {
         enabled = !!value; L.Storage.set('homelab_seek_frames', enabled); hide();
-        if (current) { if (enabled) bindPreparation(current); else stopPreparation(current); }
+        if (current) { if (enabled) bindPreparation(current); else { releaseFrames(current); stopPreparation(current); } }
         publish();
       },
       retryMetadata: function () { if (current && current.failed && !current.metaRequest && Date.now() >= current.metaManualAt) startMetadata(current); }
@@ -27,6 +27,9 @@
     function publish() { subscribers.slice().forEach(function (fn) { fn(); }); }
     var current = null, button = null, overlay = null, sequence = 0, pendingTime = 0, selection = null, menuVisible = false;
     var retryDelays = [5000, 15000, 60000];
+    // Native rewind grows each repeated step by 3%; reports are spaced out so
+    // flapping waiting/playing events cannot flood the worker.
+    var PHASE_GAP = 3000, LANDED_HIDE = 2500, RELEASE_HIDE = 1500, NEAR_SLOTS = 3;
     var enabled = L.Storage.get('homelab_seek_frames', true) !== false;
     var icon = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16M3 10h5M3 15h5M12 9h6M12 14h6"/></svg>';
     var seekPanel = null, seekButtons = [];
@@ -42,7 +45,7 @@
       var step = Math.max(5, Number(L.Storage.field('player_rewind')) || 20);
       seekButtons.forEach(function (entry) {
         entry.button.find('text').text(step);
-        entry.button.attr('aria-label', (entry.forward ? 'Вперёд' : 'Назад') + ' на ' + step + ' с');
+        entry.button.attr('aria-label', (entry.forward ? 'Вперёд' : 'Назад') + ' примерно на ' + step + ' с');
       });
     }
     function seekControls() {
@@ -70,7 +73,7 @@
     if (L.Storage.listener && typeof L.Storage.listener.follow === 'function') L.Storage.listener.follow('change', function (event) {
       if (event.name === 'player_rewind') seekLabels();
     });
-    $('<style>.homelab-seek-preview{position:absolute;bottom:8em;left:50%;transform:translateX(-50%);width:clamp(140px,18vw,280px);max-width:70vw;background:#17191f;border-radius:.5em;overflow:hidden;text-align:center;pointer-events:none;z-index:5;box-shadow:0 .2em 1em #0008}.homelab-seek-preview img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain}.homelab-seek-preview__label{padding:.4em;font-size:max(.8em,11px)}.homelab-seek-preview__note{padding:.2em .4em;font-size:max(.7em,10px);color:#bbb}.homelab-seek-preview.hide{display:none}.player-panel:not(.panel--visible) .homelab-seek-preview{visibility:hidden}.player-panel .homelab-chapters{width:auto;padding:.65em .9em;border-radius:2em;gap:.4em}.homelab-chapters>span{font-size:.75em;white-space:nowrap}body.true--mobile .homelab-chapters>span{display:none}body.true--mobile .homelab-chapters{min-width:44px;min-height:44px}body.true--mobile .player-panel .button{width:44px;height:44px;padding:10px}body.true--mobile .player-panel .player-panel__playpause{width:64px;height:64px;padding:16px}body.true--mobile .player-panel__left .homelab-chapter-controls{margin-left:2px}</style>').appendTo('head');
+    $('<style>.homelab-seek-preview{position:absolute;bottom:8em;left:50%;transform:translateX(-50%);width:clamp(140px,18vw,280px);max-width:70vw;background:#17191f;border-radius:.5em;overflow:hidden;text-align:center;pointer-events:none;z-index:5;box-shadow:0 .2em 1em #0008}.homelab-seek-preview img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain}.homelab-seek-preview__label{padding:.4em;font-size:max(.8em,11px)}.homelab-seek-preview__note{padding:.2em .4em;font-size:max(.7em,10px);color:#bbb}.homelab-seek-preview.hide{display:none}.homelab-seek-preview--near img{opacity:.55}.player-panel:not(.panel--visible) .homelab-seek-preview{visibility:hidden}.player-panel .homelab-chapters{width:auto;padding:.65em .9em;border-radius:2em;gap:.4em}.homelab-chapters>span{font-size:.75em;white-space:nowrap}body.true--mobile .homelab-chapters>span{display:none}body.true--mobile .homelab-chapters{min-width:44px;min-height:44px}body.true--mobile .player-panel .button{width:44px;height:44px;padding:10px}body.true--mobile .player-panel .player-panel__playpause{width:64px;height:64px;padding:16px}body.true--mobile .player-panel__left .homelab-chapter-controls{margin-left:2px}</style>').appendTo('head');
 
     function plain(value) {
       return String(value).replace(/[<>"'`]/g, function (c) { return {'<':'‹','>':'›','"':'″',"'":'’','`':'ʼ'}[c]; });
@@ -91,6 +94,32 @@
       return '/previews/' + hash.toLowerCase() + '/' + index + '/';
     }
     function live(state) { return current === state && L.Player.playdata() === state.data; }
+    function clientId() { return 'hl_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 12); }
+    // One frame owner for the plugin lifetime: the worker keeps only its latest
+    // seek, across files too. n orders requests that overtake each other.
+    var frameClient = clientId(), frameOrder = 0;
+    function releaseFrames(state) {
+      if (!state || !state.frameUsed) return;
+      state.frameUsed = false;
+      fetch('/previews/cancel', {method: 'POST', keepalive: true, headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({client: frameClient, n: ++frameOrder})}).catch(function () {});
+    }
+    function retryAfter(response, fallback) {
+      var value = response && response.headers && typeof response.headers.get === 'function' ? Number(response.headers.get('Retry-After')) : NaN;
+      return Number.isFinite(value) && value > 0 ? Math.min(600, value) * 1000 : fallback;
+    }
+    function scheduleHide(state, delay) {
+      // A settled seek or a released touch caps how long a late frame may stay.
+      if (state.hideBy) delay = Math.max(0, Math.min(delay, state.hideBy - Date.now()));
+      clearTimeout(state.hide);
+      state.hide = setTimeout(hide, delay);
+    }
+    function settle(delay) {
+      var state = current;
+      if (!state || !overlay || overlay.hasClass('hide')) return;
+      state.hideBy = Date.now() + delay;
+      scheduleHide(state, delay);
+    }
     function cancelFrame(state) {
       if (!state) return;
       clearTimeout(state.debounce); clearTimeout(state.poll); clearTimeout(state.hide); clearTimeout(state.frameDeadline); state.frameDeadline = null;
@@ -102,10 +131,12 @@
     }
     function hide() {
       cancelFrame(current);
-      if (overlay) overlay.addClass('hide').find('img').removeAttr('src');
+      if (current) current.hideBy = null;
+      if (overlay) overlay.removeClass('homelab-seek-preview--near').addClass('hide').find('img').removeAttr('src');
     }
     function clear() {
       hide();
+      releaseFrames(current);
       if (current) {
         stopPreparation(current);
         (current.frames || []).forEach(function (entry) { URL.revokeObjectURL(entry.url); });
@@ -164,12 +195,12 @@
       }, onBack: function () { selection = null; menuVisible = false; if (live(state)) L.Controller.toggle('player'); }};
       L.Select.show(state.selection);
     }
-    function metadataFailed(state, request, retryable) {
+    function metadataFailed(state, request, retryable, minDelay) {
       if (!live(state) || state.metaRequest !== request) return;
       state.metaRequest = null; state.failed = true;
       clearTimeout(state.metaTimer); clearTimeout(state.metaDeadline); request.abort.abort();
       if (retryable && state.metaAttempts <= retryDelays.length) {
-        state.metaTimer = setTimeout(function () { startMetadata(state); }, retryDelays[state.metaAttempts - 1]);
+        state.metaTimer = setTimeout(function () { startMetadata(state); }, Math.max(retryDelays[state.metaAttempts - 1], minDelay || 0));
       }
       refreshMenu(state);
       publish();
@@ -188,6 +219,8 @@
       fetch(state.base + 'metadata?step=10', {signal: request.abort.signal, cache: 'no-store'}).then(function (response) {
         if (!live(state) || state.metaRequest !== request) return;
         if (response.status === 202) { state.metaTimer = setTimeout(function () { metadata(state, request); }, 1000); return; }
+        // 422: the worker's job failed and is backed off; retry after its delay.
+        if (response.status === 422) return metadataFailed(state, request, true, retryAfter(response, 60000));
         if (!response.ok) return metadataFailed(state, request, response.status === 429 || response.status >= 500);
         return response.json().then(function (info) {
           if (!live(state) || state.metaRequest !== request) return;
@@ -204,29 +237,44 @@
       chapters.forEach(function (chapter) { if (at >= chapter.start && at < chapter.end) title = chapter.title; });
       overlay.find('.homelab-seek-preview__label').text(time(at) + (title ? ' · ' + title : ''));
     }
+    function detachVideo(state) {
+      // Tizen/Orsay wrappers are <object> elements: their native
+      // removeEventListener cannot remove Lampa Subscribe listeners, so every
+      // handler also checks the events token and becomes inert.
+      var video = state.video, events = state.videoEvents;
+      if (video && events && typeof video.removeEventListener === 'function') Object.keys(events).forEach(function (name) {
+        video.removeEventListener(name, events[name]);
+      });
+      state.video = null; state.videoEvents = null;
+    }
     function stopPreparation(state) {
       clearTimeout(state.prepareTimer); clearTimeout(state.prepareDeadline);
       if (state.prepareRequest) state.prepareRequest.abort();
       state.prepareRequest = null; state.preparationClosed = true;
-      if (state.video && state.videoEvents) Object.keys(state.videoEvents).forEach(function (name) {
-        state.video.removeEventListener(name, state.videoEvents[name]);
-      });
-      state.video = null;
+      detachVideo(state);
+      // The sequence number lets the worker drop a report that overtakes this one.
       if (state.prepareClient) fetch(state.base + 'prepare', {method: 'POST', keepalive: true, headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({client: state.prepareClient, state: 'closed'})}).catch(function () {});
+        body: JSON.stringify({client: state.prepareClient, state: 'closed', seq: ++state.prepareSeq})}).catch(function () {});
       state.prepareClient = null;
     }
     function preparation(state, phase) {
-      if (!live(state) || !enabled || state.preparationClosed) return;
+      if (!live(state) || !enabled || state.preparationClosed || state.prepareUnsupported) return;
       state.preparePhase = phase;
       if (state.prepareRequest) return;
       clearTimeout(state.prepareTimer);
+      var wait = state.prepareAt == null ? 0 : state.prepareAt + PHASE_GAP - Date.now();
+      if (wait > 0) {
+        state.prepareTimer = setTimeout(function () { preparation(state, state.preparePhase); }, wait);
+        return;
+      }
+      state.prepareAt = Date.now();
       var request = state.prepareRequest = new AbortController();
       state.prepareDeadline = setTimeout(function () { request.abort(); }, 5000);
       fetch(state.base + 'prepare', {method: 'POST', signal: request.signal, headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({client: state.prepareClient, state: phase})}).catch(function () {}).then(function () {
+        body: JSON.stringify({client: state.prepareClient, state: phase, seq: ++state.prepareSeq})}).then(null, function () { return null; }).then(function (response) {
         if (state.prepareRequest !== request) return;
         clearTimeout(state.prepareDeadline); state.prepareRequest = null;
+        if (response && response.status === 422) { state.prepareUnsupported = true; return; }
         if (!live(state) || !enabled || state.preparationClosed) return;
         if (state.preparePhase !== phase) preparation(state, state.preparePhase);
         else state.prepareTimer = setTimeout(function () {
@@ -239,14 +287,16 @@
     }
     function bindPreparation(state) {
       var video = L.PlayerVideo.video();
-      if (!enabled || !video || typeof video.addEventListener !== 'function' || typeof video.removeEventListener !== 'function' || state.video === video) return;
-      if (state.video && state.videoEvents) Object.keys(state.videoEvents).forEach(function (name) { state.video.removeEventListener(name, state.videoEvents[name]); });
+      if (!enabled || !video || typeof video.addEventListener !== 'function' || state.video === video) return;
+      detachVideo(state);
       state.video = video; state.preparationClosed = false;
-      if (!state.prepareClient) state.prepareClient = 'hl_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 12);
-      function phase(value) { return function () { if (live(state) && state.video === L.PlayerVideo.video()) preparation(state, value); }; }
-      state.videoEvents = {playing: phase('playing'), canplay: function () { phase(video.paused ? 'paused' : 'playing')(); },
-        waiting: phase('buffering'), pause: phase('paused')};
-      Object.keys(state.videoEvents).forEach(function (name) { video.addEventListener(name, state.videoEvents[name]); });
+      if (!state.prepareClient) { state.prepareClient = clientId(); state.prepareSeq = 0; state.prepareAt = null; }
+      var events = {};
+      function phase(value) { return function () { if (state.videoEvents === events && live(state) && state.video === L.PlayerVideo.video()) preparation(state, value); }; }
+      events.playing = phase('playing'); events.waiting = phase('buffering'); events.pause = phase('paused');
+      events.canplay = function () { phase(video.paused ? 'paused' : 'playing')(); };
+      state.videoEvents = events;
+      Object.keys(events).forEach(function (name) { video.addEventListener(name, events[name]); });
       if (video.readyState >= 3) preparation(state, video.paused ? 'paused' : 'playing');
     }
     function remember(state, slot, url) {
@@ -256,38 +306,41 @@
     }
     function frame(state, slot, request, deadline) {
       if (!live(state) || state.request !== request) return;
-      function unavailable() {
+      function unavailable(cooldown) {
         if (!live(state) || state.request !== request) return;
         clearTimeout(state.frameDeadline); state.frameDeadline = null;
-        state.frameFailed = true; state.frameRetryAt = Date.now() + 5000;
+        state.frameFailed = true; state.frameRetryAt = Date.now() + Math.max(5000, cooldown || 0);
         overlay.find('.homelab-seek-preview__note').text('');
       }
       function retry(delay) {
         if (Date.now() + delay >= deadline) return unavailable();
         state.poll = setTimeout(function () { frame(state, slot, request, deadline); }, delay);
       }
-      function transient() { retry(Math.min(5000, 1000 * Math.pow(2, state.frameFailures++))); }
+      function transient(response) { retry(Math.max(Math.min(5000, 1000 * Math.pow(2, state.frameFailures++)), retryAfter(response, 0))); }
       if (Date.now() >= deadline) return unavailable();
       if (!state.frameDeadline) state.frameDeadline = setTimeout(function () {
         if (state.frameAbort) state.frameAbort.abort();
         unavailable();
       }, deadline - Date.now());
       state.frameAbort = new AbortController();
-      fetch(state.base + 'frame/' + slot + '.jpg' + (state.info.step === 5 ? '' : '?step=' + state.info.step), {signal: state.frameAbort.signal}).then(function (response) {
+      // client= makes the worker drop this viewer's superseded seeks (latest wins).
+      state.frameUsed = true;
+      fetch(state.base + 'frame/' + slot + '.jpg?step=' + state.info.step + '&client=' + frameClient + '&n=' + (++frameOrder), {signal: state.frameAbort.signal}).then(function (response) {
         if (!live(state) || state.request !== request) return;
         if (response.status === 202) return retry(1000);
-        if (response.status === 429 || response.status >= 500) return transient();
+        if (response.status === 429 || response.status >= 500) return transient(response);
+        // 422 is a failed job: do not poll it during the worker's backoff.
+        if (response.status === 422) return unavailable(retryAfter(response, 60000));
         if (!response.ok) return unavailable();
         return response.blob().then(function (blob) {
           if (!live(state) || state.request !== request) return;
-          if (blob.type !== 'image/jpeg' || blob.size > 512 * 1024) throw new Error('frame type');
+          if (blob.type !== 'image/jpeg' || blob.size > 512 * 1024) return unavailable(60000);
           state.blob = URL.createObjectURL(blob);
           remember(state, slot, state.blob);
           clearTimeout(state.frameDeadline); state.frameDeadline = null;
-          overlay.find('img').attr('src', state.blob).css('display', 'block');
+          overlay.removeClass('homelab-seek-preview--near').find('img').attr('src', state.blob).css('display', 'block');
           overlay.find('.homelab-seek-preview__note').text('');
-          clearTimeout(state.hide);
-          state.hide = setTimeout(hide, 6000);
+          scheduleHide(state, 6000);
         });
       }).catch(function (error) {
         if (live(state) && state.request === request && error.name !== 'AbortError') transient();
@@ -302,9 +355,18 @@
       overlay.css('left', Math.max(half + 8, Math.min(bounds.width - half - 8, x)));
       overlay.css('bottom', bounds.bottom - rail.top + 12);
     }
+    function nearest(state, slot) {
+      var best = null;
+      (state.frames || []).forEach(function (entry) {
+        var distance = Math.abs(entry.slot - slot);
+        if (distance <= NEAR_SLOTS && (!best || distance < Math.abs(best.slot - slot))) best = entry;
+      });
+      return best;
+    }
     function preview(at) {
       var state = current, video = L.PlayerVideo.video();
       if (!state || !state.info || !live(state) || !enabled || !Number.isFinite(at) || !video || !Number.isFinite(video.duration) || video.duration <= 0) return;
+      state.hideBy = null;
       at = Math.max(0, Math.min(at, Math.max(0, video.duration - 0.01)));
       var slot = Math.floor(at / state.info.step);
       label(state, slot * state.info.step);
@@ -322,11 +384,13 @@
       if (cached) {
         state.frames.splice(state.frames.indexOf(cached), 1); state.frames.push(cached);
         state.blob = cached.url;
-        overlay.find('img').attr('src', cached.url).css('display', 'block');
+        overlay.removeClass('homelab-seek-preview--near').find('img').attr('src', cached.url).css('display', 'block');
         state.hide = setTimeout(hide, 6000);
         return;
       }
-      overlay.find('img').removeAttr('src').css('display', 'none');
+      var near = nearest(state, slot);
+      if (near) overlay.addClass('homelab-seek-preview--near').find('img').attr('src', near.url).css('display', 'block');
+      else overlay.removeClass('homelab-seek-preview--near').find('img').removeAttr('src').css('display', 'none');
       state.hide = setTimeout(hide, 55000);
       state.debounce = setTimeout(function () { frame(state, slot, request, Date.now() + 55000); }, 450);
     }
@@ -348,7 +412,8 @@
         if (!/^\d{1,2}:\d{2}(?::\d{2})?$/.test(rendered)) return;
         var at = rendered.split(':').reduce(function (sum, part) { return sum * 60 + Number(part); }, 0);
         preview(at);
-      }).on('touchend.homelabPreview touchcancel.homelabPreview', hide)
+      // A quick release keeps the pending frame request briefly.
+      }).on('touchend.homelabPreview touchcancel.homelabPreview', function () { settle(RELEASE_HIDE); })
         .on('mouseleave.homelabPreview', '.player-panel__timeline', hide);
     }
     L.Player.listener.follow('ready', ready);
@@ -358,8 +423,9 @@
       var state = current;
       if (!state || !live(state)) return;
       if (!event || !event.savemeta) return stopPreparation(state);
-      if (state.video && state.videoEvents) Object.keys(state.videoEvents).forEach(function (name) { state.video.removeEventListener(name, state.videoEvents[name]); });
-      state.video = null;
+      detachVideo(state);
+      // A replacement video is not a phase flap: report it at once.
+      state.prepareAt = null;
       preparation(state, 'buffering');
     });
     L.PlayerPanel.listener.follow('mouse_rewind', function (event) {
@@ -367,7 +433,9 @@
       if (event.method === 'move' && video) preview(video.duration * event.percent);
     });
     L.PlayerVideo.listener.follow('timeupdate', function (event) { pendingTime = event.current; });
-    L.PlayerVideo.listener.follow('rewind', function () { preview(pendingTime); });
+    L.PlayerVideo.listener.follow('rewind', function () { preview(pendingTime); settle(LANDED_HIDE); });
+    // A hidden panel must not keep a stale target for its next appearance.
+    L.PlayerPanel.listener.follow('visible', function (event) { if (event && event.status === false) hide(); });
     function selectState(event) { selection = event.active; menuVisible = !!current && selection === current.selection; }
     L.Select.listener.follow('fullshow', selectState);
     L.Select.listener.follow('toggle', selectState);

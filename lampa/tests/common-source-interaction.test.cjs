@@ -308,3 +308,14 @@ test('torrent cards carry seeds, size and codec as badges', async t => {
   assert.deepEqual(badges, ['21 сид', '3,0 ГБ', 'HEVC']);
   assert.equal(h.rows()[0].find('.homelab-common-q').text(), '4K');
 });
+
+test('voice cards probe only their leader; alternates are asked when their source list opens', async t => {
+  const h = setup(t), probes = () => h.requests.filter(r => r.url.pathname === '/lite/x/video').length;
+  h.parser[0].done({Results: []});
+  await h.finish('/lite/events', twoProviders.slice(0, 2));
+  h.pages.set('two', episodePage('Studio A', {method: 'play', quality: {'1080p': '/media'}})); h.pages.set('one', episodePage('Studio A'));
+  await h.finish('/lite/two', 'two'); h.tick(150); await h.finish('/lite/one', 'one'); h.tick(3000); await flush();
+  assert.equal(probes(), 0, 'Studio A is led by a source with a known quality, so its unknown alternate waits');
+  h.L.Controller.controllers.content.right(); h.tick(1000); await flush();
+  assert.equal(probes(), 1, 'opening the source list probes the alternate');
+});

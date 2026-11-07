@@ -403,6 +403,7 @@ test('rows without quality learn the real height from the source once the catalo
     {method: 'play', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio D', url: '/proxy/d.mp4'},
     {method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio E', url: '/lite/one/video?f=e', quality: {'720p': '/x'}}]});
   await h.finish('/lite/one', 'films');
+  h.search.probe(h.search.rows);
   const row = voice => h.search.rows.find(r => r.voice === voice);
   // Quality map from the call answer.
   await h.finish('/lite/one/video', {method: 'play', url: '/proxy/a.m3u8', quality: {'1080p': '/proxy/a1', '480p': '/proxy/a2'}});
@@ -428,16 +429,58 @@ async function probeFixture(h, items) {
   await h.finish('/lite/events', [h.source('one')]);
   h.pages.set('probe', {'.videos__item': items.map(([voice, url]) => ({method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: voice, url}))});
   await h.finish('/lite/one', 'probe');
+  h.search.probe(h.search.rows);
   return voice => h.search.rows.find(r => r.voice === voice);
 }
 
-test('rch/ws handshakes keep a row available; only an explicit error marks it unavailable', async t => {
-  const h = setup(t), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a'], ['Studio B', '/lite/one/video?f=b']]);
+test('rch/ws handshakes, auth and quota answers keep a row available; only "not found" marks it unavailable', async t => {
+  const h = setup(t), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a'], ['Studio B', '/lite/one/video?f=b'], ['Studio C', '/lite/one/video?f=c'], ['Studio D', '/lite/one/video?f=d'], ['Studio E', '/lite/one/video?f=e']]);
   await h.finish('/lite/one/video', {rch: true, ws: 'wss://lampac.test/ws', nws: true});
   assert.ok(!row('Studio A').unavailable, 'an rch handshake is not a missing video');
-  await h.finish('/lite/one/video', {error: 'blocked'});
-  assert.equal(row('Studio B').unavailable, true);
+  await h.finish('/lite/one/video', {error: 'Daily limit reached'});
+  await h.finish('/lite/one/video', {accsdb: true, error: 'not found'});
+  await h.finish('/lite/one/video', {__status: 403});
+  assert.ok(['Studio B', 'Studio C', 'Studio D'].every(voice => !row(voice).unavailable), 'quota, account and 403 answers can be transient');
+  await h.finish('/lite/one/video', {error: 'File not found'});
+  assert.equal(row('Studio E').unavailable, true);
   h.search.cancel();
+});
+
+test('only measured qualities and own 404/410 are cached, for 30 minutes', async t => {
+  const h = setup(t), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a'], ['Studio B', '/lite/one/video?f=b'], ['Studio C', '/lite/one/video?f=c']]);
+  await h.finish('/lite/one/video', {__status: 410});
+  await h.finish('/lite/one/video', {__status: 401});
+  await h.finish('/lite/one/video', {error: 'File not found'});
+  assert.equal(row('Studio A').unavailable, true); h.search.cancel();
+  const reopen = async () => {
+    const search = new h.window.HomelabSources.Search(h.movie, h.selection, () => {});
+    search.start(); await flush(); await h.finish('/lite/events', [h.source('one')]); await h.finish('/lite/one', 'probe');
+    const before = h.requests.length; search.probe(search.rows); h.tick(5000); await flush();
+    const probed = h.requests.slice(before).map(r => r.url.searchParams.get('f')).sort(); search.cancel();
+    return {search, probed};
+  };
+  let again = await reopen();
+  assert.equal(again.search.rows.find(r => r.voice === 'Studio A').unavailable, true, 'own 410 comes from the cache');
+  assert.deepEqual(again.probed, ['b', 'c'], 'auth failures and error texts are asked again');
+  h.tick(31 * 60000);
+  again = await reopen();
+  assert.ok(again.probed.includes('a'), 'the cache expires after 30 minutes');
+});
+
+test('a search probes at most 12 leaders; alternates are probed only on request, within 24 in total', async t => {
+  const h = setup(t), voices = Array.from({length: 30}, (_, i) => ['Studio ' + i, '/lite/one/video?f=' + i]);
+  await probeFixture(h, []);
+  h.search.cancel();
+  const search = new h.window.HomelabSources.Search(h.movie, h.selection, () => {});
+  search.start(); await flush(); await h.finish('/lite/events', [h.source('one')]);
+  h.pages.set('many', {'.videos__item': voices.map(([voice, url]) => ({method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: voice, url}))});
+  await h.finish('/lite/one', 'many');
+  assert.equal(search.checking(), 0, 'nothing is probed until the UI asks');
+  search.probe(search.rows); search.probe(search.rows);
+  assert.equal(search.checking(), 12);
+  search.probe(search.rows, true);
+  assert.equal(search.checking(), 24);
+  search.cancel();
 });
 
 test('a foreign CDN refusal never marks a row unavailable, an own /proxy/ refusal does', async t => {
@@ -478,7 +521,7 @@ test('probes wait for live discovery to finish and share the catalog pacing', as
   h.pages.set('probe', {'.videos__item': [{method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio A', url: '/lite/one/video?f=a'}]});
   await h.finish('/lifeevents', {ready: false, online: [h.source('one')]});
   await h.finish('/lite/one', 'probe');
-  h.tick(400); await flush();
+  h.search.probe(h.search.rows); h.tick(400); await flush();
   assert.ok(!h.requests.some(r => r.url.pathname === '/lite/one/video'), 'discovery is still running');
   assert.deepEqual({...h.search.providers}, {total: 1, done: 1});
   await h.finish('/lifeevents', {ready: true, online: [h.source('one')]});
@@ -510,8 +553,8 @@ test('a probe whose address cannot be built still releases its slot', async t =>
   search.start(); await flush(); await h.finish('/lite/events', [h.source('one')]);
   const url = h.window.HomelabSync.url; let broken = false; h.window.HomelabSync.url = path => broken ? '' : url(path);
   h.pages.set('probe2', {'.videos__item': [{method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio Z', url: '/lite/one/video?f=z'}]});
-  const job = h.requests.find(r => r.url.pathname === '/lite/one' && !r.completed); job.completed = true; broken = true; job.finish('probe2');
-  await flush(); h.tick(1000); await flush();
+  const job = h.requests.find(r => r.url.pathname === '/lite/one' && !r.completed); job.completed = true; job.finish('probe2');
+  await flush(); broken = true; search.probe(search.rows); h.tick(1000); await flush();
   assert.equal(search.checking(), 0, 'the failed probe left the queue'); assert.ok(row('Studio A'));
   assert.ok(search.rows.some(r => r.voice === 'Studio Z') && !search.rows.some(r => r.native), 'a synchronous failure never escapes into the catalog handler');
   search.cancel();

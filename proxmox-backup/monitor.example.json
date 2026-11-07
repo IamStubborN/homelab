@@ -17,12 +17,12 @@
     },
     "opnsense": {
       "remote": "homelab-backups:Proxmox/OPNsense/full-vm",
-      "pattern": "vzdump-qemu-100-*.vma.zst{,.age}",
+      "pattern": "vzdump-qemu-901-*.vma.zst{,.age}",
       "max_age_hours": 194
     },
     "docker": {
       "remote": "homelab-backups:Proxmox/Docker/full-lxc",
-      "pattern": "vzdump-lxc-300-*.tar.zst{,.age}",
+      "pattern": "vzdump-lxc-902-*.tar.zst{,.age}",
       "max_age_hours": 866
     },
     "host-update": {

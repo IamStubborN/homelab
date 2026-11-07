@@ -87,6 +87,29 @@ Total Docker query failure publishes no successful result; stale Push monitors
 expire. A partial inspect preserves valid rows and marks a missing target down.
 Transport errors log only target identity and exception class, never token URLs.
 
+Optional `health_error_capture` saves failed native probes for one monitored
+container. It uses the same minute collector and inspects probe output only for
+that target. Install the service's private `StateDirectory` before enabling it:
+
+```json
+{"health_error_capture": {"container": "example-worker", "path": "/var/lib/homelab-kuma/health-errors.json"}}
+```
+
+The atomic mode-0600 file retains the latest 100 distinct failures, with probe
+start/end times, exit code, bounded output and observed Docker state. Recovery
+does not erase failures; repeated observations are deduplicated. Output may
+contain private application details and must stay outside Git. A capture write
+failure logs only its exception class and does not block heartbeat publication.
+Docker retains only a short probe ring: collector downtime can still lose old
+errors. This diagnostic does not add application request logging.
+
+For noisy container Push monitors, retry tolerance must be tested against the
+installed Kuma version. Its watchdog also consumes retries after a fresh bad
+Push; a retry count is not an exact number of minutes. In the tested v2.5.9
+timing, three retries suppress a single bad sample followed by recovery within
+70 seconds, while sustained failures and absent collectors still become DOWN.
+Keep the actual selected monitors and controls in the private catalog.
+
 Example shape (replace placeholders only in private configuration):
 
 ```json

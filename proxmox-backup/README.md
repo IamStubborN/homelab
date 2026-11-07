@@ -13,8 +13,8 @@ copies.
 | OPNsense configuration | daily 04:00 | `Proxmox/OPNsense/config` | 5 |
 | Application data | daily 04:05 | `Proxmox/Docker/apps` | 7 |
 | Proxmox host configuration | Sunday 04:20 | `Proxmox/host-config` | 5 |
-| Full OPNsense VM 100 | Sunday 04:25 | `Proxmox/OPNsense/full-vm` | 5 |
-| Full Docker CT 300 | first Sunday of month 08:00 | `Proxmox/Docker/full-lxc` | 5 |
+| Full router VM | Sunday 04:25 | `Proxmox/OPNsense/full-vm` | 5 |
+| Full Docker container | first Sunday of month 08:00 | `Proxmox/Docker/full-lxc` | 5 |
 
 Daily and weekly backups run first in the 04:00–08:00 night window, before
 the updates, so each night's copy is of the last working state; the monthly
@@ -31,9 +31,19 @@ validation, encryption, upload and provider SHA256/size checks must succeed
 before retention prunes encrypted copies. Historical plaintext copies are preserved. Failed uploads leave the local archive for retry. Existing
 Drive archives are not deleted by a schedule change.
 
+## Private guest selection
+
+Before installing the units, copy `proxmox.env.example` to the root-only
+`/etc/homelab-backup/proxmox.env` and fill in the exact intended
+router VM and Docker container. `ROUTER_VM_ID` and `DOCKER_CT_ID` must
+be positive decimal integers. The wrapper and encryption helper use those exact
+IDs for native commands and archive ownership; retention never broadens to all
+guest IDs. Interactive recovery commands must export the same private inputs.
+The existing installed units and configuration are not changed by source edits.
+
 ## Daily application archive
 
-`app-data-backup.py` runs inside CT 300 as
+`app-data-backup.py` runs inside the configured Docker container as
 `/usr/local/sbin/homelab-app-data-backup`. It creates a private capture under
 `/var/lib/homelab-app-backup`. The host packs that completed capture into one
 `.tar.zst`, encrypts it as `.tar.zst.age`, uploads it to Drive, then deletes the capture.
@@ -66,11 +76,9 @@ Manual run: `systemctl start homelab-backup-apps.service`. Check
 the Drive archive. The timer is `homelab-backup-apps.timer`. A periodic manual
 download and sample restore is preferable to a permanent heavyweight validator.
 
-First-run check (2026-10-10): the 1,603,212,532-byte archive
-`apps-2026_10_10-15_00_41.tar.zst` was downloaded back from Drive. Its MD5
-matched the local archive (`c7f5239ae542dd8cac918f2b9a13532b`), and
-`manifest.json` was readable from the compressed tar. This verifies transfer
-integrity, not a complete application restore.
+A cloud readback checksum and readable native manifest establish transfer
+integrity, not complete application restoration. Keep dated acceptance evidence
+and exact archive names, sizes and hashes in private operator records.
 
 ## Credentials and old pilot
 
@@ -101,7 +109,7 @@ Mac authenticated decryption/source-hash validation passed, including guest
 sidecars. Existing cloud objects were preserved, owned staging was cleaned,
 and installed helpers and schedules remained unchanged. Exact inventories,
 transfer quantities and private evidence stay in
-`home/local/backup-encryption-20261106/full-check/`. This did not create fresh
+private operator recovery records. This did not create fresh
 guest/application captures or change routine verification below.
 
 The wrapper calls `age-upload.py` as

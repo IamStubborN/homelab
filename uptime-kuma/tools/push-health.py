@@ -2,10 +2,12 @@
 """Publish selected Docker health and filesystem capacity; no Docker API in Kuma."""
 import argparse
 import concurrent.futures
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import urllib.parse
 import urllib.request
 
@@ -47,12 +49,62 @@ def publish(base, item, status, message):
             raise RuntimeError("Heartbeat rejected")
 
 
+def save_health_errors(path, state):
+    """Keep the latest 100 distinct failed probes, privately and across recovery."""
+    if not state:
+        return 0
+    failed = [row for row in state.get("health_log", []) if row["ExitCode"] != 0]
+    if not failed:
+        return 0
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if path.parent.stat().st_mode & 0o077 or path.is_symlink():
+        raise ValueError("Health error storage must be private")
+    data = json.loads(path.read_text()) if path.exists() else {"container": state["name"], "entries": []}
+    if data["container"] != state["name"]:
+        raise ValueError("Health error container changed")
+    entries = data["entries"]
+    seen = {(row["start"], row["end"]) for row in entries}
+    added = 0
+    for row in failed:
+        key = (row["Start"], row["End"])
+        if key in seen:
+            continue
+        entries.append({"start": row["Start"], "end": row["End"], "exit_code": row["ExitCode"],
+                        "output": row["Output"][:4096], "health": state["health"],
+                        "state": state["state"], "oom": state["oom"],
+                        "observed_at": datetime.now(timezone.utc).isoformat()})
+        seen.add(key)
+        added += 1
+    if not added:
+        return 0
+    data["entries"] = entries[-100:]
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, prefix=".health-errors-", delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(data, output, ensure_ascii=True)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return added
+
+
 def collect(config):
     items = config.get("containers", [])
     names = [item["name"] for item in items]
     states = {}
+    capture = config.get("health_error_capture")
     if names:
-        result = subprocess.run(["docker", "inspect", "--format", STATE_FORMAT, *names],
+        state_format = STATE_FORMAT
+        if capture:
+            if capture["container"] not in names:
+                raise ValueError("Health error target must be a monitored container")
+            state_format = STATE_FORMAT[:-1] + ',"health_log":{{if and .State.Health (eq .Name ' + \
+                json.dumps("/" + capture["container"]) + ')}}{{json .State.Health.Log}}{{else}}[]{{end}}}'
+        result = subprocess.run(["docker", "inspect", "--format", state_format, *names],
                                 capture_output=True, text=True, timeout=20)
         if result.returncode and not result.stdout.strip():
             # Do not invent per-container state when the data source is unavailable.
@@ -62,6 +114,14 @@ def collect(config):
         for line in result.stdout.splitlines():
             state = json.loads(line)
             states[state["name"].lstrip("/")] = state
+    if capture:
+        try:
+            added = save_health_errors(Path(capture["path"]), states.get(capture["container"]))
+            if added:
+                print(f"Captured {added} failed healthchecks")
+        except Exception as error:
+            # Diagnostic persistence must not prevent normal heartbeat publication.
+            print(f"Health error capture failed ({type(error).__name__})")
     output = [(item, *container_status(states.get(item["name"]))) for item in items]
     for item in config.get("mounts", []):
         try:

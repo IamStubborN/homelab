@@ -3,7 +3,7 @@
 # State stays on the LXC disk under openlist/data/ (not /mnt/internal).
 #
 # Same host bind mounts as Samba for Local drivers.
-# Atlas S3 storages are configured via admin API after bootstrap (not in git).
+# Additional provider storage is configured privately after bootstrap.
 
 services:
   openlist:

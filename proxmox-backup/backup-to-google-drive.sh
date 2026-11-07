@@ -3,6 +3,10 @@ set -Eeuo pipefail
 
 umask 077
 
+: "${ROUTER_VM_ID:?Set ROUTER_VM_ID in the private Proxmox environment}"
+: "${DOCKER_CT_ID:?Set DOCKER_CT_ID in the private Proxmox environment}"
+[[ "$ROUTER_VM_ID" =~ ^[1-9][0-9]*$ && "$DOCKER_CT_ID" =~ ^[1-9][0-9]*$ ]] || exit 64
+
 readonly LOCAL_BACKUP_DIR=/var/lib/vz/dump
 readonly REMOTE_ROOT='homelab-backups:Proxmox'
 readonly AGE_HELPER=/usr/local/libexec/homelab-age-upload
@@ -43,15 +47,15 @@ upload_guest_archive() {
   case "${kind}" in
     opnsense)
       remote_directory="${REMOTE_ROOT}/OPNsense/full-vm"
-      pattern='vzdump-qemu-100-*.vma.zst'
-      regex='^vzdump-qemu-100-.*\.vma\.zst$'
+      pattern="vzdump-qemu-${ROUTER_VM_ID}-*.vma.zst"
+      regex="^vzdump-qemu-${ROUTER_VM_ID}-.*\.vma\.zst$"
       log_file="${archive%.vma.zst}.log"
       keep=5
       ;;
     docker)
       remote_directory="${REMOTE_ROOT}/Docker/full-lxc"
-      pattern='vzdump-lxc-300-*.tar.zst'
-      regex='^vzdump-lxc-300-.*\.tar\.zst$'
+      pattern="vzdump-lxc-${DOCKER_CT_ID}-*.tar.zst"
+      regex="^vzdump-lxc-${DOCKER_CT_ID}-.*\.tar\.zst$"
       log_file="${archive%.tar.zst}.log"
       keep=5
       ;;
@@ -108,9 +112,9 @@ backup_opnsense_config() {
 
 backup_opnsense() {
   local archive
-  vzdump 100 --storage local --mode snapshot --compress zstd --remove 0 \
-    --notes-template 'OPNsense VM 100 full backup'
-  archive=$(latest_archive 'vzdump-qemu-100-*.vma.zst')
+  vzdump "$ROUTER_VM_ID" --storage local --mode snapshot --compress zstd --remove 0 \
+    --notes-template "Router VM ${ROUTER_VM_ID} full backup"
+  archive=$(latest_archive "vzdump-qemu-${ROUTER_VM_ID}-*.vma.zst")
   [[ -n "${archive}" ]] || exit 66
   upload_guest_archive opnsense "${archive}"
 }
@@ -122,11 +126,11 @@ backup_docker() {
   # Mapped LXC root must traverse its temporary config tree outside dumpdir.
   (
     umask 022
-    vzdump 300 --storage local --mode snapshot --compress zstd --remove 0 --tmpdir /var/tmp \
+    vzdump "$DOCKER_CT_ID" --storage local --mode snapshot --compress zstd --remove 0 --tmpdir /var/tmp \
       --exclude-path /var/lib/homelab-app-backup \
-      --notes-template 'Docker LXC 300 full rootfs backup; external bind mounts excluded'
+      --notes-template "Docker container ${DOCKER_CT_ID} full rootfs backup; external bind mounts excluded"
   )
-  archive=$(latest_archive 'vzdump-lxc-300-*.tar.zst')
+  archive=$(latest_archive "vzdump-lxc-${DOCKER_CT_ID}-*.tar.zst")
   [[ -n "${archive}" ]] || exit 66
   chmod 600 -- "${archive}"
   upload_guest_archive docker "${archive}"
@@ -160,7 +164,7 @@ upload_app_capture() {
   chmod 700 -- "${LOCAL_BACKUP_DIR}"
   if [[ ! -f "${archive}" ]]; then
     trap 'rm -f -- "${partial}"' EXIT
-    pct exec 300 -- tar --numeric-owner -C "${stage}" -cf - . | zstd -T1 -3 -q -o "${partial}"
+    pct exec "$DOCKER_CT_ID" -- tar --numeric-owner -C "${stage}" -cf - . | zstd -T1 -3 -q -o "${partial}"
     zstd -tq "${partial}"
     mv -- "${partial}" "${archive}"
     trap - EXIT
@@ -168,13 +172,13 @@ upload_app_capture() {
   zstd -tq "${archive}"
   upload_file "${archive}" "${REMOTE_ROOT}/Docker/apps"
   prune_remote "${REMOTE_ROOT}/Docker/apps" 'apps-*.tar.zst' 7 "${archive}"
-  pct exec 300 -- /usr/local/sbin/homelab-app-data-backup complete "${stage}" >/dev/null
+  pct exec "$DOCKER_CT_ID" -- /usr/local/sbin/homelab-app-data-backup complete "${stage}" >/dev/null
   cleanup_file "${archive}"
 }
 
 backup_apps() {
   local stage capture_day
-  stage=$(pct exec 300 -- /usr/local/sbin/homelab-app-data-backup prepare)
+  stage=$(pct exec "$DOCKER_CT_ID" -- /usr/local/sbin/homelab-app-data-backup prepare)
   if [[ -n "${stage}" ]]; then
     capture_day=${stage##*/}
     capture_day=${capture_day#capture-}
@@ -185,7 +189,7 @@ backup_apps() {
     [[ "${capture_day}" < "$(date -u '+%Y%m%d')" ]] || return 0
   fi
   stage="/var/lib/homelab-app-backup/capture-$(date -u '+%Y%m%dT%H%M%SZ')"
-  pct exec 300 -- nice -n 15 ionice -c 3 /usr/local/sbin/homelab-app-data-backup capture "${stage}"
+  pct exec "$DOCKER_CT_ID" -- nice -n 15 ionice -c 3 /usr/local/sbin/homelab-app-data-backup capture "${stage}"
   upload_app_capture "${stage}"
 }
 

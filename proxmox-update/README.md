@@ -48,28 +48,31 @@ GRUB cannot record a boot attempt, so a one-time boot (`grub-reboot`) would
 stick. A kernel that does not boot needs the console.
 
 After a reboot, `homelab-host-boot-check.service` waits up to 15 minutes for
-VM 100, CT 300 and `1.1.1.1`. Both units report failures through the backup
+the configured router VM and Docker container and `1.1.1.1`. Both units report failures through the backup
 monitor's Telegram alerts (`host-update` and `host-boot` jobs with
 `failure_only: true` in `/etc/homelab-backup/monitor.json`). If the host does
 not come back at all, nothing on it can report that.
 
 ## Host settings this relies on
 
-- The host boots shim and GRUB from `EFI/proxmox`. The unused `systemd-boot`
-  package was purged on 2026-10-21: it copied every kernel to the EFI
-  partition, which would have filled it. Backups of the EFI files and the
-  boot entries are in `/root/esp-EFI-loader-20261021.tgz` and
-  `/root/efibootmgr-20261021.txt`.
+- Verify the host's actual bootloader and retain a private EFI/boot-entry
+  recovery snapshot before enabling unattended kernel updates. A different
+  bootloader layout needs a separate review.
 
 - `/etc/fstab` mounts `/mnt/usb_drive` with
   `nofail,x-systemd.device-timeout=30s`, so a missing USB drive cannot stop
-  the boot in emergency mode (CT 300 then fails to start instead).
+  the boot in emergency mode (a dependent container may fail to start instead).
 - `/etc/apt/preferences.d/homelab-no-auto-ookla` pins the third-party Ookla
   repository to priority 99, so it is never upgraded unattended.
 
 ## Install
 
-As root on Proxmox:
+As root on Proxmox, create the root-only private
+`/etc/homelab-backup/proxmox.env` first. Set `ROUTER_VM_ID` and `DOCKER_CT_ID`
+to the intended guests; the supplied example leaves IDs blank. Missing
+or invalid IDs fail closed. Back up this file with the host configuration.
+Do not enable the updated units until those private inputs are installed:
+
 
 ```sh
 install -m 0755 proxmox-update/homelab-host-update.sh /usr/local/sbin/homelab-host-update
@@ -87,10 +90,10 @@ installing, holding or rebooting.
 
 ## Docker guest TRIM
 
-CT 300's rootfs is a thin volume on `local-lvm`. Blocks freed inside the
+The Docker container's rootfs is a thin volume on `local-lvm`. Blocks freed inside the
 container stay allocated in the pool until they are trimmed, and the container
 cannot trim its own rootfs. `homelab-guest-fstrim.timer` runs
-`pct fstrim 300 --ignore-mountpoints 1` at 06:20, after the Docker cleanup at
+`pct fstrim "$DOCKER_CT_ID" --ignore-mountpoints 1` at 06:20, after the Docker cleanup at
 06:05. Install as root on Proxmox:
 
 ```sh

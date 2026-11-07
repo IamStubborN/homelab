@@ -6,7 +6,8 @@
 set -euo pipefail
 
 BACKUP_LOCK=/run/lock/homelab-google-drive-backup.lock
-DOCKER_CT=300
+DOCKER_CT=${DOCKER_CT_ID:?Set DOCKER_CT_ID in the private Proxmox environment}
+[[ "$DOCKER_CT" =~ ^[1-9][0-9]*$ ]] || exit 64
 STATE=/var/lib/homelab-host-update
 KERNEL_AGE_DAYS=7
 EFI_MIN_FREE_KB=$((200 * 1024))

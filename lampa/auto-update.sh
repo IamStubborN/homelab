@@ -6,7 +6,7 @@
 # DRY_RUN=1 only reports whether an update is due.
 set -euo pipefail
 
-ROOT=${LAMPA_ROOT:-/home/iamstubborn/homelab}
+ROOT=${LAMPA_ROOT:-/opt/homelab}
 STATE=${LAMPAC_UPDATE_STATE:-/var/lib/lampac-update}
 AUTO=$STATE/auto                 # this script's own state
 UPSTREAM=ghcr.io/lampac-nextgen/lampac

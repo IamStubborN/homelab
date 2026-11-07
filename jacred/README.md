@@ -1,6 +1,6 @@
 # JacRed resource budget
 
-This host shares four CPU cores with OPNsense and interactive media services.
+Background crawling may share resources with routing and interactive services.
 JacRed is limited to 0.6 CPU and the dedicated `solverr-crawl` pool to 0.5 CPU.
 Both use `cpu_shares: 256` to yield under contention. The interactive Solverr
 pool retains its existing budget. These are CPU budgets, not request limits.
@@ -25,8 +25,7 @@ Existing analyses finish using their old semaphore; new work uses the new
 limit, so the transition can briefly overlap.
 
 Solverr's `SESSION_MAX` bounds idle retained sessions per browser engine; it is
-not a strict concurrent-request limit. Following the September 25 process
-exhaustion incident, only `solverr-crawl` uses `SESSION_MAX=2`, a five-minute
+not a strict concurrent-request limit. For bounded retained-session cleanup, `solverr-crawl` uses `SESSION_MAX=2`, a five-minute
 idle TTL, and a 15-second reaper interval. Its healthcheck calls `/health`
 directly with exec-form curl. CPU, memory and PID budgets are unchanged.
 The interactive pool retains its previous settings. Lower idle retention is
@@ -42,10 +41,9 @@ Kinozal caller counts that settled page as successful. Dependency outages
 therefore require checkpoint review. Do not edit checkpoint JSON underneath
 the running process or start a new cycle as an automatic recovery action.
 
-TorrServer's 2 GiB RAM cache and disconnect timeout are retained. On
-2026-09-25 its memory fell from 4.16 GiB to about 0.7 GiB without a restart
-when torrents became inactive. This observation does not establish a leak
-and does not justify a hard memory limit below playback demand.
+Measure current cache use and playback demand before imposing a hard memory
+limit; idle memory changes alone do not establish a leak. Keep dated production
+measurements and the selected resource budgets in private operator records.
 
 ## Network
 
@@ -77,8 +75,7 @@ Most incremental refreshes run every four to six hours. Previously disabled
 jobs remain disabled, including Rutracker/Kinozal/Ultradox full-cycle starts,
 Cloudflare warmups, and archive backfills. These trackers' archives are
 already in the database and new torrents also arrive through `syncapi`; a full
-cycle re-crawls the whole archive through Solverr for weeks (Kinozal's last
-one ran 2026-09-21 to 2026-10-20). Kinozal's incremental refresh, paused
+cycle re-crawls the whole archive through Solverr for weeks . Kinozal's incremental refresh, paused
 during that cycle, runs every six hours again.
 JSON checkpoints still save every five minutes; logs rotate every 15 minutes.
 There are no tracker starts at 22:00–23:59 and no new Sunday full-cycle start.

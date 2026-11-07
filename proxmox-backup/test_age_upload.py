@@ -36,6 +36,9 @@ else:sys.exit(10)
 
 class UploadChecks(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ, {'ROUTER_VM_ID': '901', 'DOCKER_CT_ID': '902'})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.root.chmod(0o700)
@@ -110,22 +113,34 @@ class UploadChecks(unittest.TestCase):
         directory.mkdir(parents=True)
         names=[]
         for day in range(1,9):
-            name=f'vzdump-qemu-100-2026_11_{day:02d}-04_25_00.vma.zst.age'
+            name=f'vzdump-qemu-901-2026_11_{day:02d}-04_25_00.vma.zst.age'
             names.append(name)
             for n in [name,name[:-4]+'.notes.age',name[:-len('.vma.zst.age')]+'.log.age']:
                 (directory/n).write_bytes(b'cipher')
         old_plain=names[0][:-4]
         (directory/old_plain).write_bytes(b'old plaintext')
-        (directory/'vzdump-qemu-100-unowned.vma.zst.age').write_bytes(b'unowned')
-        a.prune(remote,'vzdump-qemu-100-*.vma.zst.age',5,names[0])
+        (directory/'vzdump-qemu-901-unowned.vma.zst.age').write_bytes(b'unowned')
+        foreign = directory/'vzdump-qemu-902-2026_11_01-04_25_00.vma.zst.age'
+        foreign.write_bytes(b'foreign guest')
+        a.prune(remote,'vzdump-qemu-901-*.vma.zst.age',5,names[0])
+        self.assertTrue(foreign.exists())
         self.assertTrue((directory/names[0]).exists())
         self.assertTrue((directory/old_plain).exists())
-        self.assertTrue((directory/'vzdump-qemu-100-unowned.vma.zst.age').exists())
+        self.assertTrue((directory/'vzdump-qemu-901-unowned.vma.zst.age').exists())
         self.assertEqual(sum((directory/name).exists() for name in names),5)
         for name in names[1:4]:
             self.assertFalse((directory/name).exists())
             self.assertFalse((directory/(name[:-4]+'.notes.age')).exists())
             self.assertFalse((directory/(name[:-len('.vma.zst.age')]+'.log.age')).exists())
+
+    def test_guest_retention_requires_an_explicit_numeric_identity(self):
+        remote = a.REMOTE_ROOT + 'OPNsense/full-vm'
+        current = 'vzdump-qemu-901-2026_11_01-04_25_00.vma.zst.age'
+        for invalid in ('', '0', '901*', '../901'):
+            with patch.dict(os.environ, {'ROUTER_VM_ID': invalid}), patch.object(a, 'run_rclone') as cloud:
+                with self.assertRaises(ValueError):
+                    a.prune(remote, 'vzdump-qemu-901-*.vma.zst.age', 5, current)
+                cloud.assert_not_called()
 
     def test_recipient_rotation_cannot_change_captured_encryption_key(self):
         original_bytes=self.recipient.read_bytes()
@@ -165,7 +180,7 @@ class UploadChecks(unittest.TestCase):
     def test_guest_sidecar_failure_prevents_prune_and_cleanup(self):
         wrapper=Path(__file__).with_name('backup-to-google-drive.sh').read_text()
         function=wrapper[wrapper.index('upload_guest_archive() {'):wrapper.index('latest_archive() {')]
-        archive=self.root/'vzdump-qemu-100-2026_11_06-04_25_00.vma.zst'
+        archive=self.root/'vzdump-qemu-901-2026_11_06-04_25_00.vma.zst'
         archive.write_bytes(b'native');Path(str(archive)+'.notes').write_bytes(b'notes')
         marker=self.root/'must-not-exist'
         script='''set -euo pipefail

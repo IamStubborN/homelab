@@ -202,8 +202,19 @@ render_config() {
 }
 
 if [ "$VALIDATE_ONLY" = "true" ]; then
+    if [ -z "${EXPECTED_REMOTE_LINE:-}" ]; then
+        printf 'EXPECTED_REMOTE_LINE is required for validation.\n' >&2
+        exit 78
+    fi
+    case "$EXPECTED_REMOTE_LINE" in
+        remote\ *) ;;
+        *) printf 'Expected one remote configuration line.\n' >&2; exit 64 ;;
+    esac
+    case "$EXPECTED_REMOTE_LINE" in
+        *[![:print:]]*) printf 'Expected a printable single line.\n' >&2; exit 64 ;;
+    esac
     render_config
-    grep -q '^remote atl-core-ovpn\.atlas-iac\.net 14290$' "$CONFIG_FILE"
+    grep -Fqx -- "$EXPECTED_REMOTE_LINE" "$CONFIG_FILE"
     grep -q '^<tls-auth>$' "$CONFIG_FILE"
     grep -q '^key-direction 1$' "$CONFIG_FILE"
     grep -q '^connect-retry-max 1$' "$CONFIG_FILE"

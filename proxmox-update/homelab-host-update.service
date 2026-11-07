@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+EnvironmentFile=/etc/homelab-backup/proxmox.env
 ExecStart=/usr/local/sbin/homelab-host-update
 # Never kill dpkg mid-upgrade. While this runs it holds the backup lock, so
 # an overrun makes the next night's 04:00 backup skip (exit 75) until the next run.

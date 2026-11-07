@@ -45,6 +45,37 @@ class HealthCheckTests(unittest.TestCase):
         self.assertEqual(result[0][1], "down")
         stat.assert_not_called()
 
+    def test_health_error_capture_is_private_bounded_and_deduplicated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "errors.json"
+            state = {"name": "/worker", "state": "running", "health": "unhealthy", "oom": False,
+                     "health_log": [{"Start": "ok", "End": "ok", "ExitCode": 0, "Output": "success"},
+                                    {"Start": "failed", "End": "end", "ExitCode": 1, "Output": "TimeoutError"}]}
+            self.assertEqual(health.save_health_errors(path, state), 1)
+            self.assertEqual(health.save_health_errors(path, state), 0)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            state["health_log"] = [{"Start": str(i), "End": str(i), "ExitCode": 1,
+                                    "Output": "x" * 5000} for i in range(120)]
+            health.save_health_errors(path, state)
+            data = health.json.loads(path.read_text())
+            self.assertEqual(len(data["entries"]), 100)
+            self.assertEqual(data["entries"][0]["start"], "20")
+            self.assertEqual(len(data["entries"][-1]["output"]), 4096)
+            state["health_log"] = [{"Start": "recovered", "End": "end", "ExitCode": 0, "Output": ""}]
+            self.assertEqual(health.save_health_errors(path, state), 0)
+            self.assertEqual(health.json.loads(path.read_text()), data)
+
+    def test_capture_failure_does_not_discard_heartbeats(self):
+        row = '{"name":"/worker","state":"running","health":"healthy","oom":false,"health_log":[]}\n'
+        config = {"containers": [{"name": "worker"}],
+                  "health_error_capture": {"container": "worker", "path": "/private/errors.json"}}
+        with patch.object(health.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=row)), \
+                patch.object(health, "save_health_errors", side_effect=OSError("private detail")), \
+                patch("builtins.print") as log:
+            result = health.collect(config)
+        self.assertEqual(result[0][1], "up")
+        self.assertNotIn("private detail", str(log.call_args))
+
 
 if __name__ == "__main__":
     unittest.main()

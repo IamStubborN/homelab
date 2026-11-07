@@ -132,7 +132,7 @@ Hermes recreate) is [`health/README.md`](../health/README.md).
 ## Samba / LAN visibility
 
 T7 does **not** add a Samba share. The existing share is path `/mnt`,
-`force user/group = iamstubborn` (uid 1000). `${WIKI_ROOT}` already
+the deployment account ownership mapping. `${WIKI_ROOT}` already
 appears as `share/internal/wiki`. LAN writes would be uid 1000 and fight
 Hermes — treat that path as **read-only visibility** only.
 

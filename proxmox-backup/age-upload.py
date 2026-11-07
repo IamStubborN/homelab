@@ -18,8 +18,8 @@ LOCATIONS = {
     'OPNsense/config': 'opnsense-config-*.tar.gz.age',
     'Docker/apps': 'apps-*.tar.zst.age',
     'host-config': 'proxmox-host-config-*.tar.zst.age',
-    'OPNsense/full-vm': 'vzdump-qemu-100-*.vma.zst.age',
-    'Docker/full-lxc': 'vzdump-lxc-300-*.tar.zst.age',
+    'OPNsense/full-vm': 'vzdump-qemu-{ROUTER_VM_ID}-*.vma.zst.age',
+    'Docker/full-lxc': 'vzdump-lxc-{DOCKER_CT_ID}-*.tar.zst.age',
 }
 STAMP = r'[0-9]{4}_[0-9]{2}_[0-9]{2}-[0-9]{2}_[0-9]{2}_[0-9]{2}'
 
@@ -135,6 +135,13 @@ def upload(source, remote, recipient_file=RECIPIENTS):
 def prune(remote, pattern, keep, current):
     remote_directory(remote)
     expected_pattern = LOCATIONS[remote[len(REMOTE_ROOT):]]
+    for key in ('ROUTER_VM_ID', 'DOCKER_CT_ID'):
+        placeholder = '{' + key + '}'
+        if placeholder in expected_pattern:
+            guest_id = os.environ.get(key, '')
+            if re.fullmatch(r'[1-9][0-9]*', guest_id) is None:
+                raise ValueError('A private positive-decimal guest ID is required')
+            expected_pattern = expected_pattern.replace(placeholder, guest_id)
     if pattern != expected_pattern or keep not in (5, 7) or not archive_name(current, pattern):
         raise ValueError('Unexpected encrypted retention request')
     listing = json.loads(run_rclone('lsjson', remote, '--files-only'))

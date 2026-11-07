@@ -40,14 +40,27 @@ text bodies under 256 KB are read, so media is never downloaded; without a nativ
 own-Lampac (`/lite/`, `/proxy/`) 4xx or an explicit `error`/`accsdb` answer; rch/ws
 handshakes, timeouts and foreign CDN refusals change nothing.
 
-Playback recovery actions replace the permanent status button: Retry and Other
-source appear only after a fatal error or 30 seconds of stalled loading in the
-embedded player, including a start that never receives data and a seek that
-never completes; a user pause is not a stall. Retry is shown only when the
-current source can be retried and GST is not already recovering on its own, and Lampa's own switch to a reserve URL is not
-a failure. Phase changes never add custom center-screen status text or
-notifications; native player presentation stays in charge. They never switch
-automatically. Online retry resolves a fresh
+`playback-status.js` shows a small state card below the native loader in the
+embedded player. Preparation, buffering and GST recovery show one line with an
+elapsed timer ("Подготовка видео… 8 с") after 700 ms, so short buffering blips
+never flash; GST recovery shows only while the picture is actually stuck. For
+torrents the card adds peers, download speed and read-ahead from Lampa's own
+TorrServer `/cache` request ("Торрент: 12 пиров · 3,4 МБ/с · буфер 40%"),
+polled at most every 2 seconds and only while the card is visible. The card
+hides as soon as playback progresses, also without a `playing` event.
+
+Retry and Other source appear on the card and in the player panel only after a
+fatal error or 30 seconds of stalled loading, including a start that never
+receives data and a seek that never completes; a user pause is not a stall.
+After 20 seconds of preparation the card also suggests Other source. Retry is
+shown only when the current source can be retried and GST is not already
+recovering on its own, and Lampa's own switch to a reserve URL is not a failure.
+The card takes the remote only from the bare player (or from the panel once
+playback is stuck), never from a menu, and offers it once per state: Retry is
+focused first, Other source after a retry that did not help. Left/Right move
+between the actions, Down opens the panel, Back hides the card while the panel
+keeps the actions. Phase changes never produce notifications or raw error text,
+and recovery never switches automatically. Online retry resolves a fresh
 URL from the same provider. Other source opens concrete online variants for the
 same episode and known voice. Exact voice labels rank first; whole-label aliases
 for a small set of known studios appear as clearly marked similar voices. They

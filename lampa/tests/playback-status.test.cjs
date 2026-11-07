@@ -170,3 +170,130 @@ test('a failed retry can be pressed again, a running one explains why a repeat i
   h.videoEvent('error', {fatal: true}); retry.trigger('hover:enter');
   assert.equal(h.notices.length, 3); assert.match(h.notices[2], /уже выполняется/);
 });
+
+// ---- State card
+const card = h => {
+  const node = cls => h.elements.find(e => e.classes.has('homelab-playback-card' + cls));
+  return {root: node(''), title: node('__title'), detail: node('__detail'), hint: node('__hint'), retry: node('__retry'), source: node('__source')};
+};
+const focusLog = h => { const log = [], original = h.L.Controller.collectionFocus; h.L.Controller.collectionFocus = (node, html) => { log.push(node); original(node, html); }; return log; };
+const controllerName = h => h.L.Controller.enabled().name;
+
+test('a short buffering blip never shows the card, a longer one counts seconds and hides when playback resumes', t => {
+  const h = harness(t); const video = realistic(h); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
+  video.play(); video.data(); video.advance(2);
+  const c = card(h); assert.ok(!shown(c.root));
+  video.readyState = 2; video.fire('waiting'); h.tick(600); assert.ok(!shown(c.root), 'debounced');
+  video.data(); h.tick(2000); assert.ok(!shown(c.root));
+  video.readyState = 2; video.fire('waiting'); h.tick(700); assert.ok(shown(c.root));
+  assert.equal(c.title.text(), 'Буферизация… 1 с');
+  h.tick(3000); assert.equal(c.title.text(), 'Буферизация… 3 с');
+  assert.ok(!shown(c.retry) && !shown(c.source), 'no actions before a stall');
+  video.data(); assert.ok(!shown(c.root), 'resumed playback hides at once');
+});
+
+test('preparation shows a live timer and after twenty seconds suggests another source without a stall', t => {
+  const h = harness(t), calls = [];
+  h.window.HomelabSources = {recover: (...args) => { calls.push(args); return true; }};
+  realistic(h); h.run('plugins/playback-status.js'); const log = focusLog(h);
+  h.start({card: {id: 7}, homelab_torrent_hash: hash});
+  const c = card(h), panelButtons = buttons(h);
+  h.tick(8000); assert.equal(c.title.text(), 'Подготовка видео… 8 с');
+  assert.equal(c.detail.text(), 'Подключаемся к раздаче'); assert.ok(!shown(c.hint) && !shown(c.source));
+  assert.equal(controllerName(h), 'player', 'nothing to focus yet');
+  h.tick(12000);
+  assert.match(c.hint.text(), /другой источник/); assert.ok(shown(c.source) && !shown(c.retry));
+  assert.ok(shown(panelButtons.source) && !shown(panelButtons.retry), 'the panel offers the same action');
+  assert.equal(controllerName(h), 'homelab_playback_card'); assert.equal(log.at(-1), c.source);
+  c.retry.trigger('hover:enter'); assert.equal(calls.length, 0, 'retry needs a real stall');
+  c.source.trigger('hover:enter'); assert.equal(calls.length, 1); assert.equal(calls[0][2], false);
+});
+
+test('playback starting after an escalated preparation removes the suggestion and returns the remote to the player', t => {
+  const h = harness(t); h.window.HomelabSources = {recover: () => true};
+  const video = realistic(h); h.run('plugins/playback-status.js'); h.start({card: {id: 7}, homelab_torrent_hash: hash});
+  h.tick(21000); assert.equal(controllerName(h), 'homelab_playback_card');
+  video.play(); video.data();
+  assert.ok(!shown(card(h).root) && !shown(buttons(h).source)); assert.equal(controllerName(h), 'player');
+});
+
+test('the failure card focuses Retry first, Other source after a retry that failed, and Back only hides the card', t => {
+  const h = harness(t); h.window.HomelabSources = {recover: () => true};
+  realistic(h); h.run('plugins/playback-status.js'); const log = focusLog(h);
+  h.start({card: {id: 7}, homelab_torrent_hash: hash});
+  h.videoEvent('error', {fatal: true, error: 'http://private.example/?token=secret'});
+  const c = card(h);
+  assert.ok(shown(c.root)); assert.equal(c.title.text(), 'Не удалось воспроизвести');
+  assert.equal(c.hint.text(), 'Повторите или выберите другой источник');
+  assert.ok(![c.title, c.detail, c.hint].some(node => /token|http|Error/.test(node.text())), 'no raw error text');
+  assert.ok(shown(c.retry) && shown(c.source)); assert.equal(controllerName(h), 'homelab_playback_card'); assert.equal(log.at(-1), c.retry);
+  c.retry.trigger('hover:enter'); assert.equal(h.retryCount(), 1);
+  assert.equal(controllerName(h), 'player', 'a running retry leaves the card');
+  h.tick(6000); h.videoEvent('error', {fatal: true});
+  assert.equal(controllerName(h), 'homelab_playback_card'); assert.equal(log.at(-1), c.source, 'a retry already failed once');
+  h.L.Controller.controllers.homelab_playback_card.down(); assert.equal(controllerName(h), 'player_panel');
+  h.video().fire('pause'); h.videoEvent('error', {fatal: true}); assert.equal(controllerName(h), 'player_panel', 'the card does not pull the remote back');
+  h.L.Controller.toggle('homelab_playback_card');
+  h.L.Controller.controllers.homelab_playback_card.back();
+  assert.ok(!shown(c.root)); assert.equal(controllerName(h), 'player');
+  assert.ok(shown(buttons(h).retry) && shown(buttons(h).source), 'the panel keeps the actions');
+  assert.equal(h.notices.length, 0);
+});
+
+test('the card never takes the remote from a menu and left/right move between its actions', t => {
+  const h = harness(t); h.window.HomelabSources = {recover: () => true};
+  realistic(h); h.run('plugins/playback-status.js'); const log = focusLog(h);
+  h.start({card: {id: 7}, homelab_torrent_hash: hash});
+  h.L.Controller.toggle('select');
+  h.videoEvent('error', {fatal: true}); const c = card(h);
+  assert.ok(shown(c.root)); assert.equal(controllerName(h), 'select');
+  h.L.Controller.toggle('homelab_playback_card'); assert.equal(log.at(-1), c.retry);
+  c.retry.addClass('focus'); h.L.Controller.controllers.homelab_playback_card.right(); assert.equal(log.at(-1), c.source);
+  c.retry.removeClass('focus'); c.source.addClass('focus'); h.L.Controller.controllers.homelab_playback_card.right(); assert.equal(log.at(-1), c.source, 'stops at the edge');
+});
+
+test('a stall card names a stuck seek and a started playback differently', t => {
+  const h = harness(t); const video = realistic(h); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
+  video.play(); video.data(); video.advance(2);
+  video.seek(900); h.tick(30000); assert.equal(card(h).title.text(), 'Перемотка не завершилась');
+  assert.equal(card(h).hint.text(), 'Попробуйте повторить');
+  video.seeking = false; video.fire('seeked'); video.data();
+  video.readyState = 2; video.fire('waiting'); h.tick(30000); assert.equal(card(h).title.text(), 'Воспроизведение остановилось');
+});
+
+test('GST recovery shows only while the picture is stuck', t => {
+  const h = harness(t); const video = realistic(h); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
+  video.play(); video.data(); video.advance(2);
+  h.phase('recovering'); h.tick(2000); assert.ok(!shown(card(h).root), 'still playing from the buffer');
+  video.readyState = 2; video.fire('waiting'); h.tick(1000); assert.ok(shown(card(h).root));
+  assert.match(card(h).title.text(), /^Восстановление… \d с$/);
+  video.advance(1); assert.ok(!shown(card(h).root), 'progress without a playing event');
+  video.readyState = 2; video.fire('waiting'); h.tick(30000);
+  assert.ok(!shown(card(h).retry) && !shown(buttons(h).retry), 'GST is still recovering on its own');
+  h.phase('buffered'); video.data(); assert.ok(!shown(card(h).root));
+});
+
+test('torrent statistics come from Lampa TorrServer cache only while the card is visible, at most every two seconds', t => {
+  const h = harness(t), asked = [];
+  h.L.Torserver.url = () => 'https://lampa.test/torrserver';
+  h.L.Torserver.cache = (value, ok, fail) => asked.push({value, ok, fail});
+  const video = realistic(h); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
+  h.tick(600); assert.equal(asked.length, 0, 'nothing is polled behind a hidden card');
+  h.tick(100); assert.equal(asked.length, 1); assert.equal(asked[0].value, hash);
+  asked[0].ok({Torrent: {active_peers: 12, download_speed: 3.4 * 1048576}, Readers: [{Reader: 100, End: 110}],
+    Pieces: {100: {Completed: true}, 101: {Completed: true}, 102: {Completed: true}, 103: {Completed: true}, 105: {Completed: true}}});
+  assert.equal(card(h).detail.text(), 'Торрент: 12 пиров · 3,4 МБ/с · буфер 40%');
+  h.tick(2000); assert.equal(asked.length, 2);
+  h.tick(2000); assert.equal(asked.length, 2, 'an unanswered request is not repeated at once');
+  asked[1].ok({Torrent: {active_peers: 1, download_speed: 300 * 1024}});
+  assert.equal(card(h).detail.text(), 'Торрент: 1 пир · 300 КБ/с');
+  video.play(); video.data(); const count = asked.length; h.tick(20000);
+  assert.equal(asked.length, count, 'polling stops when the card hides');
+});
+
+test('online playback shows no torrent statistics', t => {
+  const h = harness(t), asked = [];
+  h.L.Torserver.url = () => 'https://lampa.test/torrserver'; h.L.Torserver.cache = (...args) => asked.push(args);
+  realistic(h); h.run('plugins/playback-status.js'); h.start({card: {id: 7}, homelab_online: {provider: 'one'}});
+  h.tick(5000); assert.equal(asked.length, 0); assert.equal(card(h).detail.text(), 'Загружаем видео');
+});

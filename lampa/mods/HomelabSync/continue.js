@@ -150,22 +150,7 @@
     return following ? {season: following, episode: 1} : null;
   }
   function watched(item) { return item.duration > 0 && item.position / item.duration >= .9; }
-  // Short Russian copy shared by the row, its overlay and the long-press menu.
-  var MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
-  function plural(n, forms) { var a = Math.abs(n) % 100, b = a % 10; return forms[a > 10 && a < 20 ? 2 : b === 1 ? 0 : b > 1 && b < 5 ? 1 : 2]; }
-  function ago(stamp) {
-    if (!(stamp > 0)) return '';
-    var now = Date.now(), diff = now - stamp;
-    if (diff < 60000) return 'только что';
-    if (diff < 3600000) return Math.floor(diff / 60000) + ' мин назад';
-    var today = new Date(now), then = new Date(stamp);
-    today.setHours(0, 0, 0, 0); then.setHours(0, 0, 0, 0);
-    var days = Math.round((today.getTime() - then.getTime()) / DAY), date = new Date(stamp);
-    if (days <= 0) return 'сегодня';
-    if (days === 1) return 'вчера';
-    if (days < 7) return days + ' ' + plural(days, ['день', 'дня', 'дней']) + ' назад';
-    return date.getDate() + ' ' + MONTHS[date.getMonth()] + (date.getFullYear() !== new Date(now).getFullYear() ? ' ' + date.getFullYear() : '');
-  }
+  // Short Russian copy for the focus overlay.
   function remaining(position, duration) {
     var rest = Math.max(0, duration - position), minutes = Math.round(rest / 60);
     if (rest < 60) return 'осталось меньше минуты';
@@ -677,7 +662,7 @@
         native.create();
         var tile = native.render().addClass('homelab-resume-card');
         var progress = window.$('<div class="card-watched homelab-resume-progress"><div class="card-watched__inner"><div class="homelab-resume-head"></div><div class="card-watched__body"></div></div></div>');
-        var bar = window.$('<div class="homelab-resume-bar"><div></div></div>'), badge = window.$('<div class="homelab-resume-badge"></div>'), meta = window.$('<div class="homelab-resume-meta"></div>');
+        var bar = window.$('<div class="homelab-resume-bar"><div></div></div>'), badge = window.$('<div class="homelab-resume-badge"></div>');
         // Native progress of the other episodes of the shown season, so the
         // overlay can mark watched and started ones.
         function states() {
@@ -707,7 +692,7 @@
             var line = window.$('<div class="card-watched__item homelab-ep"><span></span></div>');
             if (current) line.addClass(item.advance ? 'homelab-ep--current homelab-ep--next' : 'homelab-ep--current');
             if (done) line.addClass('homelab-ep--watched');
-            line.find('span').text(episode ? number + ' · ' + plain(episode.name || 'Серия ' + number) : hasEpisode(item) ? episodeLabel(item.season, item.episode) : 'Продолжить просмотр');
+            line.find('span').text(episode ? number + ' · ' + plain(episode.name || 'Серия ' + number) : progressText(item));
             if (current ? percent > 0 : percent > 1) line.append(track(Math.min(100, percent)));
             body.append(line);
           });
@@ -715,11 +700,7 @@
         // Everything on the tile itself comes from the cached record: no
         // request is needed to show progress, source or time.
         function decorate() {
-          var current = card(item), year = String(current.release_date || current.first_air_date || '').slice(0, 4), age = tile.find('.card__age');
           var percent = percentOf(item), source = sourceLabel(item);
-          meta.text(progressText(item));
-          if (!age.length) { age = window.$('<div class="card__age"></div>'); meta.after(age); }
-          age.text([ago(item.observed), year && year !== '0000' ? year : ''].filter(Boolean).join(' · '));
           bar.toggleClass('hide', !(percent > 0)); bar.find('div').css('width', percent + '%');
           badge.text(source).toggleClass('hide', !source);
         }
@@ -734,7 +715,8 @@
         tile.on('hover:focus hover:touch hover:hover', lookupEpisodes);
         tile.on('hover:long', function () { if (alive && !destroyed) menu(item); });
         tile.find('.card__view').append(progress).append(bar).append(badge);
-        tile.find('.card__title').after(meta);
+        // No footer under the title: progress and source live on the poster.
+        tile.find('.card__age').remove();
         tile.find('.card__icons-inner').append(window.$('<div class="card__icon icon--history"></div>'));
         decorate(); paint([]);
         byCard[item.card] = {native: native, update: function (value) {
@@ -810,8 +792,6 @@
     '.homelab-resume-title{white-space:normal;font-size:1.8em;margin:0 .6em .8em}' +
     '.homelab-resume-card{flex-shrink:0}' +
     '.homelab-resume-card .card__title{line-height:1.3;height:2.6em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}' +
-    '.homelab-resume-meta{margin-top:.35em;font-size:.95em;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff}' +
-    '.homelab-resume-card .card__age{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
     '.homelab-resume-bar{position:absolute;left:.7em;right:.7em;bottom:.7em;height:.3em;border-radius:1em;background:rgba(255,255,255,.3);overflow:hidden;z-index:1;pointer-events:none}' +
     '.homelab-resume-bar div{height:100%;border-radius:1em;background:#fff}' +
     '.homelab-resume-badge{position:absolute;top:.6em;right:.6em;max-width:45%;padding:.25em .55em;border-radius:.4em;background:rgba(0,0,0,.6);color:#fff;font-size:.8em;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;z-index:1;pointer-events:none}' +

@@ -10,38 +10,31 @@ async function row(t, items, setup = () => {}) {
   h.rows[0].call()(data => { instance = data.params.createInstance(); instance.create(); });
   h.calls[0].finish({version: 1, items}); await flush();
   const last = name => h.elements.filter(e => e.classes.has(name) && !e.removed).at(-1);
+  const overlay = () => h.elements.filter(e => e.classes.has('homelab-resume-progress') && !e.removed).at(-1).find('.card-watched__body').children[0].find('span').content;
   const all = name => h.elements.filter(e => e.classes.has(name) && !e.removed);
-  return {...h, row: instance, last, all};
+  return {...h, row: instance, last, all, overlay};
 }
 
-test('a tile shows episode, remaining time, poster progress, source and relative time from the cached record', async t => {
+test('a tile has no footer: episode and remaining time are in the focus overlay, progress and source on the poster', async t => {
   const h = await row(t, [saved]);
-  assert.equal(h.last('homelab-resume-meta').text(), 'С1 · Е2 · осталось 2 мин');
+  assert.equal(h.all('homelab-resume-meta').length, 0);
+  assert.equal(h.overlay(), 'С1 · Е2 · осталось 2 мин');
   const bar = h.last('homelab-resume-bar');
   assert.equal(bar.hasClass('hide'), false); assert.equal(bar.find('div').attrs['style:width'], '25%');
   assert.equal(h.last('homelab-resume-badge').text(), 'Торрент');
-  assert.equal(h.last('card').find('.card__age').text(), 'только что');
+  assert.equal(h.last('card').find('.card__age').removed, true, 'no year/time line under the title');
 });
 
 test('a finished episode reads as the next one without a progress bar, and online records show their provider', async t => {
   const h = await row(t, [{...saved, position: 110, kind: 'online', torrent: null, index: 0, online: {provider: 'fictional', voice: 'Voice', season_index: 0}}]);
-  assert.equal(h.last('homelab-resume-meta').text(), 'Следующая: Е3');
+  assert.equal(h.overlay(), 'Следующая: Е3');
   assert.equal(h.last('homelab-resume-bar').hasClass('hide'), true);
   assert.equal(h.last('homelab-resume-badge').text(), 'Fictional');
 });
 
-test('relative time and long remaining time use short human Russian copy', async t => {
-  const h = harness(t); h.tick(30 * DAY); const now = Date.now();
-  h.run('mods/HomelabSync/continue.js'); let instance;
-  h.rows[0].call()(data => { instance = data.params.createInstance(); instance.create(); });
-  h.calls[0].finish({version: 1, items: [
-    {...saved, observed: now - DAY},
-    {...saved, card: 'movie_7', season: 0, episode: 0, position: 600, duration: 6000, observed: now - 3 * DAY}]}); await flush();
-  const tiles = h.elements.filter(e => e.classes.has('homelab-resume-card'));
-  assert.equal(tiles[0].find('.card__age').text(), 'вчера');
-  assert.equal(tiles[1].find('.card__age').text(), '3 дня назад');
-  const metas = h.elements.filter(e => e.classes.has('homelab-resume-meta'));
-  assert.equal(metas[1].text(), 'осталось 1 ч 30 мин');
+test('long remaining time uses short human Russian copy in the overlay', async t => {
+  const h = await row(t, [{...saved, card: 'movie_7', season: 0, episode: 0, position: 600, duration: 6000}]);
+  assert.equal(h.overlay(), 'осталось 1 ч 30 мин');
 });
 
 test('the focus overlay marks watched and started episodes of the season and highlights the current one', async t => {
@@ -73,7 +66,7 @@ test('long press offers remove, mark watched and source choice; marking watched 
   assert.equal(body.kind, 'torrent'); assert.equal(body.torrent, hash); assert.equal(body.timeline, '123');
   const item = h.window.homelabContinue.list().find(x => x.card === 'tv_42');
   assert.equal(item.episode, 3); assert.deepEqual({...item.advance}, {season: 1, episode: 2});
-  assert.equal(h.last('homelab-resume-meta').text().length > 0, true);
+  assert.equal(h.overlay().length > 0, true);
 });
 
 test('marking a movie watched removes it from the row', async t => {
@@ -105,12 +98,4 @@ test('an online next episode in another season cannot be marked watched with the
   assert.equal(h.window.homelabContinue.watched(item), false);
   h.elements.filter(e => e.classes.has('homelab-resume-card')).at(-1).trigger('hover:long');
   assert.deepEqual([...h.select().items].map(x => x.title), ['Убрать из ряда', 'Выбрать источник']);
-});
-
-test('the focus overlay does not repeat the remaining time shown under the poster', async t => {
-  const h = await row(t, [{...saved, card: 'movie_7', season: 0, episode: 0, position: 600, duration: 6000}, saved]);
-  const overlays = h.all('homelab-resume-progress'), metas = h.all('homelab-resume-meta');
-  assert.equal(metas[0].text(), 'осталось 1 ч 30 мин');
-  assert.equal(overlays[0].find('.card-watched__body').children[0].find('span').content, 'Продолжить просмотр');
-  assert.equal(overlays[1].find('.card-watched__body').children[0].find('span').content, 'С1 · Е2');
 });

@@ -19,7 +19,9 @@ function harness({ screen = false, missingApi = false } = {}) {
     watchHistory(params, done) { done({ results: cubCards, total_pages: totalPages }); },
     watchHistoryCard(key, done) { historyCalls++; done(events.slice()); }
   } };
-  const label = text => ({ value: typeof text === 'string' ? text : '', text(v) { this.value = v; return this; }, attr() { return this; }, addClass() { return this; }, append() { return this; } });
+  const label = text => { if (text && typeof text === 'object') { if (!text.append) Object.assign(text, label('')); return text; } const node = { value: typeof text === 'string' && text[0] !== '<' ? text : '', html: typeof text === 'string' ? text : '', classes: new Set(typeof text === 'string' ? (/class="([^"]*)"/.exec(text) || ['', ''])[1].split(' ').filter(Boolean) : []), children: [], styles: {}, found: {},
+    text(v) { this.value = v; return this; }, attr() { return this; }, addClass(name) { this.classes.add(name); return this; }, toggleClass(name, on) { on ? this.classes.add(name) : this.classes.delete(name); return this; },
+    append(child) { this.children.push(child); return this; }, css(name, v) { this.styles[name] = v; return this; }, find(selector) { return this.found[selector] ||= label(''); } }; return node; };
   const L = {
     Account: account, Utils: { secondsToTimeHuman: n => String(n), cardImgBackground() {} }, Noty: { show() {} },
     Storage: { get: (key, fallback) => key in storage ? storage[key] : fallback, cache: (key, n, fallback) => { cacheReads++; return storage[key] || fallback; }, set: (key, data) => { storage[key] = data; }, listener: changes },
@@ -108,7 +110,8 @@ test('own history screen updates a still-open panel and refetches CUB rewatches 
   h.pull(); h.resolve([row(20)]);
   assert.equal(h.requests.length, requests + 1, 'panel repaint must not pull recursively');
   assert.ok(h.historyCalls > before, 'CUB event history is fetched again');
-  assert.equal(h.selection.items.length, 4, 'two rewatches remain separate events');
+  assert.equal(h.selection.items.length, 5, 'two rewatches remain separate events under one day header');
+  assert.equal(h.selection.items[2].separator, true); assert.equal(h.selection.items[2].title, 'Сегодня');
 });
 
 test('switching profiles immediately closes the old history panel', () => {
@@ -129,7 +132,7 @@ test('CUB-only episodes contribute to the card and panel count without duplicati
   assert.equal(h.built.results[0].homelab_summary, 'Серии: 1');
   h.open(h.built.results[0]); h.resolve([]);
   assert.equal(h.selection.items[0].html.value, 'Серии: 1');
-  assert.equal(h.selection.items.length, 4);
+  assert.equal(h.selection.items.length, 5);
 });
 
 test('an unchanged poll on page two does not reset pagination', () => {
@@ -234,4 +237,26 @@ test('an unknown changelog route (HTTP 404) falls back to full dumps instead of 
   assert.equal(h.requests.length, 3); assert.match(h.requests[2].url, /\/timecode\/dump\?/);
   h.resolve([row(1), row(2)], 2, { version: 6 });
   assert.equal(h.sync.rows().length, 2); assert.equal(h.sync.error(), '');
+});
+
+test('history cards and panel events show the same progress wording as Continue, grouped by day', () => {
+  const h = harness({ screen: true }); const comp = h.start();
+  h.resolve([row(1), row(2, { position: 280, duration: 1000, watched_at: 99000 })]);
+  const card = h.built.results[0];
+  let hooks; comp.hooks.onInstance({ use(value) { hooks = value; } }, card);
+  const node = {}, item = { render() { return node; } };
+  hooks.onCreate.call(item);
+  const [line, when] = node.children, bar = node.find('.card__view');
+  assert.equal(line.value, 'С1 · Е2 · осталось 12 мин');
+  assert.equal(when.value, 'Серии: 2 · только что');
+  assert.equal(bar.children[0].find('div').styles.width, '28%');
+  h.events([{ season: 1, episode: 2, watched_at: 99000 }, { season: 1, episode: 1, watched_at: 100000 - 86400000 }]);
+  h.open(card); h.resolve([row(1, { watched_at: 1000 }), row(2, { position: 280, duration: 1000, watched_at: 99000 })]);
+  const items = h.selection.items;
+  const separators = [...items].filter(entry => entry.separator).map(entry => entry.title);
+  assert.deepEqual(separators, ['Сегодня', 'Вчера']);
+  const events = [...items].filter(entry => entry.html && entry.html.classes.has('homelab-history-event'));
+  assert.equal(events[0].html.children[1].value, 'Осталось 12 мин');
+  assert.equal(events[0].html.children[2].find('div').styles.width, '28%');
+  assert.ok(events[1].html.classes.has('homelab-history-event--watched'));
 });

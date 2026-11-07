@@ -31,7 +31,7 @@ test('gallery loaded after metadata immediately offers skip on a paused intro', 
 test('chapter gallery samples inside the chapter and keeps thumbnail generation serial', async t => {
   const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data);
   h.video().currentTime = 10; h.core.openChapters();
-  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].url, key + 'frame/2.jpg', '8s chapter must not show preceding5s scene');
+  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].url, key + 'frame/5.jpg', 'the 8s chapter samples 15s inside it, not the preceding scene');
   h.calls[0].finish({type: 'image/jpeg', size: 100}); await flush();
   assert.equal(h.calls.length, 2, 'only one decoder request runs at a time');
   h.L.Modal.close(); assert.equal(h.calls[1].options.signal.aborted, true);
@@ -42,17 +42,18 @@ test('chapter gallery samples inside the chapter and keeps thumbnail generation 
 test('chapter gallery respects the negotiated ten-second grid', t => {
   const h = harness(t); h.run('plugins/chapter-gallery.js');
   h.coreState({...data, info: {...data.info, step: 10}}); h.video().currentTime = 10; h.core.openChapters();
-  assert.equal(h.calls[0].url, key + 'frame/1.jpg?step=10', 'the8s chapter samples10s, not the preceding scene');
+  assert.equal(h.calls[0].url, key + 'frame/2.jpg?step=10', 'the 8s chapter samples the ten-second grid inside it');
 });
 
 test('skip buttons never auto-seek and conservative labels leave story chapters alone', t => {
   const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data);
+  h.L.PlayerPanel.listener.follow('to_end', () => h.L.PlayerVideo.to(-1)); // native without a next episode
   const button = h.elements.find(e => e.classes.has('homelab-skip'));
   assert.equal(h.selected(), undefined); assert.equal(button.hasClass('hide'), false);
   button.trigger('hover:enter'); assert.equal(h.selected(), 8);
   h.video().currentTime = 10; h.videoEvent('timeupdate'); assert.equal(button.hasClass('hide'), true, 'Opening Scene is not an intro marker');
   h.video().currentTime = 100; h.videoEvent('timeupdate'); assert.equal(button.hasClass('hide'), false);
-  button.trigger('hover:enter'); assert.equal(h.selected(), 120);
+  button.trigger('hover:enter'); assert.equal(h.selected(), -1, 'tail credits use native end position');
 });
 
 test('manual chapter edits require explicit save and reject invalid boundaries or another profile', t => {
@@ -266,7 +267,7 @@ test('skip positioning follows native visibility event order and leaving its con
   panel.addClass('panel--visible'); h.L.PlayerPanel.listener.send('visible', {status: false});
   assert.equal(button.attrs['style:bottom'], 24);
   h.L.Controller.toggle('homelab_chapter_skip'); button.addClass('focus');
-  h.L.Controller.controllers.homelab_chapter_skip.up(); assert.equal(button.hasClass('focus'), false);
+  h.L.Controller.controllers.homelab_chapter_skip.left(); assert.equal(button.hasClass('focus'), false);
 });
 
 

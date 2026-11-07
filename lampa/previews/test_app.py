@@ -31,7 +31,7 @@ class PreviewTest(unittest.TestCase):
             app.run([sys.executable, "-c", "import sys; sys.stdout.write('x' * (3 * 1024 * 1024))"])
         gate = threading.Event()
         with tempfile.TemporaryDirectory() as tmp, patch.object(app, "CACHE", Path(tmp)), \
-                patch.object(app, "prepare", lambda *_: gate.wait(5)):
+                patch.object(app, "prepare", lambda *_, **__: gate.wait(5)):
             try:
                 for slot in range(3):
                     self.assertIsNone(app.request_job(HASH, 1, slot))

@@ -14,7 +14,7 @@ const info = (list = chapters, duration = 1440) => ({key, enabled: true, info: {
 // the last focused element, close does not change the controller, and mouse
 // hover sends hover:hover rather than hover:focus.
 function setup(t, options = {}) {
-  const h = harness(t), L = h.L, stack = [], closed = [], focused = [], counts = {close: 0, next: 0, toggle: 0};
+  const h = harness(t), L = h.L, stack = [], closed = [], focused = [], counts = {close: 0, next: 0, toggle: 0, pause: 0, ended: 0};
   let active = null, panelVisible = false;
   h.video().duration = 1440;
   const jq = h.window.jQuery, body = jq('<body></body>');
@@ -50,7 +50,12 @@ function setup(t, options = {}) {
   L.PlayerPanel.visibleStatus = () => panelVisible;
   L.PlayerPanel.reveal = () => { panelVisible = true; };
   L.PlayerPanel.hide = () => { panelVisible = false; };
-  if (options.playlist) L.PlayerPlaylist = {canNext: () => options.playlist.next, next() { counts.next++; }};
+  L.PlayerPlaylist = {canNext: () => !!options.playlist?.next, next() { counts.next++; }};
+  L.PlayerVideo.pause = () => { counts.pause++; };
+  // Native PlayerPanel to_end (frontend Player init): pause, mark watched, next or end.
+  L.PlayerPanel.listener.follow('to_end', () => {
+    if (L.PlayerPlaylist.canNext()) { L.PlayerVideo.pause(); counts.ended++; L.PlayerPlaylist.next(); } else L.PlayerVideo.to(-1);
+  });
   L.Controller.add('player_panel', {}); L.Controller.add('player', {}); L.Controller.add('player_skip', {});
   const native = jq('<div class="player-skip selector hide"></div>');
   L.Player.render().append(native);
@@ -111,7 +116,8 @@ const tail = [{start: 0, end: 1300, title: 'Story'}, {start: 1300, end: 1440, ti
 test('a tail outro moves to the next episode when one exists', t => {
   const h = setup(t, {playlist: {next: true}});
   h.coreState(info(tail)); h.time(1350); h.skip().trigger('hover:enter');
-  assert.equal(h.counts.next, 1); assert.equal(h.selected(), undefined);
+  assert.deepEqual([h.counts.pause, h.counts.ended, h.counts.next], [1, 1, 1], 'the episode is paused and marked watched before next');
+  assert.equal(h.selected(), undefined);
 });
 
 test('a tail outro without a next episode uses the native end position', t => {
@@ -150,16 +156,27 @@ test('gallery returns to the panel it was opened from and keeps focus on the edi
   assert.equal(h.panelVisible(), true);
 });
 
-test('mouse and touch hover load thumbnails without keyboard focus', async t => {
+const many = Array.from({length: 14}, (_, i) => ({start: i * 100, end: i * 100 + 100, title: 'Part ' + (i + 1)}));
+async function drain(h, count) { for (let i = 0; i < count; i++) { h.calls.at(-1).finish({type: 'image/jpeg', size: 100}); await flush(); } }
+
+test('thumbnails prefetch serially near the playing chapter without any focus, up to the cache cap', async t => {
   const h = setup(t);
-  h.coreState(info()); h.time(5); h.core.openChapters();
-  for (let i = 0; i < 2; i++) { h.calls.at(-1).finish({type: 'image/jpeg', size: 100}); await flush(); }
-  const before = h.calls.length;
-  h.tile(4).trigger('hover:hover');
-  assert.equal(h.calls.length, before + 1);
-  h.calls.at(-1).finish({type: 'image/jpeg', size: 100}); await flush();
-  h.tile(5).trigger('hover:touch');
-  assert.equal(h.calls.length, before + 2);
+  h.coreState(info(many, 1400)); h.time(550); h.core.openChapters();
+  await drain(h, 12);
+  assert.equal(h.calls.length, 12, 'one request at a time, then stop at twelve images');
+  assert.deepEqual(h.calls.slice(0, 5).map(call => /frame\/(\d+)/.exec(call.url)[1]), ['52', '42', '62', '72', '32']);
+  assert.equal(h.revoked.length, 0, 'prefetch never evicts');
+});
+
+test('mouse and touch hover load thumbnails outside the prefetched window', async t => {
+  const h = setup(t);
+  h.coreState(info(many, 1400)); h.time(5); h.core.openChapters();
+  await drain(h, 12);
+  h.tile(13).trigger('hover:hover');
+  assert.equal(h.calls.length, 13);
+  await drain(h, 1);
+  h.tile(12).trigger('hover:touch');
+  assert.equal(h.calls.length, 14);
 });
 
 test('busy preview service responses retry with backoff instead of dropping the tile', async t => {
@@ -188,14 +205,52 @@ test('frames are sampled inside each chapter, away from its boundary, with a nea
 });
 
 test('thumbnail cache evicts the least recently shown tile', async t => {
-  const list = Array.from({length: 14}, (_, i) => ({start: i * 100, end: i * 100 + 100, title: 'Part ' + (i + 1)}));
   const h = setup(t);
-  h.coreState(info(list, 1400)); h.time(5); h.core.openChapters();
-  for (let i = 0; i < 2; i++) { h.calls.at(-1).finish({type: 'image/jpeg', size: 100}); await flush(); }
-  for (let i = 2; i < 12; i++) { h.tile(i).trigger('hover:focus'); h.calls.at(-1).finish({type: 'image/jpeg', size: 100}); await flush(); }
+  h.coreState(info(many, 1400)); h.time(5); h.core.openChapters();
+  await drain(h, 12);
   const zero = h.tile(0).find('img').attrs.src, one = h.tile(1).find('img').attrs.src;
   h.tile(0).trigger('hover:focus');
-  h.tile(12).trigger('hover:focus'); h.calls.at(-1).finish({type: 'image/jpeg', size: 100}); await flush();
+  h.tile(12).trigger('hover:focus'); await drain(h, 1);
   assert.deepEqual(h.revoked, [one]);
   assert.equal(h.tile(0).find('img').attrs.src, zero);
+});
+
+test('Retry-After paces busy retries, 422 is final for the tile and a network error retries once', async t => {
+  const h = setup(t);
+  h.coreState(info()); h.time(5); h.core.openChapters();
+  h.calls[0].finish(null, 503, {'Retry-After': '2'}); await flush();
+  h.tick(1999); assert.equal(h.calls.length, 1); h.tick(1); assert.equal(h.calls.length, 2);
+  h.calls[1].finish(null, 422, {'Retry-After': '60'}); await flush();
+  assert.equal(h.calls.length, 3, 'the queue moves on');
+  assert.notEqual(h.calls[2].url, h.calls[0].url);
+  h.tile(0).trigger('hover:focus'); assert.equal(h.calls.length, 3);
+  const url = h.calls[2].url;
+  h.calls[2].fail(); await flush(); h.tick(1000);
+  assert.equal(h.calls[3].url, url);
+  h.calls[3].fail(); await flush();
+  assert.notEqual(h.calls.at(-1).url, url, 'a second network error gives up on that tile');
+  h.tile(0).trigger('hover:focus'); h.tick(60000);
+  assert.equal(h.calls.filter(call => call.url === h.calls[0].url).length, 2, 'an unsupported frame is never polled again');
+});
+
+test('reopening the episode or rewinding into the intro takes focus again', t => {
+  const h = setup(t);
+  h.coreState(info()); h.time(5);
+  h.L.Controller.controllers.homelab_chapter_skip.left(); assert.equal(h.controller(), 'player');
+  h.time(200); h.time(5);
+  assert.equal(h.controller(), 'homelab_chapter_skip', 'rewinding back into the segment');
+  h.L.Controller.controllers.homelab_chapter_skip.left();
+  h.destroy(); h.coreState(null); h.L.Controller.toggle('player');
+  h.start({homelab_torrent_hash: 'b'.repeat(40)}); h.coreState(info()); h.time(5);
+  assert.equal(h.controller(), 'homelab_chapter_skip', 'reopening the same episode');
+});
+
+test('after a native skip lands inside our segment the manual skip stays away', t => {
+  const h = setup(t);
+  h.coreState(info()); h.native.removeClass('hide'); h.L.Controller.toggle('player_skip'); h.time(5);
+  assert.equal(h.skip().hasClass('hide'), true);
+  h.native.addClass('hide'); h.L.Controller.toggle('player'); h.time(85);
+  assert.equal(h.skip().hasClass('hide'), true); assert.equal(h.controller(), 'player');
+  h.time(95); h.time(5);
+  assert.equal(h.skip().hasClass('hide'), false, 'a later pass without native skip offers ours');
 });

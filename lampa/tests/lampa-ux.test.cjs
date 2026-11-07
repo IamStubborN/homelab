@@ -47,6 +47,7 @@ test('chapter gallery respects the negotiated ten-second grid', t => {
 
 test('skip buttons never auto-seek and conservative labels leave story chapters alone', t => {
   const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data);
+  h.L.PlayerPanel.listener.follow('to_end', () => h.L.PlayerVideo.to(-1)); // native without a next episode
   const button = h.elements.find(e => e.classes.has('homelab-skip'));
   assert.equal(h.selected(), undefined); assert.equal(button.hasClass('hide'), false);
   button.trigger('hover:enter'); assert.equal(h.selected(), 8);

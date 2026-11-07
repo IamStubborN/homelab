@@ -11,9 +11,10 @@
       core.current, core.subscribe, core.retryMetadata, core.setEnabled].every(function (fn) { return typeof fn === 'function'; })) return;
     window.homelabChapterGallery = {version: 1};
     var gallery = null, retired = [], retireTimer, activeModal = null, skipButton = null, skipFocusTimer;
-    var cache = null, skipped = {}, grabbed = '', skipScope = '';
-    $('<style>.homelab-skip{position:absolute;right:1.5em;bottom:2em;z-index:4;display:flex;align-items:center;gap:.6em;padding:.65em 1em;border:1px solid #ffffff99;border-radius:.35em;background:rgba(20,22,27,.9);color:#fff;font-size:.9em;white-space:nowrap;max-width:90vw}.homelab-skip svg{width:1.2em;height:1.2em;flex-shrink:0}.homelab-skip.focus{color:#111;background:#fff;box-shadow:0 0 0 .12em #fff}.homelab-skip.hide{display:none}body.true--mobile .homelab-skip{font-size:14px;min-height:44px;right:16px}</style>').appendTo('head');
-    $('<style>.homelab-chapter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(12em,1fr));gap:1em}.homelab-chapter-tile{background:#333;padding:.4em;border-radius:.5em}.homelab-chapter-tile.focus,.homelab-chapter-edit.focus{outline:.18em solid white}.homelab-chapter-tile img{width:100%;aspect-ratio:16/9;object-fit:cover;background:#17191f}.homelab-chapter-current{box-shadow:inset 0 0 0 .15em #9cd7ff}.homelab-chapter-title{font-size:1.25em}.homelab-chapter-time{font-size:1em;opacity:.8}.homelab-chapter-edit{font-size:1.15em;margin-top:.3em;padding:.5em;background:#444;border-radius:.3em}.homelab-chapter-note{margin-bottom:1em;opacity:.8}.homelab-chapter-tools{display:flex;gap:1em;margin-bottom:1em}.homelab-chapter-tools .selector{padding:.6em;background:#444;border-radius:.3em}</style>').appendTo('head');
+    var cache = null, skipped = {}, grabbed = {}, suppressed = {}, skipScope = '';
+    function resetSkip() { skipped = {}; grabbed = {}; suppressed = {}; skipScope = ''; }
+    $('<style>.homelab-skip{position:absolute;right:1.5em;bottom:2em;z-index:4;display:flex;align-items:center;padding:.65em 1em;border:1px solid #ffffff99;border-radius:.35em;background:rgba(20,22,27,.9);color:#fff;font-size:.9em;white-space:nowrap;max-width:90vw}.homelab-skip svg{width:1.2em;height:1.2em;flex-shrink:0;margin-right:.6em}.homelab-skip.focus{color:#111;background:#fff;box-shadow:0 0 0 .12em #fff}.homelab-skip.hide{display:none}body.true--mobile .homelab-skip{font-size:14px;min-height:44px;right:16px}</style>').appendTo('head');
+    $('<style>.homelab-chapter-grid{font-size:0}.homelab-chapter-grid>div{display:inline-block;vertical-align:top;width:12em;margin:0 1em 1em 0;font-size:1rem}.homelab-chapter-tile{background:#333;padding:.4em;border-radius:.5em}.homelab-chapter-tile.focus,.homelab-chapter-edit.focus{outline:.18em solid white}.homelab-chapter-frame{position:relative;padding-top:56.25%;background:#17191f}.homelab-chapter-frame img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}.homelab-chapter-current{box-shadow:inset 0 0 0 .15em #9cd7ff}.homelab-chapter-title{font-size:1.25em}.homelab-chapter-time{font-size:1em;opacity:.8}.homelab-chapter-edit{font-size:1.15em;margin-top:.3em;padding:.5em;background:#444;border-radius:.3em}.homelab-chapter-note{margin-bottom:1em;opacity:.8}.homelab-chapter-tools{display:flex;margin-bottom:1em}.homelab-chapter-tools .selector{margin-right:1em;padding:.6em;background:#444;border-radius:.3em}</style>').appendTo('head');
     function scope() { return L.Timeline.filename() + '|' + String(L.Storage.get('lampac_profile_id', '') || ''); }
     function valid(g) { var now = core.current(); return gallery === g && now && now.key === g.key && scope() === g.scope; }
     function kind(title, length) {
@@ -51,7 +52,7 @@
       var at = g.order.indexOf(index); if (at >= 0) g.order.splice(at, 1);
       g.order.push(index);
     }
-    function stopThumb(g) { if (!g) return; clearTimeout(g.timer); if (g.job) { clearTimeout(g.job.deadline); g.job.abort.abort(); } g.job = null; g.loading = null; g.busy = false; g.queue = []; }
+    function stopThumb(g) { if (!g) return; clearTimeout(g.timer); if (g.job) { clearTimeout(g.job.deadline); g.job.abort.abort(); } if (g.tried && g.loading !== null && g.loading !== undefined) delete g.tried[g.loading]; g.job = null; g.loading = null; g.busy = false; g.queue = []; }
     function release(g) {
       if (g.released) return;
       g.released = true; stopThumb(g);
@@ -101,18 +102,34 @@
       else scheduleSweep();
     }
     function queueThumb(g, index) {
+      g.focusIndex = index;
       if (g.images[index]) return remember(g, index);
-      if (!valid(g) || !g.visible || g.loading === index || g.queue.indexOf(index) >= 0) return;
+      if (!valid(g) || !g.visible || g.failed[index] || g.loading === index || g.queue.indexOf(index) >= 0) return;
       g.queue.unshift(index); g.queue = g.queue.slice(0, 3); pump(g);
     }
+    function prefetch(g) {
+      // Phones and mice rarely focus tiles: fill the cache serially, nearest to
+      // the last hovered (or playing) chapter first, without evicting anything.
+      var list = chapters(), center = g.focusIndex >= 0 ? g.focusIndex : g.initialIndex || 0;
+      if (g.order.length >= 12) return -1;
+      for (var distance = 0; distance < list.length; distance++) {
+        var around = [center + distance, center - distance];
+        for (var i = 0; i < 2; i++) {
+          var index = around[i];
+          if (index >= 0 && index < list.length && !g.images[index] && !g.failed[index] && !g.tried[index]) return index;
+        }
+      }
+      return -1;
+    }
     function pump(g) {
-      if (!valid(g) || !g.visible || g.busy || !g.queue.length) return;
+      if (!valid(g) || !g.visible || g.busy) return;
+      if (!g.queue.length) { var next = prefetch(g); if (next < 0) return; g.queue.push(next); }
       var index = g.queue.shift(), chapter = chapters()[index];
       if (!chapter) return pump(g);
       var current = core.current(), step = current && current.info && current.info.step || 5;
       var slot = frameSlot(chapter, step, current && current.info && current.info.duration);
-      g.busy = true; g.loading = index;
-      var deadline = Date.now() + 55000, job = g.job = {abort: new AbortController(), failures: 0};
+      g.busy = true; g.loading = index; g.tried[index] = true;
+      var deadline = Date.now() + 55000, job = g.job = {abort: new AbortController(), failures: 0, network: 0};
       function finish() { if (g.job !== job) return; clearTimeout(job.deadline); clearTimeout(g.timer); g.job = null; g.busy = false; g.loading = null; if (valid(g)) pump(g); }
       job.deadline = setTimeout(function () { job.abort.abort(); finish(); }, 55000);
       function request() {
@@ -121,13 +138,16 @@
         fetch(g.key + 'frame/' + slot + '.jpg' + (step === 5 ? '' : '?step=' + step), {signal: job.abort.signal}).then(function (r) {
           if (!valid(g) || !g.visible || g.job !== job) return finish();
           if (r.status === 202) { g.timer = setTimeout(request, 1000); return; }
-          if (r.status === 429 || r.status >= 500) {
-            // A busy shared decoder recovers; back off instead of dropping the tile.
-            var delay = 1000 * Math.pow(2, job.failures++);
-            if (job.failures > 4 || Date.now() + delay >= deadline) return finish();
+          if (r.status === 429 || r.status === 503) {
+            // Busy or temporary: honour Retry-After, otherwise back off.
+            var after = Number(r.headers && typeof r.headers.get === 'function' && r.headers.get('Retry-After'));
+            var delay = after > 0 ? Math.min(10, after) * 1000 : 1000 * Math.pow(2, job.failures);
+            if (++job.failures > 4 || Date.now() + delay >= deadline) return finish();
             g.timer = setTimeout(request, delay); return;
           }
-          if (!r.ok) throw new Error('frame');
+          // 422: this frame failed or is unsupported; polling cannot help.
+          if (r.status === 422) g.failed[index] = true;
+          if (!r.ok) return finish();
           return r.blob().then(function (blob) {
             if (!valid(g) || !g.visible || g.job !== job || blob.type !== 'image/jpeg' || blob.size > 512 * 1024) return finish();
             var url = URL.createObjectURL(blob); g.images[index] = url;
@@ -136,7 +156,11 @@
             if (g.order.length > 12) { var old = g.order.shift(); g.html.find('[data-chapter="' + old + '"] img').attr('src', './img/img_broken.svg'); URL.revokeObjectURL(g.images[old]); delete g.images[old]; }
             finish();
           });
-        }).catch(finish);
+        }).catch(function () {
+          if (g.job !== job) return;
+          if (job.network++ < 1 && Date.now() + 1000 < deadline) { g.timer = setTimeout(request, 1000); return; }
+          finish();
+        });
       }
       request();
     }
@@ -185,7 +209,7 @@
       html.append(tools);
       var grid = $('<div class="homelab-chapter-grid"></div>'), video = L.PlayerVideo.video(), position = video && video.currentTime || 0, selected;
       list.forEach(function (chapter) {
-        var cell = $('<div></div>'), tile = $('<div class="homelab-chapter-tile selector"><img><div class="homelab-chapter-title"></div><div class="homelab-chapter-time"></div></div>').attr('data-chapter', chapter.index);
+        var cell = $('<div></div>'), tile = $('<div class="homelab-chapter-tile selector"><div class="homelab-chapter-frame"><img></div><div class="homelab-chapter-title"></div><div class="homelab-chapter-time"></div></div>').attr('data-chapter', chapter.index);
         tile.find('.homelab-chapter-title').text(chapter.title || ('Глава ' + (chapter.index + 1)));
         tile.find('.homelab-chapter-time').text(time(chapter.start) + ' — ' + time(chapter.end));
         tile.find('img').attr('src', g.images[chapter.index] || './img/img_broken.svg');
@@ -206,7 +230,7 @@
     }
     function open() {
       close(); var current = core.current(); if (!current) return;
-      var g = gallery = {key: current.key, scope: scope(), images: {}, order: [], queue: [], visible: false, from: L.Controller.enabled().name};
+      var g = gallery = {key: current.key, scope: scope(), images: {}, order: [], failed: {}, tried: {}, focusIndex: -1, queue: [], visible: false, from: L.Controller.enabled().name};
       draw(g); L.Modal.open(g.params); settle(g);
     }
     function segment(item) { return item.index + '|' + item.skipStart + '|' + item.skipEnd; }
@@ -223,13 +247,18 @@
       if (!skipButton) return;
       var current = core.current(), video = L.PlayerVideo.video(), name = L.Controller.enabled().name;
       var list = current && video ? chapters().filter(function (item) { return item.kind; }) : [];
-      if (current && current.key !== skipScope) { skipScope = current.key; skipped = {}; grabbed = ''; }
+      if (!current) resetSkip();
+      else if (current.key !== skipScope) { resetSkip(); skipScope = current.key; }
       var at = video ? video.currentTime : 0, native = list.length ? nativeSkip() : '';
       list.forEach(function (item) {
+        var id = segment(item), inside = at >= item.skipStart && at < item.skipEnd;
         // Re-offer after a real rewind, not after a seek that snapped just short of the end.
-        if (skipped[segment(item)] && (at < item.skipStart || at < item.skipEnd - 10)) delete skipped[segment(item)];
+        if (skipped[id] && (at < item.skipStart || at < item.skipEnd - 10)) delete skipped[id];
+        if (!inside) { delete grabbed[id]; delete suppressed[id]; }
+        // Native skip owned this segment; its landing point may still be inside ours.
+        else if (native) suppressed[id] = true;
       });
-      var chapter = native ? null : list.find(function (item) { return !skipped[segment(item)] && at >= item.skipStart && at < item.skipEnd; });
+      var chapter = native ? null : list.find(function (item) { var id = segment(item); return !skipped[id] && !suppressed[id] && at >= item.skipStart && at < item.skipEnd; });
       skipButton.toggleClass('hide', !chapter);
       if (!chapter) {
         if (name === 'homelab_chapter_skip') L.Controller.toggle(native === 'active' ? 'player_skip' : 'player');
@@ -238,7 +267,7 @@
       var label = chapter.kind === 'intro' ? 'Пропустить заставку' : 'Пропустить титры';
       skipButton.find('.homelab-skip-label').text(label); skipButton.attr('aria-label', label).data('end', chapter.skipEnd).data('segment', segment(chapter));
       // Like native Skip: a bare player takes OK for the visible button, once per segment.
-      if (name === 'player' && grabbed !== segment(chapter)) { grabbed = segment(chapter); L.Controller.toggle('homelab_chapter_skip'); }
+      if (name === 'player' && !grabbed[segment(chapter)]) { grabbed[segment(chapter)] = true; L.Controller.toggle('homelab_chapter_skip'); }
     }
     function skipPosition(event) {
       var root = L.Player.render(), panel = L.PlayerPanel.render();
@@ -249,13 +278,15 @@
     }
     function activateSkip() {
       if (!skipButton || skipButton.hasClass('hide')) return;
-      var end = skipButton.data('end'), video = L.PlayerVideo.video(), current = core.current(), playlist = L.PlayerPlaylist;
+      var end = skipButton.data('end'), video = L.PlayerVideo.video(), current = core.current(), playlist = L.PlayerPlaylist, events = L.PlayerPanel.listener;
       var duration = video && Number.isFinite(video.duration) && video.duration > 0 ? video.duration : current && current.info && current.info.duration || 0;
       skipped[skipButton.data('segment')] = true; skipButton.addClass('hide');
       L.Controller.toggle('player');
       if (!(duration > 0 && end >= duration - 2)) return L.PlayerVideo.to(end);
-      // Seeking to the exact end may stall instead of ending; mirror native end-skip.
-      if (playlist && typeof playlist.canNext === 'function' && typeof playlist.next === 'function' && playlist.canNext()) playlist.next();
+      // Seeking to the exact end may stall. Native to_end pauses, marks the
+      // episode watched (player Timeline.setEnd is private) and plays next.
+      if (typeof events.send === 'function') return events.send('to_end', {});
+      if (playlist && typeof playlist.canNext === 'function' && typeof playlist.next === 'function' && playlist.canNext()) { if (typeof L.PlayerVideo.pause === 'function') L.PlayerVideo.pause(); playlist.next(); }
       else L.PlayerVideo.to(-1);
     }
     function leaveSkip() { if (typeof L.Player.toggle === 'function') L.Player.toggle(); else L.Controller.toggle('player'); }
@@ -293,6 +324,7 @@
     core.openChapters = open;
     core.subscribe(function () { panel(); if (gallery) { if (!valid(gallery)) close(); else draw(gallery); } updateSkip(); scheduleSweep(); });
     L.PlayerVideo.listener.follow('timeupdate', updateSkip);
+    if (L.Player.listener && typeof L.Player.listener.follow === 'function') L.Player.listener.follow('destroy,ready', function () { resetSkip(); updateSkip(); });
     L.Modal.listener.follow('fullshow', function (event) {
       activeModal = event.active;
       if (!gallery) return;

@@ -93,7 +93,7 @@ function harness(t) {
   const sync = {scope: () => scope, url: path => 'https://lampa.test' + path + '?uid=test&profile_id=' + scope,
     rows: () => syncRows, extra: row => JSON.parse(row.extra || '{}'), pull: done => done(), subscribe: fn => syncEvents.push(fn)};
   function fetch(url, options = {}) { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); calls.push({url, options,
-    finish(data, status = 200) { resolve({ok: status === 200, status, json: async () => data, blob: async () => data}); }, fail() { reject(new Error('network')); }}); return promise; }
+    finish(data, status = 200, headers = {}) { resolve({ok: status === 200, status, headers: {get: name => headers[name] ?? null}, json: async () => data, blob: async () => data}); }, fail() { reject(new Error('network')); }}); return promise; }
   const URLClass = class extends URL {};
   URLClass.createObjectURL = () => 'blob:' + Math.random(); URLClass.revokeObjectURL = value => revoked.push(value);
   const window = {appready: true, Lampa: L, jQuery: $, $, HomelabSync: sync, homelabSeekPreviews: core, fetch, AbortController, location: {href: 'https://lampa.test/'}, addEventListener: events.follow, dispatchEvent: event => events.send(event.type, event)};

@@ -47,14 +47,25 @@ for chunked in [False, True]:
 online = dict(item, kind='online', torrent=None, index=0, observed=now + 1,
               online=dict(provider='kinobase', voice='Preferred', season_index=0))
 assert request(area, online)[0] == 200
-assert request(area)[1]['items'][0]['kind'] == 'online'
+def by(card):
+    return [i for i in request(area)[1]['items'] if i['card'] == card][0]
+assert by('tv_42')['kind'] == 'online'
 assert request(area, item)[0] == 200
-assert request(area)[1]['items'][0]['kind'] == 'online', 'stale torrent must not replace newer online source'
+assert by('tv_42')['kind'] == 'online', 'stale torrent must not replace newer online source'
+movie = dict(online, card='movie_42', season=0, episode=0, observed=now + 1,
+             online=dict(provider='kinobase', voice='Preferred', season_index=0, text='Licensed Dub',
+                         match=dict(index=0, count=3, url='/lite/one/video?i=0', text='Licensed Dub', translate='', voice_name='2160p')))
+assert request(area, movie)[0] == 200
+saved = by('movie_42')['online']['match']
+assert saved.get('index', 0) == 0 and saved['count'] == 3 and saved['voice_name'] == '2160p' and 'url' not in saved, 'match persists without resolver url'
 for invalid in [dict(online, torrent='a' * 40), dict(online, index=1), dict(online, online=None),
                 dict(online, kind='other'), dict(online, online=dict(provider='https://private', voice='', season_index=0)),
                 dict(online, online=dict(provider='kinobase', voice='x' * 201, season_index=0)),
                 dict(online, online=dict(provider='kinobase', voice='', season_index=-1)),
-                dict(online, online=dict(provider='kinobase', voice='', season_index=0, text='x' * 201))]:
+                dict(online, online=dict(provider='kinobase', voice='', season_index=0, text='x' * 201)),
+                dict(online, online=dict(provider='kinobase', voice='', season_index=0, match=dict(index=0, count=1))),
+                dict(movie, online=dict(provider='kinobase', voice='', season_index=0, match=dict(index=2, count=2))),
+                dict(movie, online=dict(provider='kinobase', voice='', season_index=0, match=dict(index=0, count=1, translate='x' * 201)))]:
     assert request(area, invalid)[0] == 400
 status, body = request(area, dict(card='tv_42', deleted=True))
 assert status == 200 and not body.get('stale')

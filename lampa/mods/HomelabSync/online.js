@@ -14,7 +14,24 @@
   function valid(source) {
     var season = source && source.season_index === undefined ? 0 : source && source.season_index;
     return source && /^[a-z0-9_.-]{1,80}$/i.test(source.provider) && typeof source.voice === 'string' && source.voice.length <= 200 && Number.isInteger(season) && season >= 0 && season <= 999 &&
-      (source.text === undefined || source.text === null || typeof source.text === 'string' && source.text.length <= 200);
+      (source.text === undefined || source.text === null || typeof source.text === 'string' && source.text.length <= 200) &&
+      (source.match === undefined || source.match === null || validMatch(source.match));
+  }
+  function short(value) { return value === undefined || value === null || typeof value === 'string' && value.length <= 200; }
+  // A movie row position from the picker (url only for this session) or a capture.
+  function validMatch(match) {
+    // The server omits a zero index on read.
+    var index = match && match.index === undefined ? 0 : match && match.index;
+    return typeof match === 'object' && Number.isInteger(index) && index >= 0 && index < 10000 &&
+      (match.count === undefined || Number.isInteger(match.count) && match.count > index && match.count <= 10000) &&
+      (match.url === undefined || typeof match.url === 'string' && match.url.length <= 4000) &&
+      short(match.text) && short(match.translate) && short(match.voice_name);
+  }
+  function clean(value) { return String(value || '').trim(); }
+  // Native movie rows show the title for quality-only or default labels.
+  function movieText(file, movie) {
+    var text = clean(file && file.text);
+    return /\d+p/i.test(text) || text === 'По умолчанию' ? clean(movie && (movie.title || movie.name)) : text;
   }
   // Movie rows of some providers carry a release tag ("WEB-DL", "2160p") in
   // voice_name and the dub in translate/text, so both identify a movie row.
@@ -57,7 +74,7 @@
       var comp = new Original(object), provider = object.balanser || '', intent = pending && object.homelab_online_intent === pending.id ? pending : null;
       if (![comp.toPlayElement, comp.startSource, comp.getChoice, comp.replaceChoice, comp.draw, comp.getFileUrl, comp.destroy].every(function (fn) { return typeof fn === 'function'; })) return comp;
       var source = comp.startSource, play = comp.toPlayElement, draw = comp.draw, resolve = comp.getFileUrl, destroy = comp.destroy;
-      var specials = null, disposed = false, requestId = 0;
+      var specials = null, disposed = false, requestId = 0, drawn = null;
       function owns(batch) { return !disposed && specials === batch && sync.scope() === batch.scope && L.Activity.active() === object && provider === batch.provider; }
       function specialRoad(file) {
         var movie = object.movie, hash = L.Utils.hash([0, '', file.episode, movie.original_title || movie.original_name].join(''));
@@ -167,6 +184,9 @@
         var work = play.apply(comp, arguments), movie = object.movie, choice = comp.getChoice(provider);
         var identity = {provider: provider, voice: String(file.voice_name || choice.voice_name || ''), season_index: choice.season || 0};
         if (movie && !movie.name && rowText(file)) identity.text = rowText(file);
+        // Record the row position for a later resume (never its resolver url).
+        var position = movie && !movie.name && drawn ? drawn.indexOf(file) : -1;
+        if (position >= 0) identity.match = {index: position, count: drawn.length, text: movieText(file, movie).slice(0, 200), translate: clean(file.translate).slice(0, 200), voice_name: clean(file.voice_name).slice(0, 200)};
         if (movie && Number.isInteger(movie.id) && ['tmdb', 'cub'].indexOf(movie.source || 'tmdb') >= 0 && valid(identity)) {
           work.card = movie; work.homelab_online = identity;
           if (specialSupport && movie.name && special(file) && specials && specials.files.indexOf(file) >= 0) {
@@ -200,7 +220,7 @@
         };
       }
       comp.draw = function (items, params) {
-        requestId++;
+        requestId++; drawn = Array.isArray(items) ? items : null;
         var batch = specials = specialSupport && object.movie.name && items.some(special) ? {files: items.filter(special), scope: sync.scope(), provider: provider, playlist: null} : null;
         if (!batch && (!intent || intent.finished || intent.cancelled)) return draw.apply(comp, arguments);
         params = Object.assign({}, params || {});
@@ -216,16 +236,44 @@
           if (rendered) rendered.apply(this, arguments);
           if (!intent || intent.finished || intent.cancelled || intent.opening) return;
           if (!round) {
-            var current = round = {match: null, matches: 0, mismatch: false, known: false};
+            var current = round = {match: null, matches: 0, mismatch: false, known: false, rows: []};
             setTimeout(function () { if (round === current) round = null; decide(current); }, 0);
           }
           if (Number.isInteger(file.season) && file.season >= 0 && Number.isInteger(file.episode) && file.episode > 0) round.known = true;
+          round.rows.push({file: file, html: html, data: data});
           if (!sameFile(intent.item, file)) return;
           if (rowMatches(intent.item, file, provider)) { round.matches++; if (!round.match) round.match = {file: file, html: html, data: data}; }
           else round.mismatch = true;
         };
+        // Movie rows: exact url (this session), else the same position on an
+        // identical page, each confirmed by translation/text.
+        function confirmed(file, match) {
+          if (clean(match.voice_name) && clean(file.voice_name) && clean(file.voice_name) !== clean(match.voice_name)) return false;
+          if (clean(match.translate) && clean(file.translate)) return clean(file.translate) === clean(match.translate);
+          if (clean(match.text)) return movieText(file, object.movie) === clean(match.text);
+          return true;
+        }
+        function movieRow(result, match) {
+          if (provider !== intent.item.online.provider) return {reason: 'changed'};
+          if (match.url) {
+            var byUrl = result.rows.filter(function (row) { return row.file.url === match.url; });
+            if (byUrl.length > 1) return {reason: 'ambiguous'};
+            if (byUrl.length === 1) return confirmed(byUrl[0].file, match) ? {row: byUrl[0]} : {reason: 'changed'};
+          }
+          var at = result.rows.find(function (row) { return items.indexOf(row.file) === (match.index || 0); });
+          if (at && (match.count === undefined || match.count === items.length) && confirmed(at.file, match)) return {row: at};
+          var similar = result.rows.filter(function (row) { return (clean(match.translate) || clean(match.text)) && confirmed(row.file, match); });
+          if (similar.length > 1) return {reason: 'ambiguous'};
+          return similar.length ? {row: similar[0]} : {reason: 'changed'};
+        }
         function decide(result) {
           if (!intent || !live(intent, object) || intent.opening) return;
+          var match = intent.item.card.indexOf('movie_') === 0 && intent.item.online.match;
+          if (match) {
+            var found = movieRow(result, match);
+            if (!found.row) return fail(intent, found.reason);
+            result = {match: found.row, matches: 1};
+          }
           if (!result.match) {
             if (result.mismatch) fail(intent, 'changed');
             else if (result.known && intent.item.card.indexOf('tv_') === 0) fail(intent, 'missing');
@@ -273,7 +321,8 @@
     if (recovery && recovery.scope !== sync.scope()) return false;
     var item = {card: (movie.name ? 'tv_' : 'movie_') + movie.id, season: selection.season, episode: selection.episode, position: recovery ? recovery.position : null,
       online: {provider: row.provider, voice: row.identityVoice, season_index: row.seasonIndex}};
-    return resume(item, movie, function (reason) { L.Noty.show(reason === 'changed' ? 'Вариант изменился. Выберите озвучку в источнике' : 'Источник не ответил. Выберите другой вариант'); }, {quality: quality, fromDuration: recovery && recovery.duration});
+    if (!movie.name && row.match && validMatch(row.match)) item.online.match = row.match;
+    return resume(item, movie, function (reason) { L.Noty.show(reason === 'changed' ? 'Вариант изменился. Выберите озвучку в источнике' : reason === 'ambiguous' ? 'Подходит несколько вариантов. Выберите нужный в источнике' : 'Источник не ответил. Выберите другой вариант'); }, {quality: quality, fromDuration: recovery && recovery.duration});
   }
   window.HomelabOnlineResume = {resume: resume, select: select, cancel: cancel, valid: valid};
   L.Player.listener.follow('ready', function (work) {

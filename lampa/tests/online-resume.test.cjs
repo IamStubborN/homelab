@@ -302,3 +302,66 @@ test('movie capture records the row translation text alongside the voice label',
   const work = c.toPlayElement({voice_name: 'WEB-DL', translate: 'Dub B', url: 'b'});
   assert.equal(work.homelab_online.text, 'Dub B');
 });
+
+const dubs = () => [{voice_name: '2160p', text: 'Licensed Dub', url: '/v?i=0'}, {voice_name: '2160p', text: 'Licensed Dub', url: '/v?i=1'}, {voice_name: 'WEB-DL', translate: 'Other Dub', url: '/v?i=2'}];
+function movieSetup(t) { const h = setup(t), failures = []; delete h.movie.name; h.movie.title = 'Film'; return {h, failures}; }
+async function pick(h, failures, match) {
+  assert.equal(h.window.HomelabOnlineResume.select({provider: 'kinobase', identityVoice: 'Licensed Dub', seasonIndex: 0, match}, h.movie, {season: 0, episode: 0}, null), true);
+  await h.component().startSource();
+  h.component().draw(arguments[3] || dubs(), {onEnter(file) { h.starts.push(file); }});
+  h.render(); h.tick(0);
+}
+// Route Noty failures to the list: select() reports through L.Noty.
+function notices(h) { const seen = []; h.L.Noty = {show: text => seen.push(text)}; return seen; }
+
+test('a common-source movie row is picked by its exact url among identical dubs', async t => {
+  const {h} = movieSetup(t), seen = notices(h);
+  await pick(h, null, {index: 1, count: 3, url: '/v?i=1', text: 'Licensed Dub', translate: '', voice_name: '2160p'});
+  assert.deepEqual(seen, []); assert.equal(h.starts.length, 1); assert.equal(h.starts[0].url, '/v?i=1');
+});
+
+test('without a url the saved index is used when the page has the same row count', async t => {
+  const {h} = movieSetup(t), seen = notices(h);
+  // The server omits a zero index.
+  await pick(h, null, {count: 3, text: 'Licensed Dub', translate: '', voice_name: '2160p'});
+  assert.deepEqual(seen, []); assert.equal(h.starts[0].url, '/v?i=0');
+});
+
+test('a changed page row count falls back to a unique text match', async t => {
+  const {h} = movieSetup(t), seen = notices(h);
+  await pick(h, null, {index: 0, count: 5, text: 'Other', translate: 'Other Dub', voice_name: 'WEB-DL'});
+  assert.equal(h.starts[0].url, '/v?i=2');
+});
+
+test('identical dubs on a changed page are ambiguous, not guessed', async t => {
+  const second = movieSetup(t), again = notices(second.h);
+  await pick(second.h, null, {index: 0, count: 5, text: 'Licensed Dub', translate: '', voice_name: '2160p'});
+  assert.equal(second.h.starts.length, 0); assert.match(again[0], /несколько/);
+});
+
+test('a url row whose dub no longer matches is reported as changed, never played', async t => {
+  const {h} = movieSetup(t), seen = notices(h);
+  await pick(h, null, {index: 2, count: 3, url: '/v?i=2', text: 'Licensed Dub', translate: 'Licensed Dub', voice_name: 'WEB-DL'});
+  assert.equal(h.starts.length, 0); assert.match(seen[0], /изменился/);
+});
+
+test('movie capture records the drawn row position and texts but never the resolver url', async t => {
+  const {h} = movieSetup(t); const c = await h.open({...h.item, card: 'movie_42', season: 0, episode: 0, online: {provider: 'kinobase', voice: '2160p', season_index: 0}});
+  const rows = dubs(); c.draw(rows, {}); h.render();
+  const work = c.toPlayElement(rows[1]);
+  assert.deepEqual({...work.homelab_online.match}, {index: 1, count: 3, text: 'Licensed Dub', translate: '', voice_name: '2160p'});
+});
+
+test('series rows ignore a stray match and keep voice/episode matching', async t => {
+  const h = setup(t);
+  assert.equal(h.window.HomelabOnlineResume.select({provider: 'kinobase', identityVoice: 'Preferred', seasonIndex: 1, match: {index: 0, count: 1, url: 'x'}}, h.movie, {season: 2, episode: 3}, null), true);
+  await h.component().startSource(); h.draw([file(2), file()]); h.render(); h.tick(0);
+  assert.equal(h.starts.length, 1); assert.equal(h.starts[0].episode, 3);
+});
+
+test('a movie match with out-of-range positions is rejected before opening', t => {
+  const {h} = movieSetup(t), valid = h.window.HomelabOnlineResume.valid;
+  assert.equal(valid({provider: 'kinobase', voice: '', season_index: 0, match: {index: 3, count: 3}}), false);
+  assert.equal(valid({provider: 'kinobase', voice: '', season_index: 0, match: {index: 0, count: 1, translate: 'x'.repeat(201)}}), false);
+  assert.equal(valid({provider: 'kinobase', voice: '', season_index: 0, match: {count: 1}}), true);
+});

@@ -27,6 +27,16 @@ public class OnlineSource
     public int season_index { get; set; }
     // Movie row dub/translation text when voice_name is a release tag.
     public string text { get; set; }
+    // Movie row position on the source page, confirmed by its texts (no resolver URL).
+    public MovieMatch match { get; set; }
+}
+public class MovieMatch
+{
+    public int index { get; set; }
+    public int count { get; set; }
+    public string text { get; set; }
+    public string translate { get; set; }
+    public string voice_name { get; set; }
 }
 public class ResumeItem
 {
@@ -100,6 +110,9 @@ public static class ResumeStore
             if (item.torrent != null || item.index != 0 || source == null ||
                 !Match(source.provider, @"^[a-zA-Z0-9_.\-]{1,80}$") || source.voice == null || source.voice.Length > 200 ||
                 source.season_index < 0 || source.season_index > 999 || source.text != null && source.text.Length > 200) return false;
+            var match = source.match;
+            if (match != null && (!item.card.StartsWith("movie_") || match.index < 0 || match.count <= match.index || match.count > 10000 ||
+                match.text?.Length > 200 || match.translate?.Length > 200 || match.voice_name?.Length > 200)) return false;
         }
         else return false;
         item.original = Short(item.original, 200);

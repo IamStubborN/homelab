@@ -131,7 +131,10 @@ rows); only a whole draw without it reports a change, and a draw of another seas
 (a shifted season index) reports a missing episode at once. Movie rows are also
 identified by their translation text, because some providers put a release tag in
 `voice_name`; several equal rows are never guessed between, and the saved voice
-name is not seeded for movies (native display would rename unlabeled rows). Any key, click or touch
+name is not seeded for movies (native display would rename unlabeled rows). A movie
+row chosen in the source picker is reopened by its exact URL, else by its index when
+the page has the same row count, each confirmed by translation/text/tag; a capture
+saves only index, count and texts (never the resolver URL). Any key, click or touch
 in the opened component cancels the automatic start. After the component opens,
 failures and the 60-second timeout show a notice and leave the user there; only a
 launch that never opened falls back to the picker. Explicit quality labels map to

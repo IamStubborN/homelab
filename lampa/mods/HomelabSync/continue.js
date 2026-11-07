@@ -399,6 +399,10 @@
     if (!video || video.seeking || video.rewind || !(video.duration > 0 && video.duration <= 86400) || !Number.isFinite(video.currentTime)) return null;
     return {position: video.currentTime, duration: video.duration};
   }
+  // Row position for a movie resume; the resolver url stays in this session.
+  function matchOf(match) {
+    return {index: match.index || 0, count: match.count, text: match.text || '', translate: match.translate || '', voice_name: match.voice_name || ''};
+  }
   function snapshot(state, force) {
     if ((playing !== state && external !== state) || context() !== state.scope || (!state.external && state.data.homelab_resume_at != null && !state.applied)) return;
     var data = state.data, movie = data.card, measured = measure(state);
@@ -413,7 +417,7 @@
     var tv = !!(movie.name || movie.original_name);
     if (tv && !(data.episode > 0)) return;
     var next = {card: (tv ? 'tv_' : 'movie_') + movie.id, title: plain(movie.name || movie.title), poster: movie.poster_path, backdrop: movie.backdrop_path,
-      kind: online ? 'online' : 'torrent', online: online ? Object.assign({provider: online.provider, voice: online.voice, season_index: online.season_index}, online.text ? {text: String(online.text).slice(0, 200)} : {}) : null,
+      kind: online ? 'online' : 'torrent', online: online ? Object.assign({provider: online.provider, voice: online.voice, season_index: online.season_index}, online.text ? {text: String(online.text).slice(0, 200)} : {}, online.match ? {match: matchOf(online.match)} : {}) : null,
       torrent: online ? null : hash.toLowerCase(), index: online ? 0 : index, original: String(movie.original_title || movie.original_name || ''), date: movie.first_air_date || movie.release_date || null, timeline: String(data.timeline.hash), season: data.season || 0, episode: data.episode || 0,
       position: Math.max(0, measured.position), duration: measured.duration,
       tracks: L.HomelabGstAudio && L.HomelabGstAudio.preferences ? L.HomelabGstAudio.preferences(data) : data.homelab_track_preferences || {}};

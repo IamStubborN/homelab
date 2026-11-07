@@ -186,3 +186,34 @@ test('remote navigation ignores scrolled-out tiles, walks the list in order and 
   h.L.Controller.controllers.content.up(); assert.equal(h.focused(), first, 'inside the list Up follows list order');
   h.L.Controller.controllers.content.left(); assert.equal(h.L.Controller.enabled().name, 'menu');
 });
+
+test('opening a torrent redraws the status so it is not left as searching', async t => {
+  const h = setup(t);
+  h.L.Torrent = {back() {}, start() {}};
+  h.parser[0].done({Results: [{Title: 'Series S01 720p', Link: 'magnet:fixture', Tracker: 'T'}]}); h.tick(150);
+  assert.match(h.status(), /Ищем/);
+  h.fire(h.rows()[0], 'hover:enter');
+  assert.doesNotMatch(h.status(), /Ищем/); assert.match(h.status(), /прерван/);
+});
+
+test('an online row whose identity the bridge cannot accept opens the native source instead of claiming it is loading', async t => {
+  const h = setup(t), long = 'Studio '.repeat(40).trim();
+  await h.finish('/lite/events', [{balanser: 'one', name: 'One', show: true, url: '/lite/one'}]);
+  h.pages.set('long', episodePage(long)); await h.finish('/lite/one', 'long'); h.tick(150);
+  let selected = 0; h.window.HomelabOnlineResume = {select: () => { selected++; return false; }};
+  const pushes = []; const push = h.L.Activity.push; h.L.Activity.push = value => { pushes.push(value); push(value); };
+  h.fire(h.rows().find(row => row.find('.homelab-common-voice').text() === long), 'hover:enter');
+  assert.equal(selected, 0); assert.equal(pushes[0].component, 'lampac'); assert.equal(pushes[0].lampac_custom_select, 'one');
+  assert.ok(!h.notices.some(text => /загружается/.test(text)));
+});
+
+test('Right on the "more" button is a no-op', async t => {
+  const h = setup(t);
+  h.parser[0].done({Results: Array.from({length: 22}, (_, i) => ({Title: 'Series S01 720p ' + i, Link: 'magnet:' + i, Tracker: 'T'}))}); h.tick(150);
+  const more = h.more(), box = (top, left) => ({top, left, width: 100, height: 20, bottom: top + 20, right: left + 100});
+  for (const node of h.component.render()[0].querySelectorAll('.selector')) node.rect = box(0, 400); // controls to the upper right
+  more.rect = box(300, 0); h.L.Controller.collectionFocus(more, h.component.render());
+  const before = h.L.Controller.enabled().name;
+  h.L.Controller.controllers.content.right();
+  assert.equal(h.focused(), more); assert.equal(h.L.Controller.enabled().name, before);
+});

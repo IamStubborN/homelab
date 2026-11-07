@@ -5,21 +5,22 @@ const path = require('node:path');
 const vm = require('node:vm');
 const {flush} = require('./ux-harness.cjs');
 
-function setup(t) {
+function setup(t, options = {}) {
   t.mock.timers.enable({apis: ['setTimeout', 'Date']});
+  const noAbort = !!options.noAbort; // old webviews: no AbortController and fetch ignores signals
   const requests = [], pages = new Map(), registry = {}, parser = [], notifications = [], storage = new Map();
   let scope = 'profile-a', clears = 0, active = 0, peak = 0;
   const dollar = () => ({append() { return this; }, text() { return this; }});
   const L = {Storage: {get: (key, value) => storage.get(key) ?? value, set: (key, value) => storage.set(key, value), field: () => true}, Utils: {hash: value => 'hash:' + value}, Component: {add: (name, ctor) => { registry[name] = ctor; }},
     Scroll() {}, Controller: {collectionFocus() {}}, Listener: {follow() {}}, Activity: {active: () => null},
     Parser: {get: (object, done, fail) => parser.push({object, done, fail}), clear: () => clears++}};
-  const window = {appready: true, Lampa: L, $: dollar, fetch: request, AbortController,
+  const window = {appready: true, Lampa: L, $: dollar, fetch: request, AbortController: options.noAbort ? undefined : AbortController,
     HomelabSync: {scope: () => scope, url: pathname => 'https://lampac.test' + pathname + '?token=private-fixture&profile_id=' + scope}};
   function request(url, options) {
     return new Promise((resolve, reject) => {
       active++; peak = Math.max(peak, active); let settled = false;
       const job = {url: new URL(url), options, started: Date.now(), finish(body) { if (settled) return; settled = true; active--; resolve({ok: true, text: async () => typeof body === 'string' ? body : JSON.stringify(body)}); }};
-      options.signal.addEventListener('abort', () => { if (!settled) { settled = true; active--; reject(new Error('aborted')); }});
+      if (!noAbort) options.signal.addEventListener('abort', () => { if (!settled) { settled = true; active--; reject(new Error('aborted')); }});
       requests.push(job);
     });
   }
@@ -33,7 +34,7 @@ function setup(t) {
     }))}; return template;
   }};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../plugins/common-sources.js'), 'utf8'),
-    {window, Lampa: L, document, fetch: request, AbortController, URL, setTimeout, clearTimeout, Date, console});
+    {window, Lampa: L, document, fetch: request, AbortController: options.noAbort ? undefined : AbortController, URL, setTimeout, clearTimeout, Date, console});
   const movie = {id: 42, name: 'Series', original_title: 'Original', imdb_id: 'tt42', kinopoisk_id: '42'};
   const selection = {season: 2, episode: 3};
   const search = new window.HomelabSources.Search(movie, selection, value => notifications.push(value.rows.length));
@@ -276,19 +277,36 @@ test('recovery searches skip the parser entirely', async t => {
   search.cancel();
 });
 
-test('multi-voice movie catalogs become one row per voice item, matching native voice names', async t => {
+test('movie call items take their dub from translate/text, never a release tag in voice_name, and keep duplicates apart', async t => {
   const h = setup(t); delete h.movie.name; h.movie.title = 'Film';
   const search = new h.window.HomelabSources.Search(h.movie, {season: 1, episode: 1}, () => {});
   search.start(); await flush();
   h.parser[0].done({Results: []});
+  // Fictional, structure-only fixture: many Lampac movie providers put the release tag in voice_name and the dub in translate/text.
   h.pages.set('film', {'.videos__item': [
-    {method: 'play', text: 'Studio Alpha', url: '/media/a', quality: {'1080p': '/media/a', '720p': '/media/a7'}},
-    {method: 'play', text: 'Studio Beta', url: '/media/b', quality: {'1080p': '/media/b'}},
+    {method: 'call', text: 'Studio Alpha', translate: 'Studio Alpha', voice_name: 'WEB-DL', url: '/lite/one/video?i=0', maxquality: '1080p'},
+    {method: 'call', text: 'Studio Alpha - cut', translate: 'Studio Alpha - cut', voice_name: 'WEB-DL', url: '/lite/one/video?i=1'},
+    {method: 'call', text: 'Licensed Dub', voice_name: '2160p', url: '/lite/one/video?i=2'},
+    {method: 'call', text: 'Licensed Dub', voice_name: '2160p', url: '/lite/one/video?i=3'},
     {method: 'play', text: '720p', url: '/media/c'}]});
   await h.finish('/lite/events', [h.source('one')]); await h.finish('/lite/one', 'film');
-  assert.deepEqual(Array.from(search.rows, r => r.identityVoice), ['Studio Alpha', 'Studio Beta', 'Film']);
-  assert.deepEqual(Array.from(search.rows[0].qualities), [1080, 720]);
+  assert.deepEqual(Array.from(search.rows, r => r.identityVoice), ['Studio Alpha', 'Studio Alpha - cut', 'Licensed Dub', 'Licensed Dub', 'Film']);
+  assert.ok(search.rows.every(r => !/WEB-DL|2160p/.test(r.voice.split(' · ')[0])), 'release tags never become the voice title');
+  assert.equal(new Set(search.rows.map(r => r.key)).size, 5, 'identical dubs stay separate rows');
+  assert.notEqual(search.rows[2].voice, search.rows[3].voice, 'identical dubs get distinguishable labels');
+  assert.deepEqual(Array.from(search.rows[0].qualities), [1080], 'maxquality is used when no quality map exists');
+  assert.deepEqual(JSON.parse(JSON.stringify(search.rows[3].match)), {index: 3, count: 5, url: '/lite/one/video?i=3', text: 'Licensed Dub', translate: '', voice_name: '2160p'});
+  assert.equal(search.rows[4].match.text, 'Film', 'match text mirrors native movie-title substitution');
   search.cancel();
+});
+
+test('the picker works without a native AbortController and still times out hung requests', async t => {
+  const h = setup(t, {noAbort: true}); await h.start();
+  assert.ok(h.window.HomelabSources.Search, 'installed');
+  h.tick(8100); await flush();
+  assert.equal(h.search.onlinePending, false, 'a hung events request is abandoned after its timeout');
+  assert.ok(h.search.errors.length);
+  h.search.cancel();
 });
 
 test('live discovery keeps its full window when externalids and events are slow', async t => {
@@ -340,12 +358,12 @@ test('cancelling an unfinished search marks it interrupted', async t => {
   done.cancel(); assert.equal(done.interrupted, false, 'a search that never started is not interrupted');
 });
 
-test('devices without fetch abort support get a visible notice instead of a missing button', t => {
+test('devices without fetch get a visible notice instead of a missing button', t => {
   const follows = {}, notices = [], buttons = [];
   const node = () => ({on(name, fn) { this.handler = fn; return this; }, find: () => ({length: 0}), prepend(b) { buttons.push(b); }});
   const L = {Listener: {follow: (name, fn) => { follows[name] = fn; }}, Noty: {show: text => notices.push(text)}, Activity: {active: () => null}};
   const $ = () => { const n = node(); n.length = 1; return n; };
-  const window = {appready: true, Lampa: L, $, HomelabSync: {scope: () => 'a'}, fetch() {}};
+  const window = {appready: true, Lampa: L, $, HomelabSync: {scope: () => 'a'}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../plugins/common-sources.js'), 'utf8'), {window, Lampa: L, document: {}, console});
   assert.ok(follows.full, 'the full card still receives a button');
   const render = {find: selector => selector === '.buttons--container' ? Object.assign(node(), {length: 1}) : {length: 0}};

@@ -7,8 +7,8 @@
   var L = window.Lampa, sync = window.HomelabSync, $ = window.$;
   var COMPONENT = 'homelab_sources', PLAY = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>';
   if (window.HomelabSources || !L || !sync || !$) return;
-  if (!window.fetch || !window.AbortController || !L.Component || !L.Component.add || !L.Parser || !L.Parser.get || !L.Parser.clear || !L.Scroll || !L.Controller || !L.Controller.collectionFocus) {
-    // Old TV webviews (no AbortController) keep a visible button that explains why instead of silently missing.
+  if (!window.fetch || typeof URL !== 'function' || !('searchParams' in URL.prototype) || typeof Promise !== 'function' || !L.Component || !L.Component.add || !L.Parser || !L.Parser.get || !L.Parser.clear || !L.Scroll || !L.Controller || !L.Controller.collectionFocus) {
+    // Very old TV webviews keep a visible button that explains why instead of silently missing.
     window.HomelabSources = {unsupported: true};
     if (L.Listener && L.Noty) L.Listener.follow('full', function (event) {
       if (event.type === 'complite') addButton(event.data.movie, event.object.activity.render(), function () { L.Noty.show('Общий недоступен на этом устройстве: браузер ТВ устарел. Используйте обычные источники'); });
@@ -16,6 +16,14 @@
     return;
   }
   var parserOwner = null, nextRequestAt = 0;
+  // Tizen/webOS <= 5 lack AbortController; their fetch ignores the signal, and request() rejects on abort itself.
+  function Abort() {
+    if (window.AbortController) return new window.AbortController();
+    var listeners = [], signal = {aborted: false, addEventListener: function (name, fn) { if (name === 'abort') listeners.push(fn); }};
+    return {signal: signal, abort: function () { if (signal.aborted) return; signal.aborted = true; listeners.splice(0).forEach(function (fn) { fn(); }); }};
+  }
+  function always(promise, fn) { return promise.then(function (value) { fn(); return value; }, function (error) { fn(); throw error; }); }
+  var ITEM_TAG = /^(?:web[\s-]?dl|webrip|hdrip|bdrip|blu[\s-]?ray|hdtv|camrip|ts|4k|uhd|hdr|sdr|\d{3,4}[pi])$/i;
   function voiceKey(value) { return String(value || '').toLowerCase().replace(/[\s._-]+/g, ' ').trim(); }
   function voiceStudio(value) {
     var text = voiceKey(value).replace(/ё/g, 'е')
@@ -84,6 +92,7 @@
     var found = Object.keys(file.quality || file.qualitys || {}).map(quality).filter(Boolean);
     var named = quality(file.text || file.Title || file.title) || quality(file.info && file.info.quality);
     if (named) found.push(named);
+    if (!found.length && file.maxquality) { named = quality(file.maxquality); if (named) found.push(named); }
     return found.filter(function (q, i) { return found.indexOf(q) === i; }).sort(function (a, b) { return b - a; });
   }
   function covers(release, selection) {
@@ -148,7 +157,7 @@
       if (!live()) return Promise.reject(new Error('cancelled'));
       var url;
       try { url = address(raw, metadata); } catch (error) { return Promise.reject(error); }
-      var abort = new AbortController(), timer = setTimeout(function () { abort.abort(); }, timeout || 8000);
+      var abort = Abort(), timer = setTimeout(function () { abort.abort(); }, timeout || 8000);
       requests.push(abort);
       var headers = {}, kit = L.Storage.get('kit_aesgcmkey', ''); if (kit) headers['X-Kit-AesGcm'] = kit;
       var delay = Math.max(0, nextRequestAt - Date.now()); nextRequestAt = Date.now() + delay + 350;
@@ -157,12 +166,14 @@
           if (!live() || abort.signal.aborted) return reject(new Error('cancelled'));
           fetch(url, {signal: abort.signal, credentials: 'same-origin', cache: 'no-store', headers: headers}).then(resolve, reject);
         };
-        if (delay) { var wait = setTimeout(start, delay); timers.push(wait); abort.signal.addEventListener('abort', function () { clearTimeout(wait); reject(new Error('cancelled')); }, {once: true}); }
+        var wait;
+        abort.signal.addEventListener('abort', function () { clearTimeout(wait); reject(new Error('cancelled')); }, {once: true});
+        if (delay) { wait = setTimeout(start, delay); timers.push(wait); }
         else start();
       });
-      return fetching.then(function (response) {
+      return always(fetching.then(function (response) {
         if (!response.ok) throw new Error('request'); return response.text();
-      }).then(function (text) { if (!live()) throw new Error('cancelled'); return text; }).finally(function () {
+      }).then(function (text) { if (!live() || abort.signal.aborted) throw new Error('cancelled'); return text; }), function () {
         clearTimeout(timer); requests = requests.filter(function (entry) { return entry !== abort; });
       });
     }
@@ -197,12 +208,28 @@
         if (voice) voiceSeen(source, state.seasonIndex, voice);
         if (state.voice && state.voice !== voice) voiceSeen(source, state.seasonIndex, state.voice);
         var matching = files.filter(function (file) { return !movie.name || Number.isInteger(file.season) && file.season >= 0 && Number.isInteger(file.episode) && file.episode > 0 && file.season === selection.season && file.episode === selection.episode; });
+        var labels = {};
         matching.forEach(function (file) {
-          var filmText = /\d+p/i.test(file.text) || file.text === 'По умолчанию' ? movie.title : file.text;
-          var identityVoice = voice || file.voice_name || (movie.name ? 'Неизвестно' : filmText) || 'Неизвестно';
-          var name = identityVoice;
-          add({key: source.key + ':' + state.seasonIndex + ':' + name + ':' + qualities(file).join(','), kind: 'online', provider: source.key, providerName: source.name,
-            voice: name, identityVoice: identityVoice, seasonIndex: state.seasonIndex, qualities: qualities(file)});
+          var row = {kind: 'online', provider: source.key, providerName: source.name, seasonIndex: state.seasonIndex, qualities: qualities(file)}, identityVoice;
+          if (movie.name) {
+            identityVoice = voice || file.voice_name || 'Неизвестно';
+            row.key = source.key + ':' + state.seasonIndex + ':' + identityVoice + ':' + row.qualities.join(',');
+          } else {
+            // Movie items often keep a release tag (WEB-DL, 2160p) in voice_name and the dub in translate/text.
+            var index = files.indexOf(file), translate = typeof file.translate === 'string' ? file.translate.trim() : '';
+            var filmText = /\d+p/i.test(file.text) || file.text === 'По умолчанию' ? movie.title : file.text;
+            var tag = typeof file.voice_name === 'string' ? file.voice_name.trim() : '';
+            identityVoice = voice || translate || filmText || (tag && !ITEM_TAG.test(tag) ? tag : '') || movie.title || 'Неизвестно';
+            row.key = source.key + ':' + state.seasonIndex + ':' + index + ':' + identityVoice + ':' + row.qualities.join(',');
+            row.tag = tag && tag !== identityVoice ? tag : '';
+            // Exact native draw identity for the bridge: same item index among play/call items, URL and texts.
+            row.match = {index: index, count: files.length, url: typeof file.url === 'string' ? file.url : '', text: filmText || '', translate: translate, voice_name: tag};
+          }
+          var label = identityVoice + (row.tag ? ' · ' + row.tag : '');
+          labels[label] = (labels[label] || 0) + 1;
+          row.voice = labels[label] > 1 ? label + ' · вариант ' + labels[label] : label;
+          row.identityVoice = identityVoice;
+          add(row);
         });
         if (!matching.length && !voices.length) fallback(source, 'Уточнить серию в источнике');
         voices.forEach(function (choice) { if (!choice.active && choice.url && choice.text && !voiceSeen(source, state.seasonIndex, choice.text)) enqueue(source, choice.url, {seasonIndex: state.seasonIndex, voice: choice.text}, 1); });
@@ -225,7 +252,7 @@
         if (Date.now() >= deadline) { queue.splice(0).concat(voiceQueue.splice(0)).forEach(function (job) { fallback(job.source, 'Другие варианты в источнике'); }); break; }
         (function (job) {
           running++;
-          request(job.url, false).then(function (text) { catalog(job, text); }).catch(function () { if (live()) fallback(job.source); }).finally(function () { running--; pump(); settle(); });
+          always(request(job.url, false).then(function (text) { catalog(job, text); }).catch(function () { if (live()) fallback(job.source); }), function () { running--; pump(); settle(); });
         })(queue.length ? queue.shift() : voiceQueue.shift());
       }
       settle();
@@ -377,16 +404,26 @@
       }));
       controls.append(button('Обновить', 'homelab-common-refresh', restart));
     }
+    function directIdentity(row) {
+      return /^[a-z0-9_.-]{1,80}$/i.test(row.provider) && typeof row.identityVoice === 'string' && row.identityVoice.length <= 200 && Number.isInteger(row.seasonIndex) && row.seasonIndex >= 0 && row.seasonIndex <= 999;
+    }
+    function openNative(row) {
+      L.Activity.push({component: 'lampac', movie: movie, title: 'Онлайн', search: movie.title || movie.name, search_one: movie.title || movie.name, search_two: movie.original_title || movie.original_name, page: 1, lampac_custom_select: row.provider});
+    }
     function open(row) {
       if (!active() || sync.scope() !== currentScope) return;
       if (recovery && (row.native || row.kind !== 'online' || row.provider === recovery.excludeProvider || recovery.voice && !voiceMatch(recovery.voice, row.identityVoice))) return;
       // Online handoffs push an activity, whose pause() cancels the search; a refused handoff keeps it running.
       if (row.kind === 'torrent') {
-        cancel();
+        cancel(); draw();
         var release = Object.assign({}, row.release, {title: row.release.Title, poster: movie.img || (movie.poster_path ? L.Api.img(movie.poster_path) : '')});
         L.Torrent.back(function () { if (active()) self.start(); }); L.Torrent.start(release, movie);
       } else if (row.native) {
-        L.Activity.push({component: 'lampac', movie: movie, title: 'Онлайн', search: movie.title || movie.name, search_one: movie.title || movie.name, search_two: movie.original_title || movie.original_name, page: 1, lampac_custom_select: row.provider});
+        openNative(row);
+      } else if (!directIdentity(row)) {
+        // The bridge only accepts bounded identities; open the provider natively rather than claim it is loading.
+        L.Noty.show('Этот вариант откроется в источнике');
+        openNative(row);
       } else if (!window.HomelabOnlineResume || !window.HomelabOnlineResume.select(row, movie, selection, q || recovery && recovery.quality, recovery)) {
         L.Noty.show('Онлайн-источник ещё загружается. Повторите выбор');
       }
@@ -487,7 +524,7 @@
     this.start = function () {
       if (!active()) return;
       if (sync.scope() !== currentScope) { cancel(); return L.Activity.backward(); }
-      L.Controller.add('content', {link: self, invisible: true, toggle: function () { focus(false); }, up: function () { move(0, -1); }, down: function () { move(0, 1); }, left: function () { move(-1, 0); }, right: function () { if (last && last.classList.contains('homelab-common-result')) $(last).trigger('hover:long'); else move(1, 0); }, back: function () { cancel(); L.Activity.backward(); }});
+      L.Controller.add('content', {link: self, invisible: true, toggle: function () { focus(false); }, up: function () { move(0, -1); }, down: function () { move(0, 1); }, left: function () { move(-1, 0); }, right: function () { if (last && last.classList.contains('homelab-common-result')) $(last).trigger('hover:long'); else if (!(last && body[0].contains(last))) move(1, 0); }, back: function () { cancel(); L.Activity.backward(); }});
       L.Controller.toggle('content');
       if (!started) { started = true; restart(); }
       else draw();

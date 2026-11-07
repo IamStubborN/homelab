@@ -752,6 +752,151 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(ffprobe.call_count, 1, "the waiting lookup does not probe again itself")
 
 
+class WarmTests(unittest.TestCase):
+    def setUp(self):
+        app._warmed.clear()
+        self.addCleanup(app._warmed.clear)
+        app._probe_cache.clear()
+        app._probe_failures.clear()
+        app._embedded_cache.clear()
+        self.addCleanup(app._embedded_cache.clear)
+
+    def test_each_file_is_warmed_once_until_forgotten(self):
+        self.assertTrue(app.claim_warm(HASH, 14, now=100))
+        self.assertFalse(app.claim_warm(HASH, 14, now=200))
+        self.assertTrue(app.claim_warm(HASH, 13, now=200))
+        self.assertTrue(app.claim_warm(HASH, 14, now=101 + app.WARM_FORGET_SECONDS))
+
+    def test_full_claims_drop_the_oldest(self):
+        with mock.patch.object(app, "MAX_PROBES_CACHED", 2):
+            self.assertTrue(app.claim_warm(HASH, 1, now=1))
+            self.assertTrue(app.claim_warm(HASH, 2, now=2))
+            self.assertTrue(app.claim_warm(HASH, 3, now=3), "a new file is still warmed")
+        self.assertEqual(list(app._warmed), [(HASH, 2), (HASH, 3)])
+
+    def serve(self, size, ranges=True):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = os.path.join(directory.name, "video.mkv")
+        with open(path, "wb") as output:
+            output.write(b"x" * size)
+        handler = RangeHandler
+        if not ranges:
+            class handler(RangeHandler):
+                def do_GET(self):
+                    del self.headers["Range"]
+                    super().do_GET()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.path = path
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return mock.patch.object(app, "TORRSERVER_BASE", f"http://127.0.0.1:{server.server_address[1]}")
+
+    def test_the_head_is_asked_for_as_a_range(self):
+        with self.serve(300000), mock.patch.object(app, "WARM_HEAD_BYTES", 100000):
+            self.assertEqual(app.read_head(HASH, 14), 100000)
+
+    def test_a_server_ignoring_the_range_is_read_only_to_the_limit(self):
+        with self.serve(3000000, ranges=False), mock.patch.object(app, "WARM_HEAD_BYTES", 100000):
+            self.assertEqual(app.read_head(HASH, 14), 100000)
+        source = io.BytesIO(b"x" * 300000)
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.side_effect = source.read
+        with mock.patch.object(app.urllib.request, "urlopen", return_value=response) as urlopen, \
+                mock.patch.object(app, "WARM_HEAD_BYTES", 100000):
+            self.assertEqual(app.read_head(HASH, 14), 100000)
+        self.assertEqual(urlopen.call_args.args[0].get_header("Range"), "bytes=0-99999")
+        self.assertEqual(source.tell(), 100000, "nothing past the limit is read")
+
+    def run_warm(self, voice_id, viewed=False, active=True, touch_during=False):
+        app._warms.acquire()
+        requests = []
+        def torrent_request(path, payload):
+            requests.append((path, payload))
+            if path == "/torrents":
+                return [{"hash": HASH, "stat": app.TORRENT_WORKING}] if active else []
+            if touch_during and payload["action"] == "list":
+                app.touch(HASH, 14)
+            return [{"hash": HASH, "file_index": 14}] if viewed and payload["action"] == "list" else None
+        with mock.patch.object(app, "read_head", side_effect=OSError("slow torrent")) as head, \
+                mock.patch.object(app, "probe_embedded") as embedded, \
+                mock.patch.object(app, "probe_audio_soon") as audio, \
+                mock.patch.object(app, "torrent_request", side_effect=torrent_request):
+            app.warm(HASH, 14, voice_id, FILES)
+        self.assertTrue(app._warms.acquire(blocking=False), "the slot is free again")
+        app._warms.release()
+        return head, embedded, audio, requests
+
+    def test_a_warm_reads_the_head_and_probes_the_video_only(self):
+        head, embedded, audio, requests = self.run_warm(None)
+        head.assert_called_once_with(HASH, 14)
+        embedded.assert_called_once_with(HASH, 14, remember_failure=False)
+        audio.assert_not_called()
+        self.assertEqual(requests[-1], ("/viewed", {"action": "rem", "hash": HASH, "file_index": 14}), "a warm-up is not a view")
+
+    def test_a_warm_probes_the_voice_over_being_played_and_keeps_views(self):
+        _, _, audio, requests = self.run_warm(2, viewed=True)
+        audio.assert_called_once_with(HASH, 2, wait=app.WARM_VOICE_WAIT_SECONDS, remember_failure=False)
+        self.assertEqual([payload["action"] for path, payload in requests if path == "/viewed"], ["list"], "a file viewed before stays viewed")
+
+    def test_a_warm_never_reads_a_torrent_stopped_since_the_request(self):
+        head, embedded, audio, requests = self.run_warm(2, active=False)
+        head.assert_not_called(); embedded.assert_not_called(); audio.assert_not_called()
+        self.assertEqual([path for path, _ in requests], ["/torrents"])
+
+    def test_a_real_start_during_the_warm_keeps_the_viewed_mark(self):
+        _, _, _, requests = self.run_warm(None, touch_during=True)
+        self.assertEqual([payload["action"] for path, payload in requests if path == "/viewed"], ["list"], "the viewer's own mark stays")
+
+    def test_the_voice_over_of_the_next_episode_is_found_in_the_same_folder(self):
+        self.assertEqual(app.voice_candidate(FILES, 14, 1), 2)
+        self.assertIsNone(app.voice_candidate(FILES, 14, 20), "no Studio Band file for episode 2")
+        self.assertIsNone(app.voice_candidate(FILES, 14, 13), "not an audio file")
+        self.assertIsNone(app.voice_candidate(FILES, 14, 99))
+
+    def test_a_failed_warm_probe_does_not_hold_back_the_real_start(self):
+        with mock.patch.object(app.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "ffprobe")) as run, \
+                mock.patch.object(app, "require_video_file"):
+            for probe in (lambda **options: app.probe_audio(HASH, 1, **options),
+                          lambda **options: app.probe_embedded(HASH, 14, **options)):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    probe(remember_failure=False)
+                with self.assertRaises(subprocess.CalledProcessError, msg="probed again, not ProbeFailed"):
+                    probe()
+        self.assertEqual(run.call_count, 4)
+
+    def test_a_running_embedded_probe_is_joined(self):
+        reading = threading.Event()
+        release = threading.Event()
+        def run(command, **options):
+            reading.set()
+            release.wait(5)
+            return mock.Mock(stdout=json.dumps({"streams": [], "format": {"duration": "60"}}).encode())
+        results = []
+        with mock.patch.object(app.subprocess, "run", side_effect=run) as ffprobe, \
+                mock.patch.object(app, "require_video_file"):
+            first = threading.Thread(target=lambda: results.append(app.probe_embedded(HASH, 14, remember_failure=False)))
+            first.start()
+            self.assertTrue(reading.wait(5))
+            second = threading.Thread(target=lambda: results.append(app.probe_embedded(HASH, 14)))
+            second.start()
+            time.sleep(0.05)
+            release.set()
+            first.join(5)
+            second.join(5)
+        self.assertEqual(ffprobe.call_count, 1)
+        self.assertEqual([result["duration"] for result in results], [60.0, 60.0])
+
+    def test_only_running_torrents_are_active(self):
+        torrents = [{"hash": HASH.upper(), "stat": 3}, {"hash": "a" * 40, "stat": 5}]
+        with mock.patch.object(app, "torrent_request", return_value=torrents) as request:
+            self.assertTrue(app.torrent_active(HASH))
+            self.assertFalse(app.torrent_active("a" * 40), "kept only in the database")
+            self.assertFalse(app.torrent_active("b" * 40))
+        request.assert_called_with("/torrents", {"action": "list"})
+
+
 class CacheTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -1320,6 +1465,68 @@ class HttpTests(unittest.TestCase):
             for path in ("/extaudio/fonts/" + "b" * 32 + ".ttf", "/extaudio/fonts/..%2Fapp.py", "/extaudio/fonts/x.ttf"):
                 with self.subTest(path=path):
                     self.assertEqual(self.get(path)[0], 404)
+
+    def warm_post(self, path, headers=None):
+        request = urllib.request.Request(self.base + path, method="POST", headers=headers or {})
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            with error:
+                return error.code, json.loads(error.read())
+
+    def test_warm_endpoint_starts_one_warm_per_video(self):
+        app._warmed.clear()
+        self.addCleanup(app._warmed.clear)
+        started = threading.Event()
+        def warm(torrent_hash, file_id, voice_id, files):
+            app._warms.release()
+            started.set()
+        with mock.patch.object(app, "torrent_active", return_value=True), \
+                mock.patch.object(app, "torrent_files", return_value=FILES), mock.patch.object(app, "warm", side_effect=warm) as run:
+            host = urllib.parse.urlsplit(self.base).netloc
+            self.assertEqual(self.warm_post(f"/extaudio/{HASH.upper()}/14/warm?voice=1", {"Origin": f"http://{host}"}), (202, {"warm": "started"}))
+            self.assertTrue(started.wait(5))
+            self.assertEqual(self.warm_post(f"/extaudio/{HASH}/14/warm"), (200, {"warm": "done"}))
+            for path in (f"/extaudio/{HASH}/1/warm", f"/extaudio/{HASH}/77/warm", f"/extaudio/{HASH}/14/tracks"):
+                with self.subTest(path=path):
+                    self.assertEqual(self.warm_post(path)[0], 404)
+            self.assertEqual(self.warm_post(f"/extaudio/{HASH}/13/warm?voice=x")[0], 400)
+            self.assertEqual(self.get(f"/extaudio/{HASH}/14/warm")[0], 404)
+        run.assert_called_once_with(HASH, 14, 2, FILES)
+
+    def test_warms_from_other_sites_idle_torrents_and_concurrent_warms_are_refused(self):
+        app._warmed.clear()
+        self.addCleanup(app._warmed.clear)
+        unknown = urllib.error.HTTPError("url", 404, "Not Found", {}, None)
+        self.addCleanup(unknown.close)
+        with mock.patch.object(app, "torrent_active", return_value=False) as active, \
+                mock.patch.object(app, "torrent_files", side_effect=AssertionError("`get` would start the torrent")), \
+                mock.patch.object(app, "warm") as run:
+            self.assertEqual(self.warm_post(f"/extaudio/{HASH}/14/warm", {"Origin": "https://evil.test"})[0], 403)
+            active.assert_not_called()
+            self.assertEqual(self.warm_post(f"/extaudio/{HASH}/14/warm")[0], 404)
+            app._warms.acquire()
+            try:
+                self.assertEqual(self.warm_post(f"/extaudio/{HASH}/14/warm")[0], 429)
+            finally:
+                app._warms.release()
+        with mock.patch.object(app, "torrent_active", side_effect=unknown), mock.patch.object(app, "warm") as run:
+            self.assertEqual(self.warm_post(f"/extaudio/{HASH}/14/warm")[0], 404)
+        run.assert_not_called()
+        self.assertTrue(app._warms.acquire(blocking=False), "refused warms free their slot")
+        app._warms.release()
+
+    def test_a_warm_that_cannot_start_is_not_remembered(self):
+        app._warmed.clear()
+        self.addCleanup(app._warmed.clear)
+        with mock.patch.object(app, "torrent_active", return_value=True), \
+                mock.patch.object(app, "torrent_files", return_value=FILES), \
+                mock.patch.object(app, "threading", mock.Mock(**{"Thread.return_value.start.side_effect": RuntimeError("can't start new thread")})):
+            self.assertEqual(self.warm_post(f"/extaudio/{HASH}/14/warm")[0], 503)
+        self.assertEqual(app._warmed, {})
+        self.assertTrue(app._warms.acquire(blocking=False))
+        app._warms.release()
 
     def test_track_lookups_are_bounded(self):
         for _ in range(app.MAX_TRACK_LOOKUPS):

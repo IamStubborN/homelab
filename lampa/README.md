@@ -11,25 +11,63 @@ were installed on 2026-11-01 after explicit approval; a source checkout alone
 does not install them. Clients need one reload to load the new plugins.
 
 The independent `common-sources.js` picker offers online voices and native torrent
-results together. Torrent rows show available voice metadata, codec, quality,
-size and seeds; Right/long press opens the full release title. Favorite voice
-and quality are stored per HomelabSync profile on this device and reused across
-providers. Results rank favorites first, followed by concrete online variants,
-seeded torrents and native provider fallbacks. Once a result receives focus,
-late results append without moving it or recentering the scroll. Online voices whose
-quality is only known at playback stay visible under every quality tab, marked
-as to be clarified. Leaving mid-search marks the list as interrupted; Refresh
-restarts it. Recovery pickers skip the torrent search. Devices without
+results together. By default it shows one card per online voice: Enter plays the
+best source of that voice (playable first, highest quality, a measured height over
+a declared one), the card names how many other sources stand behind it, and Right
+or a long press lists every source plus a toggle for the favourite voice (shown as
+a star and a chip that can change or clear it). The view chip switches to a flat
+list of every source; recovery pickers start flat. The top card is highlighted as
+the recommendation and, until the first key press, keeps the focus so one OK plays
+it. Quality is a single badge (4K, 1080p, ...) marked as measured or declared; rows
+whose source hands out no video are dimmed and sorted last. Torrent cards carry
+seeds, size and codec badges; Right/long press shows the full release title. A
+status line with a spinner and bar reports how many online providers have answered
+and whether torrents are still searched; an empty result explains what to change.
+Favorite voice and quality are stored per HomelabSync profile on this device and
+reused across providers. Results rank favorites first, followed by concrete online
+variants, seeded torrents and native provider fallbacks. Once a result receives
+focus, late results append without moving it or recentering the scroll. Online
+voices whose quality is only known at playback stay visible under every quality
+tab, marked as to be clarified. Leaving mid-search marks the list as interrupted;
+Refresh restarts it. Recovery pickers skip the torrent search. Devices without
 `AbortController` get a button that explains the picker is unavailable.
 
-Playback recovery actions replace the permanent status button: Retry and Other
-source appear only after a fatal error or 30 seconds of stalled loading in the
-embedded player, including a start that never receives data and a seek that
-never completes; a user pause is not a stall. Retry is shown only when the
-current source can be retried and GST is not already recovering on its own, and Lampa's own switch to a reserve URL is not
-a failure. Phase changes never add custom center-screen status text or
-notifications; native player presentation stays in charge. They never switch
-automatically. Online retry resolves a fresh
+Rows without a quality are probed once the live discovery and every catalog page
+are done, two at a time, own-Lampac requests paced like catalog pages. Only the
+leading source of each card on screen is probed (at most 12 per search); the other
+sources of a voice are probed when its source list is opened (at most 24 probes in
+total). Measured qualities and own 404/410 answers are cached per page session for
+30 minutes (at most 200 URLs). Only JSON, HLS, HTML or small plain text bodies under
+256 KB are read, so media is never downloaded; without a native `AbortController`
+nothing is probed. A row is marked as having no video only on an own-Lampac
+(`/lite/`, `/proxy/`) 404/410 or an explicit "not found" error; 401/403, `accsdb`,
+quota or other errors, rch/ws handshakes, timeouts and foreign CDN refusals change
+nothing.
+
+`playback-status.js` shows a small state card below the native loader in the
+embedded player. Preparation, buffering and GST recovery show one line with an
+elapsed timer ("Подготовка видео… 8 с"): a start after 2.5 s, which Lampa's own
+loader covers until then, and mid-play buffering after 700 ms, so short blips
+never flash; the card hides while a Lampa menu is open; GST recovery shows only while the picture is actually stuck. For
+torrents the card adds peers, download speed and read-ahead from Lampa's own
+TorrServer `/cache` request ("Торрент: 12 пиров · 3,4 МБ/с · буфер 40%"),
+polled at most every 2 seconds and only while the card is visible. The card
+hides as soon as playback progresses, also without a `playing` event.
+
+Retry and Other source appear on the card and in the player panel only after a
+fatal error or 30 seconds of stalled loading, including a start that never
+receives data and a seek that never completes; a user pause is not a stall.
+After 20 seconds of preparation the card also suggests Other source. Retry is
+shown only when the current source can be retried and GST is not already
+recovering on its own, and Lampa's own switch to a reserve URL is not a failure.
+The card takes the remote only from the bare player, never from the panel (the
+user may be seeking away from a broken spot) or a menu, and once per state:
+Retry is focused first, Other source after a retry that did not help. Left/Right
+move between the actions and hand off to the panel at the edges, Down opens the
+panel. Back on an automatically focused card hides it and still acts as the
+player's Back; after the user moved focus, Back only hides it. The panel keeps
+the actions. Phase changes never produce notifications or raw error text,
+and recovery never switches automatically. Online retry resolves a fresh
 URL from the same provider. Other source opens concrete online variants for the
 same episode and known voice. Exact voice labels rank first; whole-label aliases
 for a small set of known studios appear as clearly marked similar voices. They
@@ -141,6 +179,67 @@ minute first. A remembered voice is applied automatically only in the first 45
 seconds after the first frame (90 seconds while an external rendition is being prepared); one found
 later is announced and left in the menu instead of reloading the video.
 
+### Track menus
+
+The plugin draws Lampa's audio and subtitle menu items itself (Select's
+`onDraw`); each track's `label` stays its source name, which preferences, logs
+and other plugins match by.
+
+- Audio: a title from the voice-over's tag or folder, cleaned of extensions,
+  release tags, language words and dots/underscores (`Rus_MVO_LostFilm.mka`
+  reads `Многоголосая — LostFilm`), then a small line: language, `5.1`/`стерео`,
+  codec and `внешняя`/`встроенная`. The voice remembered for the torrent comes
+  first and is marked `★ для сериала`, then Russian, untagged, Ukrainian,
+  English and the rest, otherwise in file order. An external voice being
+  prepared shows `готовится… N с` on its item, and a failed one says so until
+  it is chosen again.
+- Subtitles: `Выкл.` first, then the group or language with `полные`,
+  `надписи` (signs, forced, songs) or `полные, для слабослышащих` (SDH), the
+  language, `ASS со стилями` for tracks drawn with their own styles, and
+  `внешние`/`встроенные`.
+- Notices: one when the remembered voice is applied (`Озвучка: LostFilm — как
+  в прошлой серии`), and one per voice when its external rendition fails and
+  the embedded audio takes over.
+
+## Next episode warm-up
+
+On a slow torrent the next episode waits for its head before GST and the
+track probes can start. Once an episode has played 10 s within its last
+7 minutes and its second half (paused, seeking or scrubbing does not count),
+the plugin sends `POST /extaudio/<hash>/<file id>/warm` for the next playlist
+item, only when that item is another file of the same torrent and the browser
+reports no data saver or cellular connection. The playing item is found by the
+URL Lampa listed for it (`homelab_source_url`), or by its torrent and file. It
+asks once per play of an episode (an audio switch or a retry keeps that play)
+and remembers the last 50 files the sidecar accepted (2xx), until the page
+reloads. A busy sidecar (429) is asked once more after 30 s, a failure (5xx or
+network) once more after 10 s; then the play gives up. The window opens only
+once `video.duration` has held the same finite value for 30 s, since a GST
+EVENT playlist grows while the task encodes ahead. While an
+external voice-over plays, it adds `?voice=<its file id>`. Each request is
+logged as a `warm-next` event.
+
+The sidecar refuses a request from another site's page (`Origin`), and a
+torrent that `list` does not report as running: it never makes TorrServer
+start a torrent. It accepts only a video of that torrent, runs one warm at a
+time (429 otherwise) and warms a file at most once in 6 hours. A warm reads:
+
+- the first `WARM_HEAD_MB` (8) MiB of the video with a range request, closed
+  at that limit;
+- whatever ffprobe reads for the embedded subtitle probe: the header, and in
+  MKV also the attachments (fonts), tags and seek index it points to, which may
+  sit at the end of the file;
+- with `voice`, the head of that voice-over's file for the next episode (the
+  candidate in the same folder), as the `/tracks` probe reads it. Without
+  `voice`, no audio file is read.
+
+Results land in the probe caches, so the next episode's menus answer at once;
+a probe that fails during a warm is not remembered, so the real start probes
+again. A probe already running is joined, not repeated. Nothing is encoded.
+TorrServer marks every file it streams as viewed; a warm removes that mark
+again unless the file was viewed before (a start of that episode during the
+warm marks it again on its next read).
+
 ## External ASS subtitles
 
 Lampa draws subtitles as plain text in one box at the bottom, and Lampac turns
@@ -157,7 +256,7 @@ External `.ass`/`.ssa` files named after the video (for example
 - The image bundles [JASSUB](https://github.com/ThaUnknown/jassub) (libass in
   WebAssembly), pinned in `extaudio/jassub/package-lock.json`, and serves it at
   `/extaudio/jassub/`. It needs Chrome 80 or Safari 17 or newer.
-- The plugin adds `<group> (ASS)` items to the subtitle menu. Choosing one
+- The plugin adds `<group>: полные/надписи (внешние)` items to the subtitle menu. Choosing one
   draws the file over the video with its own fonts; the choice is remembered
   per torrent. The encoding is detected from the BOM, then UTF-8, then
   Windows-1251.

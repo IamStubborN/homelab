@@ -341,5 +341,5 @@
   var L = window.Lampa, config = window.homelabSyncConfig;
   if (window.homelabSourcesLoading || window.HomelabSources || !L || !L.Utils || typeof L.Utils.putScriptAsync !== 'function' || !config || !config.url) return;
   window.homelabSourcesLoading = true;
-  L.Utils.putScriptAsync([config.url + '/plugins/homelab/common-sources.js?v=20261108a', config.url + '/plugins/homelab/playlist-thumbnails.js?v=20261108a'], function () { window.homelabSourcesLoading = false; });
+  L.Utils.putScriptAsync([config.url + '/plugins/homelab/common-sources.js?v=20261108b', config.url + '/plugins/homelab/playlist-thumbnails.js?v=20261108b'], function () { window.homelabSourcesLoading = false; });
 })();

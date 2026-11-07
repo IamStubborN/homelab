@@ -97,7 +97,9 @@
     var playlist = event.playlist, scope = cacheScope, epoch = generation;
     if (!Array.isArray(playlist) || L.PlayerPlaylist.get() !== playlist) return;
     var item = playlist[event.position + 1], work = L.Player.playdata();
-    if (!item || (usable(item.thumbnail) && item.homelab_thumbnail !== 'fallback') || !(item.season > 0 && item.episode > 0)) return;
+    // On the last episode there is no Next card; stills still serve the list.
+    if (!item) return listStills(playlist, playlist[event.position], work, scope, epoch);
+    if ( (usable(item.thumbnail) && item.homelab_thumbnail !== 'fallback') || !(item.season > 0 && item.episode > 0)) return;
     var card = cardOf(item, work);
     if (!card || typeof card !== 'object') return;
     var id = tmdbId(card), resolved = false, timer;
@@ -119,6 +121,76 @@
     }, epoch);
     if (!resolved) timer = delay = setTimeout(fallback, FALLBACK_DELAY);
   }
+  function listStills(playlist, item, work, scope, epoch) {
+    var card = item && item.season > 0 && cardOf(item, work), id = card && typeof card === 'object' ? tmdbId(card) : 0;
+    if (!id || playlist.every(function (entry) { return !entry || +entry.season !== +item.season || usable(entry.thumbnail); })) return;
+    stills(id, item.season, function (map) {
+      if (live(playlist, scope, epoch) && fill(playlist, id, item.season, map, work).length) repaint(playlist, scope, epoch);
+    }, epoch);
+  }
+  // The native playlist is a Select of the playlist items. Each row gets its
+  // saved progress (live for the current one), a watched mark and «Сейчас».
+  function remaining(position, duration) {
+    var rest = Math.max(0, duration - position), minutes = Math.round(rest / 60);
+    if (rest < 60) return 'осталось меньше минуты';
+    if (minutes < 60) return 'осталось ' + minutes + ' мин';
+    return 'осталось ' + Math.floor(minutes / 60) + ' ч' + (minutes % 60 ? ' ' + minutes % 60 + ' мин' : '');
+  }
+  function progress(entry) {
+    var road = entry.timeline && typeof entry.timeline === 'object' ? entry.timeline : {}, video, time = +road.time || 0, duration = +road.duration || 0;
+    if (entry.selected && L.PlayerVideo && typeof L.PlayerVideo.video === 'function') {
+      video = L.PlayerVideo.video();
+      if (video && video.duration > 0 && isFinite(video.currentTime)) { time = video.currentTime; duration = video.duration; }
+    }
+    var percent = duration > 0 ? time / duration * 100 : +road.percent || 0;
+    return {percent: Math.round(Math.max(0, Math.min(100, percent)) * 10) / 10, time: time, duration: duration};
+  }
+  function mark(row, entry) {
+    if (!row || typeof row.find !== 'function' || !entry || typeof entry !== 'object') return;
+    var $ = window.$, state = progress(entry), current = !!entry.selected, done = !current && state.percent >= 90;
+    var title = row.find('.selectbox-item__title'), icon = row.find('.selectbox-item__icon'), host = entry.thumbnail && icon.length ? icon : null;
+    row.addClass('homelab-playlist-item');
+    if (current) row.addClass('homelab-playlist-item--current');
+    if (done) row.addClass('homelab-playlist-item--watched');
+    var text = current ? (state.duration > 0 ? remaining(state.time, state.duration) : '') : done ? 'Просмотрено' : state.percent > 1 ? (state.duration > 0 ? remaining(state.time, state.duration) : Math.round(state.percent) + '%') : '';
+    var line = $('<div class="homelab-playlist-state"></div>');
+    if (current) line.append($('<span class="homelab-playlist-now"></span>').text('Сейчас'));
+    if (text) line.append($('<span></span>').text(current ? (text ? ' ' + text : '') : text));
+    if (current || text) title.after(line);
+    if (current || !done && state.percent > 1) {
+      var bar = $('<div class="homelab-playlist-bar"><div></div></div>');
+      bar.find('div').css('width', state.percent + '%');
+      if (host) host.append(bar); else line.after(bar);
+    }
+    if (done && host) host.append($('<div class="homelab-playlist-done"></div>'));
+  }
+  if (window.$ && typeof window.$ === 'function') {
+    window.$('head').append(window.$('<style></style>').text(
+      '.homelab-playlist-item .selectbox-item__icon{position:relative}' +
+      '.homelab-playlist-item .selectbox-item__icon>img.size-youtube{border-radius:.4em}' +
+      '.homelab-playlist-item.homelab-playlist-item--current.selected::after{display:none}' +
+      '.homelab-playlist-item.selected:not(.nomark){padding-right:2em}' +
+      '.homelab-playlist-item--watched .selectbox-item__title{opacity:.6}' +
+      '.homelab-playlist-state{font-size:1em;margin-top:.35em;opacity:.75}' +
+      '.homelab-playlist-now{display:inline-block;padding:.1em .5em;border-radius:.3em;background:#fff;color:#000;font-size:.85em;margin-right:.3em}' +
+      '.homelab-playlist-item.focus .homelab-playlist-now{background:#000;color:#fff}' +
+      '.homelab-playlist-bar{height:.25em;margin-top:.5em;border-radius:1em;background:rgba(255,255,255,.3);overflow:hidden}' +
+      '.selectbox-item__icon .homelab-playlist-bar{position:absolute;left:.35em;right:.35em;bottom:.35em;margin:0;width:auto;height:.25em}' +
+      '.homelab-playlist-bar div{height:100%;background:#fff;border-radius:1em}' +
+      '.homelab-playlist-done{position:absolute;top:.3em;right:.3em;width:1.3em;height:1.3em;border-radius:50%;background:rgba(0,0,0,.65)}' +
+      '.homelab-playlist-done:after{content:"";position:absolute;left:.47em;top:.25em;width:.3em;height:.6em;border-right:.15em solid #fff;border-bottom:.15em solid #fff;-webkit-transform:rotate(45deg);transform:rotate(45deg)}'
+    ));
+  }
+  if (L.Select && L.Select.listener && typeof L.Select.listener.follow === 'function') L.Select.listener.follow('preshow', function (event) {
+    var active = event && event.active;
+    if (!active || active.homelab_playlist || !L.Player.opened() || !Array.isArray(active.items) || active.items !== L.PlayerPlaylist.get()) return;
+    var native = active.onDraw;
+    active.homelab_playlist = true;
+    active.onDraw = function (row, entry) {
+      try { mark(row, entry); } catch (_) {}
+      if (typeof native === 'function') return native.apply(this, arguments);
+    };
+  });
   L.PlayerPlaylist.listener.follow('set', decorate);
   L.Player.listener.follow('ready', function () {
     clearTimeout(ready); ready = setTimeout(function () { decorate({playlist: L.PlayerPlaylist.get(), position: L.PlayerPlaylist.position()}); }, 0);

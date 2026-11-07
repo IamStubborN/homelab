@@ -228,3 +228,43 @@ test('repeated re-sets during a stuck lookup still produce a single still repain
   assert.equal(h.renders.length, before + 1);
   assert.equal(h.lookups.length, 1);
 });
+
+test('the native playlist list shows progress, a watched mark and «Сейчас» on episode stills', t => {
+  const h = lampa(t);
+  h.lampacStart(); h.stills(0, all);
+  const list = h.L.PlayerPlaylist.get();
+  list[0].selected = true; list[0].timeline = {percent: 10, time: 12, duration: 120};
+  list[1].timeline = {percent: 95, time: 1140, duration: 1200};
+  list[2].timeline = {percent: 50, time: 600, duration: 1200};
+  h.video().currentTime = 60; h.video().duration = 120;
+  const active = {title: 'Плейлист', items: list};
+  h.L.Select.listener.send('preshow', {active});
+  assert.equal(typeof active.onDraw, 'function');
+  const rows = list.map(entry => { const row = h.window.$('<div class="selectbox-item selector"></div>'); active.onDraw(row, entry); return row; });
+  const parts = row => ({state: row.find('.selectbox-item__title').children[0], icon: row.find('.selectbox-item__icon')});
+  const current = parts(rows[0]);
+  assert.ok(rows[0].hasClass('homelab-playlist-item--current'));
+  assert.equal(current.state.children[0].text(), 'Сейчас'); assert.equal(current.state.children[1].text(), ' осталось 1 мин');
+  assert.equal(current.icon.children[0].find('div').attrs['style:width'], '50%', 'current progress is live from the video');
+  assert.ok(rows[1].hasClass('homelab-playlist-item--watched'));
+  assert.equal(parts(rows[1]).state.children[0].text(), 'Просмотрено');
+  assert.ok(parts(rows[1]).icon.children.some(child => child.classes.has('homelab-playlist-done')));
+  assert.equal(parts(rows[2]).state.children[0].text(), 'осталось 10 мин');
+  assert.equal(parts(rows[3]).state, undefined, 'an unstarted episode stays clean');
+});
+
+test('other selects and a closed player are never decorated', t => {
+  const h = lampa(t);
+  const other = {title: 'Другое', items: [{title: 'x'}]};
+  h.L.Select.listener.send('preshow', {active: other}); assert.equal(other.onDraw, undefined);
+  h.lampacStart(); const list = h.L.PlayerPlaylist.get(); h.close();
+  const late = {items: list}; h.L.Select.listener.send('preshow', {active: late}); assert.equal(late.onDraw, undefined);
+});
+
+test('the last episode still loads the season stills for the list without a Next card', t => {
+  const h = lampa(t);
+  h.lampacStart(3);
+  assert.equal(h.lookups.length, 1);
+  h.stills(0, all);
+  assert.equal(h.playlist[0].thumbnail, '/image/one.jpg');
+});

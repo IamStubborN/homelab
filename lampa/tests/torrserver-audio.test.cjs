@@ -72,12 +72,13 @@ function fakeElement(html = '') {
     toggleClass(name, on) { if (on) classes.add(name); else classes.delete(name); return element; },
     hasClass: name => classes.has(name),
     html(value) { element.content = value; return element; },
+    text(value) { element.textContent = value; return element; },
     after(other) { element.next.push(other); return element; },
   };
   return element;
 }
 
-function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null, attachments = {}, library = null, platform = null } = {}) {
+function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null, attachments = {}, library = null, platform = null, playlist = null, connection = null, warm = [] } = {}) {
   const notices = [];
   const playlistUrls = [];
   const runas = [];
@@ -155,7 +156,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       subsview() {},
     },
     Noty: { show: message => notices.push(message) },
-    PlayerPlaylist: { url: value => { playlistUrls.push(value); } },
+    PlayerPlaylist: { url: value => { playlistUrls.push(value); }, get: () => playlist || [] },
     PlayerPanel: {
       listener: panel, setTracks: value => { audioMenu = value; }, setSubs: value => { subtitles = value; },
       render: () => ({ find: selector => selector === '.player-panel__subs' ? subsButton : { length: 0 } }),
@@ -179,12 +180,18 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       MediaSource: { isTypeSupported: type => mse.some(codec => type === `audio/mp4; codecs="${codec}"`) },
       location: { origin: 'https://lampa.test', href: 'https://lampa.test/' },
       localStorage: browserStorage,
+      navigator: connection ? { connection } : {},
       fetch(url, options) {
         if (new URL(url).pathname === '/extaudio/log') {
           logs.push({...JSON.parse(options.body), options});
           return Promise.resolve({ok: true, status: 204});
         }
         requests.push({url, options});
+        if (/\/warm$/.test(new URL(url).pathname)) {
+          const status = warm.length ? warm.shift() : 202;
+          if (status === 'network') return Promise.reject(new TypeError('Failed to fetch'));
+          return Promise.resolve({ok: status >= 200 && status < 300, status});
+        }
         if (/\/(?:heartbeat|remove)(?:\?|$)/.test(url)) return Promise.resolve({ok: true});
         if (/^\/extaudio\/[^/]+\/\d+\/tracks$/.test(new URL(url).pathname)) {
           return Promise.resolve({ok: true, json: async () => ({tracks: external, ...(ass || {})})});
@@ -269,7 +276,8 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
   return {
     loads, storage, requests, logs, destroy, playingStates, notices, context, video: () => video,
     settle: async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); },
-    audioMenu: () => audioMenu,
+    // The plugin builds its menu array in its own realm.
+    audioMenu: () => Array.from(audioMenu),
     loaderInstances: TestLoader.instances,
     createHls() {
       const hls = new context.window.Hls({});
@@ -278,6 +286,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       return hls;
     },
     explicitPause() { video.pause(); playerVideo.send('pause'); },
+    timeupdate(time) { video.currentTime = time; playerVideo.send('timeupdate', {duration: video.duration, current: time}); },
     fireTimer(delay) {
       const timer = [...timers].find(([, value]) => value.delay === delay);
       assert.ok(timer, `timer ${delay} is scheduled`);
@@ -333,6 +342,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       player.send('ready', work);
     },
     work: () => work,
+    setPlaydata(value) { work = value; },
     pending,
     async probe(tracks, lampac = false) {
       const request = pending.find(item => /\/probe$/.test(new URL(item.url).pathname));
@@ -392,8 +402,10 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
     userPlayPause: () => Lampa.PlayerVideo.playpause(),
     audioIndex: () => Number(new URL(work.url).searchParams.get('audio') || 0),
     subtitleTitle: () => subtitles.find(item => item.mode === 'showing')?.label ?? null,
-    subtitleMenu: () => Array.from(subtitles, item => item.label),
-    subtitleList: () => subtitles,
+    // The plugin's own «Выкл.» item leads the menu; tests look at the tracks.
+    subtitleMenu: () => Array.from(subtitles, item => item.label).filter((label, index) => subtitles[index].index !== -1),
+    subtitleList: () => Array.from(subtitles).filter(item => item.index !== -1),
+    subtitleItems: () => subtitles,
     signsButton: () => subsButton.next[0],
     useController(name) { controller = name; },
     press(code, modifiers = {}) { keypad.send('keydown', { code, enabled: true, event: { ...modifiers } }); },
@@ -808,7 +820,7 @@ test('external audio is offered with one embedded track and reuses the AAC task'
   await h.probe([japaneseAAC]);
   await h.task('301');
   assert.ok(h.requests.some(r => new URL(r.url).pathname === '/extaudio/abc/13/tracks'));
-  assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', externalLabel]);
+  assert.deepEqual(h.audioMenu().map(item => item.label), [externalLabel, 'Japanese'], 'a Russian voice-over leads the menu');
   const before = h.work().url;
   h.chooseAudio(externalLabel);
   await h.settle();
@@ -830,9 +842,9 @@ test('track names from torrents never reach Lampa as markup', async t => {
   await h.probe([{ ...japaneseAAC, Title: '<b onclick="x">Jap</b>' }]);
   await h.task('301');
   const labels = h.audioMenu().map(item => item.label);
-  assert.deepEqual(labels, ['\u2039b onclick=\u2033x\u2033\u203aJap\u2039/b\u203a',
-    '\u2039img src=x onerror=alert(1)\u203a (внешняя)']);
-  h.chooseAudio(labels[1]);
+  assert.deepEqual(labels, ['\u2039img src=x onerror=alert(1)\u203a (внешняя)',
+    '\u2039b onclick=\u2033x\u2033\u203aJap\u2039/b\u203a']);
+  h.chooseAudio(labels[0]);
   await h.settle();
   assert.ok(h.notices.every(text => !/[<>]/.test(text)), h.notices.join('; '));
 });
@@ -888,7 +900,7 @@ test('an external audio file still downloading is asked for until the sidecar re
   assert.equal(h.work().homelab_external_audio, undefined, 'nothing to restore yet');
   assert.ok(h.subtitleMenu().includes('YakuSub Studio: полные (внешние)'), 'external subtitles do not wait for the audio');
   for (let i = 0; i < 3; i++) { h.fireTimer(2000); await h.settle(); }
-  assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', externalLabel]);
+  assert.deepEqual(h.audioMenu().map(item => item.label), [externalLabel, 'Japanese'], 'a Russian voice-over leads the menu');
   assert.equal(h.work().homelab_external_audio.name, 'AniLibria.tv', 'the remembered voice-over returns once it is read');
 });
 
@@ -923,7 +935,7 @@ test('external audio keeps current audio playing until the rendition is ready', 
   await h.settle();
   assert.equal(h.work().homelab_external_audio, undefined);
   assert.equal(h.loads.length, loads, 'playback is not reloaded while the sidecar prepares');
-  assert.deepEqual(h.notices, ['Готовлю озвучку: ' + externalLabel]);
+  assert.deepEqual(h.notices, ['Готовлю озвучку «AniLibria.tv»…']);
   h.fireTimer(2000);
   await h.settle();
   assert.equal(h.work().homelab_external_audio, undefined);
@@ -942,7 +954,7 @@ test('a failed external rendition keeps the embedded track', async t => {
   await h.settle();
   assert.equal(h.work().homelab_external_audio, undefined);
   assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), ['Japanese']);
-  assert.equal(h.notices.at(-1), 'Не удалось подготовить озвучку: ' + externalLabel);
+  assert.equal(h.notices.at(-1), 'Не удалось подготовить озвучку «AniLibria.tv»');
 });
 
 test('choosing an embedded track cancels external preparation', async t => {
@@ -1101,7 +1113,7 @@ test('an unsupported fragment layout falls back to the embedded track', async t 
   h.fireTimer(0);
   assert.equal(h.work().homelab_external_audio, undefined);
   assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), ['Japanese']);
-  assert.equal(h.notices.at(-1), 'Внешняя озвучка не поддерживается для этого видео');
+  assert.equal(h.notices.at(-1), 'Озвучка «AniLibria.tv» не подходит к этому видео — включена встроенная');
 });
 
 test('an unsupported fragment layout without an embedded track is reported as fatal', async t => {
@@ -1136,7 +1148,7 @@ test('a busy external lookup is asked once more', async t => {
   assert.deepEqual(h.audioMenu().map(item => item.label), []);
   h.fireTimer(5000);
   await h.settle();
-  assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', externalLabel]);
+  assert.deepEqual(h.audioMenu().map(item => item.label), [externalLabel, 'Japanese'], 'a Russian voice-over leads the menu');
 });
 
 test('players without external audio keep default playlist loaders', async t => {
@@ -1278,8 +1290,8 @@ test('ASS items leave the menu with their episode', async t => {
   h.start(13, 'abc', true);
   await h.probe([japaneseAAC]);
   await h.settle();
-  const panelList = h.subtitleList();
-  assert.deepEqual(Array.from(panelList, item => item.label), ['YakuSub Studio: полные (внешние)', 'YakuSub Studio: надписи (внешние)']);
+  const panelList = h.subtitleItems();
+  assert.deepEqual(Array.from(panelList, item => item.label), [undefined, 'YakuSub Studio: полные (внешние)', 'YakuSub Studio: надписи (внешние)']);
   h.destroy();
   assert.equal(panelList.length, 0, 'the list the panel kept loses its ASS items');
 });
@@ -1566,12 +1578,13 @@ test('Lampa sending back its kept list does not make drawn items their own origi
   await h.probe(signsAndFull);
   h.emitSubtitles(signsAndFull);
   await h.settle();
-  const list = h.subtitleList();
+  const list = h.subtitleItems();
   h.context.Lampa.PlayerVideo.listener.send('subs', { subs: list });
   await h.settle();
-  assert.equal(list.length, 3);
+  assert.equal(list.length, 4, '«Выкл.» and the three tracks');
+  assert.equal(list.filter(item => item.index === -1).length, 1, 'one «Выкл.» item');
   assert.ok(list.every(item => item.homelabOriginal !== item));
-  assert.ok(!list[0].homelabOriginal.homelabAss);
+  assert.ok(!list[1].homelabOriginal.homelabAss);
 });
 
 test('embedded ASS is looked up again while TorrServer still fetches the torrent', async t => {
@@ -1768,7 +1781,7 @@ test('external audio that arrives after embedded subtitles is still offered', as
   await h.settle();
   release();
   await h.settle();
-  assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', externalLabel]);
+  assert.deepEqual(h.audioMenu().map(item => item.label), [externalLabel, 'Japanese'], 'a Russian voice-over leads the menu');
 });
 
 test('playback start, track switches and stop are logged without URLs or credentials', async t => {
@@ -2097,7 +2110,7 @@ for (const failure of [
     h.fireTimer(0);
     assert.equal(h.work().homelab_external_audio, undefined);
     assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), ['Japanese']);
-    assert.equal(h.notices.at(-1), 'Внешняя озвучка недоступна, включена встроенная');
+    assert.equal(h.notices.at(-1), 'Озвучка «AniLibria.tv» недоступна — включена встроенная');
     // An explicit choice prepares the rendition again.
     const prepared = h.requests.filter(r => /audio\.m3u8$/.test(new URL(r.url).pathname)).length;
     h.ready();
@@ -2154,7 +2167,7 @@ test('a late external lookup keeps the mark on the track that is playing', async
   h.ready();
   h.fireTimer(2000);
   await h.settle();
-  assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', 'Commentary', externalLabel]);
+  assert.deepEqual(h.audioMenu().map(item => item.label), ['Commentary', externalLabel, 'Japanese'], 'the chosen voice first, then by language');
   assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), ['Commentary']);
 });
 
@@ -2181,7 +2194,7 @@ test('a remembered voice found late is offered instead of reloading the video', 
   await h.settle();
   assert.equal(h.requests.filter(r => /audio\.m3u8$/.test(new URL(r.url).pathname)).length, 0, 'nothing is prepared');
   assert.equal(h.loads.length, loads, 'the video is not reloaded');
-  assert.equal(h.notices.at(-1), 'Озвучка «' + externalLabel + '» доступна в меню');
+  assert.equal(h.notices.at(-1), 'Озвучка «AniLibria.tv» готова — включите её в аудиодорожках');
 });
 
 test('a playlist item played again forgets the audio and preferences of its last play', async t => {
@@ -2323,4 +2336,346 @@ test('a refused retry leaves the work untouched', async t => {
   assert.equal(h.context.Lampa.HomelabGstAudio.retryCurrent(), false);
   assert.equal(work.url, url);
   assert.equal(work.homelab_retry_playback, undefined);
+});
+
+const episodes = (hash, files) => files.map(file => ({ title: `Серия ${file}`, url: `https://lampa.test/torrserver/stream/Show%20${file}.mkv?link=${hash}&index=${file}&play` }));
+const gstEpisodes = (hash, files) => files.map(file => ({ title: `Серия ${file}`, torrent_hash: hash, url: `https://lampa.test/torrserver/gst/${hash}/master.m3u8?index=${file}&audio=0` }));
+const warms = h => h.requests.filter(item => /\/warm$/.test(new URL(item.url).pathname)).map(item => [new URL(item.url).pathname + new URL(item.url).search, item.options.method]);
+// Lampa reports the time about once a second of playback.
+function playThrough(h, from, to, step = 1) {
+  for (let time = from; time <= to; time += step) { h.clock(1000); h.timeupdate(time); }
+}
+
+test('the next episode is warmed once, after playback runs in its last seven minutes', async t => {
+  const h = harness(t, new Map(), { playlist: episodes('ABC', [12, 13, 14]) });
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  playThrough(h, 600, 620);
+  assert.deepEqual(warms(h), [], 'the middle of the episode warms nothing');
+  playThrough(h, 960, 979);
+  assert.deepEqual(warms(h), [], 'more than seven minutes are left');
+  playThrough(h, 981, 990);
+  assert.deepEqual(warms(h), [], 'ten seconds have to play first');
+  playThrough(h, 991, 1000);
+  assert.deepEqual(warms(h), [['/extaudio/abc/14/warm', 'POST']]);
+  assert.ok(h.logs.some(event => event.e === 'warm-next' && event.next === 14));
+  playThrough(h, 1001, 1300);
+  assert.equal(warms(h).length, 1, 'once per episode');
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  playThrough(h, 1225, 1300);
+  assert.equal(warms(h).length, 1, 'a reopened episode does not warm the same file again');
+});
+
+test('a pause, a seek or a scrub near the end warms nothing', async t => {
+  const h = harness(t, new Map(), { playlist: episodes('abc', [13, 14]) });
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  h.video().paused = true;
+  playThrough(h, 1225, 1300);
+  h.video().paused = false;
+  playThrough(h, 1000, 1390, 5);
+  h.video().seeking = true;
+  playThrough(h, 1225, 1300);
+  assert.deepEqual(warms(h), []);
+});
+
+test('only another file of the same torrent is warmed, and not on a metered connection', async t => {
+  const cases = [
+    [{ playlist: episodes('abc', [12, 13]) }, 'the last episode has no next one'],
+    [{ playlist: [...episodes('abc', [13]), ...episodes('other', [14])] }, 'another torrent'],
+    [{ playlist: [...episodes('abc', [13]), { title: 'online', url: 'https://example.test/video.mp4' }] }, 'not a torrent file'],
+    [{ playlist: episodes('abc', [13, 14]), connection: { saveData: true } }, 'data saver'],
+    [{ playlist: episodes('abc', [13, 14]), connection: { type: 'cellular' } }, 'cellular'],
+  ];
+  for (const [options, message] of cases) {
+    const h = harness(t, new Map(), options);
+    h.start(13, 'abc', true);
+    await h.probe(firstEpisode);
+    playThrough(h, 1225, 1300);
+    assert.deepEqual(warms(h), [], message);
+  }
+});
+
+test('from the second episode on, the playlist item being played warms the next one', async t => {
+  const playlist = gstEpisodes('abc', [13, 14, 15]);
+  const h = harness(t, new Map(), { playlist });
+  h.replay(playlist[0]);
+  await h.probe(firstEpisode);
+  playThrough(h, 1225, 1300);
+  h.replay(playlist[1]);
+  await h.probe(firstEpisode);
+  assert.ok(!playlist[1].torrent_hash && /\/gst\/start\.m3u8$/.test(new URL(playlist[1].url).pathname), 'the item went through create');
+  playThrough(h, 1225, 1300);
+  assert.deepEqual(warms(h), [['/extaudio/abc/14/warm', 'POST'], ['/extaudio/abc/15/warm', 'POST']]);
+});
+
+test('the first episode finds its playlist position by the URL Lampa listed', async t => {
+  // The same file listed twice: only the source URL tells which item plays.
+  const playlist = [
+    { title: 'Серия 13 (stream)', url: 'https://lampa.test/torrserver/stream/Show.mkv?link=abc&index=13&play' },
+    ...gstEpisodes('abc', [16, 13, 15]),
+  ];
+  const h = harness(t, new Map(), { playlist });
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  playThrough(h, 1225, 1300);
+  assert.deepEqual(warms(h), [['/extaudio/abc/15/warm', 'POST']]);
+});
+
+test('the voice-over being played is named so the sidecar probes only its file', async t => {
+  const h = harness(t, new Map(), { playlist: gstEpisodes('abc', [13, 14]) });
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  h.work().homelab_external_audio = { key: '7:0' };
+  playThrough(h, 1225, 1300);
+  assert.deepEqual(warms(h), [['/extaudio/abc/14/warm?voice=7', 'POST']]);
+});
+
+test('a short video, an unknown duration or another playdata warms nothing', async t => {
+  const h = harness(t, new Map(), { playlist: episodes('abc', [13, 14]) });
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  h.video().duration = 200;
+  playThrough(h, 30, 99);
+  assert.deepEqual(warms(h), [], 'the first half of a short video is not its end');
+  h.video().duration = Infinity;
+  playThrough(h, 1225, 1300);
+  h.video().duration = NaN;
+  playThrough(h, 1225, 1300);
+  h.video().duration = 1400;
+  const work = h.work();
+  h.setPlaydata({ ...work });
+  playThrough(h, 1225, 1300);
+  assert.deepEqual(warms(h), []);
+  h.setPlaydata(work);
+  playThrough(h, 1225, 1300);
+  assert.equal(warms(h).length, 1, 'the same playback still warms');
+});
+
+test('a growing EVENT playlist duration warms nothing until it stops changing', async t => {
+  const h = harness(t, new Map(), { playlist: episodes('abc', [13, 14]) });
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  // GST encodes ahead: the playlist always ends a few minutes past playback.
+  for (let time = 600; time <= 1000; time++) {
+    h.video().duration = time + 300;
+    h.clock(1000);
+    h.timeupdate(time);
+  }
+  assert.deepEqual(warms(h), [], 'a duration still growing is not the end of the episode');
+  h.video().duration = 1400;
+  playThrough(h, 1001, 1025);
+  assert.deepEqual(warms(h), [], 'the final duration has to hold for 30 seconds first');
+  playThrough(h, 1026, 1060);
+  assert.deepEqual(warms(h), [['/extaudio/abc/14/warm', 'POST']]);
+});
+
+test('a busy sidecar is asked once more after 30 seconds, a failed warm is not remembered', async t => {
+  const h = harness(t, new Map(), { playlist: episodes('abc', [13, 14]), warm: [429, 503] });
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  playThrough(h, 1000, 1045);
+  await h.settle();
+  assert.equal(warms(h).length, 1);
+  playThrough(h, 1046, 1070);
+  await h.settle();
+  assert.equal(warms(h).length, 1, 'no retry within 30 seconds of a 429');
+  playThrough(h, 1071, 1080);
+  await h.settle();
+  assert.equal(warms(h).length, 2, 'one retry after the wait');
+  playThrough(h, 1081, 1300);
+  await h.settle();
+  assert.equal(warms(h).length, 2, 'it gives up after the retry');
+  assert.ok(h.logs.some(event => event.e === 'warm-failed' && event.status === 429));
+  // Neither attempt warmed the file, so a reopened episode asks again.
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  playThrough(h, 1000, 1045);
+  await h.settle();
+  assert.equal(warms(h).length, 3);
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  playThrough(h, 1000, 1100);
+  await h.settle();
+  assert.equal(warms(h).length, 3, 'a warmed file is not asked for again');
+});
+
+test('a network failure or a 5xx is retried once, a refusal is not', async t => {
+  const failing = harness(t, new Map(), { playlist: episodes('abc', [13, 14]), warm: ['network', 'network'] });
+  failing.start(13, 'abc', true);
+  await failing.probe(firstEpisode);
+  playThrough(failing, 1000, 1300);
+  await failing.settle();
+  playThrough(failing, 1301, 1390);
+  await failing.settle();
+  assert.equal(warms(failing).length, 2);
+  const refused = harness(t, new Map(), { playlist: episodes('abc', [13, 14]), warm: [403] });
+  refused.start(13, 'abc', true);
+  await refused.probe(firstEpisode);
+  playThrough(refused, 1000, 1300);
+  await refused.settle();
+  assert.equal(warms(refused).length, 1);
+});
+
+// A Lampa Select item as the plugin's onDraw sees it: the template's title
+// line, and a details line only when the plugin adds one.
+function menuItem() {
+  let title = '', line = null;
+  return {
+    find: selector => selector === '.selectbox-item__title' ? { length: 1, text(value) { title = value; } }
+      : line ? { length: 1, text(value) { line.textContent = value; } } : { length: 0 },
+    append(child) { line = child; },
+    title: () => title, details: () => line && line.textContent,
+  };
+}
+function draw(item) { const node = menuItem(); item.onDraw(node, item); return node; }
+
+test('audio menu items read as voices with small details, not raw names', async t => {
+  const files = [
+    { ...anilibria, file: 2, title: 'Rus_MVO_LostFilm.mka', codec: 'eac3', channels: 6 },
+    { ...anilibria, file: 3, title: 'Sound / RUS / AniDub', location: 'Sound / RUS / AniDub', codec: 'aac' },
+    { ...anilibria, file: 4, title: 'Dub [Невафильм]', codec: 'ac3', channels: 6 },
+  ];
+  const h = harness(t, new Map(), { external: files });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC, { Type: 'audio', Index: 1, Title: '', Language: '', Channels: 2 }]);
+  await h.task('301');
+  const shown = h.audioMenu().map(item => { const node = draw(item); return [node.title(), node.details()]; });
+  assert.deepEqual(shown, [
+    ['Многоголосая — LostFilm', 'Русский · 5.1 · E-AC3 · внешняя'],
+    ['AniDub', 'Русский · стерео · AAC · внешняя'],
+    ['Дубляж — Невафильм', 'Русский · 5.1 · AC3 · внешняя'],
+    ['Дорожка 2', 'стерео · встроенная'],
+    ['Японский', 'стерео · AAC · встроенная'],
+  ]);
+  assert.ok(h.audioMenu().every(item => !/\.mka|_/.test(draw(item).title())));
+});
+
+test('an external voice being prepared says so in the open menu, the remembered one is starred', async t => {
+  const h = harness(t, new Map(), { external: [anilibria], rendition: [503] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  const voice = h.audioMenu().find(item => item.external);
+  const node = draw(voice);
+  assert.equal(node.details(), 'готовится… · ★ для сериала · Русский · стерео · AAC · внешняя');
+  h.clock(4000);
+  h.fireTimer(2000);
+  assert.match(node.details(), /^готовится… 4 с · /, 'the drawn item follows the preparation');
+  await h.settle();
+  assert.equal(node.details(), '★ для сериала · Русский · стерео · AAC · внешняя', 'ready, switched');
+  assert.equal(draw(h.audioMenu().find(item => !item.external)).details(), 'стерео · AAC · встроенная');
+});
+
+test('a failed preparation is shown on its item until it is chosen again', async t => {
+  const h = harness(t, new Map(), { external: [anilibria], rendition: [502] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  assert.match(draw(h.audioMenu().find(item => item.external)).details(), /^не загрузилась — выберите ещё раз · /);
+});
+
+test('the remembered voice is applied with one short notice', async t => {
+  const storage = new Map([['homelab_gst_track_preferences', JSON.stringify({ abc: { audio: { title: 'commentary', language: 'en', external: false } } })]]);
+  const h = harness(t, storage, { playlist: episodes('abc', [13, 14]) });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC, commentary]);
+  await h.settle();
+  assert.equal(h.audioIndex(), 1);
+  assert.deepEqual(h.notices, ['Озвучка: Commentary — как в прошлой серии']);
+  assert.equal(h.audioMenu()[0].label, 'Commentary', 'the remembered voice leads the menu');
+  h.ready();
+  h.chooseAudio('Japanese');
+  h.ready();
+  h.chooseAudio('Commentary');
+  assert.equal(h.notices.length, 1, 'a manual choice brings no notice');
+});
+
+test('falling back to the embedded audio is announced once per voice', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  h.play(13, 'abc');
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  for (let i = 0; i < 2; i++) {
+    h.chooseAudio(externalLabel);
+    await h.settle();
+    h.ready();
+    const hls = h.createHls();
+    hls.on('error', () => {});
+    hls.trigger('error', { type: 'networkError', details: 'fragLoadError', fatal: true, frag: { type: 'audio', sn: 4 }, response: { code: 502 } });
+    h.fireTimer(0);
+    h.ready();
+  }
+  assert.equal(h.notices.filter(text => /включена встроенная/.test(text)).length, 1);
+});
+
+test('the subtitle menu starts with «Выкл.» and tells drawn and plain tracks apart', async t => {
+  const h = harness(t, new Map(), { ass: assLookup, raw: { 25: new TextEncoder().encode(assText) } });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  h.emitSubtitles([track('subtitle', 0, 'Russian Forced'), track('subtitle', 1, 'English SDH', 'en')], false, true);
+  await h.settle();
+  const items = h.subtitleItems();
+  assert.equal(items[0].index, -1);
+  assert.equal(items[0].title, 'Выкл.');
+  assert.equal(items[0].selected, true, 'nothing on screen: «Выкл.» is the current choice');
+  const shown = items.slice(1).map(item => { const node = draw(item); return [node.title(), node.details()]; });
+  assert.deepEqual(shown, [
+    ['Русские', 'надписи · встроенные'],
+    ['Английские', 'полные, для слабослышащих · встроенные'],
+    ['YakuSub Studio', 'полные · ASS со стилями · внешние'],
+    ['YakuSub Studio', 'надписи · ASS со стилями · внешние'],
+  ]);
+  h.chooseSubtitle('YakuSub Studio: полные (внешние)');
+  assert.equal(items[0].selected, false);
+  assert.equal(items[0].mode, 'disabled', '«Выкл.» never becomes a track');
+  assert.match(draw(h.subtitleList().find(item => item.label === 'YakuSub Studio: полные (внешние)')).details(), /★ для сериала/);
+  h.chooseSubtitle(null);
+  assert.equal(items[0].selected, true);
+});
+
+test('the seconds of a preparation count once a second while its item is on screen', async t => {
+  const h = harness(t, new Map(), { external: [anilibria], rendition: [503, 503] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  const node = draw(h.audioMenu().find(item => item.external));
+  node[0] = {};
+  const shown = [];
+  for (let i = 0; i < 3; i++) {
+    h.clock(1000);
+    h.fireTimer(1000);
+    shown.push(node.details().split(' · ')[0]);
+  }
+  assert.deepEqual(shown, ['готовится…', 'готовится… 2 с', 'готовится… 3 с']);
+  // The menu closed: the item left the page, so the count stops.
+  h.context.window.document = { documentElement: { contains: () => false } };
+  h.clock(1000);
+  h.fireTimer(1000);
+  assert.ok(![...h.timers.values()].some(timer => timer.delay === 1000), 'no tick for a closed menu');
+});
+
+test('a list the panel keeps after playback carries no menu items or hooks of that play', async t => {
+  const h = harness(t, new Map(), { external: [anilibria], ass: assLookup, raw: { 25: new TextEncoder().encode(assText) } });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  h.emitSubtitles(firstEpisode);
+  await h.settle();
+  const kept = h.subtitleItems();
+  const tracks = h.audioMenu();
+  assert.equal(kept[0].index, -1);
+  assert.ok(kept.every(item => item.index === -1 || typeof item.onDraw === 'function'));
+  h.destroy();
+  assert.deepEqual(Array.from(kept, item => item.label), ['надписи', 'English', 'Russian'], 'only the stream\'s own tracks stay');
+  assert.ok(kept.every(item => item.onDraw === undefined && item.homelabItem === undefined));
+  assert.ok(tracks.every(item => item.onDraw === undefined));
 });

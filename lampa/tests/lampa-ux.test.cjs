@@ -6,7 +6,7 @@ const data = {key, enabled: true, info: {duration: 120, step: 5, version: 1, cha
   {start: 0, end: 8, title: 'OP'}, {start: 8, end: 90, title: 'Opening Scene'}, {start: 90, end: 120, title: 'Ending'},
 ]}};
 
-test('playback recovery stays silent through preparation, buffering, recovery and failure while retaining one manual retry', t => {
+test('playback phases never produce popups or raw error text and keep one manual retry', t => {
   const h = harness(t); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
   const retry = h.elements.find(e => e.classes.has('homelab-playback-retry'));
   h.video().fire('waiting'); h.tick(400); assert.ok(retry.hasClass('hide'));
@@ -14,7 +14,8 @@ test('playback recovery stays silent through preparation, buffering, recovery an
   h.videoEvent('error', {fatal: true, error: 'http://private/?token=secret'});
   assert.ok(!retry.hasClass('hide'));
   assert.equal(h.notices.length, 0, 'phase changes never produce popups');
-  assert.equal(h.elements.some(e => [...e.classes].some(name => name.startsWith('homelab-playback-status'))), false, 'no status overlay or hint DOM is created');
+  const text = h.elements.filter(e => [...e.classes].some(name => name.startsWith('homelab-playback-card'))).map(e => e.text()).join(' ');
+  assert.match(text, /Не удалось воспроизвести/); assert.doesNotMatch(text, /private|token|secret|http/, 'the status card shows human text only');
   retry.trigger('hover:enter'); assert.equal(h.retryCount(), 1);
   h.destroy(); h.tick(10000); assert.ok(retry.hasClass('hide'));
 });

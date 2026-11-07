@@ -103,20 +103,20 @@ test('torrent continuation stops after navigation during source lookup or option
   assert.equal(h.work(),null); assert.equal(h.L.routed,undefined);
 });
 
-test('retained cards restore the year node removed by native Release for an initially unknown date', async t => {
+test('retained cards restore the age line removed by native Release and never keep an unknown year', async t => {
   const h=harness(t); let row;
   h.run('mods/HomelabSync/continue.js');
   h.rows[0].call()(data=>{row=data.params.createInstance();row.create()});
   h.calls[0].finish({version:1,items:[saved]}); await flush();
   const tile=h.elements.find(e=>e.classes.has('homelab-resume-card')), find=tile.find.bind(tile);
+  const meta=h.elements.find(e=>e.classes.has('homelab-resume-meta')), after=meta.after.bind(meta);
   let age;
   tile.find=selector=>selector==='.card__age' ? age || {length:0,remove(){}} : find(selector);
-  const title=tile.find('.card__title'), after=title.after.bind(title);
-  title.after=node=>{age=node;return after(node)};
+  meta.after=node=>{age=node;return after(node)};
   h.tick(15001); h.window.homelabContinue.load();
   h.calls.at(-1).finish({version:1,items:[{...saved,date:'2026-04-04',observed:2}]}); await flush();
-  assert.equal(tile.removed,undefined); assert.equal(age.text(),'2026');
+  assert.equal(tile.removed,undefined); assert.equal(age.text(),'только что · 2026');
   h.tick(15001); h.window.homelabContinue.load();
   h.calls.at(-1).finish({version:1,items:[{...saved,observed:3}]}); await flush();
-  assert.equal(age.removed,true,'an unknown year must not retain the previous date');
+  assert.equal(age.text(),'только что','an unknown year must not retain the previous date');
 });

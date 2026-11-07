@@ -19,7 +19,13 @@ function setup(t, options = {}) {
   function request(url, options) {
     return new Promise((resolve, reject) => {
       active++; peak = Math.max(peak, active); let settled = false;
-      const job = {url: new URL(url), options, started: Date.now(), finish(body) { if (settled) return; settled = true; active--; resolve({ok: true, text: async () => typeof body === 'string' ? body : JSON.stringify(body)}); }};
+      const job = {url: new URL(url), options, started: Date.now(), finish(body) {
+        if (settled) return; settled = true; active--; const status = body && body.__status || 200, text = typeof body === 'string' ? body : JSON.stringify(body);
+        // Realistic headers: JSON for objects, an HLS type for playlists; __type/__length override them (null = absent).
+        const type = body && body.__type !== undefined ? body.__type : typeof body === 'string' ? /^#EXTM3U/.test(body) ? 'application/vnd.apple.mpegurl' : 'text/html' : 'application/json; charset=utf-8';
+        const length = body && body.__length !== undefined ? body.__length : String(text.length);
+        job.read = false;
+        resolve({ok: status < 400, status, headers: {get: name => name.toLowerCase() === 'content-type' ? type : name.toLowerCase() === 'content-length' ? length : null}, text: async () => { job.read = true; return text; }}); }};
       if (!noAbort) options.signal.addEventListener('abort', () => { if (!settled) { settled = true; active--; reject(new Error('aborted')); }});
       requests.push(job);
     });
@@ -344,7 +350,7 @@ test('voice pages are fetched once per provider, season and voice, after first p
   await h.finish('/lite/one', 'voice-b');
   await h.finish('/lite/one', 'voice-c');
   h.tick(5000); await flush();
-  const voices = h.requests.filter(r => r.url.searchParams.has('t')).map(r => r.url.searchParams.get('t'));
+  const voices = h.requests.filter(r => r.url.pathname === '/lite/one' && r.url.searchParams.has('t')).map(r => r.url.searchParams.get('t'));
   assert.deepEqual(voices.sort(), ['B', 'C'], 'the already visited active voice is never re-fetched');
   assert.deepEqual(Array.from(h.search.rows.filter(r => !r.native), r => r.voice), ['Studio A', 'Studio B', 'Studio C']);
   assert.equal(h.search.onlinePending, false);
@@ -385,4 +391,179 @@ test('movie recovery uses the dub from the saved match instead of a release-tag 
   h.L.Activity = {active: () => activity, push: value => pushes.push(value)};
   assert.equal(h.window.HomelabSources.recover(work, {position: 71, duration: 120}, false), true); h.tick(0);
   assert.equal(pushes[0].homelab_recovery.voice, 'MVO Studio');
+});
+
+test('rows without quality learn the real height from the source once the catalog is done', async t => {
+  const h = setup(t); await h.start();
+  await h.finish('/lite/events', [h.source('one')]);
+  h.pages.set('films', {'.videos__item': [
+    {method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio A', url: '/lite/one/video?f=a'},
+    {method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio B', url: '/lite/one/video?f=b'},
+    {method: 'play', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio C', url: '/proxy/c.m3u8'},
+    {method: 'play', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio D', url: '/proxy/d.mp4'},
+    {method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio E', url: '/lite/one/video?f=e', quality: {'720p': '/x'}}]});
+  await h.finish('/lite/one', 'films');
+  h.search.probe(h.search.rows);
+  const row = voice => h.search.rows.find(r => r.voice === voice);
+  // Quality map from the call answer.
+  await h.finish('/lite/one/video', {method: 'play', url: '/proxy/a.m3u8', quality: {'1080p': '/proxy/a1', '480p': '/proxy/a2'}});
+  assert.deepEqual(Array.from(row('Studio A').qualities), [1080, 480]);
+  // A 404 from the source marks the row and sorts it last.
+  await h.finish('/lite/one/video', {__status: 404});
+  assert.equal(row('Studio B').unavailable, true);
+  // HLS master: a cinema crop still counts as 1080p.
+  await h.finish('/proxy/c.m3u8', '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1280x534\nlow.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2,RESOLUTION=1920x800\nhigh.m3u8\n');
+  assert.deepEqual(Array.from(row('Studio C').qualities), [1080]);
+  // A direct file is never downloaded and stays unknown.
+  await h.finish('/proxy/d.mp4', {__type: 'video/mp4'});
+  assert.deepEqual(Array.from(row('Studio D').qualities), []); assert.ok(!row('Studio D').unavailable);
+  // Rows that already know their quality are never probed.
+  assert.ok(!h.requests.some(r => r.url.searchParams.get('f') === 'e'));
+  const order = h.search.rows.slice().sort((a, b) => h.window.HomelabSources.compareRows(a, b, {}));
+  assert.equal(order[order.length - 1].voice, 'Studio B');
+  h.search.cancel();
+});
+
+async function probeFixture(h, items) {
+  await h.start();
+  await h.finish('/lite/events', [h.source('one')]);
+  h.pages.set('probe', {'.videos__item': items.map(([voice, url]) => ({method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: voice, url}))});
+  await h.finish('/lite/one', 'probe');
+  h.search.probe(h.search.rows);
+  return voice => h.search.rows.find(r => r.voice === voice);
+}
+
+test('rch/ws handshakes, auth and quota answers keep a row available; only "not found" marks it unavailable', async t => {
+  const h = setup(t), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a'], ['Studio B', '/lite/one/video?f=b'], ['Studio C', '/lite/one/video?f=c'], ['Studio D', '/lite/one/video?f=d'], ['Studio E', '/lite/one/video?f=e']]);
+  await h.finish('/lite/one/video', {rch: true, ws: 'wss://lampac.test/ws', nws: true});
+  assert.ok(!row('Studio A').unavailable, 'an rch handshake is not a missing video');
+  await h.finish('/lite/one/video', {error: 'Daily limit reached'});
+  await h.finish('/lite/one/video', {accsdb: true, error: 'not found'});
+  await h.finish('/lite/one/video', {__status: 403});
+  assert.ok(['Studio B', 'Studio C', 'Studio D'].every(voice => !row(voice).unavailable), 'quota, account and 403 answers can be transient');
+  await h.finish('/lite/one/video', {error: 'File not found'});
+  assert.equal(row('Studio E').unavailable, true);
+  h.search.cancel();
+});
+
+test('only measured qualities and own 404/410 are cached, for 30 minutes', async t => {
+  const h = setup(t), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a'], ['Studio B', '/lite/one/video?f=b'], ['Studio C', '/lite/one/video?f=c']]);
+  await h.finish('/lite/one/video', {__status: 410});
+  await h.finish('/lite/one/video', {__status: 401});
+  await h.finish('/lite/one/video', {error: 'File not found'});
+  assert.equal(row('Studio A').unavailable, true); h.search.cancel();
+  const reopen = async () => {
+    const search = new h.window.HomelabSources.Search(h.movie, h.selection, () => {});
+    search.start(); await flush(); await h.finish('/lite/events', [h.source('one')]); await h.finish('/lite/one', 'probe');
+    const before = h.requests.length; search.probe(search.rows); h.tick(5000); await flush();
+    const probed = h.requests.slice(before).map(r => r.url.searchParams.get('f')).sort(); search.cancel();
+    return {search, probed};
+  };
+  let again = await reopen();
+  assert.equal(again.search.rows.find(r => r.voice === 'Studio A').unavailable, true, 'own 410 comes from the cache');
+  assert.deepEqual(again.probed, ['b', 'c'], 'auth failures and error texts are asked again');
+  h.tick(31 * 60000);
+  again = await reopen();
+  assert.ok(again.probed.includes('a'), 'the cache expires after 30 minutes');
+});
+
+test('a search probes at most 12 leaders; alternates are probed only on request, within 24 in total', async t => {
+  const h = setup(t), voices = Array.from({length: 30}, (_, i) => ['Studio ' + i, '/lite/one/video?f=' + i]);
+  await probeFixture(h, []);
+  h.search.cancel();
+  const search = new h.window.HomelabSources.Search(h.movie, h.selection, () => {});
+  search.start(); await flush(); await h.finish('/lite/events', [h.source('one')]);
+  h.pages.set('many', {'.videos__item': voices.map(([voice, url]) => ({method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: voice, url}))});
+  await h.finish('/lite/one', 'many');
+  assert.equal(search.checking(), 0, 'nothing is probed until the UI asks');
+  search.probe(search.rows); search.probe(search.rows);
+  assert.equal(search.checking(), 12);
+  search.probe(search.rows, true);
+  assert.equal(search.checking(), 24);
+  search.cancel();
+});
+
+test('a foreign CDN refusal never marks a row unavailable, an own /proxy/ refusal does', async t => {
+  const h = setup(t), row = await probeFixture(h, [['Studio A', 'https://cdn.test/a.m3u8'], ['Studio B', '/proxy/b.m3u8']]);
+  await h.finish('/a.m3u8', {__status: 403});
+  assert.ok(!row('Studio A').unavailable);
+  const foreign = h.requests.find(r => r.url.origin === 'https://cdn.test');
+  assert.equal(foreign.options.credentials, 'omit'); assert.ok(!foreign.url.searchParams.has('token'), 'identity stays on Lampac');
+  await h.finish('/proxy/b.m3u8', {__status: 404});
+  assert.equal(row('Studio B').unavailable, true);
+  h.search.cancel();
+});
+
+test('without a native AbortController nothing is probed', async t => {
+  const h = setup(t, {noAbort: true}), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a']]);
+  h.tick(5000); await flush();
+  assert.ok(!h.requests.some(r => r.url.pathname === '/lite/one/video'));
+  assert.deepEqual(Array.from(row('Studio A').qualities), []); assert.equal(h.search.checking(), 0);
+  h.search.cancel();
+});
+
+test('bodies without an allowed content type or above the size cap are never read', async t => {
+  const h = setup(t), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a'], ['Studio B', '/lite/one/video?f=b'], ['Studio C', '/lite/one/video?f=c']]);
+  const job = () => h.requests.find(r => r.url.pathname === '/lite/one/video' && !r.completed);
+  let pending = job(); await h.finish('/lite/one/video', {__type: null, quality: {'1080p': '/x'}});
+  assert.equal(pending.read, false, 'no content type: the body may be media'); assert.deepEqual(Array.from(row('Studio A').qualities), []);
+  pending = job(); await h.finish('/lite/one/video', {__length: '9000000', quality: {'1080p': '/x'}});
+  assert.equal(pending.read, false, 'oversized answer');
+  pending = job(); await h.finish('/lite/one/video', {__type: 'text/plain', __length: null, quality: {'1080p': '/x'}});
+  assert.equal(pending.read, false, 'plain text of unknown size');
+  assert.ok(['Studio A', 'Studio B', 'Studio C'].every(voice => !row(voice).unavailable && !row(voice).qualities.length));
+  h.search.cancel();
+});
+
+test('probes wait for live discovery to finish and share the catalog pacing', async t => {
+  const h = setup(t); await h.start();
+  await h.finish('/lite/events', {life: true, memkey: 'fixture'});
+  h.pages.set('probe', {'.videos__item': [{method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio A', url: '/lite/one/video?f=a'}]});
+  await h.finish('/lifeevents', {ready: false, online: [h.source('one')]});
+  await h.finish('/lite/one', 'probe');
+  h.search.probe(h.search.rows); h.tick(400); await flush();
+  assert.ok(!h.requests.some(r => r.url.pathname === '/lite/one/video'), 'discovery is still running');
+  assert.deepEqual({...h.search.providers}, {total: 1, done: 1});
+  await h.finish('/lifeevents', {ready: true, online: [h.source('one')]});
+  const probe = h.requests.find(r => r.url.pathname === '/lite/one/video'); assert.ok(probe);
+  const previous = h.requests[h.requests.indexOf(probe) - 1];
+  assert.ok(probe.started - previous.started >= 350, 'own probes are paced like catalog pages');
+  h.search.cancel();
+});
+
+test('measured results are cached for the session, so a reopened picker does not probe again', async t => {
+  const h = setup(t), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a']]);
+  await h.finish('/lite/one/video', {quality: {'1080p': '/x'}});
+  assert.equal(row('Studio A').measured, true); h.search.cancel();
+  const again = new h.window.HomelabSources.Search(h.movie, h.selection, () => {});
+  again.start(); await flush();
+  await h.finish('/lite/events', [h.source('one')]); await h.finish('/lite/one', 'probe');
+  h.tick(5000); await flush();
+  assert.equal(h.requests.filter(r => r.url.pathname === '/lite/one/video').length, 1, 'no second probe');
+  const cached = again.rows.find(r => r.voice === 'Studio A');
+  assert.deepEqual(Array.from(cached.qualities), [1080]); assert.equal(cached.measured, true);
+  again.cancel();
+});
+
+test('a probe whose address cannot be built still releases its slot', async t => {
+  const h = setup(t), row = await probeFixture(h, [['Studio A', '/lite/one/video?f=a']]);
+  // probeFixture ran the catalog; the probe was queued and is fetching. Rebuild with a failing identity.
+  h.search.cancel();
+  const search = new h.window.HomelabSources.Search(h.movie, h.selection, () => {});
+  search.start(); await flush(); await h.finish('/lite/events', [h.source('one')]);
+  const url = h.window.HomelabSync.url; let broken = false; h.window.HomelabSync.url = path => broken ? '' : url(path);
+  h.pages.set('probe2', {'.videos__item': [{method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio Z', url: '/lite/one/video?f=z'}]});
+  const job = h.requests.find(r => r.url.pathname === '/lite/one' && !r.completed); job.completed = true; job.finish('probe2');
+  await flush(); broken = true; search.probe(search.rows); h.tick(1000); await flush();
+  assert.equal(search.checking(), 0, 'the failed probe left the queue'); assert.ok(row('Studio A'));
+  assert.ok(search.rows.some(r => r.voice === 'Studio Z') && !search.rows.some(r => r.native), 'a synchronous failure never escapes into the catalog handler');
+  search.cancel();
+});
+
+test('rows group by voice with the best playable source first; torrents and native fallbacks stay single', t => {
+  const group = setup(t).window.HomelabSources.groupRows, row = (key, voice, qualities, extra = {}) => ({key, kind: 'online', provider: key, providerName: key, identityVoice: voice, voice, qualities, ...extra});
+  const groups = group([row('a', 'Dub', [2160], {unavailable: true}), row('b', 'Dub', [1080]), row('c', 'dub', [1080], {measured: true}), row('d', 'Other', []),
+    row('t', 'Dub', [1080], {kind: 'torrent'}), row('n', 'Dub', [], {native: true})]);
+  assert.deepEqual(JSON.parse(JSON.stringify(groups.map(g => g.rows.map(r => r.key)))), [['c', 'b', 'a'], ['d'], ['t'], ['n']]);
+  assert.equal(groups[0].best.key, 'c', 'measured beats declared at the same height; unavailable is last');
 });

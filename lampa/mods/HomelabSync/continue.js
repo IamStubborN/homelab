@@ -475,6 +475,9 @@
     if (!base || entry.deleted || base.timeline == null || String(entry.timeline) !== String(base.timeline) || !(base.duration > 0)) return null;
     var online = base.kind === 'online';
     if (online ? !base.online || !base.online.provider : !/^[a-f0-9]{40}$/i.test(base.torrent || '') || !(base.index > 0)) return null;
+    // The captured online season index belongs to the captured season; the
+    // server requires an online source, so another season cannot be marked.
+    if (online && hasEpisode(entry) && entry.season !== base.season) return null;
     var record = Object.assign({}, base, {position: base.duration, duration: base.duration});
     if (hasEpisode(entry)) { record.season = entry.season; record.episode = entry.episode; }
     return record;
@@ -704,7 +707,7 @@
             var line = window.$('<div class="card-watched__item homelab-ep"><span></span></div>');
             if (current) line.addClass(item.advance ? 'homelab-ep--current homelab-ep--next' : 'homelab-ep--current');
             if (done) line.addClass('homelab-ep--watched');
-            line.find('span').text(episode ? number + ' · ' + plain(episode.name || 'Серия ' + number) : progressText(item));
+            line.find('span').text(episode ? number + ' · ' + plain(episode.name || 'Серия ' + number) : hasEpisode(item) ? episodeLabel(item.season, item.episode) : 'Продолжить просмотр');
             if (current ? percent > 0 : percent > 1) line.append(track(Math.min(100, percent)));
             body.append(line);
           });

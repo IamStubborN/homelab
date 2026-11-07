@@ -128,8 +128,9 @@ rewrites the variant's `CODECS` to the external codec, because hls.js creates th
 audio SourceBuffer from it. If a GST fragment layout cannot be stripped, or the
 external rendition fails for good (sidecar error, missing segment), the plugin
 falls back to the embedded track; choosing the external track again prepares it
-anew. A remembered voice is applied automatically only in the first 45 seconds of
-playback (90 seconds while an external rendition is being prepared); one found
+anew. External audio fragments retry a busy or restarting sidecar for up to a
+minute first. A remembered voice is applied automatically only in the first 45
+seconds after the first frame (90 seconds while an external rendition is being prepared); one found
 later is announced and left in the menu instead of reloading the video.
 
 ## External ASS subtitles
@@ -271,8 +272,9 @@ If a network failure hides the ID entirely, safe targeted removal is impossible
 and the backend's inactivity handling remains the fallback. Invalid GST
 manifests are reported as errors, never retried as native raw-video playback.
 The plugin takes over a torrent only when Lampa's torrent player setting
-(`player_torrent`) is an embedded one and then pins the embedded player; external
-torrent players keep Lampa's own flow. Lampa's playlist is pointed at the item's
+(`player_torrent`) is an embedded one, the main player is not Samsung AVPlay or
+Orsay, and the torrent menu's "run as" did not pick an external app; it then pins
+the embedded player. Everything else keeps Lampa's own flow. Lampa's playlist is pointed at the item's
 original URL, so Next/Previous stay on the right episode after the GST rewrite.
 Lampa's own Playback info button stays hidden for these streams: it needs the
 legacy TorrServer hash, which the plugin removes so that Lampa's legacy GST

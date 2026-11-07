@@ -201,6 +201,56 @@
       return 0;
     }
 
+    // The sidecar answers 503 while it encodes a segment, and a restart
+    // briefly refuses connections. External audio fragments wait for it
+    // longer than hls.js's shared fragment policy before failing for good.
+    var AUDIO_RETRY_MS = 60000;
+    var AUDIO_RETRY_DELAY_MS = 2000;
+    var TRANSIENT_STATUS = {0: true, 429: true, 500: true, 502: true, 503: true, 504: true};
+
+    function retryingLoader(BaseLoader) {
+      function Loader(config) { this.config = config; this.inner = new BaseLoader(config); this.timer = null; this.stopped = false; }
+      ['stats', 'context'].forEach(function (name) {
+        Object.defineProperty(Loader.prototype, name, {get: function () { return this.inner[name]; }});
+      });
+      Loader.prototype.load = function (context, config, callbacks) {
+        var self = this;
+        var frag = context.frag;
+        if (!frag || frag.type !== 'audio') return this.inner.load(context, config, callbacks);
+        var deadline = Date.now() + AUDIO_RETRY_MS;
+        function attempt() {
+          self.timer = null;
+          if (self.stopped) return;
+          self.inner.load(context, config, Object.assign({}, callbacks, {
+            onError: function (error, loaderContext, networkDetails, stats) {
+              if (!self.stopped && error && TRANSIENT_STATUS[error.code] && Date.now() + AUDIO_RETRY_DELAY_MS < deadline) {
+                // A loader is used once; hls.js keeps the first one's stats.
+                var kept = self.inner.stats;
+                try { self.inner.destroy(); } catch (_) {}
+                self.inner = new BaseLoader(self.config);
+                if (kept && kept.loading) {
+                  kept.loading.start = kept.loading.first = kept.loading.end = 0;
+                  kept.loaded = 0;
+                  kept.aborted = false;
+                  kept.retry = (kept.retry || 0) + 1;
+                  self.inner.stats = kept;
+                }
+                self.timer = setTimeout(attempt, AUDIO_RETRY_DELAY_MS);
+                return;
+              }
+              callbacks.onError(error, loaderContext, networkDetails, stats);
+            }
+          }));
+        }
+        attempt();
+      };
+      Loader.prototype.abort = function () { this.stopped = true; clearTimeout(this.timer); this.inner.abort(); };
+      Loader.prototype.destroy = function () { this.stopped = true; clearTimeout(this.timer); this.inner.destroy(); };
+      Loader.prototype.getCacheAge = function () { return this.inner.getCacheAge ? this.inner.getCacheAge() : null; };
+      Loader.prototype.getResponseHeader = function (name) { return this.inner.getResponseHeader ? this.inner.getResponseHeader(name) : null; };
+      return Loader;
+    }
+
     function hlsQuoted(value) {
       return String(value || '').replace(/["\r\n]/g, ' ').trim();
     }
@@ -235,7 +285,7 @@
         if (context.type !== 'manifest') return response;
         return Object.assign({}, response, {data: withExternalAudio(response.data, external)});
       });
-      config.fLoader = transformingLoader(config.fLoader || BaseLoader, function (context, response) {
+      config.fLoader = transformingLoader(retryingLoader(config.fLoader || BaseLoader), function (context, response) {
         var frag = context.frag;
         if (!frag || frag.type !== 'main') return response;
         var bytes = new Uint8Array(response.data);
@@ -655,6 +705,9 @@
     function preparePlayback(event) {
       installHlsResilience();
       var work = event.data;
+      var runas = runasChoice;
+      runasChoice = null;
+      if (runas && runas !== 'inner' && runas !== 'lampa') return;
       var original = masterUrl(work);
       if (!original) return;
       pausedWork = null;
@@ -668,7 +721,8 @@
       // the torrent one; masterUrl already checked that this is the embedded player.
       work.launch_player = 'inner';
       work.hls_manifest_timeout = 90000;
-      if (work.homelab_gst_played) {
+      var replayed = Boolean(work.homelab_gst_played);
+      if (replayed) {
         // A playlist item played again keeps the object of its last play.
         // Only cross-device resume brings preferences of its own.
         if (work.homelab_resume_at === undefined || work.homelab_resume_at === null) delete work.homelab_track_preferences;
@@ -694,6 +748,8 @@
         // another viewer's legacy task for this torrent.
         delete work.torrent_hash;
       } else {
+        // The audio of the last play is chosen again from the preferences.
+        if (replayed) original.searchParams.delete('audio');
         original.searchParams.set('uid', newSessionId());
         work.url = original.href;
       }
@@ -705,7 +761,26 @@
 
     function externalTorrentPlayer() {
       var choice = Lampa.Storage.field('player_torrent');
-      return Boolean(choice) && !EMBEDDED_PLAYERS[choice];
+      if (choice && !EMBEDDED_PLAYERS[choice]) return true;
+      // Lampa's main `player` setting picks Samsung AVPlay or Orsay for the
+      // embedded player: an <object> without hls.js, MSE or working
+      // removeEventListener. Leave those to Lampa's own flow.
+      var platform = Lampa.Platform && Lampa.Platform.is;
+      var main = Lampa.Storage.field('player');
+      return Boolean(platform && (platform.call(Lampa.Platform, 'tizen') && main === 'tizen' ||
+        platform.call(Lampa.Platform, 'orsay') && main === 'orsay'));
+    }
+
+    // The torrent menu's "run as" (Player.runas) applies to the next play only
+    // after `create`; remember it so that play is left to Lampa.
+    var runasChoice = null;
+    if (typeof Lampa.Player.runas === 'function' && !Lampa.Player.runas.homelab) {
+      var lampaRunas = Lampa.Player.runas;
+      Lampa.Player.runas = function (need) {
+        runasChoice = need || null;
+        return lampaRunas.apply(this, arguments);
+      };
+      Lampa.Player.runas.homelab = true;
     }
 
     function masterUrl(work) {
@@ -850,7 +925,14 @@
       track.ignore_translate = true;
       var descriptor = Object.getOwnPropertyDescriptor(track, 'enabled');
       if (descriptor && descriptor.set && descriptor.set.homelabState === state) return;
-      function choose(value) { if (value) selectTrack(state, track); }
+      function choose(value) {
+        if (!value) return;
+        // The panel returns focus after this setter: an error must not skip that.
+        try { selectTrack(state, track); } catch (error) {
+          console.warn('Homelab GST audio:', error && error.message);
+          report('audio-switch-failed', {track: track.label, reason: error && error.message}, state.work);
+        }
+      }
       choose.homelabState = state;
       Object.defineProperty(track, 'enabled', {
         configurable: true, enumerable: false,
@@ -1827,7 +1909,9 @@
       if (!url || typeof window.fetch !== 'function' || typeof AbortController === 'undefined') return;
       var state = active = {
         work: work, abort: new AbortController(), externalAbort: new AbortController(), previousTracks: work.voiceovers,
-        embeddedProxies: {}, embeddedBroken: {}, autoUntil: Date.now() + AUTO_APPLY_MS
+        embeddedProxies: {}, embeddedBroken: {},
+        // Counted from the first frame: a slow torrent start keeps the window open.
+        autoUntil: Infinity
       };
       report('play-start', {audio: Number(url.searchParams.get('audio') || 0)}, work);
       var stored = Lampa.Storage.get(preferenceKey, {});
@@ -1954,6 +2038,7 @@
     });
     Lampa.PlayerVideo.listener.follow('play', function () {
       var video = Lampa.PlayerVideo.video();
+      if (active && active.work === Lampa.Player.playdata() && active.autoUntil === Infinity) active.autoUntil = Date.now() + AUTO_APPLY_MS;
       if (pausedWork === Lampa.Player.playdata() && video && !video.paused) pausedWork = null;
     });
     if (Lampa.Storage.listener) Lampa.Storage.listener.follow('change', function (event) {
@@ -1973,6 +2058,16 @@
       }
     });
     Lampa.Player.listener.follow('ready', installCurrent);
+    // A play that still ends in an external app gets back what Lampa built.
+    Lampa.Player.listener.follow('external', function (work) {
+      if (!work || !work.homelab_source_url || !work.homelab_torrent_hash) return;
+      work.url = work.homelab_source_url;
+      work.torrent_hash = work.homelab_torrent_hash;
+      delete work.homelab_torrent_hash;
+      delete work.homelab_source_url;
+      delete work.homelab_external_audio;
+      delete work.homelab_gst_played;
+    });
     Lampa.Player.listener.follow('destroy', function () {
       if (active) report('play-stop', {}, active.work);
       pausedWork = null;
@@ -1980,6 +2075,12 @@
       if (retryWork) delete retryWork.homelab_retry_playback;
       retryWork = null;
     });
+    function canRetry(work) {
+      if (!work || work !== Lampa.Player.playdata() || !masterUrl(work) || !Lampa.PlayerVideo.video()) return false;
+      if (active) return active.work === work;
+      return typeof window.fetch === 'function' && typeof AbortController !== 'undefined';
+    }
+
     Lampa.HomelabGstAudio = {installCurrent: installCurrent, toggleSigns: toggleSigns,
       preferences: function (work) {
         var state = active, url = masterUrl(work);
@@ -1993,15 +2094,13 @@
         return result;
       },
       // Whether retryCurrent() would restart this work in place; reads only.
-      canRetry: function (work) {
-        if (!work || work !== Lampa.Player.playdata() || !masterUrl(work) || !Lampa.PlayerVideo.video()) return false;
-        if (active) return active.work === work;
-        return typeof window.fetch === 'function' && typeof AbortController !== 'undefined';
-      },
+      canRetry: canRetry,
       subscribe: function (fn) { phaseListeners.push(fn); return function () { phaseListeners = phaseListeners.filter(function (value) { return value !== fn; }); }; },
       retryCurrent: function () {
-        var work = Lampa.Player.playdata(), url = masterUrl(work), old = Lampa.PlayerVideo.video();
-        if (!url || !old) return false;
+        var work = Lampa.Player.playdata();
+        // Decide before touching the work: a refusal leaves it as it was.
+        if (!canRetry(work)) return false;
+        var url = masterUrl(work), old = Lampa.PlayerVideo.video();
         var saved = active && active.pendingPlayback || ((old.readyState < 1 || old.error) && work.homelab_retry_playback) || {time: Number(old.currentTime) || 0, paused: old.paused,
           volume: old.volume, muted: old.muted, rate: old.playbackRate};
         work.homelab_retry_playback = saved; retryWork = work;

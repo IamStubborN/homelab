@@ -43,6 +43,7 @@ MAX_PROBES_CACHED = 256
 WARM_HEAD_BYTES = int(os.environ.get("WARM_HEAD_MB", "8")) * 1024 * 1024
 WARM_SECONDS = 60
 WARM_FORGET_SECONDS = 6 * 3600
+WARM_VOICE_WAIT_SECONDS = 20
 # TorrServer's torrent states that are running (not only kept in its database).
 TORRENT_GETTING_INFO, TORRENT_PRELOAD, TORRENT_WORKING = 1, 2, 3
 
@@ -820,7 +821,8 @@ def warm(torrent_hash, file_id, voice_id, files):
             lambda: probe_embedded(torrent_hash, file_id, remember_failure=False),
         ]
         if voice_id is not None:
-            steps.append(lambda: probe_audio_soon(torrent_hash, voice_id, wait=PROBE_BACKGROUND_SECONDS, remember_failure=False))
+            # The probe goes on in the background; a short wait keeps the viewed-mark window short.
+            steps.append(lambda: probe_audio_soon(torrent_hash, voice_id, wait=WARM_VOICE_WAIT_SECONDS, remember_failure=False))
         for step in steps:
             try:
                 step()

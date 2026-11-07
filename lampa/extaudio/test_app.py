@@ -837,7 +837,7 @@ class WarmTests(unittest.TestCase):
 
     def test_a_warm_probes_the_voice_over_being_played_and_keeps_views(self):
         _, _, audio, requests = self.run_warm(2, viewed=True)
-        audio.assert_called_once_with(HASH, 2, wait=app.PROBE_BACKGROUND_SECONDS, remember_failure=False)
+        audio.assert_called_once_with(HASH, 2, wait=app.WARM_VOICE_WAIT_SECONDS, remember_failure=False)
         self.assertEqual([payload["action"] for path, payload in requests if path == "/viewed"], ["list"], "a file viewed before stays viewed")
 
     def test_a_warm_never_reads_a_torrent_stopped_since_the_request(self):

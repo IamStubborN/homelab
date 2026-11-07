@@ -6,6 +6,7 @@ include:
 
     # services
     - glance/compose.yml
+    - uptime-kuma/compose.yml
     - jacred/compose.yml
     - lampa/compose.yml
     - download/compose.yml

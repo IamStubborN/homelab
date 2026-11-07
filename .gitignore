@@ -259,3 +259,7 @@ instances/
 cliproxyapi/config.yaml
 cliproxyapi/auths/
 cliproxyapi/logs/
+
+# Uptime Kuma runtime state and private provisioning
+uptime-kuma/data/
+uptime-kuma/private/

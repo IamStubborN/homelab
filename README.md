@@ -19,6 +19,7 @@ with the documented Docker Compose or guarded media deployment commands.
 - Plex, Kavita, Samba, OpenList, Watchtower, DeUnhealth
 - Media Orchestrator with a dedicated Rezka VPN, managed by the root Compose project
 - KaraKeep, Freedium, Movie Tracker, Glance
+- [Uptime Kuma](uptime-kuma/README.md) for private availability monitoring
 - Bitwarden (Vaultwarden), Mosquitto, RustDesk
 - OpenCode Go for household chat, NVIDIA embeddings for KaraKeep
 - Family Health Python MCP cashier (jsonl under `/mnt/internal/wiki/shared/health`)

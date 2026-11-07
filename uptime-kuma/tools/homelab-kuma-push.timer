@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh container and filesystem health in Uptime Kuma
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=homelab-kuma-push.service
+
+[Install]
+WantedBy=timers.target

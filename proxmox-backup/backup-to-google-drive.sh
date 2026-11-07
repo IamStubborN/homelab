@@ -5,8 +5,8 @@ umask 077
 
 readonly LOCAL_BACKUP_DIR=/var/lib/vz/dump
 readonly REMOTE_ROOT='homelab-backups:Proxmox'
+readonly AGE_HELPER=/usr/local/libexec/homelab-age-upload
 readonly LOCK_FILE=/run/lock/homelab-google-drive-backup.lock
-readonly RCLONE_BIND=0.0.0.0
 
 exec 9>"${LOCK_FILE}"
 # The nightly backups run minutes apart: wait for the previous one (or the
@@ -16,7 +16,7 @@ if ! flock -w 1800 9; then
   exit 75
 fi
 
-for command in awk basename date find flock mv pct pvesm rclone rm sort stat tar vzdump zstd; do
+for command in age awk basename date find flock mv pct pvesm python3 rclone rm sort stat tar vzdump zstd; do
   command -v "${command}" >/dev/null || {
     echo "Required command is missing: ${command}" >&2
     exit 69
@@ -24,49 +24,15 @@ for command in awk basename date find flock mv pct pvesm rclone rm sort stat tar
 done
 
 upload_file() {
-  local source=$1
-  local remote_directory=$2
-  local destination
-  local local_size remote_size
-
-  destination="${remote_directory}/$(basename "${source}")"
-
-  rclone --bind "${RCLONE_BIND}" mkdir "${remote_directory}"
-  rclone --bind "${RCLONE_BIND}" copyto "${source}" "${destination}" \
-    --transfers 1 \
-    --checkers 2 \
-    --drive-chunk-size 64M
-
-  local_size=$(stat -c '%s' "${source}")
-  remote_size=$(rclone --bind "${RCLONE_BIND}" lsl "${destination}" | awk 'NR == 1 {print $1}')
-  if [[ -z "${remote_size}" || "${local_size}" != "${remote_size}" ]]; then
-    echo "Remote size verification failed for $(basename "${source}")" >&2
-    exit 74
-  fi
+  "${AGE_HELPER}" upload "$1" "$2"
 }
 
 prune_remote() {
-  local remote_directory=$1
-  local include_pattern=$2
-  local keep=$3
-  local index=0 file log_file
+  "${AGE_HELPER}" prune "$1" "$2.age" "$3" "$(basename "$4").age"
+}
 
-  while IFS= read -r file; do
-    [[ -n "${file}" ]] || continue
-    index=$((index + 1))
-    if (( index <= keep )); then
-      continue
-    fi
-
-    case "${file}" in
-      *.vma.zst) log_file="${file%.vma.zst}.log" ;;
-      *.tar.zst) log_file="${file%.tar.zst}.log" ;;
-      *) log_file='' ;;
-    esac
-    rclone --bind "${RCLONE_BIND}" deletefile "${remote_directory}/${file}"
-    rclone --bind "${RCLONE_BIND}" deletefile "${remote_directory}/${file}.notes" 2>/dev/null || true
-    [[ -n "${log_file}" ]] && rclone --bind "${RCLONE_BIND}" deletefile "${remote_directory}/${log_file}" 2>/dev/null || true
-  done < <(rclone --bind "${RCLONE_BIND}" lsf "${remote_directory}" --files-only --include "${include_pattern}" | sort -r)
+cleanup_file() {
+  rm -f -- "$1" "$1.age" "$1.age.meta.json"
 }
 
 upload_guest_archive() {
@@ -117,8 +83,10 @@ upload_guest_archive() {
     [[ -f "${sidecar}" ]] && upload_file "${sidecar}" "${remote_directory}"
   done
 
-  prune_remote "${remote_directory}" "${pattern}" "${keep}"
-  rm -f -- "${archive}" "${archive}.notes" "${log_file}"
+  prune_remote "${remote_directory}" "${pattern}" "${keep}" "${archive}"
+  cleanup_file "${archive}"
+  cleanup_file "${archive}.notes"
+  cleanup_file "${log_file}"
 }
 
 latest_archive() {
@@ -134,8 +102,8 @@ backup_opnsense_config() {
   chmod 700 -- "${LOCAL_BACKUP_DIR}"
   /usr/local/libexec/homelab-opnsense-config-backup "${archive}"
   upload_file "${archive}" "${REMOTE_ROOT}/OPNsense/config"
-  prune_remote "${REMOTE_ROOT}/OPNsense/config" 'opnsense-config-*.tar.gz' 5
-  rm -f -- "${archive}"
+  prune_remote "${REMOTE_ROOT}/OPNsense/config" 'opnsense-config-*.tar.gz' 5 "${archive}"
+  cleanup_file "${archive}"
 }
 
 backup_opnsense() {
@@ -174,8 +142,8 @@ backup_host_config() {
 
   zstd -tq "${archive}"
   upload_file "${archive}" "${REMOTE_ROOT}/host-config"
-  prune_remote "${REMOTE_ROOT}/host-config" 'proxmox-host-config-*.tar.zst' 5
-  rm -f -- "${archive}"
+  prune_remote "${REMOTE_ROOT}/host-config" 'proxmox-host-config-*.tar.zst' 5 "${archive}"
+  cleanup_file "${archive}"
 }
 
 upload_app_capture() {
@@ -199,9 +167,9 @@ upload_app_capture() {
   fi
   zstd -tq "${archive}"
   upload_file "${archive}" "${REMOTE_ROOT}/Docker/apps"
-  prune_remote "${REMOTE_ROOT}/Docker/apps" 'apps-*.tar.zst' 7
+  prune_remote "${REMOTE_ROOT}/Docker/apps" 'apps-*.tar.zst' 7 "${archive}"
   pct exec 300 -- /usr/local/sbin/homelab-app-data-backup complete "${stage}" >/dev/null
-  rm -f -- "${archive}"
+  cleanup_file "${archive}"
 }
 
 backup_apps() {

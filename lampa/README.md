@@ -21,7 +21,7 @@ Playback recovery actions replace the permanent status button: Retry and Other
 source appear only after a fatal error or 30 seconds of stalled loading in the
 embedded player, including a start that never receives data and a seek that
 never completes; a user pause is not a stall. Retry is shown only when the
-current source can be retried, and Lampa's own switch to a reserve URL is not
+current source can be retried and GST is not already recovering on its own, and Lampa's own switch to a reserve URL is not
 a failure. Phase changes never add custom center-screen status text or
 notifications; native player presentation stays in charge. They never switch
 automatically. Online retry resolves a fresh

@@ -33,25 +33,36 @@
     }
   }
   function actions(s, show) {
-    toggle(retryButton, show && canRetry(s));
+    // Retry would discard the GST plugin's own recovery while it is running.
+    toggle(retryButton, show && s.phase !== 'recovering' && canRetry(s));
     toggle(sourceButton, show && canChoose(s));
   }
   function capture(s) {
     if (!currentVideo(s)) return;
     var at = s.video.currentTime, duration = s.video.duration;
-    if (Number.isFinite(at) && (at > 0 || s.video.readyState >= 1 && (s.video.seeking || s.started))) { s.position = Math.max(0, at); s.started = true; }
+    if (Number.isFinite(at) && (at > 0 || s.video.readyState >= 1 && (s.video.seeking || s.started))) { s.position = Math.max(0, at); s.started = s.observed = true; }
     if (Number.isFinite(duration) && duration > 0) s.duration = duration;
+  }
+  // Lampa's Timeline resume rules, for a failure before anything was observed.
+  function resumeAt(s) {
+    var at = Number(s.work.homelab_resume_at); if (at > 0) return at;
+    var tl = s.work.timeline, mode = L.Storage && typeof L.Storage.field === 'function' ? L.Storage.field('player_timecode') : '';
+    if (!tl || mode === 'again' || tl.continued_bloc) return 0;
+    var duration = s.duration || Number(tl.duration) || 0, percent = Number(tl.percent), exact = parseFloat(tl.time + '');
+    if (!(exact > 0 && (!duration || exact < duration))) exact = duration ? Math.round(duration * percent / 100) : 0;
+    if (!(exact > 10 && percent < 90)) return 0;
+    return duration && exact > duration - 15 ? Math.max(0, duration - 15) : exact;
   }
   function recover(same) {
     var s = state; if (!s || !valid(s) || !s.actionable) return;
     if (Date.now() - s.retryAt < 5000) { L.Noty.show('Перезапуск уже выполняется, подождите'); return; }
     s.retryAt = Date.now(); capture(s);
     if ((!same || s.work.homelab_online) && canChoose(s)) {
-      if (!window.HomelabSources.recover(s.work, {position: s.position, duration: s.duration}, same)) L.Noty.show('Откройте источник заново');
+      if (!window.HomelabSources.recover(s.work, {position: s.observed ? s.position : resumeAt(s), duration: s.duration}, same)) { s.retryAt = -Infinity; L.Noty.show('Откройте источник заново'); }
       return;
     }
     var audio = L.HomelabGstAudio;
-    if (!audio || !audio.retryCurrent || !audio.retryCurrent()) L.Noty.show('Повторный запуск недоступен. Откройте видео заново');
+    if (!audio || !audio.retryCurrent || !audio.retryCurrent()) { s.retryAt = -Infinity; L.Noty.show('Повторный запуск недоступен. Откройте видео заново'); }
     else { bind(s); set('preparing'); arm(s); }
   }
   function set(phase, stalled) {
@@ -68,15 +79,18 @@
       if (!currentVideo(s) || s.video !== video || s.userPaused || video.ended) return;
       // Before MANIFEST_LOADED hls.js leaves the element paused without data;
       // paused with playable data is a blocked autoplay, not a stall.
-      if (window.document && window.document.hidden || video.paused && video.readyState >= 3 || Math.abs(video.currentTime - at) > .5) return arm(s);
-      set('buffering', true);
+      // Players without pause events (Tizen AVPlay) report a user pause only
+      // through paused after playback has started.
+      if (window.document && window.document.hidden || video.paused && (s.started || video.readyState >= 3) || Math.abs(video.currentTime - at) > .5) return arm(s);
+      set(s.phase === 'recovering' ? 'recovering' : 'buffering', true);
     }, 30000);
   }
   function cancelStall(s) { clearTimeout(s.stall); s.stall = null; }
   function unbind(s) {
     if (!s) return;
     cancelStall(s); clearTimeout(s.rebind);
-    if (s.video) Object.keys(s.events).forEach(function (name) { s.video.removeEventListener(name, s.events[name]); });
+    // The Tizen AVPlay wrapper has no removeEventListener; currentVideo() guards stale events.
+    if (s.video && typeof s.video.removeEventListener === 'function') Object.keys(s.events).forEach(function (name) { s.video.removeEventListener(name, s.events[name]); });
     s.video = null;
   }
   function bind(s) {
@@ -107,8 +121,7 @@
     clear();
     if (!work || !work.homelab_online && !/^[a-f0-9]{40}$/i.test(work.homelab_torrent_hash || work.torrent_hash || '')) return;
     panel();
-    var saved = Number(work.homelab_resume_at) || work.timeline && Number(work.timeline.time) || 0;
-    state = {work: work, scope: scope(), phase: 'preparing', retryAt: -Infinity, position: saved > 0 ? saved : 0, duration: 0, started: false, userPaused: false, reserve: !!work.url_reserve};
+    state = {work: work, scope: scope(), phase: 'preparing', retryAt: -Infinity, position: 0, observed: false, duration: 0, started: false, userPaused: false, reserve: !!work.url_reserve};
     set('preparing');
   }
   function audioReady() {

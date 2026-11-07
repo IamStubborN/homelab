@@ -77,8 +77,10 @@ function fakeElement(html = '') {
   return element;
 }
 
-function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null, attachments = {}, library = null } = {}) {
+function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null, attachments = {}, library = null, platform = null } = {}) {
   const notices = [];
+  const playlistUrls = [];
+  const runas = [];
   let work = false;
   let video = createVideo();
   let audioMenu = [];
@@ -131,11 +133,13 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       field: key => storage.has(key) ? JSON.parse(storage.get(key)) : undefined,
       listener: settings,
     },
-    Controller: { toggle() {}, enabled: () => ({ name: controller }) }, Keypad: { listener: keypad }, Platform: { is: name => android && name === 'android' },
-    Player: { playdata: () => work, listener: player },
+    Controller: { toggle() {}, enabled: () => ({ name: controller }) }, Keypad: { listener: keypad }, Platform: { is: name => android && name === 'android' || name === platform },
+    Player: { playdata: () => work, listener: player, runas: need => { runas.push(need); } },
     PlayerVideo: {
       listener: playerVideo, video: () => video,
-      destroy(savemeta) { selectedSubtitle = -1; subtitles = []; playerVideo.send('destroy', { savemeta }); },
+      // Replacing the video (savemeta) keeps the panel's subtitle list; only
+      // closing the player (PlayerPanel.destroy) drops it.
+      destroy(savemeta) { if (!savemeta) { selectedSubtitle = -1; subtitles = []; } playerVideo.send('destroy', { savemeta }); },
       url(url) {
         loads.push(url); video = createVideo(); video.readyState = 0; video.paused = true;
         // Match native PlayerVideo: url/waiting set the loader; only playing
@@ -146,11 +150,12 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
           playingStates.push({ muted: video.muted, currentTime: video.currentTime });
         });
       },
-      pause: () => video.pause(), play: () => video.play(),
+      pause: () => video.pause(), play: () => { video.play(); playerVideo.send('play'); },
       playpause() { if (!waiting) video.paused ? video.play() : video.pause(); },
       subsview() {},
     },
     Noty: { show: message => notices.push(message) },
+    PlayerPlaylist: { url: value => { playlistUrls.push(value); } },
     PlayerPanel: {
       listener: panel, setTracks: value => { audioMenu = value; }, setSubs: value => { subtitles = value; },
       render: () => ({ find: selector => selector === '.player-panel__subs' ? subsButton : { length: 0 } }),
@@ -161,7 +166,11 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
     setItem: (key, value) => storage.set(key, String(value)),
     removeItem: key => storage.delete(key),
   };
+  // Date.now() the plugin sees; tests move it with clock().
+  let clockOffset = 0;
+  class TestDate extends Date { static now() { return Date.now() + clockOffset; } }
   const context = {
+    Date: TestDate,
     Lampa, URL, AbortController, console, localStorage: browserStorage, TextDecoder, TextEncoder, Worker: class {},
     setTimeout(fn, delay) { timers.set(++timerId, {fn, delay}); return timerId; },
     clearTimeout(id) { timers.delete(id); },
@@ -282,6 +291,29 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       request.resolve({ok: true, url: `https://lampa.test/gst/${id}/master.m3u8`});
       await new Promise(setImmediate);
     },
+    playlistUrls,
+    runas,
+    clock(ms) { clockOffset += ms; },
+    // Lampa's PlayerVideo `play` event: playback has really started.
+    firstFrame() { playerVideo.send('play'); },
+    // Lampa between create/start and ready (a preroll, for example).
+    begin(file = 1, hash = 'same-torrent') {
+      work = { torrent_hash: hash, url: `https://lampa.test/torrserver/gst/${hash}/master.m3u8?index=${file}&audio=0` };
+      player.send('create', {data: work});
+      player.send('start', work);
+    },
+    external() { player.send('external', work); },
+    // The production order: Lampa sends create (the plugin rewrites the URL), start, ready.
+    play(file = 1, hash = 'same-torrent', fields = {}) { this.start(file, hash, true, fields); },
+    // Lampa plays a playlist item again with the object of its last play.
+    replay(item) {
+      destroy();
+      work = item;
+      video = createVideo();
+      player.send('create', {data: work});
+      player.send('start', work);
+      player.send('ready', work);
+    },
     start(file = 1, hash = 'same-torrent', prepare = false, fields = {}) {
       destroy();
       work = { ...fields, torrent_hash: hash, url: `https://lampa.test/torrserver/gst/${hash}/master.m3u8?index=${file}&audio=0` };
@@ -329,8 +361,13 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       audioMenu.forEach((item, index) => { item.title = `${index + 1} / ${item.language || ''} / ${item.label}`; });
       const item = audioMenu.find(value => value.label === title);
       assert.ok(item, `audio option ${title} exists`);
-      // Select invokes the item's onSelect directly instead of the panel callback.
-      item.onSelect(item);
+      // Lampa 3.4.6 PlayerPanel: unmark all, switch the chosen one on through
+      // `enabled`, return focus, then call an item's own onSelect if it has one.
+      assert.equal(item.ignore_translate, true, 'labels must not be replaced by Lampa translations');
+      audioMenu.forEach(element => { element.enabled = false; element.selected = false; });
+      item.enabled = true;
+      item.selected = true;
+      if (item.onSelect) item.onSelect(item);
     },
     chooseSubtitle(title) {
       // The subtitle menu also replaces title; label remains source metadata.
@@ -734,7 +771,8 @@ test('Android embedded player owns a separate HLS session and preserves reordere
   assert.notEqual(androidUrl.searchParams.get('uid'), browserUrl.searchParams.get('uid'));
   assert.equal(h.work().hls_type, 'hlsjs');
   assert.equal(h.work().launch_player, 'inner', 'torrent playback must not fall back to the external main player');
-  assert.equal(browser.work().launch_player, undefined, 'browser player selection remains untouched');
+  // Without torrent_hash Lampa would read its main `player` setting instead of `player_torrent`.
+  assert.equal(browser.work().launch_player, 'inner', 'GST playback stays in the embedded player on every platform');
   assert.equal(h.work().torrent_hash, undefined);
   await h.probe(firstEpisode, true);
   h.chooseAudio('Amediateka (Studio Band)');
@@ -1994,4 +2032,295 @@ test('cross-device resume restores recorded track identity without using this de
   h.start(1, 'same-torrent', true, {homelab_track_preferences: {audio: {title: 'japanese', language: 'ja', external: false}}});
   await h.probe(firstEpisode); h.ready();
   assert.equal(new URL(h.loads.at(-1)).searchParams.get('audio'), '2');
+});
+
+// Review fixes, exercised through Lampa's production create → start → ready order.
+
+const commentary = { Type: 'audio', Index: 1, Title: 'Commentary', Language: 'en', Channels: 2 };
+
+test('the playlist finds the playing item by the URL Lampa built, not the rewritten one', t => {
+  const h = harness(t);
+  h.play(5, 'fictional-hash');
+  assert.equal(new URL(h.work().url).pathname, '/gst/start.m3u8');
+  assert.equal(h.playlistUrls.at(-1), 'https://lampa.test/torrserver/gst/fictional-hash/master.m3u8?index=5&audio=0');
+});
+
+test('an external torrent player choice keeps Lampa in charge; embedded choices are taken over', t => {
+  const external = harness(t, new Map([['player_torrent', JSON.stringify('vlc')]]));
+  external.play();
+  assert.equal(external.work().torrent_hash, 'same-torrent', 'Lampa keeps its torrent player setting');
+  assert.equal(external.work().launch_player, undefined);
+  assert.equal(new URL(external.work().url).pathname, '/torrserver/gst/same-torrent/master.m3u8');
+  const tizen = harness(t, new Map([['player_torrent', JSON.stringify('tizen')]]));
+  tizen.play();
+  assert.equal(new URL(tizen.work().url).pathname, '/gst/start.m3u8');
+  assert.equal(tizen.work().launch_player, 'inner');
+});
+
+test('external ASS follows the new video after an audio switch even without embedded subtitles', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), { ass: assLookup, raw: { 25: new TextEncoder().encode(assText) } });
+  h.play(13, 'abc');
+  await h.probe([japaneseAAC, commentary]);
+  await h.settle();
+  h.chooseSubtitle('YakuSub Studio: полные (внешние)');
+  await h.settle();
+  assert.equal(FakeAss.instances.length, 1);
+  h.chooseAudio('Commentary');
+  h.ready();
+  await h.settle();
+  // Lampa sends no subtitle event: the GST stream has no subtitle tracks.
+  assert.equal(FakeAss.instances.length, 2, 'the renderer is created again for the new video');
+  assert.ok(FakeAss.instances[0].destroyed, 'the renderer of the removed video is released');
+  assert.equal(FakeAss.instances[1].options.video, h.video());
+  assert.equal(h.subtitleTitle(), 'YakuSub Studio: полные (внешние)');
+});
+
+for (const failure of [
+  { name: 'segment', data: { type: 'networkError', details: 'fragLoadError', fatal: true, frag: { type: 'audio', sn: 4 }, response: { code: 502 } } },
+  { name: 'playlist', data: { type: 'networkError', details: 'audioTrackLoadError', fatal: true, response: { code: 404 } } },
+]) {
+  test(`a fatal external audio ${failure.name} error falls back to the embedded track instead of ending playback`, async t => {
+    const h = harness(t, new Map(), { external: [anilibria] });
+    h.play(13, 'abc');
+    await h.probe([japaneseAAC]);
+    await h.task('301');
+    h.chooseAudio(externalLabel);
+    await h.settle();
+    h.ready();
+    const hls = h.createHls();
+    const errors = [];
+    hls.on('error', (name, data) => errors.push(data));
+    hls.trigger('error', { ...failure.data });
+    assert.deepEqual(errors, [], 'the application never sees a terminal error');
+    assert.equal(h.requests.filter(r => new URL(r.url).pathname === '/gst/remove').length, 0, 'the video task stays');
+    h.fireTimer(0);
+    assert.equal(h.work().homelab_external_audio, undefined);
+    assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), ['Japanese']);
+    assert.equal(h.notices.at(-1), 'Внешняя озвучка недоступна, включена встроенная');
+    // An explicit choice prepares the rendition again.
+    const prepared = h.requests.filter(r => /audio\.m3u8$/.test(new URL(r.url).pathname)).length;
+    h.ready();
+    h.chooseAudio(externalLabel);
+    await h.settle();
+    assert.equal(h.requests.filter(r => /audio\.m3u8$/.test(new URL(r.url).pathname)).length, prepared + 1);
+  });
+}
+
+test('audio and subtitle fragment errors do not start the terminal deadline', t => {
+  const h = harness(t);
+  h.play();
+  const hls = h.createHls();
+  hls.on('error', () => {});
+  hls.trigger('error', { type: 'networkError', details: 'fragLoadError', fatal: false, frag: { type: 'audio', sn: 3 } });
+  hls.trigger('error', { type: 'networkError', details: 'fragLoadTimeOut', fatal: false, frag: { type: 'subtitle', sn: 3 } });
+  assert.throws(() => h.fireTimer(180000), /timer 180000 is scheduled/);
+  hls.trigger('error', { type: 'networkError', details: 'fragLoadError', fatal: false, frag: { type: 'main', sn: 3 } });
+  h.fireTimer(180000);
+  assert.equal(hls.stops, 1, 'a main fragment error still ends at the deadline');
+});
+
+test('a paused video with buffered frames is not failed by the deadline', t => {
+  const h = harness(t);
+  h.play();
+  const hls = h.createHls();
+  const errors = [];
+  hls.on('error', (name, data) => errors.push(data));
+  hls.trigger('manifestLoading');
+  Object.assign(h.video(), { paused: true, currentTime: 10, buffered: { length: 1, start: () => 0, end: () => 40 } });
+  h.fireTimer(180000);
+  assert.equal(hls.stops, 0);
+  assert.deepEqual(errors, []);
+  h.video().paused = false;
+  h.fireTimer(180000);
+  assert.equal(hls.stops, 1, 'once playing again, a stall still ends at the deadline');
+});
+
+test('a late external lookup keeps the mark on the track that is playing', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  const fetch = h.context.window.fetch;
+  let unread = 1;
+  h.context.window.fetch = (url, options) => {
+    if (unread && /\/13\/tracks$/.test(new URL(url).pathname)) {
+      unread--;
+      return Promise.resolve({ ok: true, json: async () => ({ tracks: [], pending: true }) });
+    }
+    return fetch(url, options);
+  };
+  h.play(13, 'abc');
+  await h.probe([japaneseAAC, commentary]);
+  await h.settle();
+  h.chooseAudio('Commentary');
+  h.ready();
+  h.fireTimer(2000);
+  await h.settle();
+  assert.deepEqual(h.audioMenu().map(item => item.label), ['Japanese', 'Commentary', externalLabel]);
+  assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), ['Commentary']);
+});
+
+test('a remembered voice found late is offered instead of reloading the video', async t => {
+  const storage = new Map([['homelab_gst_track_preferences', JSON.stringify({ abc: { audio: { title: 'anilibria.tv', language: 'ru', external: true } } })]]);
+  const h = harness(t, storage, { external: [anilibria] });
+  const fetch = h.context.window.fetch;
+  let unread = 1;
+  h.context.window.fetch = (url, options) => {
+    if (unread && /\/13\/tracks$/.test(new URL(url).pathname)) {
+      unread--;
+      return Promise.resolve({ ok: true, json: async () => ({ tracks: [], pending: true }) });
+    }
+    return fetch(url, options);
+  };
+  h.play(13, 'abc');
+  await h.probe([japaneseAAC, commentary]);
+  await h.settle();
+  h.ready();
+  h.firstFrame();
+  const loads = h.loads.length;
+  h.clock(60000);
+  h.fireTimer(2000);
+  await h.settle();
+  assert.equal(h.requests.filter(r => /audio\.m3u8$/.test(new URL(r.url).pathname)).length, 0, 'nothing is prepared');
+  assert.equal(h.loads.length, loads, 'the video is not reloaded');
+  assert.equal(h.notices.at(-1), 'Озвучка «' + externalLabel + '» доступна в меню');
+});
+
+test('a playlist item played again forgets the audio and preferences of its last play', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  h.play(13, 'abc');
+  const first = h.work();
+  await h.probe([japaneseAAC]);
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  h.ready();
+  assert.ok(first.homelab_external_audio);
+  h.play(14, 'abc');
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  h.ready();
+  h.chooseAudio('Japanese');
+  h.ready();
+  h.replay(first);
+  assert.equal(first.homelab_external_audio, undefined, 'the old rendition is not attached to the new player');
+  assert.equal(new URL(first.url).searchParams.has('audio'), false, 'the old audio index is not reused');
+  await h.probe([japaneseAAC]);
+  await h.settle();
+  assert.equal(first.homelab_external_audio, undefined, 'the choice made in the later episode wins');
+  assert.deepEqual(h.audioMenu().filter(item => item.selected).map(item => item.label), ['Japanese']);
+  assert.equal(h.playlistUrls.at(-1), 'https://lampa.test/torrserver/gst/abc/master.m3u8?index=13&audio=0');
+});
+
+test('canRetry reports whether retryCurrent would restart this work, without side effects', async t => {
+  const h = harness(t);
+  const audio = h.context.Lampa.HomelabGstAudio;
+  h.play();
+  await h.probe(firstEpisode);
+  const work = h.work();
+  const url = work.url, requests = h.requests.length, loads = h.loads.length;
+  assert.equal(audio.canRetry(work), true);
+  assert.equal(audio.canRetry({ ...work }), false, 'another work object is not the playing one');
+  assert.equal(audio.canRetry(null), false);
+  assert.equal(work.url, url);
+  assert.equal(h.requests.length, requests);
+  assert.equal(h.loads.length, loads);
+  assert.equal(work.homelab_retry_playback, undefined);
+  h.destroy();
+  assert.equal(audio.canRetry(work), false, 'a closed player cannot be retried');
+  const external = harness(t, new Map([['player_torrent', JSON.stringify('vlc')]]));
+  external.play();
+  assert.equal(external.context.Lampa.HomelabGstAudio.canRetry(external.work()), false, 'an external player has no GST stream to retry');
+});
+
+// Second review round.
+
+test('a slow torrent start keeps the remembered voice: the window counts from the first frame', async t => {
+  const storage = new Map([['homelab_gst_track_preferences', JSON.stringify({ abc: { audio: { title: 'commentary', language: 'en', external: false } } })]]);
+  const h = harness(t, storage);
+  h.play(13, 'abc');
+  h.clock(120000);
+  await h.probe([japaneseAAC, commentary]);
+  await h.settle();
+  assert.equal(new URL(h.loads.at(-1)).searchParams.get('audio'), '1', 'no frame was shown yet, so the voice is applied');
+});
+
+test('Samsung AVPlay and Orsay players are left to Lampa', t => {
+  for (const [platform, player] of [['tizen', 'tizen'], ['orsay', 'orsay']]) {
+    const h = harness(t, new Map([['player', JSON.stringify(player)]]), { platform });
+    h.play();
+    assert.equal(h.work().torrent_hash, 'same-torrent');
+    assert.equal(new URL(h.work().url).pathname, '/torrserver/gst/same-torrent/master.m3u8');
+    assert.equal(h.requests.length, 0);
+  }
+  const html5 = harness(t, new Map([['player', JSON.stringify('inner')]]), { platform: 'tizen' });
+  html5.play();
+  assert.equal(new URL(html5.work().url).pathname, '/gst/start.m3u8', 'the HTML5 player on Tizen is taken over');
+});
+
+test('"run as" an external player leaves that play to Lampa', t => {
+  const h = harness(t);
+  h.context.Lampa.Player.runas('vlc');
+  assert.deepEqual(h.runas, ['vlc'], 'Lampa still receives the choice');
+  h.play();
+  assert.equal(h.work().torrent_hash, 'same-torrent');
+  assert.equal(new URL(h.work().url).pathname, '/torrserver/gst/same-torrent/master.m3u8');
+  h.play(2);
+  assert.equal(new URL(h.work().url).pathname, '/gst/start.m3u8', 'the choice applies to one play');
+});
+
+test('a taken-over play that ends in an external app gets the original URL back', t => {
+  const h = harness(t);
+  h.play(4);
+  h.external();
+  assert.equal(h.work().url, 'https://lampa.test/torrserver/gst/same-torrent/master.m3u8?index=4&audio=0');
+  assert.equal(h.work().torrent_hash, 'same-torrent');
+  assert.equal(h.work().homelab_torrent_hash, undefined);
+});
+
+test('an error while switching audio still lets the panel return focus', async t => {
+  const h = harness(t);
+  h.play();
+  await h.probe(firstEpisode);
+  const destroy = h.context.Lampa.PlayerVideo.destroy;
+  h.context.Lampa.PlayerVideo.destroy = () => { throw new Error('player gone'); };
+  assert.doesNotThrow(() => h.chooseAudio('Amediateka (Studio Band)'));
+  h.context.Lampa.PlayerVideo.destroy = destroy;
+  assert.ok(h.logs.some(event => event.e === 'audio-switch-failed'));
+});
+
+test('external audio fragments wait out a busy or restarting sidecar before failing', async t => {
+  const h = harness(t, new Map(), { external: [anilibria] });
+  h.play(13, 'abc');
+  await h.probe([japaneseAAC]);
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  const hls = h.createHls();
+  const outcome = [];
+  const loader = new hls.config.fLoader({});
+  loader.load({ frag: { type: 'audio', sn: 3 } }, {}, { onSuccess: r => outcome.push(['ok', r.data]), onError: e => outcome.push(['error', e.code]) });
+  h.loaderInstances.at(-1).callbacks.onError({ code: 503, text: 'preparing' }, {}, null, {});
+  assert.deepEqual(outcome, []);
+  h.fireTimer(2000);
+  h.loaderInstances.at(-1).callbacks.onError({ code: 0, text: 'connection refused' }, {}, null, {});
+  h.fireTimer(2000);
+  h.loaderInstances.at(-1).callbacks.onSuccess({ data: 'segment' }, {}, {}, null);
+  assert.deepEqual(outcome, [['ok', 'segment']]);
+  const late = new hls.config.fLoader({});
+  late.load({ frag: { type: 'audio', sn: 4 } }, {}, { onSuccess: () => outcome.push(['ok']), onError: e => outcome.push(['error', e.code]) });
+  h.clock(61000);
+  h.loaderInstances.at(-1).callbacks.onError({ code: 503 }, {}, null, {});
+  assert.deepEqual(outcome.at(-1), ['error', 503], 'a sidecar that stays unavailable still fails');
+  const missing = new hls.config.fLoader({});
+  missing.load({ frag: { type: 'audio', sn: 5 } }, {}, { onSuccess: () => {}, onError: e => outcome.push(['error', e.code]) });
+  h.loaderInstances.at(-1).callbacks.onError({ code: 404 }, {}, null, {});
+  assert.deepEqual(outcome.at(-1), ['error', 404], 'a missing segment is not retried');
+});
+
+test('a refused retry leaves the work untouched', async t => {
+  const h = harness(t);
+  h.play();
+  await h.probe(firstEpisode);
+  h.begin(2);
+  const work = h.work(), url = work.url;
+  assert.equal(h.context.Lampa.HomelabGstAudio.retryCurrent(), false);
+  assert.equal(work.url, url);
+  assert.equal(work.homelab_retry_playback, undefined);
 });

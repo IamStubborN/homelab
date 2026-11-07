@@ -40,6 +40,9 @@ pages:
                   - title: OPNsense
                     url: https://opnsense.${LAN_DOMAIN}/
                     icon: si:opnsense
+                  - title: Uptime Kuma
+                    url: https://uptime.${DOCKER_DOMAIN}/
+                    icon: si:uptimekuma
                   - title: Traefik
                     url: https://traefik.${DOCKER_DOMAIN}/
                     icon: si:traefikproxy

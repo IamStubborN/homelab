@@ -5,6 +5,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+EnvironmentFile=/etc/homelab-backup/proxmox.env
 ExecStart=/usr/local/sbin/homelab-backup-to-google-drive %i
 Nice=10
 IOSchedulingClass=best-effort

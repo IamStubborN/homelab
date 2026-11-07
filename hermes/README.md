@@ -46,7 +46,7 @@ on two checks in a row, it reports through the disk-watchdog's bot, and again
 on recovery:
 
 ```text
-*/5 * * * * /home/iamstubborn/homelab/hermes/scripts/telegram-watchdog 2>&1 | /usr/bin/logger -t hermes-telegram-watchdog
+*/5 * * * * /opt/homelab/hermes/scripts/telegram-watchdog 2>&1 | /usr/bin/logger -t hermes-telegram-watchdog
 ```
 
 Everything else is attached through upstream extension points:

@@ -40,7 +40,10 @@ too. Its own state is `<state>/auto`. The idle check sees browser (GST) and
 proxied online playback, which flow through Lampa, but not a paused player.
 `DRY_RUN=1 lampa/auto-update.sh` only reports whether an update is due.
 
-Install as root on the Docker host:
+Install as root on the Docker host. The example service uses `/opt/homelab`;
+if the checkout is elsewhere, set `LAMPA_ROOT` in a private systemd override
+before enabling its timer. Do not commit the actual deployment path:
+
 
 ```sh
 install -m 0644 lampa/lampac-auto-update.service lampa/lampac-auto-update.timer /etc/systemd/system/

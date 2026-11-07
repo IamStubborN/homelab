@@ -6,7 +6,7 @@ LAN-only on `*.host-5.example.invalid.example.test` — primary file manager UI.
 ## Stack
 
 - `openlistteam/openlist:latest` — UI/API on `:5244` (Watchtower-enabled)
-- Runs as `user: 1000:1000` (host `iamstubborn`) for data volume permissions
+- Runs as `user: 1000:1000` (deployment account) for data volume permissions
 
 State: `openlist/data/` on the LXC disk (gitignored). Do not put state on `/mnt/internal`.
 Admin password: ignored file `openlist/data/.admin-password` (chmod 600). Optional env
@@ -27,27 +27,11 @@ Same host paths Samba shares, mounted RW:
 
 Never delete or rearrange `save/`, `_partial/`, `_cull/` under internal.
 
-## Atlas S3
+## Additional storage
 
-Fourteen AWS S3 (`eu-central-1`) storages, one mount each (configured via admin API,
-credentials configured via admin API — never commit keys):
-
-| Mount | Bucket | Root/prefix |
-| --- | --- | --- |
-| `/Atlas/Test/SR` | `static.pl-test.cdn-platform.xyz` | _(bucket root)_ |
-| `/Atlas/Test/BO` | `bo.pl-test.cdn-platform.xyz` | |
-| `/Atlas/Feature/BO` | `bo.pl-feature.cdn-platform.xyz` | |
-| `/Atlas/Test/CMS` | `media.pl-test.cdn-platform.xyz` | `/cms` |
-| `/Atlas/Stage/SR` | `static.pl-stage1.cdn-platform.xyz` | |
-| `/Atlas/Stage/BO` | `bo.pl-stage1.cdn-platform.xyz` | |
-| `/Atlas/Stage/CMS` | `media.pl-stage1.cdn-platform.xyz` | `/cms` |
-| `/Atlas/Stage/CMS2` | `media.pl-stage1.cdn-platform.xyz` | `/cms2` |
-| `/Atlas/Green-Prod/SR` | `static.pl-01.cdn-platform.xyz` | |
-| `/Atlas/Green-Prod/BO` | `bo.pl-01.cdn-platform.xyz` | |
-| `/Atlas/Green-Prod/CMS` | `media.pl-01.cdn-platform.xyz` | `/cms` |
-| `/Atlas/Yellow-Prod/SR` | `static.pl-01.cdn-yellow-platform.xyz` | |
-| `/Atlas/Yellow-Prod/BO` | `bo.pl-01.cdn-yellow-platform.xyz` | |
-| `/Atlas/Yellow-Prod/CMS` | `media.pl-01.cdn-yellow-platform.xyz` | `/cms` |
+Configure storage providers, bucket names, mount labels, regions and credentials
+through the administrator UI/API after bootstrap. Keep the actual account and
+storage inventory in private operator records, not in this repository.
 
 ## Guest access (LAN)
 
@@ -70,4 +54,4 @@ curl -fsS https://openlist.${DOCKER_DOMAIN}/ping
 ```
 
 Verify Local: Admin or API list `/internal` and `/usb_drive`.
-Spot-check S3: `/Atlas/Test/SR`, `/Atlas/Green-Prod/CMS`, `/Atlas/Yellow-Prod/CMS`.
+Spot-check one explicitly configured private storage mount.

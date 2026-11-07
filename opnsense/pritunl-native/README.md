@@ -1,6 +1,8 @@
 # Native OPNsense Pritunl client
 
-This directory contains the fail-safe supervisor used by the disabled native OpenVPN client instance named `Atlas Dev Pritunl native client` on OPNsense.
+This directory contains a fail-safe supervisor for an operator-configured,
+disabled native OpenVPN client instance on OPNsense. Instance names, remote
+endpoints and organizational routing/DNS inventory belong in private records.
 
 The persisted OPNsense instance intentionally stays disabled. The supervisor enables only an in-memory model, renders a current `PIN + TOTP` credential, and runs one foreground OpenVPN process per attempt. This prevents OPNsense service restarts or reboots from bypassing the retry budget.
 
@@ -64,6 +66,11 @@ refuses to run without a valid UUID. Keep the private value with the router
 configuration backup; do not add it to this repository. Existing installed
 scripts are unaffected until they are deliberately replaced on OPNsense.
 
+For a validation-only run, provide `EXPECTED_REMOTE_LINE` as the exact
+`remote ...` line expected from the private native instance. Keep it outside Git;
+validation refuses to continue without it and retains exact fixed-line matching.
+This input does not start the VPN or change the launch budget.
+
 Useful commands:
 
 ```sh
@@ -79,7 +86,7 @@ pritunl-vpnctl test-retry-contract
 OPNsense UI configuration:
 
 - `VPN > OpenVPN > Instances`: disabled native client instance;
-- `Services > Unbound DNS > Query Forwarding`: `platform-bo.com`, `host-4.example.invalid`, and `atlas-iac.com` to `192.0.2.21:53`;
+- `Services > Unbound DNS > Query Forwarding`: explicitly configured private domains and DNS endpoints; do not publish the live forwarding inventory;
 - `Firewall > NAT > Outbound`: hybrid mode, LAN and TAILSCALE source NAT on the OpenVPN group;
 - `Firewall > Aliases`: external alias `PRITUNL_CORPORATE_ROUTES`;
 - `Firewall > Rules > Floating`: quick outbound WAN block to `PRITUNL_CORPORATE_ROUTES`;

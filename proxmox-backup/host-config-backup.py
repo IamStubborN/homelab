@@ -21,6 +21,12 @@ PATHS = [
     "usr/local/libexec/homelab-opnsense-config-backup",
     "usr/local/libexec/homelab-host-config-backup",
     "usr/local/libexec/homelab-backup-monitor", "etc/homelab-backup/monitor.json",
+    "usr/local/libexec/homelab-age-upload",
+    "usr/local/libexec/homelab-router-config-backup",
+    "etc/homelab-backup/proxmox.env",
+    "etc/homelab-backup/router-recipients.txt", "etc/homelab-backup/routers.json",
+    "etc/homelab-backup/router-ssh.conf", "etc/homelab-backup/router-known-hosts",
+    "var/lib/homelab-router-config-backup",
     "usr/local/sbin/proxmox-cpu-quiet.sh",
     "etc/crontab", "etc/cron.d", "var/spool/cron/crontabs",
 ]

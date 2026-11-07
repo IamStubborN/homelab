@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -37,8 +38,11 @@ print(base64.b64encode(output.getvalue()).decode())
 
 def main():
     destination = Path(sys.argv[1])
+    guest_id = os.environ.get('ROUTER_VM_ID', '')
+    if re.fullmatch(r'[1-9][0-9]*', guest_id) is None:
+        raise ValueError('A private positive-decimal router VM ID is required')
     result = subprocess.run(
-        ['qm', 'guest', 'exec', '100', '--timeout', '60', '--',
+        ['qm', 'guest', 'exec', guest_id, '--timeout', '60', '--',
          '/usr/local/bin/python3', '-c', GUEST_CODE],
         check=True, capture_output=True, text=True, timeout=75,
     )

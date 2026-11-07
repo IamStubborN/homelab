@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # After a reboot by homelab-host-update, confirm the host came up on the new
-# kernel with the router (VM 100), the Docker guest (CT 300) and the internet.
+# kernel with the configured router VM, Docker container and internet probe.
 set -euo pipefail
 
 STATE=/var/lib/homelab-host-update
@@ -15,9 +15,13 @@ if [ "$running" != "$target" ]; then
   exit 1
 fi
 
+: "${ROUTER_VM_ID:?Set ROUTER_VM_ID in the private Proxmox environment}"
+: "${DOCKER_CT_ID:?Set DOCKER_CT_ID in the private Proxmox environment}"
+[[ "$ROUTER_VM_ID" =~ ^[1-9][0-9]*$ && "$DOCKER_CT_ID" =~ ^[1-9][0-9]*$ ]] || exit 64
+
 for _ in $(seq 90); do
-  if qm status 100 | grep -q 'status: running' &&
-     pct status 300 | grep -q 'status: running' &&
+  if qm status "$ROUTER_VM_ID" | grep -q 'status: running' &&
+     pct status "$DOCKER_CT_ID" | grep -q 'status: running' &&
      ping -c 1 -W 3 1.1.1.1 >/dev/null 2>&1; then
     touch "$STATE/checked-$target"
     echo "Kernel $running is up with OPNsense, the Docker guest and the internet."

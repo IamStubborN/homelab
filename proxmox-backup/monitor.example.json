@@ -2,27 +2,27 @@
   "jobs": {
     "daily-apps": {
       "remote": "homelab-backups:Proxmox/Docker/apps",
-      "pattern": "apps-*.tar.zst",
+      "pattern": "apps-*.tar.zst{,.age}",
       "max_age_hours": 50
     },
     "opnsense-config": {
       "remote": "homelab-backups:Proxmox/OPNsense/config",
-      "pattern": "opnsense-config-*.tar.gz",
+      "pattern": "opnsense-config-*.tar.gz{,.age}",
       "max_age_hours": 50
     },
     "host-config": {
       "remote": "homelab-backups:Proxmox/host-config",
-      "pattern": "proxmox-host-config-*.tar.zst",
+      "pattern": "proxmox-host-config-*.tar.zst{,.age}",
       "max_age_hours": 194
     },
     "opnsense": {
       "remote": "homelab-backups:Proxmox/OPNsense/full-vm",
-      "pattern": "vzdump-qemu-100-*.vma.zst",
+      "pattern": "vzdump-qemu-901-*.vma.zst{,.age}",
       "max_age_hours": 194
     },
     "docker": {
       "remote": "homelab-backups:Proxmox/Docker/full-lxc",
-      "pattern": "vzdump-lxc-300-*.tar.zst",
+      "pattern": "vzdump-lxc-902-*.tar.zst{,.age}",
       "max_age_hours": 866
     },
     "host-update": {

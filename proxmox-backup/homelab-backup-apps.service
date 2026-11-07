@@ -5,6 +5,7 @@ After=network-online.target pve-guests.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=/etc/homelab-backup/proxmox.env
 ExecStart=/usr/local/sbin/homelab-backup-to-google-drive apps
 ExecStopPost=-/usr/local/libexec/homelab-backup-monitor record daily-apps
 Nice=15

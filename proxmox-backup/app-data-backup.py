@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare private daily application files and transaction-consistent DB exports.
 
-Run inside Docker CT 300. The host archives and uploads the completed directory;
+Run inside Docker the configured Docker container. The host archives and uploads the completed directory;
 this helper does not upload data or stop applications.
 """
 

@@ -1,0 +1,24 @@
+{%- if heartbeatJSON -%}
+{%- if heartbeatJSON.status == 0 -%}
+🔴 <b>Недоступен</b>
+{%- elsif heartbeatJSON.status == 1 -%}
+🟢 <b>Доступен</b>
+{%- else -%}
+🟡 <b>Изменение состояния</b>
+{%- endif %}
+<b>{{ name | truncate: 100 | escape }}</b>
+
+{{ heartbeatJSON.msg | truncate: 450 | escape }}
+{% if heartbeatJSON.ping != nil %}
+⏱ {{ heartbeatJSON.ping | escape }} мс
+{% endif %}
+🕒 {% if heartbeatJSON.localDateTime %}{{ heartbeatJSON.localDateTime | escape }} · {{ heartbeatJSON.timezone | escape }}{% else %}{{ heartbeatJSON.time | escape }} UTC{% endif %}
+<i>Homelab · Uptime Kuma</i>
+{%- else -%}
+🟡 <b>Уведомление Homelab</b>
+{% if monitorJSON %}
+<b>{{ name | truncate: 100 | escape }}</b>
+{% endif %}
+{{ msg | truncate: 450 | escape }}
+<i>Uptime Kuma</i>
+{%- endif -%}

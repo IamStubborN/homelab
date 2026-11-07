@@ -25,6 +25,18 @@ public class OnlineSource
     public string provider { get; set; }
     public string voice { get; set; }
     public int season_index { get; set; }
+    // Movie row dub/translation text when voice_name is a release tag.
+    public string text { get; set; }
+    // Movie row position on the source page, confirmed by its texts (no resolver URL).
+    public MovieMatch match { get; set; }
+}
+public class MovieMatch
+{
+    public int index { get; set; }
+    public int count { get; set; }
+    public string text { get; set; }
+    public string translate { get; set; }
+    public string voice_name { get; set; }
 }
 public class ResumeItem
 {
@@ -45,25 +57,50 @@ public class ResumeItem
     public double duration { get; set; }
     public long observed { get; set; }
     public TrackPreferences tracks { get; set; }
+    // A dismissal: hides the card until a newer observation arrives.
+    public bool deleted { get; set; }
+}
+
+public class SaveResult
+{
+    public bool ok;
+    public bool stale;
+    public long observed;
+    // The scope cap is reached: retryable, unlike an invalid item.
+    public bool full;
 }
 
 public static class ResumeStore
 {
     // One Lampac process owns this bind; no new database or identity system.
     static readonly object gate = new();
+    // Clocks within this window keep the client stamp; others are clamped.
+    const long Skew = 300000;
+    // Any client can name a uid/profile; bound how many scope files exist.
+    const int MaxScopes = 500;
     static string Folder => Path.Combine("database", "homelab-sync-resume");
     static string FileName(string scope) => Path.Combine(Folder,
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scope))).ToLowerInvariant() + ".json");
     static string Short(string text, int max) => text == null ? null : text[..Math.Min(text.Length, max)];
     static bool Match(string text, string pattern) => text != null && System.Text.RegularExpressions.Regex.IsMatch(text, pattern);
 
+    static bool Card(string card) => Match(card, @"^(tv|movie)_[1-9][0-9]{0,10}$");
     public static bool Valid(ResumeItem item)
     {
-        if (item == null || !Match(item.card, @"^(tv|movie)_[1-9][0-9]{0,10}$") ||
-            !Match(item.timeline, @"^[a-zA-Z0-9_\-]{1,128}$") || item.season < 0 || item.season > 999 || item.episode < 0 || item.episode > 99999 ||
+        if (item == null || !Card(item.card)) return false;
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        // A skewed device clock is clamped rather than rejected: a rejected
+        // write would never be saved and the client would keep retrying it.
+        if (item.observed <= 0 || Math.Abs(item.observed - now) > Skew) item.observed = now;
+        if (item.deleted)
+        {
+            var tombstone = new ResumeItem { card = item.card, deleted = true, observed = item.observed, kind = null };
+            Copy(tombstone, item);
+            return true;
+        }
+        if (!Match(item.timeline, @"^[a-zA-Z0-9_\-]{1,128}$") || item.season < 0 || item.season > 999 || item.episode < 0 || item.episode > 99999 ||
             !double.IsFinite(item.position) || !double.IsFinite(item.duration) || item.position < 0 || item.duration <= 0 ||
-            item.duration > 86400 || item.position > item.duration + 1 ||
-            Math.Abs((double)item.observed - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) > 300000)
+            item.duration > 86400 || item.position > item.duration + 1)
             return false;
         if (item.kind == "torrent")
         {
@@ -74,7 +111,10 @@ public static class ResumeStore
             var source = item.online;
             if (item.torrent != null || item.index != 0 || source == null ||
                 !Match(source.provider, @"^[a-zA-Z0-9_.\-]{1,80}$") || source.voice == null || source.voice.Length > 200 ||
-                source.season_index < 0 || source.season_index > 999) return false;
+                source.season_index < 0 || source.season_index > 999 || source.text != null && source.text.Length > 200) return false;
+            var match = source.match;
+            if (match != null && (!item.card.StartsWith("movie_") || match.index < 0 || match.count <= match.index || match.count > 10000 ||
+                match.text?.Length > 200 || match.translate?.Length > 200 || match.voice_name?.Length > 200)) return false;
         }
         else return false;
         item.original = Short(item.original, 200);
@@ -87,6 +127,10 @@ public static class ResumeStore
             if (choice != null) { choice.title = Short(choice.title, 200); choice.language = Short(choice.language, 16); }
         return true;
     }
+    static void Copy(ResumeItem from, ResumeItem to)
+    {
+        foreach (var property in typeof(ResumeItem).GetProperties()) property.SetValue(to, property.GetValue(from));
+    }
     public static ResumeItem[] Read(string scope)
     {
         lock (gate) return Load(scope);
@@ -94,20 +138,31 @@ public static class ResumeStore
     static ResumeItem[] Load(string scope)
     {
         var file = FileName(scope);
-        return File.Exists(file) ? JsonSerializer.Deserialize<ResumeItem[]>(File.ReadAllText(file)) ?? Array.Empty<ResumeItem>() : Array.Empty<ResumeItem>();
+        if (!File.Exists(file)) return Array.Empty<ResumeItem>();
+        try { return (JsonSerializer.Deserialize<ResumeItem[]>(File.ReadAllText(file)) ?? Array.Empty<ResumeItem>()).Where(i => i != null).ToArray(); }
+        catch (JsonException)
+        {
+            // Keep the unreadable file for inspection and start a clean list,
+            // instead of failing every read and write for this scope.
+            try { File.Move(file, file + ".corrupt-" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), true); } catch (IOException) { }
+            return Array.Empty<ResumeItem>();
+        }
     }
-    public static bool Save(string scope, ResumeItem item)
+    public static SaveResult Save(string scope, ResumeItem item)
     {
-        if (!Valid(item)) return false;
+        if (!Valid(item)) return null;
         lock (gate)
         {
+            var file = FileName(scope);
+            if (!File.Exists(file) && Directory.Exists(Folder) && Directory.EnumerateFiles(Folder, "*.json").Count() >= MaxScopes) return new SaveResult { full = true };
             var list = Load(scope).ToList();
             var old = list.FirstOrDefault(i => i.card == item.card);
-            if (old != null && old.observed > item.observed) return true;
+            // A dismissal always wins over the record it dismisses.
+            if (item.deleted && old != null && old.observed >= item.observed) item.observed = old.observed + 1;
+            if (old != null && old.observed > item.observed) return new SaveResult { ok = true, stale = true, observed = old.observed };
             list.RemoveAll(i => i.card == item.card);
             list.Add(item);
             Directory.CreateDirectory(Folder);
-            var file = FileName(scope);
             var temporary = file + ".tmp";
             try
             {
@@ -116,7 +171,7 @@ public static class ResumeStore
                 File.Move(temporary, file, true);
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
-            return true;
+            return new SaveResult { ok = true, observed = item.observed };
         }
     }
 }

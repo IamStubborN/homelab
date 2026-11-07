@@ -141,23 +141,26 @@
   L.Select.listener.follow('toggle', selectState);
   function History(object) {
     var comp = L.Maker.make('Category', object, function (helper) { return helper.toggle(helper.MASK.base, 'Pagination'); });
-    var destroyed = false, loading = false, page = 1, signature = '', shown = {};
+    var destroyed = false, loading = false, page = 1, shown = {}, labels = {};
     function read(done) {
       loading = true;
       loadPage(page, function (error, data) {
         loading = false;
         if (destroyed) return;
         if (error) return done(error);
-        var stamp = JSON.stringify(data);
-        done(null, data, stamp);
+        done(null, data);
       });
     }
+    // Background polls repaint visible progress in place; rebuilding the
+    // activity would reset TV focus, scroll and pagination.
     var unsubscribe = sync.subscribe(function () {
       resetScope();
       if (destroyed || loading || !L.Activity.own(comp)) return;
       if (panel) { if (panel.visible) refreshPanel(panel, true); return; }
-      if (sync.error()) return;
-      read(function (error, data, stamp) { if (!error && stamp !== signature && L.Activity.own(comp)) L.Activity.refresh(); });
+      Object.keys(labels).forEach(function (key) {
+        var entry = labels[key], text = summary(entry.card);
+        if (text !== entry.card.homelab_summary) { entry.card.homelab_summary = text; entry.node.text(text); }
+      });
     });
     comp.use({
       onCreate: function () {
@@ -166,8 +169,8 @@
           if (destroyed) return;
           if (error && sync.rows().length) L.Noty.show('История не обновлена: показаны последние полученные данные');
           if (error && !sync.rows().length) { loading = false; self.empty(); L.Noty.show('История дома временно недоступна'); return; }
-          read(function (failure, data, stamp) {
-            if (failure) return self.empty(); signature = stamp;
+          read(function (failure, data) {
+            if (failure) return self.empty();
             data.results.forEach(function (card) { shown[card.homelab_key] = true; });
             if (data.results.length) self.build(data); else self.empty();
           });
@@ -175,21 +178,20 @@
       },
       onNext: function (resolve, reject) {
         page++;
-        read(function (error, data, stamp) {
+        read(function (error, data) {
           if (error) return reject();
-          signature = stamp;
           data.results = data.results.filter(function (card) { if (shown[card.homelab_key]) return false; shown[card.homelab_key] = true; return true; });
           resolve(data);
         });
       },
       onInstance: function (item, card) {
         item.use({
-          onCreate: function () { $(this.render()).append(label(card.homelab_summary).addClass('homelab-history-progress')); },
+          onCreate: function () { var node = label(card.homelab_summary).addClass('homelab-history-progress'); labels[card.homelab_key] = {node: node, card: card}; $(this.render()).append(node); },
           onEnter: function () { showPanel(card); },
           onFocus: function () { L.Background.change(L.Utils.cardImgBackground(card)); }
         });
       },
-      onDestroy: function () { destroyed = true; closePanel(); unsubscribe(); }
+      onDestroy: function () { destroyed = true; labels = {}; closePanel(); unsubscribe(); }
     });
     return comp;
   }

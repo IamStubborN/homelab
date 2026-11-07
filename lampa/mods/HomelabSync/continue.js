@@ -20,13 +20,23 @@
     L.Controller.add, L.Controller.toggle, L.Controller.enabled, L.Api.img, L.Router.call, L.Noty.show,
     L.Utils.secondsToTime, L.Player.opened, window.$,
     sync.scope, sync.pull, sync.rows, sync.extra, sync.subscribe].every(function (fn) { return typeof fn === 'function'; })) return;
-  var items = [], scope = '', reading = null, readAt = -Infinity, listeners = [], playing = null, pending = {}, sending = null, restore = null, metadata = {}, resolving = {}, metadataQueue = [], metadataRunning = 0, resumeIntent = null, writeTimer = null, writeError = false, readError = false;
+  var items = [], scope = '', reading = null, readAt = -Infinity, listeners = [], playing = null, pending = {}, sending = null, restore = null, metadata = {}, resolving = {}, metadataQueue = [], metadataRunning = 0, resumeIntent = null, writeTimer = null, writeError = false, readError = false, external = null, loadedOnce = false;
+  var CACHE = 'homelab_continue_cache', DAY = 86400000, NEWER = 120000;
+  // Any key, click or touch while a launch is still being prepared hands
+  // control back to the user (the online component then owns its own input).
+  function interrupted() {
+    var intent = resumeIntent;
+    if (intent && !intent.launched && Date.now() - intent.created >= 500) cancelResume();
+  }
+  if (L.Keypad && L.Keypad.listener && typeof L.Keypad.listener.follow === 'function') L.Keypad.listener.follow('keydown', interrupted);
+  if (typeof document !== 'undefined' && document && typeof document.addEventListener === 'function') ['mousedown', 'touchstart'].forEach(function (name) { document.addEventListener(name, interrupted, true); });
+  function intentNew() { return resumeIntent = {created: Date.now()}; }
   function cancelResume() { if (window.HomelabOnlineResume) window.HomelabOnlineResume.cancel(); if (resumeIntent) clearTimeout(resumeIntent.timer); resumeIntent = null; }
   function plain(value) { return String(value || '').replace(/[<>"'`]/g, ''); }
   function context() {
     var key = sync.scope();
     if (scope !== key) {
-      scope = key; items = []; metadata = {}; resolving = {}; metadataQueue = []; metadataRunning = 0; readAt = -Infinity; pending = {}; writeError = false; readError = false;
+      scope = key; items = cached(key); metadata = {}; resolving = {}; metadataQueue = []; metadataRunning = 0; readAt = -Infinity; pending = {}; writeError = false; readError = false; loadedOnce = false; external = null;
       clearTimeout(writeTimer);
       if (reading) reading.abort.abort(); reading = null;
       if (sending) sending.abort.abort(); sending = null;
@@ -36,6 +46,19 @@
     return key;
   }
   function publish() { listeners.slice().forEach(function (fn) { fn(); }); }
+  // The last server list is kept per scope so the main row renders at once.
+  function cached(key) {
+    var value = null;
+    try { value = L.Storage.get(CACHE, null); } catch (_) {}
+    return key && value && value.scope === key && Array.isArray(value.items) ? value.items.map(normal).filter(accepted) : [];
+  }
+  function persist() { try { L.Storage.set(CACHE, {scope: scope, items: items.slice(0, 50)}, true); } catch (_) {} }
+  // Lampac omits default values such as a zero position.
+  function normal(item) { return item && !item.deleted && item.position === undefined ? Object.assign({}, item, {position: 0}) : item; }
+  function accepted(item) {
+    if (!item || !/^(tv|movie)_\d+$/.test(item.card)) return false;
+    return item.deleted === true ? Number.isFinite(item.observed) : Number.isFinite(item.position) && Number.isFinite(item.duration);
+  }
   function load(done) {
     done = done || function () {};
     var key = context(), url = sync.url('/homelab-sync/resume');
@@ -47,9 +70,9 @@
     fetch(url, {signal: job.abort.signal, cache: 'no-store'}).then(function (r) { if (!r.ok) throw new Error('resume'); return r.json(); }).then(function (data) {
       if (context() !== key || reading !== job) return;
       if (data.version !== 1 || !Array.isArray(data.items)) throw new Error('contract');
-      items = data.items.filter(function (item) { return item && /^(tv|movie)_\d+$/.test(item.card) && Number.isFinite(item.position) && Number.isFinite(item.duration); }).map(function (item) {
+      items = data.items.map(normal).filter(accepted).map(function (item) {
         // Lampac omits default-valued season=0 from captured Specials records.
-        return item.card.indexOf('tv_') === 0 && item.season === undefined && (item.kind === 'online' || item.kind === 'torrent') ? Object.assign({}, item, {season: 0}) : item;
+        return item.card.indexOf('tv_') === 0 && item.season === undefined && !item.deleted && (item.kind === 'online' || item.kind === 'torrent') ? Object.assign({}, item, {season: 0}) : item;
       });
       var writes = Object.keys(pending).map(function (card) { return pending[card]; });
       if (sending && sending.queued.scope === key) writes.push(sending.queued);
@@ -57,25 +80,47 @@
         var queued = write.item, newer = items.find(function (item) { return item.card === queued.card && item.observed >= queued.observed; });
         if (!newer) { items = items.filter(function (item) { return item.card !== queued.card; }); items.unshift(queued); }
       });
-      readError = false;
-      publish();
-    }).catch(function () { if (context() === key) { readError = true; publish(); } }).then(function () {
+      readError = false; loadedOnce = true;
+      persist(); publish();
+    }).catch(function () { if (context() === key) { readError = true; loadedOnce = true; publish(); } }).then(function () {
       clearTimeout(timer); if (reading === job) reading = null; enrich(); job.callbacks.splice(0).forEach(function (callback) { callback(); });
     });
   }
-  function list() {
+  function later(next, old) {
+    if (!Number.isInteger(next.season) || !(next.episode > 0)) return false;
+    // Specials have no position in the regular order; recency decides.
+    if (next.season === 0 || !Number.isInteger(old.season) || old.season === 0) return true;
+    return next.season > old.season || next.season === old.season && next.episode > old.episode;
+  }
+  function merged() {
     context();
-    var byCard = {}, captured = {};
+    var byCard = {}, captured = {}, natives = {};
     items.forEach(function (item) { byCard[item.card] = Object.assign({}, item); captured[item.card] = true; });
     sync.rows().forEach(function (row) {
       var extra = sync.extra(row), key = extra.card;
       if (!/^(tv|movie)_\d+$/.test(key || '')) return;
       var old = byCard[key];
-      // Native TimeCode stamps even a stale paused player's close as new.
-      // Captured observations are authoritative; legacy rows only seed cards
-      // that have never been captured by this extension.
+      // Native TimeCode stamps even a stale paused player's close as new. For
+      // the captured episode (or movie) a newer native row only moves the
+      // position forward, when it is watched or clearly further, and keeps
+      // the source. Another episode replaces the record (without its source)
+      // only when it is a later episode, or any episode once a special is
+      // involved, viewed at least a minute and stamped more than two minutes
+      // after the capture: the native player saves every two minutes, so
+      // an active viewing keeps stamping while an old close does not. A
+      // dismissed card returns on any newer viewing.
       if (captured[key]) {
-        if (row.deleted && String(row.hash) === old.timeline && row.watched_at > old.observed) old.deleted = true;
+        if (old.deleted) {
+          if (!row.deleted && row.watched_at > old.observed && row.position > 1 && (!natives[key] || natives[key].watched_at < row.watched_at)) natives[key] = row;
+          return;
+        }
+        if (row.deleted && String(row.hash) === old.timeline && row.watched_at > old.observed) { old.deleted = true; return; }
+        if (row.deleted || !(row.watched_at > old.observed) || !(row.position > 1) || natives[key] && natives[key].watched_at >= row.watched_at) return;
+        var same = key.indexOf('movie_') === 0 || extra.season === old.season && extra.episode === old.episode;
+        // Another cut of the same episode has its own positions.
+        if (same && old.timeline != null && String(row.hash) !== old.timeline) return;
+        if (same ? watched(row) || row.position > old.position + 30 :
+          key.indexOf('tv_') === 0 && row.watched_at > old.observed + NEWER && row.position >= 60 && later(extra, old)) natives[key] = row;
         return;
       }
       if (old && old.observed >= row.watched_at) return;
@@ -83,14 +128,51 @@
       byCard[key] = Object.assign({}, old ? {title: old.title, poster: old.poster, backdrop: old.backdrop} : {}, same ? old : {}, {card: key, season: Number.isInteger(extra.season) && extra.season >= 0 ? extra.season : undefined, episode: extra.episode || 0,
         position: row.position, duration: row.duration, observed: row.watched_at, deleted: row.deleted});
     });
-    return Object.keys(byCard).map(function (key) { return Object.assign({}, byCard[key], metadata[key] || {}); }).filter(function (item) {
-      return !item.deleted && item.position > 1 && item.duration > 0 && item.position / item.duration < .98;
-    }).sort(function (a, b) { return b.observed - a.observed; }).slice(0, 20);
+    Object.keys(natives).forEach(function (key) {
+      var row = natives[key], extra = sync.extra(row), old = byCard[key];
+      if (!old.deleted && (key.indexOf('movie_') === 0 || extra.season === old.season && extra.episode === old.episode)) {
+        byCard[key] = Object.assign(old, {position: row.position, duration: row.duration, observed: row.watched_at});
+        return;
+      }
+      byCard[key] = {card: key, title: old.title, poster: old.poster, backdrop: old.backdrop, original: old.original, date: old.date,
+        season: Number.isInteger(extra.season) && extra.season >= 0 ? extra.season : undefined, episode: extra.episode || 0,
+        timeline: row.hash != null ? String(row.hash) : undefined, position: row.position, duration: row.duration, observed: row.watched_at};
+    });
+    return Object.keys(byCard).map(function (key) { return Object.assign({}, byCard[key], metadata[key] || {}); });
+  }
+  // Lampa marks an episode watched at 90%; Continue then offers the next one.
+  function nextEpisode(item, seasons) {
+    if (!Number.isInteger(item.season) || item.season < 0 || !(item.episode > 0)) return null;
+    var count = seasons && seasons[item.season];
+    if (!seasons || !(count > 0) || item.episode < count) return seasons && seasons[item.season] === 0 ? null : {season: item.season, episode: item.episode + 1};
+    if (item.season === 0) return null;
+    var following = Object.keys(seasons).map(Number).filter(function (n) { return n > item.season && seasons[n] > 0; }).sort(function (a, b) { return a - b; })[0];
+    return following ? {season: following, episode: 1} : null;
+  }
+  function watched(item) { return item.duration > 0 && item.position / item.duration >= .9; }
+  function list() {
+    var result = [];
+    merged().forEach(function (item) {
+      if (item.deleted || !(item.duration > 0)) return;
+      if (watched(item)) {
+        if (item.card.indexOf('tv_') !== 0) return;
+        var next = nextEpisode(item, metadata[item.card] && metadata[item.card].seasons);
+        if (!next) return;
+        var value = Object.assign({}, item, {season: next.season, episode: next.episode, position: 0, advance: {season: item.season, episode: item.episode}});
+        // A native season index cannot be derived for another season.
+        if (next.season !== item.season) delete value.online;
+        result.push(value);
+      } else if (item.position > 1) result.push(item);
+    });
+    return result.sort(function (a, b) { return b.observed - a.observed; }).slice(0, 20);
   }
   function enrich() {
     if (!L.Api.sources || !L.Api.sources.tmdb || !L.Api.sources.tmdb.get) return;
     var key = context();
-    list().forEach(function (item) { if (!item.title && !resolving[item.card]) { resolving[item.card] = true; metadataQueue.push(item); } });
+    merged().forEach(function (item) {
+      if (resolving[item.card] || item.deleted) return;
+      if (!item.title || item.card.indexOf('tv_') === 0 && watched(item) && !(metadata[item.card] && metadata[item.card].seasons)) { resolving[item.card] = true; metadataQueue.push(item); }
+    });
     function work() {
       if (context() !== key) return;
       while (metadataRunning < 4 && metadataQueue.length) {
@@ -98,7 +180,17 @@
           metadataRunning++;
           function complete(data) {
             if (context() !== key) return;
-            if (data) metadata[item.card] = {title: plain(data.name || data.title), poster: data.poster_path, backdrop: data.backdrop_path};
+            if (data) {
+              var value = {};
+              if (data.name || data.title) value.title = plain(data.name || data.title);
+              if (data.poster_path) value.poster = data.poster_path;
+              if (data.backdrop_path) value.backdrop = data.backdrop_path;
+              if (Array.isArray(data.seasons)) {
+                value.seasons = {};
+                data.seasons.forEach(function (season) { if (season && Number.isInteger(season.season_number) && Number.isInteger(season.episode_count)) value.seasons[season.season_number] = season.episode_count; });
+              }
+              metadata[item.card] = value;
+            }
             metadataRunning--; publish(); work();
           }
           L.Api.sources.tmdb.get(item.card.replace('_', '/'), {}, complete, function () { complete(); });
@@ -115,11 +207,6 @@
     if (item.date) result[tv ? 'first_air_date' : 'release_date'] = item.date;
     if (tv) { result.original_name = result.original_title; result.number_of_seasons = Math.max(1, item.season || 0); }
     return result;
-  }
-  function fallback(item) {
-    L.Noty.show('Раздача недоступна. Выберите источник для продолжения');
-    var value = card(item); delete value.params;
-    L.Router.call('full', value);
   }
   function fullCard(item, data) {
     var tv = item.card.indexOf('tv_') === 0;
@@ -149,7 +236,7 @@
       return !parts.some(function (folder) { return /^(samples?|trailers?|трейлеры?|пробник)$/i.test(folder); })
         && !/(?:^|[. _-])(sample|trailer|трейлер|пробник)\.[^.]+$/i.test(name);
     }).map(function (file) {
-      var selected = file.id === item.index;
+      var selected = !item.advance && file.id === item.index;
       var info = L.Torserver.parse({movie: value, files: videos, filename: file.path_human, path: file.path, is_file: /\.(vob|m2ts)$/i.test(file.path)});
       var season = selected ? item.season : info.season, episode = selected ? item.episode : info.episode;
       var road = L.Timeline.view(selected ? item.timeline : info.hash,
@@ -177,32 +264,59 @@
     if (L.Player.opened()) return L.Noty.show('Сначала закройте текущий просмотр');
     var owner = L.Activity && typeof L.Activity.active === 'function' ? L.Activity.active() : null;
     function owned(intent) { return resumeIntent === intent && context() === key && !L.Player.opened() && (!L.Activity || typeof L.Activity.active !== 'function' || L.Activity.active() === owner); }
+    function metadataFor(intent, done) {
+      if (!L.Api.sources || !L.Api.sources.tmdb || typeof L.Api.sources.tmdb.get !== 'function') return done(null);
+      L.Api.sources.tmdb.get(item.card.replace('_', '/') + '?append_to_response=external_ids,keywords', {}, function (movie) { done(fullCard(item, movie)); }, function () { done(null); });
+    }
+    // Without a usable captured source, offer the picker with the exact
+    // episode and position instead of a bare card.
+    function chooseSource(notice) {
+      var intent = intentNew(), settled = false;
+      function open(value) {
+        if (settled || !owned(intent)) return;
+        settled = true; cancelResume();
+        if (notice) L.Noty.show(notice);
+        var movie = value || card(item), picker = window.HomelabSources;
+        delete movie.params;
+        if (picker && typeof picker.resume === 'function' && picker.resume(item, movie)) return;
+        L.Router.call('full', movie);
+      }
+      intent.timer = setTimeout(function () { open(null); }, 5000);
+      metadataFor(intent, open);
+    }
+    function onlineFailed(reason) {
+      L.Noty.show(reason === 'changed' ? 'Сохранённая озвучка не найдена. Выберите вариант в списке' :
+        reason === 'ambiguous' ? 'Подходит несколько вариантов. Выберите нужный в списке' :
+        reason === 'missing' ? 'Сохранённая серия не найдена. Выберите сезон и серию в списке' : 'Источник не ответил. Выберите вариант в списке');
+    }
     if (item.kind === 'online' && item.online) {
-      var onlineIntent = resumeIntent = {}, settled = false;
-      function unavailable(value) {
+      var onlineIntent = intentNew(), settled = false;
+      var unavailable = function (value) {
         if (!owned(onlineIntent)) return;
         cancelResume();
         var movie = value || card(item), picker = window.HomelabSources;
         if (picker && typeof picker.resume === 'function' && picker.resume(item, movie)) return;
         L.Router.call('full', movie);
-      }
-      function launchOnline(value) {
+      };
+      var launchOnline = function (value) {
         if (settled || !owned(onlineIntent)) return;
-        settled = true; clearTimeout(onlineIntent.timer);
+        settled = true; clearTimeout(onlineIntent.timer); onlineIntent.launched = true;
         var adapter = window.HomelabOnlineResume, launched = false;
-        try { launched = adapter && adapter.resume(item, value || card(item), function () { unavailable(value); }); } catch (_) {}
+        // Once the native component is shown the user stays there: a failure
+        // only explains what to choose instead of navigating away.
+        try { launched = adapter && adapter.resume(item, value || card(item), function (reason) { if (resumeIntent === onlineIntent) cancelResume(); onlineFailed(reason); }); } catch (_) {}
         if (L.Activity && typeof L.Activity.active === 'function') owner = L.Activity.active();
         if (!launched) unavailable(value);
-      }
+      };
       if (!window.HomelabOnlineResume) { unavailable(); return; }
       onlineIntent.timer = setTimeout(function () { launchOnline(null); }, 5000);
       L.Api.sources.tmdb.get(item.card.replace('_', '/') + '?append_to_response=external_ids,keywords', {}, function (movie) { launchOnline(fullCard(item, movie)); }, function () { launchOnline(null); });
       return;
     }
-    if (!item.torrent) return fallback(item);
-    var intent = resumeIntent = {};
+    if (!item.torrent) return chooseSource(item.advance ? '' : 'Выберите источник для продолжения');
+    var intent = intentNew();
     intent.timer = setTimeout(fail, 8000);
-    function fail() { if (!owned(intent)) return; cancelResume(); fallback(item); }
+    function fail() { if (!owned(intent)) return; cancelResume(); chooseSource('Раздача недоступна. Выберите источник для продолжения'); }
     L.Torserver.files(item.torrent, function (data) {
       if (!owned(intent)) return;
       var file = (data.file_stats || []).find(function (entry) { return entry.id === item.index && typeof entry.path === 'string'; });
@@ -213,6 +327,11 @@
         if (L.Player.opened()) return L.Noty.show('Сначала закройте текущий просмотр');
         var playlist = [];
         try { if (value) playlist = releasePlaylist(item, data, value); } catch (_) {}
+        if (item.advance) {
+          var next = playlist.find(function (entry) { return entry.episode === item.episode && (!Number.isInteger(entry.season) || entry.season === item.season); });
+          if (!next) return chooseSource('Следующая серия не найдена в раздаче. Выберите источник');
+          L.Player.play(next); L.Player.playlist(playlist); return;
+        }
         var work = playlist.find(function (entry) { return entry.id === item.index; });
         if (!work) {
           value = card(item);
@@ -233,8 +352,7 @@
       if (value) return launch(value);
       clearTimeout(intent.timer);
       intent.timer = setTimeout(function () { launch(null); }, 2000);
-      if (!L.Api.sources || !L.Api.sources.tmdb || typeof L.Api.sources.tmdb.get !== 'function') return launch(null);
-      L.Api.sources.tmdb.get(item.card.replace('_', '/') + '?append_to_response=external_ids,keywords', {}, function (movie) { launch(fullCard(item, movie)); }, function () { launch(null); });
+      metadataFor(intent, launch);
     }, fail);
   }
   function drain() {
@@ -250,17 +368,29 @@
     fetch(queued.url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(queued.item),
       signal: job.abort.signal, keepalive: true}).then(function (r) {
       if (!r.ok) { var error = new Error('save'); error.retryable = r.status === 429 || r.status >= 500; throw error; }
+      return typeof r.json === 'function' ? r.json().catch(function () { return {}; }) : {};
+    }).then(function (body) {
       if (context() !== queued.scope) return;
-      var newer = items.find(function (item) { return item.card === queued.item.card && item.observed > queued.item.observed; });
-      if (!newer) { items = items.filter(function (item) { return item.card !== queued.item.card; }); items.unshift(queued.item); items = items.slice(0, 50); }
+      body = body || {};
+      // The server may clamp a skewed device clock; adopt its stamp. A
+      // rejected older write leaves the newer server record in place.
+      if (!body.stale) {
+        var saved = Number.isFinite(body.observed) ? Object.assign({}, queued.item, {observed: body.observed}) : queued.item;
+        var newer = items.find(function (item) { return item.card === saved.card && item.observed > saved.observed; });
+        if (!newer) { items = items.filter(function (item) { return item.card !== saved.card; }); items.unshift(saved); items = items.slice(0, 50); }
+      }
       writeError = false;
       readAt = -Infinity;
     }).catch(function (error) {
       if (context() !== queued.scope) return;
       var newer = pending[queued.item.card];
-      if (!newer || newer.item.observed < queued.item.observed) {
+      if (error.retryable === false) {
+        // A permanently rejected write is dropped and no longer shown as saved.
+        items = items.filter(function (item) { return item.card !== queued.item.card || item.observed !== queued.item.observed; });
+        readAt = -Infinity; persist();
+      } else if (!newer || newer.item.observed < queued.item.observed) {
         queued.attempt++;
-        queued.readyAt = error.retryable !== false && queued.attempt <= 3 ? Date.now() + [5000, 15000, 60000][queued.attempt - 1] : Infinity;
+        queued.readyAt = Date.now() + ([5000, 15000, 60000][queued.attempt - 1] || 300000);
         pending[queued.item.card] = queued;
       }
       writeError = true;
@@ -276,10 +406,37 @@
     if (!newer) { items = items.filter(function (item) { return item.card !== state.last.card; }); items.unshift(state.last); items = items.slice(0, 50); }
     state.saved = Date.now(); drain();
   }
+  // Dismissal is a server tombstone; a later viewing brings the card back.
+  function dismiss(cardKey) {
+    var key = context(), url = sync.url('/homelab-sync/resume');
+    if (!url || !/^(tv|movie)_\d+$/.test(cardKey)) return;
+    var previous = items.find(function (item) { return item.card === cardKey; });
+    var native = sync.rows().reduce(function (max, row) { return sync.extra(row).card === cardKey && row.watched_at > max ? row.watched_at : max; }, 0);
+    var tomb = {card: cardKey, deleted: true, observed: Math.max(Date.now(), previous ? previous.observed + 1 : 0, native + 1)};
+    items = items.filter(function (item) { return item.card !== cardKey; }); items.unshift(tomb); items = items.slice(0, 50);
+    pending[cardKey] = {scope: key, url: url, item: tomb, attempt: 0, readyAt: 0};
+    persist(); publish(); drain();
+  }
+  function measure(state) {
+    var data = state.data;
+    if (state.external) {
+      var road = data.timeline || {};
+      return Number.isFinite(road.time) && road.duration > 0 && road.duration <= 86400 ? {position: road.time, duration: road.duration} : null;
+    }
+    var video = L.PlayerVideo.video();
+    if (!video || video.seeking || video.rewind || !(video.duration > 0 && video.duration <= 86400) || !Number.isFinite(video.currentTime)) return null;
+    return {position: video.currentTime, duration: video.duration};
+  }
+  // Row position for a movie resume; the resolver url stays in this session.
+  function matchOf(match) {
+    return {index: match.index || 0, count: match.count, text: match.text || '', translate: match.translate || '', voice_name: match.voice_name || ''};
+  }
   function snapshot(state, force) {
-    if (playing !== state || context() !== state.scope || (state.data.homelab_resume_at != null && !state.applied)) return;
-    var data = state.data, video = L.PlayerVideo.video(), movie = data.card;
-    if (!movie || !movie.id || !data.timeline || !video || video.seeking || video.rewind || !(video.duration > 0 && video.duration <= 86400) || !Number.isFinite(video.currentTime)) return;
+    if ((playing !== state && external !== state) || context() !== state.scope || (!state.external && state.data.homelab_resume_at != null && !state.applied)) return;
+    var data = state.data, movie = data.card, measured = measure(state);
+    if (!movie || !movie.id || !data.timeline || !measured) return;
+    // Ids from other catalogues (Kinopoisk, anime plugins) are not TMDB ids.
+    if (['tmdb', 'cub'].indexOf(String(movie.source || 'tmdb')) < 0) return;
     var hash = data.homelab_torrent_hash || data.torrent_hash, index = data.homelab_file_index;
     if (index == null && data.torrent_hash) { try { index = Number(new URL(data.url, window.location.href).searchParams.get('index')); } catch (_) {} }
     var online = data.homelab_online;
@@ -288,9 +445,9 @@
     var tv = !!(movie.name || movie.original_name);
     if (tv && !(data.episode > 0)) return;
     var next = {card: (tv ? 'tv_' : 'movie_') + movie.id, title: plain(movie.name || movie.title), poster: movie.poster_path, backdrop: movie.backdrop_path,
-      kind: online ? 'online' : 'torrent', online: online ? {provider: online.provider, voice: online.voice, season_index: online.season_index} : null,
+      kind: online ? 'online' : 'torrent', online: online ? Object.assign({provider: online.provider, voice: online.voice, season_index: online.season_index}, online.text ? {text: String(online.text).slice(0, 200)} : {}, online.match ? {match: matchOf(online.match)} : {}) : null,
       torrent: online ? null : hash.toLowerCase(), index: online ? 0 : index, original: String(movie.original_title || movie.original_name || ''), date: movie.first_air_date || movie.release_date || null, timeline: String(data.timeline.hash), season: data.season || 0, episode: data.episode || 0,
-      position: Math.max(0, video.currentTime), duration: video.duration,
+      position: Math.max(0, measured.position), duration: measured.duration,
       tracks: L.HomelabGstAudio && L.HomelabGstAudio.preferences ? L.HomelabGstAudio.preferences(data) : data.homelab_track_preferences || {}};
     var stamp = JSON.stringify(next);
     if (stamp !== state.stamp) {
@@ -325,8 +482,38 @@
     }
     restore = {video: video, apply: apply}; video.addEventListener('loadedmetadata', apply); video.addEventListener('canplay', apply); apply();
   }
+  // External players (Android, webOS, Apple TV) read the start position from
+  // the timeline before 'external'; the inner player gets it from bindResume.
+  L.Player.listener.follow('create', function (event) {
+    var data = event && event.data;
+    if (!data || data.homelab_resume_at == null || !data.timeline) return;
+    data.homelab_external_start = true;
+    var duration = data.homelab_resume_from_duration || data.timeline.duration;
+    data.timeline.time = data.homelab_resume_at;
+    if (duration > 0) data.timeline.percent = Math.min(100, data.homelab_resume_at / duration * 100);
+  });
+  L.Player.listener.follow('start', function (data) {
+    if (!data || !data.homelab_external_start || !data.timeline) return;
+    delete data.homelab_external_start; data.timeline.time = 0; data.timeline.percent = 0;
+  });
+  L.Player.listener.follow('external', function (data) {
+    if (resumeIntent) { clearTimeout(resumeIntent.timer); resumeIntent = null; }
+    if (playing) { clearTimeout(playing.pause); queue(playing); playing = null; }
+    if (!data) return;
+    delete data.homelab_external_start;
+    external = {data: data, scope: context(), url: sync.url('/homelab-sync/resume'), saved: -Infinity, external: true, at: Date.now()};
+    snapshot(external, true);
+  });
+  // Returning from an external player updates the native timeline.
+  if (L.Timeline.listener && typeof L.Timeline.listener.follow === 'function') L.Timeline.listener.follow('update', function (event) {
+    var state = external, road = event && event.data && event.data.road, timeline = state && state.data.timeline;
+    if (!state || !road || !timeline || Date.now() - state.at > DAY || String(event.data.hash) !== String(timeline.hash)) return;
+    timeline.time = road.time; timeline.duration = road.duration; timeline.percent = road.percent;
+    snapshot(state, true);
+  });
   L.Player.listener.follow('ready', function (data) {
     if (resumeIntent) { clearTimeout(resumeIntent.timer); resumeIntent = null; }
+    external = null;
     if (playing) queue(playing);
     playing = {data: data, scope: context(), url: sync.url('/homelab-sync/resume'), saved: -Infinity};
     bindResume(playing);
@@ -365,7 +552,7 @@
   }
   function ResumeRow() {
     var self = this, bus = L.Subscribe(), html = window.$('<div class="homelab-resume-row"><div class="homelab-resume-title">Продолжить просмотр</div><div class="homelab-resume-sync"></div></div>');
-    var scroll = new L.Scroll({horizontal: true, step: 300}), last = null, key = '', stamp = '', destroyed = false, cards = [], byCard = {}, order = '', seasons = {}, seasonScope = sync.scope();
+    var scroll = new L.Scroll({horizontal: true, step: 300}), last = null, key = '', stamp = '', destroyed = false, cards = [], byCard = {}, order = '', orderList = [], seasons = {}, seasonScope = sync.scope(), empty = null;
     function clearSeasons() { Object.keys(seasons).forEach(function (name) { clearTimeout(seasons[name].timer); }); seasons = {}; }
     function clearCards() { cards.splice(0).forEach(function (native) { native.destroy(); }); byCard = {}; order = ''; }
     scroll.onScroll = function () { L.Layer.visible(scroll.render(true)); };
@@ -403,7 +590,7 @@
     function draw() {
       if (destroyed) return;
       if (seasonScope !== sync.scope()) { clearSeasons(); clearCards(); seasonScope = sync.scope(); stamp = ''; }
-      var data = list(), next = JSON.stringify({items: data, warning: writeError || readError});
+      var data = list(), next = JSON.stringify({items: data, warning: writeError || readError, ready: loadedOnce});
       if (next === stamp) return; stamp = next;
       var focused = L.Controller.own(self), nextOrder = JSON.stringify(data.map(function (item) { return item.card; })), changedOrder = nextOrder !== order, wanted = {};
       html.find('.homelab-resume-sync').text(writeError || readError ? 'Продолжение не синхронизировано: показаны последние данные' : '');
@@ -424,7 +611,7 @@
           var body = progress.find('.card-watched__body').empty();
           (rows.length ? rows : [null]).forEach(function (episode, index) {
             var line = window.$('<div class="card-watched__item"><span></span></div>');
-            line.find('span').text(episode ? episode.episode_number + ' - ' + plain(episode.name || 'Серия ' + episode.episode_number) : item.episode ? 'Сезон ' + item.season + ' · Серия ' + item.episode : 'Продолжить просмотр');
+            line.find('span').text((item.advance && !index ? 'Далее · ' : '') + (episode ? episode.episode_number + ' - ' + plain(episode.name || 'Серия ' + episode.episode_number) : item.episode ? 'Сезон ' + item.season + ' · Серия ' + item.episode : 'Продолжить просмотр'));
             if (!index) {
               var track = window.$('<div class="homelab-resume-track"><div></div></div>');
               track.find('div').css('width', Math.min(100, item.position / item.duration * 100) + '%'); line.append(track);
@@ -442,6 +629,7 @@
           }, 500);
         }
         tile.on('hover:focus hover:touch hover:hover', lookupEpisodes);
+        tile.on('hover:long', function () { if (alive && !destroyed) menu(item); });
         tile.find('.card__view').append(progress);
         tile.find('.card__icons-inner').append(window.$('<div class="card__icon icon--history"></div>'));
         byCard[item.card] = {native: native, update: function (value) {
@@ -467,14 +655,30 @@
       });
       Object.keys(byCard).forEach(function (card) { if (!wanted[card]) { byCard[card].native.destroy(); delete byCard[card]; } });
       cards = data.map(function (item) { return byCard[item.card].native; });
+      if (empty) empty.text(loadedOnce ? 'Здесь появятся незавершённые просмотры' : 'Загрузка…');
       if (changedOrder) {
-        order = nextOrder; scroll.clear();
-        if (!cards.length) scroll.append(window.$('<div class="homelab-resume-empty selector">Здесь появятся незавершённые просмотры</div>'));
+        order = nextOrder; orderList = data.map(function (item) { return item.card; }); scroll.clear(); empty = null;
+        if (!cards.length) { empty = window.$('<div class="homelab-resume-empty selector"></div>').text(loadedOnce ? 'Здесь появятся незавершённые просмотры' : 'Загрузка…'); scroll.append(empty); }
         cards.forEach(function (native) { scroll.append(native.render(true)); });
         last = byCard[key] ? byCard[key].native.render(true) : cards.length ? cards[0].render(true) : null;
       }
       L.Layer.visible(scroll.render(true));
       if (focused && changedOrder) { L.Controller.collectionSet(scroll.render(true)); L.Controller.collectionFocus(last || false, scroll.render(true)); }
+    }
+    // Long press (or remote hold) offers removal from the row.
+    function menu(item) {
+      if (!L.Select || typeof L.Select.show !== 'function') return;
+      var previous = L.Controller.enabled().name;
+      function back() { L.Controller.toggle(previous); }
+      L.Select.show({title: plain(item.title || 'Продолжить просмотр'), items: [{title: 'Убрать из «Продолжить просмотр»', remove: true}],
+        onBack: back,
+        onSelect: function (choice) {
+          back();
+          if (!choice || !choice.remove || destroyed) return;
+          var index = orderList.indexOf(item.card);
+          key = orderList[index + 1] || orderList[index - 1] || '';
+          dismiss(item.card);
+        }});
     }
     this.create = function () { rowCount++; scroll.body().addClass('homelab-resume-items mapping--line'); html.append(scroll.render()); listeners.push(draw); draw(); };
     this.render = function (js) { return js ? html[0] : html; };
@@ -495,8 +699,14 @@
   }
   window.$('head').append(window.$('<style></style>').text('.homelab-resume-row{padding:1em 0}.homelab-resume-items{display:flex;align-items:stretch}.homelab-resume-title{white-space:normal;font-size:1.8em;margin:0 .6em .8em}.homelab-resume-card{flex-shrink:0}.homelab-resume-card .card__title{line-height:1.3;height:2.6em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}.homelab-resume-progress .card-watched__inner{padding:.7em}.homelab-resume-track{height:.18em;background:rgba(255,255,255,.25);margin-top:.5em;border-radius:1em;overflow:hidden}.homelab-resume-track div{height:100%;background:#fff}.homelab-resume-empty{padding:1em;opacity:.7}'));
   L.ContentRows.add({name: 'homelab_continue', title: 'Продолжить просмотр', index: 0, screen: ['main'],
-    call: function () { return function (resolve) { sync.pull(function () { load(function () { resolve({title: 'Продолжить просмотр', results: [{}], params: {createInstance: function () { return new ResumeRow(); }}}); }); }); }; }});
-  window.homelabContinue = {list: list, resume: resume, load: load, subscribe: function (fn) { listeners.push(fn); }};
+    // Resolve at once from the cached list: Main waits for its whole first
+    // batch of rows, so a slow Lampac must not hold the home screen.
+    call: function () { return function (resolve) {
+      context();
+      resolve({title: 'Продолжить просмотр', results: [{}], params: {createInstance: function () { return new ResumeRow(); }}});
+      sync.pull(function () { load(); });
+    }; }});
+  window.homelabContinue = {list: list, resume: resume, load: load, dismiss: dismiss, subscribe: function (fn) { listeners.push(fn); }};
   // Plugins may finish loading after Main has already collected its rows.
   setTimeout(function () {
     var active = L.Activity && typeof L.Activity.active === 'function' ? L.Activity.active() : null;

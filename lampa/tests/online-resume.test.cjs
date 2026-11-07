@@ -2,7 +2,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {harness, flush} = require('./ux-harness.cjs');
 
-function setup(t) {
+function setup(t, options = {}) {
   const h = harness(t), registry = {}, choices = {}, starts = [];
   let active = null, requests = [], draws = [];
   function Native(object) {
@@ -12,7 +12,13 @@ function setup(t) {
     this.toPlayElement = file => ({url: file.url, title: file.title, timeline: {hash: '123', percent: 42, time: 50}, season: file.season, episode: file.episode});
     this.getFileUrl = (file, done) => { requests.push(() => done({url: 'fresh-url'})); };
     this.setDefaultQuality = work => { if (work.quality) work.url = work.quality['2160p']; };
-    this.draw = (items, params) => { draws.push(() => items.forEach(file => { file.timeline = {hash: '123'}; file.mark = () => {}; params.onRender?.(file, {}, {}); })); };
+    // Lampac display(): with voice filter buttons the choice names the active
+    // (default first) button and every row takes that name.
+    this.draw = (items, params) => { draws.push(() => items.forEach(file => {
+      if (options.buttons) {
+        const choice = choices.kinobase || {}, name = options.buttons.includes(choice.voice_name) ? choice.voice_name : options.buttons[0];
+        choices.kinobase = {...choice, voice_name: name}; file.voice_name = name;
+      } file.timeline = {hash: '123'}; file.mark = () => {}; params.onRender?.(file, {}, {}); })); };
     this.destroy = () => {};
   }
   registry.lampac = Native;
@@ -162,13 +168,16 @@ test('an online launch failure opens the source picker with the saved item inste
   assert.equal(h.notices.length,0); assert.equal(h.L.routed,undefined);
 });
 
-test('a source timeout opens the picker once; later metadata and other profiles cannot cause another redirect', t => {
+test('a source timeout inside the opened component only explains what to choose, once and never for another profile', t => {
   const h = setup(t), picked=[]; h.run('mods/HomelabSync/continue.js');
   h.window.HomelabSources={resume(item,movie){picked.push({item,movie});return true}};
   h.window.homelabContinue.resume({...h.item,kind:'online',title:'Series',duration:120});
-  h.tick(60000); assert.equal(picked.length,1); h.tick(60000); assert.equal(picked.length,1);
+  const opened = h.L.Activity.active();
+  h.tick(60000); assert.equal(picked.length,0); assert.equal(h.L.Activity.active(), opened, 'the user stays in the native component');
+  assert.equal(h.notices.filter(text => text.includes('Источник не ответил')).length, 1);
+  h.tick(60000); assert.equal(h.notices.length, 1);
   h.window.homelabContinue.resume({...h.item,kind:'online',title:'Series',duration:120});
-  h.profile('other'); h.tick(60000); assert.equal(picked.length,1);
+  h.profile('other'); h.tick(60000); assert.equal(picked.length,0); assert.equal(h.notices.length, 1);
 });
 
 test('leaving home during metadata resolution or starting another video suppresses stale failure navigation', t => {
@@ -178,14 +187,14 @@ test('leaving home during metadata resolution or starting another video suppress
   h.window.homelabContinue.resume({...h.item,kind:'online',title:'Series',duration:120});h.start({card:h.movie});done(h.movie);h.tick(5000);assert.equal(picked.length,0);
 });
 
-test('a saved voice mismatch opens Continue recovery once with its exact position and episode', async t => {
+test('a saved voice mismatch keeps the user in the native component with a notice instead of navigating', async t => {
   const h = setup(t), recovered = []; h.run('mods/HomelabSync/continue.js');
-  h.registry.homelab_sources = function () {};
-  h.window.HomelabSources = {resume(item, movie) { recovered.push({item, movie}); h.L.Activity.push({component: 'homelab_sources'}); return true; }};
+  h.window.HomelabSources = {resume(item, movie) { recovered.push({item, movie}); return true; }};
   h.window.homelabContinue.resume({...h.item, kind: 'online', title: 'Series', duration: 120});
+  const opened = h.L.Activity.active();
   await h.component().startSource(); h.draw([file(3, 'Different')]); h.render(); h.tick(0); h.tick(60000);
-  assert.equal(recovered.length, 1); assert.equal(recovered[0].item.position, 71); assert.equal(recovered[0].item.episode, 3);
-  assert.equal(h.L.Activity.active().component, 'homelab_sources'); assert.equal(h.work(), null);
+  assert.equal(recovered.length, 0); assert.equal(h.L.Activity.active(), opened); assert.equal(h.work(), null);
+  assert.deepEqual(Array.from(h.notices), ['Сохранённая озвучка не найдена. Выберите вариант в списке']);
 });
 
 test('a stale mismatch cannot redirect a different activity or profile', async t => {
@@ -221,4 +230,146 @@ test('unknown native episode identities cannot autoplay as episode one', async t
     h.draw([{...file(), season: 0, episode}]); h.render(); h.tick(0);
     assert.deepEqual(h.starts, []); assert.equal(h.work(), null);
   }
+});
+
+// Native Lampac draws each translation of a movie as its own row when the
+// provider has no voice buttons; the saved voice need not be the first row.
+test('movie continuation matches the saved voice in any rendered row, not only the first', async t => {
+  const h = setup(t); delete h.movie.name; h.movie.title = 'Film';
+  await h.open({...h.item, card: 'movie_42', season: 0, episode: 0, online: {provider: 'kinobase', voice: 'Second voice', season_index: 0}});
+  h.draw([{voice_name: 'First voice', title: 'Film', url: 'a'}, {voice_name: 'Second voice', title: 'Film', url: 'b'}, {voice_name: 'Third voice', title: 'Film', url: 'c'}]);
+  h.render(); h.tick(0);
+  assert.equal(h.starts.length, 1); assert.equal(h.starts[0].voice_name, 'Second voice');
+  assert.deepEqual(Array.from(h.notices), []);
+});
+
+test('a voice is declared changed only after a whole draw had no matching row', async t => {
+  const h = setup(t), failures = [];
+  delete h.movie.name; h.movie.title = 'Film';
+  assert.equal(h.window.HomelabOnlineResume.resume({...h.item, card: 'movie_42', season: 0, episode: 0, online: {provider: 'kinobase', voice: 'Gone', season_index: 0}}, h.movie, reason => failures.push(reason)), true);
+  await h.component().startSource();
+  h.draw([{voice_name: 'First voice', url: 'a'}, {voice_name: 'Second voice', url: 'b'}]); h.render(); h.tick(0);
+  assert.deepEqual(failures, ['changed']); assert.equal(h.starts.length, 0);
+});
+
+test('an explicit 4K choice selects the 4K stream when the provider labels it "4K"', async t => {
+  const h = setup(t);
+  assert.equal(h.window.HomelabOnlineResume.select({provider: 'kinobase', identityVoice: 'Preferred', seasonIndex: 1}, h.movie, {season: 2, episode: 3}, 2160), true);
+  const c = h.component(); await c.startSource();
+  const work = {quality: {'4K': 'fresh-uhd', '1080p': 'fresh-fhd'}};
+  c.setDefaultQuality(work); assert.equal(work.url, 'fresh-uhd'); assert.deepEqual(Object.keys(work.quality), ['4K']);
+});
+
+test('a key press in the opened component cancels automatic continuation without navigating', async t => {
+  const h = setup(t); await h.open(); const opened = h.L.Activity.active();
+  h.tick(600); h.L.Keypad.listener.send('keydown', {code: 40});
+  h.draw([file()]); h.render(); h.tick(0); h.tick(60000);
+  assert.deepEqual(h.starts, []); assert.equal(h.L.Activity.active(), opened);
+});
+
+test('a shifted saved season index (wrong season drawn) is reported at once instead of waiting a minute', async t => {
+  const h = setup(t), failures = [];
+  assert.equal(h.window.HomelabOnlineResume.resume(h.item, h.movie, reason => failures.push(reason)), true);
+  await h.component().startSource();
+  h.draw([{...file(1), season: 3}, {...file(2), season: 3}]); h.render(); h.tick(0);
+  assert.deepEqual(failures, ['missing']); assert.equal(h.work(), null);
+  h.tick(60000); assert.deepEqual(failures, ['missing'], 'the failure is reported once');
+});
+
+// Some providers put a release tag in voice_name and the dub in translate.
+test('movie rows sharing a release-tag voice are told apart by their translation text', async t => {
+  const h = setup(t); delete h.movie.name; h.movie.title = 'Film';
+  await h.open({...h.item, card: 'movie_42', season: 0, episode: 0, online: {provider: 'kinobase', voice: 'WEB-DL', text: 'Dub B', season_index: 0}});
+  h.draw([{voice_name: 'WEB-DL', translate: 'Dub A', url: 'a'}, {voice_name: 'WEB-DL', translate: 'Dub B', url: 'b'}]); h.render(); h.tick(0);
+  assert.equal(h.starts.length, 1); assert.equal(h.starts[0].translate, 'Dub B');
+  h.resolve(); assert.equal(h.work().homelab_resume_at, 71);
+});
+
+test('identical movie rows are never guessed between', async t => {
+  const h = setup(t), failures = []; delete h.movie.name; h.movie.title = 'Film';
+  assert.equal(h.window.HomelabOnlineResume.resume({...h.item, card: 'movie_42', season: 0, episode: 0, online: {provider: 'kinobase', voice: 'WEB-DL', season_index: 0}}, h.movie, reason => failures.push(reason)), true);
+  await h.component().startSource();
+  h.draw([{voice_name: 'WEB-DL', translate: 'Dub A', url: 'a'}, {voice_name: 'WEB-DL', translate: 'Dub B', url: 'b'}]); h.render(); h.tick(0);
+  assert.deepEqual(failures, ['ambiguous']); assert.equal(h.work(), null);
+});
+
+test('movie continuation seeds the saved voice so a provider with voice buttons opens that voice', async t => {
+  const h = setup(t, {buttons: ['Default Dub', 'Preferred']}); delete h.movie.name; h.movie.title = 'Film';
+  await h.open({...h.item, card: 'movie_42', season: 0, episode: 0, online: {provider: 'kinobase', voice: 'Preferred', season_index: 0}});
+  assert.equal(h.choices.kinobase.voice_name, 'Preferred'); assert.equal(h.choices.kinobase.voice_url, '');
+  h.draw([{text: 'Film 1080p', url: 'a'}]); h.render(); h.tick(0);
+  assert.equal(h.starts.length, 1, 'a saved non-default voice is not reported as changed');
+});
+
+test('series continuation still seeds the saved voice button', async t => {
+  const h = setup(t); await h.open(); assert.equal(h.choices.kinobase.voice_name, 'Preferred');
+});
+
+test('movie capture records the row translation text alongside the voice label', async t => {
+  const h = setup(t); delete h.movie.name; h.movie.title = 'Film'; const c = await h.open({...h.item, card: 'movie_42', season: 0, episode: 0});
+  const work = c.toPlayElement({voice_name: 'WEB-DL', translate: 'Dub B', url: 'b'});
+  assert.equal(work.homelab_online.text, 'Dub B');
+});
+
+const dubs = () => [{voice_name: '2160p', text: 'Licensed Dub', url: '/v?i=0'}, {voice_name: '2160p', text: 'Licensed Dub', url: '/v?i=1'}, {voice_name: 'WEB-DL', translate: 'Other Dub', url: '/v?i=2'}];
+function movieSetup(t) { const h = setup(t), failures = []; delete h.movie.name; h.movie.title = 'Film'; return {h, failures}; }
+async function pick(h, failures, match) {
+  assert.equal(h.window.HomelabOnlineResume.select({provider: 'kinobase', identityVoice: 'Licensed Dub', seasonIndex: 0, match}, h.movie, {season: 0, episode: 0}, null), true);
+  await h.component().startSource();
+  h.component().draw(arguments[3] || dubs(), {onEnter(file) { h.starts.push(file); }});
+  h.render(); h.tick(0);
+}
+// Route Noty failures to the list: select() reports through L.Noty.
+function notices(h) { const seen = []; h.L.Noty = {show: text => seen.push(text)}; return seen; }
+
+test('a common-source movie row is picked by its exact url among identical dubs', async t => {
+  const {h} = movieSetup(t), seen = notices(h);
+  await pick(h, null, {index: 1, count: 3, url: '/v?i=1', text: 'Licensed Dub', translate: '', voice_name: '2160p'});
+  assert.deepEqual(seen, []); assert.equal(h.starts.length, 1); assert.equal(h.starts[0].url, '/v?i=1');
+});
+
+test('without a url the saved index is used when the page has the same row count', async t => {
+  const {h} = movieSetup(t), seen = notices(h);
+  // The server omits a zero index.
+  await pick(h, null, {count: 3, text: 'Licensed Dub', translate: '', voice_name: '2160p'});
+  assert.deepEqual(seen, []); assert.equal(h.starts[0].url, '/v?i=0');
+});
+
+test('a changed page row count falls back to a unique text match', async t => {
+  const {h} = movieSetup(t), seen = notices(h);
+  await pick(h, null, {index: 0, count: 5, text: 'Other', translate: 'Other Dub', voice_name: 'WEB-DL'});
+  assert.equal(h.starts[0].url, '/v?i=2');
+});
+
+test('identical dubs on a changed page are ambiguous, not guessed', async t => {
+  const second = movieSetup(t), again = notices(second.h);
+  await pick(second.h, null, {index: 0, count: 5, text: 'Licensed Dub', translate: '', voice_name: '2160p'});
+  assert.equal(second.h.starts.length, 0); assert.match(again[0], /несколько/);
+});
+
+test('a url row whose dub no longer matches is reported as changed, never played', async t => {
+  const {h} = movieSetup(t), seen = notices(h);
+  await pick(h, null, {index: 2, count: 3, url: '/v?i=2', text: 'Licensed Dub', translate: 'Licensed Dub', voice_name: 'WEB-DL'});
+  assert.equal(h.starts.length, 0); assert.match(seen[0], /изменился/);
+});
+
+test('movie capture records the drawn row position and texts but never the resolver url', async t => {
+  const {h} = movieSetup(t); const c = await h.open({...h.item, card: 'movie_42', season: 0, episode: 0, online: {provider: 'kinobase', voice: '2160p', season_index: 0}});
+  const rows = dubs(); c.draw(rows, {}); h.render();
+  const work = c.toPlayElement(rows[1]);
+  assert.deepEqual({...work.homelab_online.match}, {index: 1, count: 3, text: 'Licensed Dub', translate: '', voice_name: '2160p'});
+});
+
+test('series rows ignore a stray match and keep voice/episode matching', async t => {
+  const h = setup(t);
+  assert.equal(h.window.HomelabOnlineResume.select({provider: 'kinobase', identityVoice: 'Preferred', seasonIndex: 1, match: {index: 0, count: 1, url: 'x'}}, h.movie, {season: 2, episode: 3}, null), true);
+  await h.component().startSource(); h.draw([file(2), file()]); h.render(); h.tick(0);
+  assert.equal(h.starts.length, 1); assert.equal(h.starts[0].episode, 3);
+});
+
+test('a movie match with out-of-range positions is rejected before opening', t => {
+  const {h} = movieSetup(t), valid = h.window.HomelabOnlineResume.valid;
+  assert.equal(valid({provider: 'kinobase', voice: '', season_index: 0, match: {index: 3, count: 3}}), false);
+  assert.equal(valid({provider: 'kinobase', voice: '', season_index: 0, match: {index: 0, count: 1, translate: 'x'.repeat(201)}}), false);
+  assert.equal(valid({provider: 'kinobase', voice: '', season_index: 0, match: {count: 1}}), true);
 });

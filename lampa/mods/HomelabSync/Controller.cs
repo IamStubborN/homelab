@@ -54,7 +54,9 @@ public class HomelabSyncController : BaseController
         ResumeItem item;
         try { item = JsonSerializer.Deserialize<ResumeItem>(buffer.AsSpan(0, count)); }
         catch (JsonException) { return BadRequest(); }
-        return ResumeStore.Save(DataArea.Compose(requestInfo.user_uid, Request.Query["profile_id"]), item)
-            ? Json(new { success = true }) : BadRequest();
+        var result = ResumeStore.Save(DataArea.Compose(requestInfo.user_uid, Request.Query["profile_id"]), item);
+        if (result == null) return BadRequest();
+        if (result.full) return StatusCode(507);
+        return Json(new { success = true, stale = result.stale, result.observed });
     }
 }

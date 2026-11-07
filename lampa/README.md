@@ -211,14 +211,32 @@ The bootstrap sets the parser mode and local service URLs on every Lampa start.
 ## Account synchronization
 
 The bootstrap installs `plugins/account-sync.js` alongside the playback plugin.
-It uses Lampa's native account APIs to fetch history/bookmarks and playback
-progress on focus, return to the foreground, section navigation and player
-close, plus once a minute while visible and outside the player. Event bursts
-are debounced and attempts are spaced by at least 15 seconds. Changed bookmark
-lists notify Lampa to refresh its cached screens; unchanged lists do not.
-Synchronization still requires the user's account sync setting. Android may
-suspend the client in the background; returning to the app schedules a check.
-Existing clients must reload once to load the plugin after deployment.
+It asks Lampa's native CUB account code to pull bookmark and history changes
+(`Account.Bookmarks.update`) and its timeline changelog (`Account.Timeline.update`)
+on focus, return to the foreground, section navigation and player close, plus
+once a minute while visible and outside the player. CUB only receives local
+playback progress from Premium accounts, so without Premium the timeline pull
+brings nothing new; cross-device progress then comes from `HomelabSync`.
+
+Event bursts are debounced. Attempts are spaced at least 15 seconds apart;
+triggers inside that window are deferred to its end rather than dropped. A
+30-second watchdog releases an attempt whose native callback never arrives
+(Lampa's `Account.Api.clear()` silently drops pending CUB requests, for example
+while typing in Search). Late callbacks from released attempts are ignored.
+
+Open screens are refreshed only when folder membership changes: a card added,
+removed or moved between bookmark folders. History and ordering changes, which
+occur on every playback, do not reload screens. Native favorite notifications
+(including this device's own edits) update the comparison baseline, so they are
+not refreshed a second time. After a profile selection or a profile change in
+the stored account, the in-flight attempt is abandoned and sync pauses for up to
+10 seconds while native code reloads the profile; the first list afterwards is
+taken as the new baseline.
+
+Synchronization still requires the user's account sync setting and a selected
+profile. Android may suspend the client in the background; returning to the app
+schedules a check. Existing clients must reload once to load the plugin after
+deployment.
 
 ## Intel runtime and updates
 

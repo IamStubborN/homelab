@@ -20,7 +20,9 @@
       !L.Player.opened || !L.Player.listener || !L.Listener || !L.Listener.follow || !L.Account || !L.Utils) return unavailable();
 
   var rows = [], area = '', listeners = [], request, timer, lastPull = -Infinity, enabled = true;
-  var repairing = false, lastError = ''; 
+  var repairing = false, lastError = '', repairTimer, last = null, cursor = null, cursorKey = '', fullAt = -Infinity, incremental = true;
+  // Fresh results are shared by every caller; a failure may be retried sooner.
+  var FRESH = 10000, RETRY = 3000, FULL = 6 * 3600000;
   function context() {
     var account = L.Storage.get('account', {}), permit = L.Account.Permit || {};
     var profile = permit.account && permit.account.profile;
@@ -37,12 +39,12 @@
     }
     if (scope !== '' && scope !== 0) query.push('profile_id=' + encodeURIComponent(scope));
     return { key: L.Timeline.filename() + ':' + scope + ':' + query[0], file: L.Timeline.filename(),
-      url: config.url + '/timecode/dump?' + query.join('&') };
+      url: config.url + '/timecode/dump?' + query.join('&'), query: query.join('&') };
   }
   function publish() { listeners.slice().forEach(function (fn) { fn(); }); }
   function current() {
     var ctx = context();
-    if (!ctx || ctx.key !== area) { rows = []; area = ctx ? ctx.key : ''; }
+    if (!ctx || ctx.key !== area) { rows = []; area = ctx ? ctx.key : ''; cursor = null; cursorKey = area; last = null; fullAt = -Infinity; }
     return ctx;
   }
   function extra(row) {
@@ -54,6 +56,7 @@
     return value;
   }
   function repair() {
+    clearTimeout(repairTimer); repairTimer = null;
     if (repairing || !enabled) return;
     var ctx = current();
     if (!ctx) return;
@@ -81,42 +84,68 @@
     try { L.Storage.set(ctx.file, viewed, true); L.Timeline.read(); }
     finally { repairing = false; }
   }
+  // Native batches (CUB changelog, dump reads) emit one Timeline event per row.
+  function scheduleRepair() { if (!repairing && !repairTimer) repairTimer = setTimeout(repair, 50); }
+  function rowKey(row) { return row.id ? 'i:' + row.id : 'h:' + row.card + '|' + row.hash; }
+  function merge(changes) {
+    var map = {}, order = [];
+    rows.forEach(function (row) { var key = rowKey(row); if (!map[key]) order.push(key); map[key] = row; });
+    changes.forEach(function (row) {
+      // A web-created row gains an identity on its first native write.
+      if (row.id) delete map['h:' + row.card + '|' + row.hash];
+      var key = rowKey(row); if (!(key in map)) order.push(key); map[key] = row;
+    });
+    rows = order.filter(function (key) { return map[key]; }).map(function (key) { return map[key]; });
+  }
+  function validRows(list) {
+    return list.every(function (row) {
+      return row && Number.isFinite(row.watched_at) && Number.isFinite(row.position) &&
+        Number.isFinite(row.duration) && Number.isFinite(row.percent);
+    });
+  }
   function pull(done) {
     done = done || function () {};
     if (!enabled) return done(new Error('incompatible'));
     var ctx = current();
     if (!ctx) return done(new Error('identity'));
     if (request && request.ctx.url === ctx.url && request.ctx.key === ctx.key) { request.callbacks.push(done); return; }
+    if (!request && last && last.key === ctx.key && Date.now() - last.at < (last.error ? RETRY : FRESH)) return done(last.error ? new Error(last.error) : undefined);
     if (request) { var previous = request; request = null; previous.net.clear(); finish(previous, new Error('profile')); }
-    var pending = { ctx: ctx, net: new L.Reguest(), callbacks: [done] };
+    var pending = { ctx: ctx, net: new L.Reguest(), callbacks: [done], pages: 0 };
     request = pending; lastPull = Date.now(); pending.net.timeout(10000);
-    pending.net.silent(ctx.url, function (dump) {
+    fetchPage(pending);
+  }
+  function fetchPage(pending) {
+    var ctx = pending.ctx, full = !incremental || cursor === null || cursorKey !== ctx.key || Date.now() - fullAt > FULL;
+    var url = full ? ctx.url : config.url + '/timecode/changelog?since=' + encodeURIComponent(cursor) + '&' + ctx.query;
+    pending.net.silent(url, function (dump) {
       if (request !== pending) return;
       var now = current();
       if (!now || now.key !== ctx.key || now.url !== ctx.url) return finish(pending, new Error('profile'));
       if (!dump || !Array.isArray(dump.rows)) {
         if (dump && dump.success === false) return finish(pending, new Error('access'));
+        // Older Lampac without a changelog: fall back to full dumps.
+        if (!full) { incremental = false; return fetchPage(pending); }
         enabled = false; unavailable(); return finish(pending, new Error('incompatible'));
       }
-      var valid = dump.rows.every(function (row) {
-        return row && Number.isFinite(row.watched_at) && Number.isFinite(row.position) &&
-          Number.isFinite(row.duration) && Number.isFinite(row.percent);
-      });
-      if (!valid) { enabled = false; unavailable(); return finish(pending, new Error('incompatible')); }
-      rows = dump.rows;
+      if (!validRows(dump.rows)) { enabled = false; unavailable(); return finish(pending, new Error('incompatible')); }
+      if (full) { rows = dump.rows.slice(); fullAt = Date.now(); } else merge(dump.rows);
+      cursor = Number.isFinite(dump.version) ? dump.version : null; cursorKey = ctx.key;
+      if (!full && dump.truncated === true && cursor !== null && ++pending.pages < 20) return fetchPage(pending);
       repair(); finish(pending); publish();
     }, function () { if (request === pending) finish(pending, new Error('network')); });
   }
   function finish(pending, error) {
     if (request === pending) request = null;
     lastError = error ? error.message : '';
+    if (!error || error.message !== 'profile') last = { key: pending.ctx.key, at: Date.now(), error: lastError };
     pending.callbacks.splice(0).forEach(function (callback) { callback(error); });
     if (error && error.message !== 'profile') publish();
   }
   function schedule() {
     clearTimeout(timer);
     if (!enabled || document.hidden || L.Player.opened()) return;
-    timer = setTimeout(function () { pull(); }, Math.max(300, 15000 - (Date.now() - lastPull)));
+    timer = setTimeout(function () { if (!L.Player.opened()) pull(); }, Math.max(300, 15000 - (Date.now() - lastPull)));
   }
   window.HomelabSync = {
     pull: pull, rows: function () { current(); return rows.slice(); }, extra: extra,
@@ -125,8 +154,8 @@
     url: function (path) { var ctx = current(); return ctx ? ctx.url.replace('/timecode/dump?', path + '?') : null; },
     subscribe: function (fn) { listeners.push(fn); return function () { listeners = listeners.filter(function (value) { return value !== fn; }); }; }
   };
-  L.Timeline.listener.follow('read', repair);
-  L.Timeline.listener.follow('update', repair);
+  L.Timeline.listener.follow('read', scheduleRepair);
+  L.Timeline.listener.follow('update', scheduleRepair);
   L.Storage.listener.follow('change', function (e) { if (['account', 'account_use', 'lampac_profile_id'].indexOf(e.name) !== -1) { current(); publish(); schedule(); } });
   document.addEventListener('visibilitychange', schedule);
   window.addEventListener('focus', schedule);

@@ -288,14 +288,16 @@ test('recovery actions stay hidden during playback, ignore recoverable errors an
   h.profile('other'); h.tick(5000); source.trigger('hover:enter'); assert.equal(recovered.length, 1); assert.ok(source.hasClass('hide'));
 });
 
-test('stall recovery requires thirty seconds without progress and never triggers while paused, seeking, on another video or after close', t => {
+test('stall recovery requires thirty seconds without progress, never triggers while paused, on another video or after close, and covers a stuck seek', t => {
   const h = harness(t); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
   const retry = h.elements.find(e => e.classes.has('homelab-playback-retry'));
   h.video().fire('waiting'); h.tick(29000); assert.ok(retry.hasClass('hide'));
   h.video().currentTime = 3; h.video().fire('timeupdate'); h.tick(1000); assert.ok(retry.hasClass('hide'));
-  h.video().fire('waiting'); h.video().paused = true; h.tick(30000); assert.ok(retry.hasClass('hide'));
-  h.video().paused = false; h.video().fire('waiting'); h.video().seeking = true; h.tick(30000); assert.ok(retry.hasClass('hide'));
-  h.video().seeking = false; h.video().fire('waiting'); h.tick(30000); assert.ok(!retry.hasClass('hide'));
+  h.video().fire('waiting'); h.video().paused = true; h.video().fire('pause'); h.tick(30000); assert.ok(retry.hasClass('hide'));
+  h.video().paused = false; h.video().fire('play'); h.video().fire('playing');
+  h.video().seeking = true; h.video().currentTime = 50; h.video().fire('seeking'); h.tick(30000); assert.ok(!retry.hasClass('hide'), 'a seek that never completes is a stall');
+  h.video().seeking = false; h.video().fire('seeked'); h.video().fire('playing'); assert.ok(retry.hasClass('hide'));
+  h.video().fire('waiting'); h.tick(30000); assert.ok(!retry.hasClass('hide'));
   h.video().fire('playing'); assert.ok(retry.hasClass('hide'));
   h.video().fire('waiting'); const old = h.replaceVideo(); h.tick(30000); old.fire('error'); assert.ok(retry.hasClass('hide'));
   h.destroy(); h.tick(60000); assert.ok(retry.hasClass('hide'));

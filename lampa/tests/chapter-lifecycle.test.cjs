@@ -85,10 +85,11 @@ test('retiring and later dismissing a gallery revokes images once and stops pend
   assert.equal(h.calls.length, 2);
   h.L.Modal.open({title: 'Other'}); h.coreState(null);
   assert.equal(h.calls[1].options.signal.aborted, true);
+  assert.equal(h.calls[2].url, '/previews/cancel', 'the covered gallery releases its server job once');
   assert.equal(h.revoked.length, 1);
   h.calls[1].finish({type: 'image/jpeg', size: 100}); await flush();
   h.L.Modal.close(); h.tick(60000);
-  assert.equal(h.revoked.length, 1); assert.equal(h.calls.length, 2); assert.equal(h.active(), null);
+  assert.equal(h.revoked.length, 1); assert.equal(h.calls.length, 3); assert.equal(h.active(), null);
 });
 
 test('a new gallery above an unrelated modal does not confuse the retired gallery below it', t => {

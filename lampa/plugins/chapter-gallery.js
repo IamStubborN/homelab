@@ -52,10 +52,18 @@
       var at = g.order.indexOf(index); if (at >= 0) g.order.splice(at, 1);
       g.order.push(index);
     }
-    function stopThumb(g) { if (!g) return; clearTimeout(g.timer); if (g.job) { clearTimeout(g.job.deadline); g.job.abort.abort(); } if (g.tried && g.loading !== null && g.loading !== undefined) delete g.tried[g.loading]; g.job = null; g.loading = null; g.busy = false; g.queue = []; }
+    function cancelJob(g) {
+      // Aborting the fetch leaves the server job running; release it so it
+      // cannot hold the decoder ahead of the viewer's seek previews.
+      if (!g.requested) return;
+      g.requested = false;
+      fetch(g.key.split('/').slice(0, -3).join('/') + '/cancel', {method: 'POST', keepalive: true, headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({client: g.client, n: ++g.order_n})}).catch(function () {});
+    }
+    function stopThumb(g) { if (!g) return; clearTimeout(g.timer); if (g.job) { clearTimeout(g.job.deadline); g.job.abort.abort(); cancelJob(g); } if (g.tried && g.loading !== null && g.loading !== undefined) delete g.tried[g.loading]; g.job = null; g.loading = null; g.busy = false; g.queue = []; }
     function release(g) {
       if (g.released) return;
-      g.released = true; stopThumb(g);
+      g.released = true; stopThumb(g); cancelJob(g);
       Object.keys(g.images).forEach(function (key) { URL.revokeObjectURL(g.images[key]); });
       g.images = {}; g.order = [];
     }
@@ -135,7 +143,10 @@
       function request() {
         if (g.job !== job) return;
         if (!valid(g) || !g.visible || Date.now() > deadline) return finish();
-        fetch(g.key + 'frame/' + slot + '.jpg' + (step === 5 ? '' : '?step=' + step), {signal: job.abort.signal}).then(function (r) {
+        // Each open is its own client: latest wins between its serial tiles,
+        // and every poll carries a newer order so the worker accepts it.
+        g.requested = true;
+        fetch(g.key + 'frame/' + slot + '.jpg?step=' + step + '&client=' + g.client + '&n=' + (++g.order_n), {signal: job.abort.signal}).then(function (r) {
           if (!valid(g) || !g.visible || g.job !== job) return finish();
           if (r.status === 202) { g.timer = setTimeout(request, 1000); return; }
           if (r.status === 429 || r.status === 503) {
@@ -230,7 +241,7 @@
     }
     function open() {
       close(); var current = core.current(); if (!current) return;
-      var g = gallery = {key: current.key, scope: scope(), images: {}, order: [], failed: {}, tried: {}, focusIndex: -1, queue: [], visible: false, from: L.Controller.enabled().name};
+      var g = gallery = {client: 'g' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36), order_n: 0, key: current.key, scope: scope(), images: {}, order: [], failed: {}, tried: {}, focusIndex: -1, queue: [], visible: false, from: L.Controller.enabled().name};
       draw(g); L.Modal.open(g.params); settle(g);
     }
     function segment(item) { return item.index + '|' + item.skipStart + '|' + item.skipEnd; }

@@ -580,3 +580,38 @@ test('moving focus far away abandons the pending thumbnail; disabled frames requ
   h.menu().onFocus(h.menu().items[3]); h.tick(1000);
   assert.equal(h.frames().length, 2);
 });
+
+test('evicted object URLs stay valid while a card or an open chapter row still shows them', async t => {
+  const h = harness(t); h.video.duration = 4200;
+  const many = {version: 1, step: 10, duration: 4200, chapters: Array.from({length: 70}, (_, i) => ({start: i * 60, end: i * 60 + 60, title: 'C' + i}))};
+  h.ready(); h.calls[0].finish(many); await flush();
+  const answered = new Set();
+  async function loadList(from, to) {
+    h.button().events['hover:enter'](); const rows = drawMenu(h);
+    for (let i = from; i < to; i++) {
+      h.menu().onFocus(h.menu().items[i]); h.tick(250);
+      let call;
+      while ((call = h.frames().find(c => !answered.has(c)))) { answered.add(call); call.finish(jpeg); await flush(); }
+    }
+    return rows;
+  }
+  await loadList(0, 1); h.L.Select.closeAll();
+  const first = 'blob:1'; // chapter 0 thumbnail, slot 1
+  h.fire('panel:mouse_rewind', {method: 'move', percent: 15 / 4200});
+  assert.equal(h.img().attrs.src, first, 'the card reuses the chapter thumbnail');
+  h.panel.events['mouseleave.homelabPreview']();
+  const rows = await loadList(0, 70);
+  assert.ok(h.objects.length > 64, 'more thumbnails than the cache keeps');
+  assert.equal(painted(rows[0]), `url("${first}")`);
+  assert.equal(h.revoked.includes(first), false, 'an evicted URL painted in the open list is not revoked');
+  h.L.Select.closeAll();
+  assert.equal(h.revoked.includes(first), false, 'still the image of the (faded) card');
+  h.fire('panel:mouse_rewind', {method: 'move', percent: 15 / 4200});
+  assert.notEqual(h.img().attrs.src, first, 'an evicted frame is never shown again');
+  h.tick(450); answered.add(h.frames().at(-1)); h.frames().at(-1).finish(jpeg); await flush();
+  assert.equal(h.revoked.includes(first), true, 'revoked once nothing references it');
+  const count = h.objects.length;
+  h.fire('player:destroy');
+  assert.equal(new Set(h.revoked).size, count, 'closing playback releases every URL exactly once');
+  assert.equal(h.revoked.length, count);
+});

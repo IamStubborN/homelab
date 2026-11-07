@@ -74,6 +74,7 @@
     return {title: voices.length ? voices.slice(0, 2).join(' / ') + (voices.length > 2 ? ' +' + (voices.length - 2) : '') : 'Озвучка в раздаче', codec: codec, voices: voices};
   }
   function compareRows(a, b, pref) {
+    var broken = (a.unavailable ? 1 : 0) - (b.unavailable ? 1 : 0); if (broken) return broken;
     function favorite(row) { return pref.voice && !row.native && voiceKey(row.identityVoice || row.voice) === voiceKey(pref.voice) ? 1 : 0; }
     var match = favorite(b) - favorite(a); if (match) return match;
     function group(row) { return row.native ? 2 : row.kind === 'online' ? 0 : 1; }
@@ -94,6 +95,17 @@
     if (named) found.push(named);
     if (!found.length && file.maxquality) { named = quality(file.maxquality); if (named) found.push(named); }
     return found.filter(function (q, i) { return found.indexOf(q) === i; }).sort(function (a, b) { return b - a; });
+  }
+  // Width first: cinema crops (1920x800) still count as 1080p.
+  function standard(width, height) {
+    var steps = [[3800, 2160], [2500, 1440], [1800, 1080], [1200, 720], [1000, 576], [800, 480]];
+    for (var i = 0; i < steps.length; i++) if (width >= steps[i][0] || height >= steps[i][1] * 0.9) return steps[i][1];
+    return width || height ? 360 : 0;
+  }
+  function hlsQuality(text) {
+    var best = 0;
+    String(text).replace(/RESOLUTION=(\d+)x(\d+)/gi, function (all, width, height) { best = Math.max(best, standard(+width, +height)); return all; });
+    return best;
   }
   function covers(release, selection) {
     var seasons = release.info && release.info.seasons;
@@ -180,6 +192,50 @@
     function fallback(source, label) {
       add({key: 'source:' + source.key, kind: 'online', provider: source.key, providerName: source.name, voice: label || 'Выбрать в источнике', native: true, qualities: []});
     }
+    // Rows without quality ask their source once, after the catalog is done: the call JSON or the HLS master
+    // (RESOLUTION) gives the real height; a 4xx means the source hands out no video. Timeouts change nothing.
+    var probeQueue = [], probing = 0, probes = 0;
+    function probe(row, raw) {
+      if (row.native || row.qualities.length || typeof raw !== 'string' || !raw || probes >= 24) return;
+      probes++; probeQueue.push({row: row, url: raw}); probeNext();
+    }
+    function probeFetch(raw) {
+      var auth = server('/lite/events'), url = new URL(raw, auth.origin), own = url.origin === auth.origin;
+      if (own && /^\/lite\//.test(url.pathname)) url = new URL(address(url.href, false));
+      if (!/^https?:$/.test(url.protocol)) return Promise.reject(new Error('url'));
+      var abort = Abort(), timer = setTimeout(function () { abort.abort(); }, 10000); requests.push(abort);
+      var headers = {}, kit = own && L.Storage.get('kit_aesgcmkey', ''); if (kit) headers['X-Kit-AesGcm'] = kit;
+      return always(fetch(url.href, {signal: abort.signal, credentials: own ? 'same-origin' : 'omit', cache: 'no-store', headers: headers}).then(function (response) {
+        // A direct file answers with media: never download it.
+        if (/^(?:video|audio)\/|octet-stream/i.test(response.headers.get('content-type') || '')) { abort.abort(); return {status: response.status, text: ''}; }
+        return response.text().then(function (text) { return {status: response.status, text: text}; });
+      }), function () { clearTimeout(timer); requests = requests.filter(function (entry) { return entry !== abort; }); });
+    }
+    function probeJob(row, raw, hop) {
+      return probeFetch(raw).then(function (result) {
+        if (!live()) return;
+        if (result.status >= 400 && result.status < 500 && result.status !== 429) { row.unavailable = true; return notify(); }
+        if (result.status >= 300) return;
+        var json; try { json = JSON.parse(result.text); } catch (_) {}
+        if (json && typeof json === 'object') {
+          var found = qualities({quality: json.quality || json.qualitys, maxquality: json.maxquality});
+          if (found.length) { row.qualities = found; row.measured = true; return notify(); }
+          if (typeof json.url === 'string' && json.url && !hop) return probeJob(row, json.url, 1);
+          if (json.error || json.accsdb || !json.url) { row.unavailable = true; notify(); }
+          return;
+        }
+        var best = /^\s*#EXTM3U/.test(result.text) ? hlsQuality(result.text) : 0;
+        if (best) { row.qualities = [best]; row.measured = true; notify(); }
+      });
+    }
+    function probeNext() {
+      while (live() && probing < 2 && probeQueue.length && !running && !queue.length && !voiceQueue.length) {
+        (function (job) {
+          probing++;
+          always(probeJob(job.row, job.url, 0).catch(function () {}), function () { probing--; probeNext(); });
+        })(probeQueue.shift());
+      }
+    }
     function voiceSeen(source, seasonIndex, text) {
       var key = source.key + ':' + seasonIndex + ':' + voiceKey(text);
       if (voicesSeen[key]) return true;
@@ -230,6 +286,7 @@
           row.voice = labels[label] > 1 ? label + ' · вариант ' + labels[label] : label;
           row.identityVoice = identityVoice;
           add(row);
+          if (self.rows[self.rows.length - 1] === row) probe(row, file.url);
         });
         if (!matching.length && !voices.length) fallback(source, 'Уточнить серию в источнике');
         voices.forEach(function (choice) { if (!choice.active && choice.url && choice.text && !voiceSeen(source, state.seasonIndex, choice.text)) enqueue(source, choice.url, {seasonIndex: state.seasonIndex, voice: choice.text}, 1); });
@@ -245,7 +302,7 @@
       }
     }
     var discoveryDone = false;
-    function settle() { self.onlinePending = live() && (!discoveryDone || running > 0 || queue.length > 0 || voiceQueue.length > 0); notify(); }
+    function settle() { self.onlinePending = live() && (!discoveryDone || running > 0 || queue.length > 0 || voiceQueue.length > 0); probeNext(); notify(); }
     function pump() {
       if (!live()) return;
       while (running < 2 && (queue.length || voiceQueue.length)) {
@@ -302,7 +359,7 @@
     }
     this.cancel = function () {
       if (alive && started && (self.onlinePending || self.torrentPending)) self.interrupted = true;
-      alive = false; timers.forEach(clearTimeout); clearTimeout(parserTimer); requests.forEach(function (abort) { abort.abort(); }); queue = []; voiceQueue = [];
+      alive = false; timers.forEach(clearTimeout); clearTimeout(parserTimer); requests.forEach(function (abort) { abort.abort(); }); queue = []; voiceQueue = []; probeQueue = [];
       if (parserOwner === self && parserPending) L.Parser.clear();
       if (parserOwner === self) parserOwner = null;
       parserPending = false;
@@ -456,7 +513,8 @@
           var size = Number(row.release.Size || row.release.size); if (size > 0) details += ' · ' + (size / 1073741824).toFixed(1).replace('.', ',') + ' ГБ';
           if (Number.isFinite(+row.release.Seeders)) details += ' · ' + (+row.release.Seeders) + ' сидов';
           if (tv) details += ' · Выбор серии в раздаче';
-        } else if (!row.qualities.length) details += row.native ? ' · Качество неизвестно · Открыть источник' : ' · Качество уточняется';
+        } else if (row.unavailable) details += ' · Не отдаёт видео';
+        else if (!row.qualities.length) details += row.native ? ' · Качество неизвестно · Открыть источник' : ' · Качество уточняется';
         text.append($('<div class="homelab-common-details"></div>').text(details));
         tile.prepend(icon).append($('<div class="homelab-common-quality"></div>').text(row.qualities.length ? row.qualities.map(function (n) { return n === 2160 ? '4K' : n + 'p'; }).join(' / ') : '—'));
         tile.on('hover:focus', function () { last = this; if (!restoringFocus) { locked = true; scroll.update(this, true); } })

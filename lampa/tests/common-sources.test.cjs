@@ -19,7 +19,7 @@ function setup(t, options = {}) {
   function request(url, options) {
     return new Promise((resolve, reject) => {
       active++; peak = Math.max(peak, active); let settled = false;
-      const job = {url: new URL(url), options, started: Date.now(), finish(body) { if (settled) return; settled = true; active--; resolve({ok: true, text: async () => typeof body === 'string' ? body : JSON.stringify(body)}); }};
+      const job = {url: new URL(url), options, started: Date.now(), finish(body) { if (settled) return; settled = true; active--; const status = body && body.__status || 200; resolve({ok: status < 400, status, headers: {get: () => body && body.__type || ''}, text: async () => typeof body === 'string' ? body : JSON.stringify(body)}); }};
       if (!noAbort) options.signal.addEventListener('abort', () => { if (!settled) { settled = true; active--; reject(new Error('aborted')); }});
       requests.push(job);
     });
@@ -344,7 +344,7 @@ test('voice pages are fetched once per provider, season and voice, after first p
   await h.finish('/lite/one', 'voice-b');
   await h.finish('/lite/one', 'voice-c');
   h.tick(5000); await flush();
-  const voices = h.requests.filter(r => r.url.searchParams.has('t')).map(r => r.url.searchParams.get('t'));
+  const voices = h.requests.filter(r => r.url.pathname === '/lite/one' && r.url.searchParams.has('t')).map(r => r.url.searchParams.get('t'));
   assert.deepEqual(voices.sort(), ['B', 'C'], 'the already visited active voice is never re-fetched');
   assert.deepEqual(Array.from(h.search.rows.filter(r => !r.native), r => r.voice), ['Studio A', 'Studio B', 'Studio C']);
   assert.equal(h.search.onlinePending, false);
@@ -385,4 +385,34 @@ test('movie recovery uses the dub from the saved match instead of a release-tag 
   h.L.Activity = {active: () => activity, push: value => pushes.push(value)};
   assert.equal(h.window.HomelabSources.recover(work, {position: 71, duration: 120}, false), true); h.tick(0);
   assert.equal(pushes[0].homelab_recovery.voice, 'MVO Studio');
+});
+
+test('rows without quality learn the real height from the source once the catalog is done', async t => {
+  const h = setup(t); await h.start();
+  await h.finish('/lite/events', [h.source('one')]);
+  h.pages.set('films', {'.videos__item': [
+    {method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio A', url: '/lite/one/video?f=a'},
+    {method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio B', url: '/lite/one/video?f=b'},
+    {method: 'play', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio C', url: '/proxy/c.m3u8'},
+    {method: 'play', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio D', url: '/proxy/d.mp4'},
+    {method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio E', url: '/lite/one/video?f=e', quality: {'720p': '/x'}}]});
+  await h.finish('/lite/one', 'films');
+  const row = voice => h.search.rows.find(r => r.voice === voice);
+  // Quality map from the call answer.
+  await h.finish('/lite/one/video', {method: 'play', url: '/proxy/a.m3u8', quality: {'1080p': '/proxy/a1', '480p': '/proxy/a2'}});
+  assert.deepEqual(Array.from(row('Studio A').qualities), [1080, 480]);
+  // A 404 from the source marks the row and sorts it last.
+  await h.finish('/lite/one/video', {__status: 404});
+  assert.equal(row('Studio B').unavailable, true);
+  // HLS master: a cinema crop still counts as 1080p.
+  await h.finish('/proxy/c.m3u8', '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1280x534\nlow.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2,RESOLUTION=1920x800\nhigh.m3u8\n');
+  assert.deepEqual(Array.from(row('Studio C').qualities), [1080]);
+  // A direct file is never downloaded and stays unknown.
+  await h.finish('/proxy/d.mp4', {__type: 'video/mp4'});
+  assert.deepEqual(Array.from(row('Studio D').qualities), []); assert.ok(!row('Studio D').unavailable);
+  // Rows that already know their quality are never probed.
+  assert.ok(!h.requests.some(r => r.url.searchParams.get('f') === 'e'));
+  const order = h.search.rows.slice().sort((a, b) => h.window.HomelabSources.compareRows(a, b, {}));
+  assert.equal(order[order.length - 1].voice, 'Studio B');
+  h.search.cancel();
 });

@@ -77,7 +77,7 @@ function fakeElement(html = '') {
   return element;
 }
 
-function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null, attachments = {}, library = null, platform = null } = {}) {
+function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null, attachments = {}, library = null, platform = null, playlist = null, connection = null } = {}) {
   const notices = [];
   const playlistUrls = [];
   const runas = [];
@@ -155,7 +155,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       subsview() {},
     },
     Noty: { show: message => notices.push(message) },
-    PlayerPlaylist: { url: value => { playlistUrls.push(value); } },
+    PlayerPlaylist: { url: value => { playlistUrls.push(value); }, get: () => playlist || [] },
     PlayerPanel: {
       listener: panel, setTracks: value => { audioMenu = value; }, setSubs: value => { subtitles = value; },
       render: () => ({ find: selector => selector === '.player-panel__subs' ? subsButton : { length: 0 } }),
@@ -179,12 +179,14 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       MediaSource: { isTypeSupported: type => mse.some(codec => type === `audio/mp4; codecs="${codec}"`) },
       location: { origin: 'https://lampa.test', href: 'https://lampa.test/' },
       localStorage: browserStorage,
+      navigator: connection ? { connection } : {},
       fetch(url, options) {
         if (new URL(url).pathname === '/extaudio/log') {
           logs.push({...JSON.parse(options.body), options});
           return Promise.resolve({ok: true, status: 204});
         }
         requests.push({url, options});
+        if (/\/warm$/.test(new URL(url).pathname)) return Promise.resolve({ok: true, status: 202});
         if (/\/(?:heartbeat|remove)(?:\?|$)/.test(url)) return Promise.resolve({ok: true});
         if (/^\/extaudio\/[^/]+\/\d+\/tracks$/.test(new URL(url).pathname)) {
           return Promise.resolve({ok: true, json: async () => ({tracks: external, ...(ass || {})})});
@@ -278,6 +280,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       return hls;
     },
     explicitPause() { video.pause(); playerVideo.send('pause'); },
+    timeupdate(time) { video.currentTime = time; playerVideo.send('timeupdate', {duration: video.duration, current: time}); },
     fireTimer(delay) {
       const timer = [...timers].find(([, value]) => value.delay === delay);
       assert.ok(timer, `timer ${delay} is scheduled`);
@@ -333,6 +336,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       player.send('ready', work);
     },
     work: () => work,
+    setPlaydata(value) { work = value; },
     pending,
     async probe(tracks, lampac = false) {
       const request = pending.find(item => /\/probe$/.test(new URL(item.url).pathname));
@@ -2323,4 +2327,118 @@ test('a refused retry leaves the work untouched', async t => {
   assert.equal(h.context.Lampa.HomelabGstAudio.retryCurrent(), false);
   assert.equal(work.url, url);
   assert.equal(work.homelab_retry_playback, undefined);
+});
+
+const episodes = (hash, files) => files.map(file => ({ title: `Серия ${file}`, url: `https://lampa.test/torrserver/stream/Show%20${file}.mkv?link=${hash}&index=${file}&play` }));
+const gstEpisodes = (hash, files) => files.map(file => ({ title: `Серия ${file}`, torrent_hash: hash, url: `https://lampa.test/torrserver/gst/${hash}/master.m3u8?index=${file}&audio=0` }));
+const warms = h => h.requests.filter(item => /\/warm$/.test(new URL(item.url).pathname)).map(item => [new URL(item.url).pathname + new URL(item.url).search, item.options.method]);
+function playThrough(h, from, to, step = 1) {
+  for (let time = from; time <= to; time += step) h.timeupdate(time);
+}
+
+test('the next episode is warmed once, after playback runs in its last seven minutes', async t => {
+  const h = harness(t, new Map(), { playlist: episodes('ABC', [12, 13, 14]) });
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  playThrough(h, 600, 620);
+  assert.deepEqual(warms(h), [], 'the middle of the episode warms nothing');
+  playThrough(h, 960, 979);
+  assert.deepEqual(warms(h), [], 'more than seven minutes are left');
+  playThrough(h, 981, 990);
+  assert.deepEqual(warms(h), [], 'ten seconds have to play first');
+  playThrough(h, 991, 1000);
+  assert.deepEqual(warms(h), [['/extaudio/abc/14/warm', 'POST']]);
+  assert.ok(h.logs.some(event => event.e === 'warm-next' && event.next === 14));
+  playThrough(h, 1001, 1300);
+  assert.equal(warms(h).length, 1, 'once per episode');
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  playThrough(h, 1225, 1300);
+  assert.equal(warms(h).length, 1, 'a reopened episode does not warm the same file again');
+});
+
+test('a pause, a seek or a scrub near the end warms nothing', async t => {
+  const h = harness(t, new Map(), { playlist: episodes('abc', [13, 14]) });
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  h.video().paused = true;
+  playThrough(h, 1225, 1300);
+  h.video().paused = false;
+  playThrough(h, 1000, 1390, 5);
+  h.video().seeking = true;
+  playThrough(h, 1225, 1300);
+  assert.deepEqual(warms(h), []);
+});
+
+test('only another file of the same torrent is warmed, and not on a metered connection', async t => {
+  const cases = [
+    [{ playlist: episodes('abc', [12, 13]) }, 'the last episode has no next one'],
+    [{ playlist: [...episodes('abc', [13]), ...episodes('other', [14])] }, 'another torrent'],
+    [{ playlist: [...episodes('abc', [13]), { title: 'online', url: 'https://example.test/video.mp4' }] }, 'not a torrent file'],
+    [{ playlist: episodes('abc', [13, 14]), connection: { saveData: true } }, 'data saver'],
+    [{ playlist: episodes('abc', [13, 14]), connection: { type: 'cellular' } }, 'cellular'],
+  ];
+  for (const [options, message] of cases) {
+    const h = harness(t, new Map(), options);
+    h.start(13, 'abc', true);
+    await h.probe(firstEpisode);
+    playThrough(h, 1225, 1300);
+    assert.deepEqual(warms(h), [], message);
+  }
+});
+
+test('from the second episode on, the playlist item being played warms the next one', async t => {
+  const playlist = gstEpisodes('abc', [13, 14, 15]);
+  const h = harness(t, new Map(), { playlist });
+  h.replay(playlist[0]);
+  await h.probe(firstEpisode);
+  playThrough(h, 1225, 1300);
+  h.replay(playlist[1]);
+  await h.probe(firstEpisode);
+  assert.ok(!playlist[1].torrent_hash && /\/gst\/start\.m3u8$/.test(new URL(playlist[1].url).pathname), 'the item went through create');
+  playThrough(h, 1225, 1300);
+  assert.deepEqual(warms(h), [['/extaudio/abc/14/warm', 'POST'], ['/extaudio/abc/15/warm', 'POST']]);
+});
+
+test('the first episode finds its playlist position by the URL Lampa listed', async t => {
+  // The same file listed twice: only the source URL tells which item plays.
+  const playlist = [
+    { title: 'Серия 13 (stream)', url: 'https://lampa.test/torrserver/stream/Show.mkv?link=abc&index=13&play' },
+    ...gstEpisodes('abc', [16, 13, 15]),
+  ];
+  const h = harness(t, new Map(), { playlist });
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  playThrough(h, 1225, 1300);
+  assert.deepEqual(warms(h), [['/extaudio/abc/15/warm', 'POST']]);
+});
+
+test('the voice-over being played is named so the sidecar probes only its file', async t => {
+  const h = harness(t, new Map(), { playlist: gstEpisodes('abc', [13, 14]) });
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  h.work().homelab_external_audio = { key: '7:0' };
+  playThrough(h, 1225, 1300);
+  assert.deepEqual(warms(h), [['/extaudio/abc/14/warm?voice=7', 'POST']]);
+});
+
+test('a short video, an unknown duration or another playdata warms nothing', async t => {
+  const h = harness(t, new Map(), { playlist: episodes('abc', [13, 14]) });
+  h.start(13, 'abc', true);
+  await h.probe(firstEpisode);
+  h.video().duration = 200;
+  playThrough(h, 30, 99);
+  assert.deepEqual(warms(h), [], 'the first half of a short video is not its end');
+  h.video().duration = Infinity;
+  playThrough(h, 1225, 1300);
+  h.video().duration = NaN;
+  playThrough(h, 1225, 1300);
+  h.video().duration = 1400;
+  const work = h.work();
+  h.setPlaydata({ ...work });
+  playThrough(h, 1225, 1300);
+  assert.deepEqual(warms(h), []);
+  h.setPlaydata(work);
+  playThrough(h, 1225, 1300);
+  assert.equal(warms(h).length, 1, 'the same playback still warms');
 });

@@ -1999,6 +1999,84 @@
       ownStream(state, url);
     }
 
+    // Near the end of an episode the sidecar reads the head of the next one
+    // (a few MB) and probes it, so a slow torrent starts it sooner.
+    // Only playback counts, not a pause or a scrub through the timeline.
+    var WARM_REMAINING = 420;
+    var WARM_PLAYED = 10;
+    var warmedFiles = [];
+
+    function torrentFile(item) {
+      // An item that has played was rewritten to a GST start URL; it keeps its file.
+      if (item && item.homelab_torrent_hash && Number.isInteger(item.homelab_file_index)) {
+        return {hash: String(item.homelab_torrent_hash).toLowerCase(), index: item.homelab_file_index};
+      }
+      if (!item || typeof item.url !== 'string') return null;
+      try {
+        // Lampa lists `/stream/<name>?link=<hash>&index=N` or `/gst/<hash>/master.m3u8?index=N`.
+        var url = new URL(item.url, window.location.href);
+        var gst = /\/gst\/([^/]+)\/master\.m3u8$/.exec(url.pathname);
+        var hash = url.searchParams.get('link') || (gst && decodeURIComponent(gst[1]));
+        var index = url.searchParams.get('index');
+        return hash && /^\d+$/.test(index || '') ? {hash: hash.toLowerCase(), index: Number(index)} : null;
+      } catch (error) { return null; }
+    }
+
+    // The item after the playing one, if it is another file of the same torrent.
+    function nextFile(work) {
+      var list = Lampa.PlayerPlaylist && typeof Lampa.PlayerPlaylist.get === 'function' ? Lampa.PlayerPlaylist.get() : work.playlist;
+      if (!Array.isArray(list) || !Number.isInteger(work.homelab_file_index)) return null;
+      var hash = String(work.homelab_torrent_hash).toLowerCase();
+      var files = list.map(torrentFile);
+      // From the second episode on Lampa plays the playlist item itself; the
+      // first one is a copy that keeps the item's URL in homelab_source_url.
+      var current = list.indexOf(work);
+      if (current === -1 && work.homelab_source_url) {
+        current = list.findIndex(function (item) { return item && item.url === work.homelab_source_url; });
+      }
+      if (current === -1) current = files.findIndex(function (file) { return file && file.hash === hash && file.index === work.homelab_file_index; });
+      var next = current === -1 ? null : files[current + 1];
+      return next && next.hash === hash && next.index !== work.homelab_file_index ? next : null;
+    }
+
+    function metered() {
+      var connection = window.navigator && window.navigator.connection;
+      return Boolean(connection && (connection.saveData || connection.type === 'cellular'));
+    }
+
+    function warmNext() {
+      var state = active;
+      if (!state || state.warmed || Lampa.Player.playdata() !== state.work || !state.work.homelab_torrent_hash) return;
+      var video = Lampa.PlayerVideo.video();
+      var time = video && Number(video.currentTime);
+      var left = video && video.duration - time;
+      if (!video || video.paused || video.seeking || !isFinite(video.duration) ||
+          !(left > 0 && left <= WARM_REMAINING) || time < video.duration / 2) {
+        state.warmPlayed = 0;
+        state.warmLast = null;
+        return;
+      }
+      // A jump forward is a seek, not playback.
+      var step = state.warmLast === null || state.warmLast === undefined ? 0 : time - state.warmLast;
+      state.warmLast = time;
+      if (step > 0 && step < 3) state.warmPlayed = (state.warmPlayed || 0) + step;
+      if (state.warmPlayed < WARM_PLAYED) return;
+      // Once per episode, whatever the outcome.
+      state.warmed = true;
+      var next = nextFile(state.work);
+      if (!next || metered()) return;
+      var key = next.hash + '/' + next.index;
+      if (warmedFiles.indexOf(key) !== -1) return;
+      warmedFiles.push(key);
+      if (warmedFiles.length > 50) warmedFiles.shift();
+      var url = new URL('/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + next.index + '/warm', window.location.href);
+      // The sidecar probes external audio only for the voice-over being played.
+      var external = state.work.homelab_external_audio;
+      if (external && /^\d+:/.test(external.key)) url.searchParams.set('voice', external.key.split(':')[0]);
+      report('warm-next', {next: next.index, voice: Boolean(url.searchParams.get('voice'))}, state.work);
+      window.fetch(url.href, {method: 'POST', cache: 'no-store'}).catch(function () {});
+    }
+
     Lampa.PlayerVideo.listener.follow('subs', function (event) {
       if (!Array.isArray(event.subs)) return;
       // Lampa may send back the list it keeps, with drawn items already in it.
@@ -2032,6 +2110,7 @@
       var controller = Lampa.Controller.enabled && Lampa.Controller.enabled();
       if (controller && /^player(_panel|_rewind)?$/.test(controller.name)) toggleSigns();
     });
+    Lampa.PlayerVideo.listener.follow('timeupdate', warmNext);
     Lampa.PlayerVideo.listener.follow('pause', function () {
       var work = Lampa.Player.playdata();
       if (masterUrl(work)) pausedWork = work;

@@ -141,6 +141,41 @@ minute first. A remembered voice is applied automatically only in the first 45
 seconds after the first frame (90 seconds while an external rendition is being prepared); one found
 later is announced and left in the menu instead of reloading the video.
 
+## Next episode warm-up
+
+On a slow torrent the next episode waits for its head before GST and the
+track probes can start. Once an episode has played 10 s within its last
+7 minutes and its second half (paused, seeking or scrubbing does not count),
+the plugin sends `POST /extaudio/<hash>/<file id>/warm` for the next playlist
+item, only when that item is another file of the same torrent and the browser
+reports no data saver or cellular connection. The playing item is found by the
+URL Lampa listed for it (`homelab_source_url`), or by its torrent and file. It
+asks once per play of an episode (an audio switch or a retry keeps that play)
+and remembers the last 50 files it asked for, until the page reloads. While an
+external voice-over plays, it adds `?voice=<its file id>`. Each request is
+logged as a `warm-next` event.
+
+The sidecar refuses a request from another site's page (`Origin`), and a
+torrent that `list` does not report as running: it never makes TorrServer
+start a torrent. It accepts only a video of that torrent, runs one warm at a
+time (429 otherwise) and warms a file at most once in 6 hours. A warm reads:
+
+- the first `WARM_HEAD_MB` (8) MiB of the video with a range request, closed
+  at that limit;
+- whatever ffprobe reads for the embedded subtitle probe: the header, and in
+  MKV also the attachments (fonts), tags and seek index it points to, which may
+  sit at the end of the file;
+- with `voice`, the head of that voice-over's file for the next episode (the
+  candidate in the same folder), as the `/tracks` probe reads it. Without
+  `voice`, no audio file is read.
+
+Results land in the probe caches, so the next episode's menus answer at once;
+a probe that fails during a warm is not remembered, so the real start probes
+again. A probe already running is joined, not repeated. Nothing is encoded.
+TorrServer marks every file it streams as viewed; a warm removes that mark
+again unless the file was viewed before (a start of that episode during the
+warm marks it again on its next read).
+
 ## External ASS subtitles
 
 Lampa draws subtitles as plain text in one box at the bottom, and Lampac turns

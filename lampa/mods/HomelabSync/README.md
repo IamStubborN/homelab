@@ -10,8 +10,9 @@ native parser torrent releases for the selected title.
 
 Online catalog requests have concurrency two; all metadata requests and polls
 are paced at least 350 ms apart. Traversal is limited to the selected season
-and episode, a 60-second deadline and 32 pages per provider. Unknown quality is
-visible under All qualities. Ambiguous titles/seasons, RCH and failed metadata
+and episode, a 60-second deadline and 32 pages per provider. Online rows of
+unknown quality stay visible under every quality tab, labelled «Качество
+уточняется»; torrents without a quality remain hidden under a specific tab. Ambiguous titles/seasons, RCH and failed metadata
 probes offer native-source selection instead of declaring the source dead.
 Torrent releases with explicit incompatible season/episode coverage are
 excluded; unknown-coverage packs retain the native file chooser. Discovery
@@ -27,19 +28,25 @@ profile cancels searches; returning keeps collected results with Refresh.
 Tests: `common-sources.test.cjs` and `online-resume.test.cjs`. Native-frontend
 compatibility still needs validation after upstream updates.
 
-The same loader installs `playlist-thumbnails.js`. It decorates only a missing
-next-episode thumbnail (including native `w300null` placeholders), first with
-the card backdrop/poster, then the exact episode still from public `Api.seasons`.
-Metadata is coalesced and bounded to the upcoming episode; valid existing
-thumbnails are preserved. A guarded re-set of the same native playlist updates
-the Next renderer without changing media URLs, order, or progress. Closing the
-player, replacing the playlist, or changing profile invalidates late callbacks.
+The same loader installs `playlist-thumbnails.js`. It fills only a missing
+next-episode thumbnail (including native `w300null` placeholders) with the exact
+TMDB episode still from public `Api.seasons` (tmdb/cub ids or `card.tmdb_id`).
+The card backdrop/poster is shown only as a provisional fallback when the still
+is slow (>1.5 s) or absent, and is upgraded when the still arrives. Season stills
+are cached per app session (bounded, survives episode switches; misses retry
+after 5 min). Valid existing thumbnails are preserved. A guarded re-set of the
+same native playlist updates the Next renderer without changing media URLs,
+order, or the current index. Closing the player, replacing the playlist, or
+changing profile invalidates late callbacks.
 
 `HomelabSync` is a local dynamic Lampac module. It serves its own JavaScript at
 `/homelab-sync.js` (or `/homelab-sync/js/{token}`), without modifying Lampac or
 Lampa source files. The response is `no-store`; its serialized configuration
 uses Lampac's existing assigned identity and optional route token. Progress reads
-go directly to the existing authenticated `/timecode/dump` endpoint. The owned
+go directly to the existing authenticated `/timecode/dump` endpoint once, then to
+its incremental `/timecode/changelog?since=` (including tombstones; truncated
+pages continue in the same pull). A full dump is repeated every six hours and on
+profile change; a Lampac without the changelog falls back to dumps. The owned
 Continue Watching row additionally reads/writes `/homelab-sync/resume`, using
 Lampac’s existing identity and profile namespace. It introduces no account system
 or direct connection to the native SQLite database.
@@ -54,10 +61,13 @@ URLs are not automatically converted to token routes. Never commit tokens.
 - Pull playback progress at startup, on focus/foreground/pageshow, on navigation
   and player close, and once a minute outside playback. Bursts share a request;
   scheduled attempts are at least 15 seconds apart, with a 10-second timeout.
+  Every caller (screens, panels, the main row) reuses a result younger than
+  10 seconds (3 seconds after a failure) instead of issuing another request.
 - Preserve the native main/shared and non-main profile namespaces. Discard old
   responses and clear the extension's in-memory snapshot on profile changes.
 - Repair older imports into native timeline storage through public Timeline
-  `read`/`update` notifications. Preserve newer local positions and retain delete
+  `read`/`update` notifications, coalesced into one pass per native batch.
+  Preserve newer local positions and retain delete
   timestamps/duration. Reading back storage rebuilds native indexes without
   echoing playback writes. Ambiguous hashes belonging to different cards are
   retained for our own history but are not imported into native hash storage.
@@ -65,6 +75,8 @@ URLs are not automatically converted to token routes. Never commit tokens.
   public Category maker for mobile layouts, TV navigation and pagination.
   Combine Lampac progress with CUB's event history; refetch CUB events on refresh,
   including rewatches. The open owned panel updates without a PWA reload.
+  Background polls repaint the progress line of shown cards in place, so TV
+  focus, scroll and loaded pages are kept; new cards appear on the next visit.
 - Leave CUB's own history screen available. This extension does not replace its
   component or patch generated JavaScript. Snapshot-derived events are the latest
   saved position per file, not a reconstruction of every historical viewing;
@@ -77,13 +89,23 @@ The owned **Продолжить просмотр** main row uses native Maker C
 history, inside an owned Scroll/Controller row. Native poster proportions, focus,
 TV badges, play icons and lazy image loading are reused. The row displays the
 captured episode/progress and time rather than deriving another source's timeline;
-refreshes preserve the page and focused card.
+refreshes preserve the page and focused card. The row is created at once from the
+last list cached on the device for the same identity/profile (Main waits for its
+first batch of rows) and updates when the pull and resume read complete.
+
+An episode past 90% (Lampa's own watched mark) is offered as the next episode
+from its start: within the season, or episode 1 of the next season when TMDB
+season counts say the season ended; a finished series and watched movies leave the
+row. A torrent continuation finds that episode in the same release; online keeps
+the provider/voice within the season. A long press offers **Убрать из «Продолжить
+просмотр»**: the server stores a tombstone and a later viewing brings the card back.
 
 Records distinguish torrent and online sources. A newer observation replaces the
 whole source for the same card, so switching from a torrent to online cannot leave
 the old torrent active. Legacy records without `kind` retain torrent semantics.
-Only clients with this extension can capture the source; historical progress
-without source metadata opens the card for source selection.
+Only clients with this extension can capture the source; progress without source
+metadata opens the source picker with its exact episode and position (or the card
+when the picker is unavailable). Cards from non-TMDB catalogues are not captured.
 
 Torrent records retain the hash/file index, exact position and track preferences.
 Direct continuation checks the existing TorrServer file without adding a torrent,
@@ -103,9 +125,19 @@ alternative. Cancellation, profile changes and departed activities block late
 responses; successful manual playback retires an earlier automatic intent.
 
 The explicit position is applied once, before native continuation prompts can
-interfere. Re-selecting a playlist item does not repeat its original jump. Online
-support for unrelated third-party components or external Android players is not
-implemented. The integration is checked against native frontend `1992839` and
+interfere. Re-selecting a playlist item does not repeat its original jump. The saved
+voice is matched across every row of a native draw (movies list translations as
+rows); only a whole draw without it reports a change, and a draw of another season
+(a shifted season index) reports a missing episode at once. Any key, click or touch
+in the opened component cancels the automatic start. After the component opens,
+failures and the 60-second timeout show a notice and leave the user there; only a
+launch that never opened falls back to the picker. Explicit quality labels map to
+heights as in the picker (`4K`/`UHD` is 2160).
+
+External players (Android, webOS, Apple TV) receive the continuation point through
+the timeline they read at launch. Their launch is captured, and the position the
+native timeline records on return (within 24 hours) is captured again. Online
+support for unrelated third-party components is not implemented. The integration is checked against native frontend `1992839` and
 Lampac NextGen online plugin `1.9.1`; presence guards cannot guarantee arbitrary
 future changes to those method contracts.
 
@@ -113,17 +145,22 @@ The client observes progress every 15 seconds, on pause/preferences changes and
 player close. Unchanged paused playback keeps its original observation time.
 Writes share one request and retry after 5, 15 and 60 seconds; a visible warning
 marks failures. Foreground and profile changes refresh the owned row. The server
-rejects older observations, invalid identities and oversized requests (16 KiB,
-including chunked bodies). Atomic JSON files under the existing writable
+reports older observations as `stale` (the client then keeps the server record),
+clamps a client stamp more than five minutes from its clock to its own time and
+returns the stored stamp, and rejects invalid identities and oversized requests
+(16 KiB, including chunked bodies). An unreadable store file is set aside as
+`*.corrupt-<time>` and replaced, and at most 500 user/profile files are created. Atomic JSON files under the existing writable
 `database/homelab-sync-resume/` bind retain at most 50 entries per hashed user/profile.
 The updater’s database snapshot therefore includes this state.
 
-**Every viewing client must load the new plugin.** Captured Continue Watching
-records are authoritative for their card: native TimeCode can assign a new time
-to a stale paused player’s close, so its later timestamp cannot safely replace
-an owned record. Native progress supplies historical fallback for cards never
-captured by the extension; matching deletion markers remain honoured. An older
-client that lacks the extension cannot advance an already captured record.
+Captured records keep their source for their own episode. Native TimeCode can
+assign a new time to a stale paused player’s close, so a newer native row replaces
+a captured record only when it is a later episode (or a special, or a viewing after
+a dismissal); the row then shows that episode without the captured source, whose
+release or voice belonged to another episode. Native progress for the captured
+episode itself (another cut, a stale close) never replaces its position. Native
+progress supplies historical fallback for cards never captured by the extension;
+matching deletion markers remain honoured.
 Audio/subtitle restoration requires the matching track to exist in that source.
 
 ## Compatibility and failure handling

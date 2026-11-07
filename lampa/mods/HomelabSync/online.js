@@ -16,6 +16,21 @@
     return source && /^[a-z0-9_.-]{1,80}$/i.test(source.provider) && typeof source.voice === 'string' && source.voice.length <= 200 && Number.isInteger(season) && season >= 0 && season <= 999;
   }
   function cancel() { if (pending) { pending.cancelled = true; clearTimeout(pending.timer); pending = null; } }
+  // Same label to height mapping as the source picker ("4K" is 2160, not 4).
+  function height(label) {
+    var text = String(label || '');
+    if (/\b(4k|uhd)\b/i.test(text)) return 2160;
+    var match = /(?:^|\D)(2160|1440|1080|720|576|480|360)(?:p|i|\D|$)/i.exec(text);
+    return match ? +match[1] : 0;
+  }
+  // Any key, click or touch in the opened component hands control to the user.
+  function interrupted() {
+    var intent = pending;
+    if (!intent || intent.opening || intent.finished || Date.now() - intent.created < 500 || L.Activity.active() !== intent.activity) return;
+    cancel();
+  }
+  if (L.Keypad && L.Keypad.listener && typeof L.Keypad.listener.follow === 'function') L.Keypad.listener.follow('keydown', interrupted);
+  if (typeof document !== 'undefined' && document && typeof document.addEventListener === 'function') ['mousedown', 'touchstart'].forEach(function (name) { document.addEventListener(name, interrupted, true); });
   function live(intent, object) { return !intent.cancelled && !intent.finished && sync.scope() === intent.scope && L.Activity.active() === object && !L.Player.opened(); }
   function fail(intent, reason) {
     if (pending !== intent || !live(intent, intent.activity)) return;
@@ -167,7 +182,7 @@
         comp.setDefaultQuality = function (work) {
           defaultQuality.apply(comp, arguments);
           if (intent && intent.quality && work.quality) Object.keys(work.quality).some(function (key) {
-            if (parseInt(key, 10) !== intent.quality) return false;
+            if (height(key) !== intent.quality) return false;
             work.url = work.quality[key];
             // Native Player.play applies the global default again for multi-quality maps.
             var chosen = {}; chosen[key] = work.quality[key]; work.quality = chosen; return true;
@@ -179,7 +194,9 @@
         var batch = specials = specialSupport && object.movie.name && items.some(special) ? {files: items.filter(special), scope: sync.scope(), provider: provider, playlist: null} : null;
         if (!batch && (!intent || intent.finished || intent.cancelled)) return draw.apply(comp, arguments);
         params = Object.assign({}, params || {});
-        var rendered = params.onRender;
+        var rendered = params.onRender, round = null;
+        // Native rendering is one synchronous loop per draw; decide after it,
+        // so a saved voice that is not the first row (movies) still matches.
         params.onRender = function (file, html, data) {
           if (batch && owns(batch) && special(file)) {
             file.timeline = specialRoad(file);
@@ -187,20 +204,27 @@
             specialViewed(file, html, data, batch);
           }
           if (rendered) rendered.apply(this, arguments);
-          if (!intent || intent.finished || intent.cancelled) return;
-          if (intent.scheduled || !sameFile(intent.item, file)) return;
-          intent.scheduled = true;
-          setTimeout(function () {
-            intent.scheduled = false;
-            if (!live(intent, object) || intent.opening) return;
-            if (provider !== intent.item.online.provider || file.voice_name !== intent.item.online.voice) {
-              return fail(intent, 'changed');
-            }
-            if (typeof params.onEnter !== 'function') return;
-            intent.opening = true;
-            params.onEnter(file, html, data);
-          }, 0);
+          if (!intent || intent.finished || intent.cancelled || intent.opening) return;
+          if (!round) {
+            var current = round = {match: null, mismatch: false, known: false};
+            setTimeout(function () { if (round === current) round = null; decide(current); }, 0);
+          }
+          if (Number.isInteger(file.season) && file.season >= 0 && Number.isInteger(file.episode) && file.episode > 0) round.known = true;
+          if (!sameFile(intent.item, file)) return;
+          if (provider === intent.item.online.provider && file.voice_name === intent.item.online.voice) { if (!round.match) round.match = {file: file, html: html, data: data}; }
+          else round.mismatch = true;
         };
+        function decide(result) {
+          if (!intent || !live(intent, object) || intent.opening) return;
+          if (!result.match) {
+            if (result.mismatch) fail(intent, 'changed');
+            else if (result.known && intent.item.card.indexOf('tv_') === 0) fail(intent, 'missing');
+            return;
+          }
+          if (typeof params.onEnter !== 'function') return;
+          intent.opening = true;
+          params.onEnter(result.match.file, result.match.html, result.match.data);
+        }
         return draw.call(comp, items, params);
       };
       comp.destroy = function () { disposed = true; requestId++; if (intent && !intent.finished) { intent.cancelled = true; clearTimeout(intent.timer); } return destroy.apply(comp, arguments); };
@@ -221,7 +245,7 @@
     movie = Object.assign({}, movie);
     if (movie.name) movie.title = movie.name;
     item = Object.assign({}, item, {online: Object.assign({}, item.online, {season_index: item.online.season_index === undefined ? 0 : item.online.season_index})});
-    var intent = pending = {id: ++sequence, item: item, scope: sync.scope(), cancelled: false, failed: failed, quality: options && options.quality, fromDuration: options && options.fromDuration};
+    var intent = pending = {id: ++sequence, item: item, scope: sync.scope(), cancelled: false, failed: failed, quality: options && options.quality, fromDuration: options && options.fromDuration, created: Date.now()};
     intent.timer = setTimeout(function () { fail(intent, 'timeout'); }, 60000);
     var activity = intent.activity = {component: 'lampac', movie: movie, title: 'Онлайн', url: '', search: movie.title || movie.name,
       search_one: movie.title || movie.name, search_two: movie.original_title || movie.original_name, page: 1,
@@ -253,5 +277,5 @@
   var L = window.Lampa, config = window.homelabSyncConfig;
   if (window.homelabSourcesLoading || window.HomelabSources || !L || !L.Utils || typeof L.Utils.putScriptAsync !== 'function' || !config || !config.url) return;
   window.homelabSourcesLoading = true;
-  L.Utils.putScriptAsync([config.url + '/plugins/homelab/common-sources.js?v=20261102g', config.url + '/plugins/homelab/playlist-thumbnails.js?v=20261102a'], function () { window.homelabSourcesLoading = false; });
+  L.Utils.putScriptAsync([config.url + '/plugins/homelab/common-sources.js?v=20261108a', config.url + '/plugins/homelab/playlist-thumbnails.js?v=20261108a'], function () { window.homelabSourcesLoading = false; });
 })();

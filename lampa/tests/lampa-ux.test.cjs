@@ -99,11 +99,12 @@ test('continue loads once for concurrent callers and explicitly resumes high-per
   const h = harness(t); h.run('mods/HomelabSync/continue.js');
   let first = false, second = false;
   h.window.homelabContinue.load(() => { first = true; }); h.window.homelabContinue.load(() => { second = true; });
-  assert.equal(h.calls.length, 1); h.calls[0].finish({version: 1, items: [entry()]}); await flush();
+  // 87.5%: below Lampa's 90% watched mark, so the episode itself resumes.
+  assert.equal(h.calls.length, 1); h.calls[0].finish({version: 1, items: [{...entry(), position: 105}]}); await flush();
   assert.ok(first && second); assert.equal(h.window.homelabContinue.list().length, 1);
   h.window.homelabContinue.resume(h.window.homelabContinue.list()[0]);
   h.L.sourceLookup.success({file_stats: [{id: 1, path: 'Series/02.mkv'}]});
-  assert.equal(h.video().currentTime, 112); assert.equal(h.work().timeline.continued, true);
+  assert.equal(h.video().currentTime, 105); assert.equal(h.work().timeline.continued, true);
   assert.equal(h.work().homelab_track_preferences.audio.title, 'Preferred');
   assert.ok(!JSON.stringify(h.calls).includes('/gst/'), 'resume persistence must not contain a session URL');
 });
@@ -150,14 +151,20 @@ test('continue retains native video formats while explicit samples cannot become
   assert.deepEqual(Array.from(h.L.playlistData, work => work.id), [1, 2]);
 });
 
-test('unreliable native close timestamps cannot override captured episode, source or position', async t => {
+test('a newer later native episode replaces the captured one without its source; stale closes and other cuts do not', async t => {
   const h = harness(t); h.run('mods/HomelabSync/continue.js');
-  h.window.homelabContinue.load(); const item = entry(); item.observed = 100;
+  h.window.homelabContinue.load(); const item = entry(); item.observed = 100; item.position = 60;
   h.calls[0].finish({version: 1, items: [item]}); await flush();
-  h.syncRows([{watched_at: 200, position: 40, duration: 120, extra: JSON.stringify({card: 'tv_42', season: 1, episode: 3})}]);
-  const value = h.window.homelabContinue.list()[0]; assert.equal(value.episode, 2); assert.equal(value.position, 112); assert.equal(value.torrent, hash);
+  // An external player or a client without the extension watched episode 3.
+  h.syncRows([{watched_at: 200, hash: '789', position: 40, duration: 120, extra: JSON.stringify({card: 'tv_42', season: 1, episode: 3})}]);
+  let value = h.window.homelabContinue.list()[0];
+  assert.equal(value.episode, 3); assert.equal(value.position, 40); assert.equal(value.timeline, '789');
+  assert.equal(value.torrent, undefined, 'the captured release belongs to episode 2 only'); assert.equal(value.title, 'Series');
+  // Native TimeCode re-stamps a stale paused device closing an earlier episode.
+  h.syncRows([{watched_at: 300, hash: '111', position: 10, duration: 120, extra: JSON.stringify({card: 'tv_42', season: 1, episode: 1})}]);
+  value = h.window.homelabContinue.list()[0]; assert.equal(value.episode, 2); assert.equal(value.position, 60); assert.equal(value.torrent, hash);
   h.syncRows([{watched_at: 300, hash: '456', position: 50, duration: 120, extra: JSON.stringify({card: 'tv_42', season: 1, episode: 2})}]);
-  assert.equal(h.window.homelabContinue.list()[0].position, 112, 'positions from another cut are not combined with the captured source');
+  assert.equal(h.window.homelabContinue.list()[0].position, 60, 'positions from another cut are not combined with the captured source');
 });
 
 test('continue profile changes discard old reads and queued playback writes', async t => {

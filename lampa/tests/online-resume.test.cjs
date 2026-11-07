@@ -162,13 +162,16 @@ test('an online launch failure opens the source picker with the saved item inste
   assert.equal(h.notices.length,0); assert.equal(h.L.routed,undefined);
 });
 
-test('a source timeout opens the picker once; later metadata and other profiles cannot cause another redirect', t => {
+test('a source timeout inside the opened component only explains what to choose, once and never for another profile', t => {
   const h = setup(t), picked=[]; h.run('mods/HomelabSync/continue.js');
   h.window.HomelabSources={resume(item,movie){picked.push({item,movie});return true}};
   h.window.homelabContinue.resume({...h.item,kind:'online',title:'Series',duration:120});
-  h.tick(60000); assert.equal(picked.length,1); h.tick(60000); assert.equal(picked.length,1);
+  const opened = h.L.Activity.active();
+  h.tick(60000); assert.equal(picked.length,0); assert.equal(h.L.Activity.active(), opened, 'the user stays in the native component');
+  assert.equal(h.notices.filter(text => text.includes('Источник не ответил')).length, 1);
+  h.tick(60000); assert.equal(h.notices.length, 1);
   h.window.homelabContinue.resume({...h.item,kind:'online',title:'Series',duration:120});
-  h.profile('other'); h.tick(60000); assert.equal(picked.length,1);
+  h.profile('other'); h.tick(60000); assert.equal(picked.length,0); assert.equal(h.notices.length, 1);
 });
 
 test('leaving home during metadata resolution or starting another video suppresses stale failure navigation', t => {
@@ -178,14 +181,14 @@ test('leaving home during metadata resolution or starting another video suppress
   h.window.homelabContinue.resume({...h.item,kind:'online',title:'Series',duration:120});h.start({card:h.movie});done(h.movie);h.tick(5000);assert.equal(picked.length,0);
 });
 
-test('a saved voice mismatch opens Continue recovery once with its exact position and episode', async t => {
+test('a saved voice mismatch keeps the user in the native component with a notice instead of navigating', async t => {
   const h = setup(t), recovered = []; h.run('mods/HomelabSync/continue.js');
-  h.registry.homelab_sources = function () {};
-  h.window.HomelabSources = {resume(item, movie) { recovered.push({item, movie}); h.L.Activity.push({component: 'homelab_sources'}); return true; }};
+  h.window.HomelabSources = {resume(item, movie) { recovered.push({item, movie}); return true; }};
   h.window.homelabContinue.resume({...h.item, kind: 'online', title: 'Series', duration: 120});
+  const opened = h.L.Activity.active();
   await h.component().startSource(); h.draw([file(3, 'Different')]); h.render(); h.tick(0); h.tick(60000);
-  assert.equal(recovered.length, 1); assert.equal(recovered[0].item.position, 71); assert.equal(recovered[0].item.episode, 3);
-  assert.equal(h.L.Activity.active().component, 'homelab_sources'); assert.equal(h.work(), null);
+  assert.equal(recovered.length, 0); assert.equal(h.L.Activity.active(), opened); assert.equal(h.work(), null);
+  assert.deepEqual(Array.from(h.notices), ['Сохранённая озвучка не найдена. Выберите вариант в списке']);
 });
 
 test('a stale mismatch cannot redirect a different activity or profile', async t => {
@@ -221,4 +224,48 @@ test('unknown native episode identities cannot autoplay as episode one', async t
     h.draw([{...file(), season: 0, episode}]); h.render(); h.tick(0);
     assert.deepEqual(h.starts, []); assert.equal(h.work(), null);
   }
+});
+
+// Native Lampac draws each translation of a movie as its own row when the
+// provider has no voice buttons; the saved voice need not be the first row.
+test('movie continuation matches the saved voice in any rendered row, not only the first', async t => {
+  const h = setup(t); delete h.movie.name; h.movie.title = 'Film';
+  await h.open({...h.item, card: 'movie_42', season: 0, episode: 0, online: {provider: 'kinobase', voice: 'Second voice', season_index: 0}});
+  h.draw([{voice_name: 'First voice', title: 'Film', url: 'a'}, {voice_name: 'Second voice', title: 'Film', url: 'b'}, {voice_name: 'Third voice', title: 'Film', url: 'c'}]);
+  h.render(); h.tick(0);
+  assert.equal(h.starts.length, 1); assert.equal(h.starts[0].voice_name, 'Second voice');
+  assert.deepEqual(Array.from(h.notices), []);
+});
+
+test('a voice is declared changed only after a whole draw had no matching row', async t => {
+  const h = setup(t), failures = [];
+  delete h.movie.name; h.movie.title = 'Film';
+  assert.equal(h.window.HomelabOnlineResume.resume({...h.item, card: 'movie_42', season: 0, episode: 0, online: {provider: 'kinobase', voice: 'Gone', season_index: 0}}, h.movie, reason => failures.push(reason)), true);
+  await h.component().startSource();
+  h.draw([{voice_name: 'First voice', url: 'a'}, {voice_name: 'Second voice', url: 'b'}]); h.render(); h.tick(0);
+  assert.deepEqual(failures, ['changed']); assert.equal(h.starts.length, 0);
+});
+
+test('an explicit 4K choice selects the 4K stream when the provider labels it "4K"', async t => {
+  const h = setup(t);
+  assert.equal(h.window.HomelabOnlineResume.select({provider: 'kinobase', identityVoice: 'Preferred', seasonIndex: 1}, h.movie, {season: 2, episode: 3}, 2160), true);
+  const c = h.component(); await c.startSource();
+  const work = {quality: {'4K': 'fresh-uhd', '1080p': 'fresh-fhd'}};
+  c.setDefaultQuality(work); assert.equal(work.url, 'fresh-uhd'); assert.deepEqual(Object.keys(work.quality), ['4K']);
+});
+
+test('a key press in the opened component cancels automatic continuation without navigating', async t => {
+  const h = setup(t); await h.open(); const opened = h.L.Activity.active();
+  h.tick(600); h.L.Keypad.listener.send('keydown', {code: 40});
+  h.draw([file()]); h.render(); h.tick(0); h.tick(60000);
+  assert.deepEqual(h.starts, []); assert.equal(h.L.Activity.active(), opened);
+});
+
+test('a shifted saved season index (wrong season drawn) is reported at once instead of waiting a minute', async t => {
+  const h = setup(t), failures = [];
+  assert.equal(h.window.HomelabOnlineResume.resume(h.item, h.movie, reason => failures.push(reason)), true);
+  await h.component().startSource();
+  h.draw([{...file(1), season: 3}, {...file(2), season: 3}]); h.render(); h.tick(0);
+  assert.deepEqual(failures, ['missing']); assert.equal(h.work(), null);
+  h.tick(60000); assert.deepEqual(failures, ['missing'], 'the failure is reported once');
 });

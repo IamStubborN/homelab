@@ -9,7 +9,8 @@
   if (![L.PlayerPlaylist.listener.follow, L.PlayerPlaylist.get, L.PlayerPlaylist.position, L.Player.listener.follow, L.Player.playlist, L.Player.playdata, L.Player.opened, L.Api.seasons, L.Api.img, sync.scope].every(function (fn) { return typeof fn === 'function'; })) return;
   // A still that arrives within FALLBACK_DELAY is painted directly (one native re-render, no backdrop flash).
   // LOOKUP_TIMEOUT is a safety net above Lampa's own 10 s TMDB request timeout; a still that still arrives later is applied.
-  var FALLBACK_DELAY = 1500, LOOKUP_TIMEOUT = 15000, MISS_TTL = 5 * 60 * 1000, LIMIT = 32;
+  // Season maps expire (airing shows gain stills); misses retry sooner. Waiters per pending lookup are capped.
+  var FALLBACK_DELAY = 1500, LOOKUP_TIMEOUT = 15000, MISS_TTL = 5 * 60 * 1000, HIT_TTL = 6 * 60 * 60 * 1000, LIMIT = 32, WAITERS = 8;
   var cache = {}, uses = 0, cacheScope = sync.scope(), generation = 0, paint, ready, delay;
   function usable(value) { return typeof value === 'string' && !!value.trim() && !/(?:\/w\d+)?(?:null|undefined)(?:[?#].*)?$/i.test(value); }
   function image(path) { return typeof path === 'string' && /^\/[^/]/.test(path) && usable(path) ? L.Api.img(path, 'w300') : ''; }
@@ -36,27 +37,33 @@
   }
   // Calls done with {episodeNumber: still_path}. A timed-out lookup reports {} but keeps its
   // waiters, so a still that arrives later is still delivered.
-  function stills(id, number, done) {
+  function wait(job, done, epoch) {
+    // Waiters of an earlier playback can never paint again; drop them and keep only the newest few.
+    job.waiters = job.waiters.filter(function (waiter) { return waiter.epoch === epoch; }).slice(1 - WAITERS);
+    job.waiters.push({done: done, epoch: epoch});
+  }
+  function stills(id, number, done, epoch) {
     var key = id + ':' + number, job = cache[key];
-    if (job && job.expires && job.expires < Date.now()) { clearTimeout(job.timer); delete cache[key]; job = null; }
+    if (job && job.expires < Date.now()) { clearTimeout(job.timer); delete cache[key]; job = null; }
     if (job) {
       job.used = ++uses;
-      if (!job.value || job.timedOut) job.waiters.push(done);
+      if (!job.value || job.timedOut) wait(job, done, epoch);
       if (job.value) done(job.value);
       return;
     }
     evict();
-    job = cache[key] = {waiters: [done], used: ++uses};
+    job = cache[key] = {waiters: [], used: ++uses, expires: Infinity};
+    wait(job, done, epoch);
     job.timer = setTimeout(function () {
       if (cache[key] !== job || job.value) return;
       job.value = {}; job.timedOut = true; job.expires = Date.now() + MISS_TTL;
-      job.waiters.slice().forEach(function (callback) { callback(job.value); });
+      job.waiters.slice().forEach(function (waiter) { waiter.done(job.value); });
     }, LOOKUP_TIMEOUT);
     function complete(map, found) {
       if (cache[key] !== job || (job.value && !job.timedOut)) return;
       clearTimeout(job.timer);
-      job.value = map; job.timedOut = false; job.expires = found ? 0 : Date.now() + MISS_TTL;
-      job.waiters.splice(0).forEach(function (callback) { callback(map); });
+      job.value = map; job.timedOut = false; job.expires = Date.now() + (found ? HIT_TTL : MISS_TTL);
+      job.waiters.splice(0).forEach(function (waiter) { waiter.done(map); });
     }
     try {
       L.Api.seasons({id: id, source: 'tmdb'}, [number], function (data) {
@@ -69,6 +76,21 @@
       });
     } catch (_) { complete({}, false); }
   }
+  function cardOf(item, work) { return item.card && typeof item.card === 'object' ? item.card : work && work.card; }
+  // Writes known stills into every item of that season, replacing missing thumbnails and earlier
+  // backdrop fallbacks, so later native sets already draw the right image. Returns changed items.
+  function fill(playlist, id, number, map, work) {
+    var changed = [];
+    playlist.forEach(function (entry) {
+      var card = entry && +entry.season === +number && cardOf(entry, work), url;
+      if (!card || typeof card !== 'object' || tmdbId(card) !== id) return;
+      if (usable(entry.thumbnail) && entry.homelab_thumbnail !== 'fallback') return;
+      url = image(map[+entry.episode]);
+      if (!url || entry.thumbnail === url) return;
+      entry.thumbnail = url; entry.homelab_thumbnail = 'still'; changed.push(entry);
+    });
+    return changed;
+  }
   function decorate(event) {
     if (!L.Player.opened()) return;
     if (cacheScope !== sync.scope()) { reset(); forget(); }
@@ -76,7 +98,7 @@
     if (!Array.isArray(playlist) || L.PlayerPlaylist.get() !== playlist) return;
     var item = playlist[event.position + 1], work = L.Player.playdata();
     if (!item || (usable(item.thumbnail) && item.homelab_thumbnail !== 'fallback') || !(item.season > 0 && item.episode > 0)) return;
-    var card = item.card && typeof item.card === 'object' ? item.card : work && work.card;
+    var card = cardOf(item, work);
     if (!card || typeof card !== 'object') return;
     var id = tmdbId(card), resolved = false, timer;
     function fallback() {
@@ -90,13 +112,11 @@
     stills(id, item.season, function (map) {
       resolved = true;
       if (!live(playlist, scope, epoch)) return;
-      var url = image(map[+item.episode]);
-      if (!url) return fallback();
+      var changed = fill(playlist, id, item.season, map, work);
+      if (item.homelab_thumbnail !== 'still') return fallback();
       clearTimeout(timer);
-      if (item.thumbnail === url) return;
-      item.thumbnail = url; item.homelab_thumbnail = 'still';
-      repaint(playlist, scope, epoch);
-    });
+      if (changed.indexOf(item) >= 0) repaint(playlist, scope, epoch);
+    }, epoch);
     if (!resolved) timer = delay = setTimeout(fallback, FALLBACK_DELAY);
   }
   L.PlayerPlaylist.listener.follow('set', decorate);

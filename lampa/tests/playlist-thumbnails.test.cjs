@@ -152,3 +152,79 @@ test('late stills cannot repaint after the player closes', t => {
   h.close(); h.stills(0, all); h.tick(20000);
   assert.equal(h.renders.length, count);
 });
+
+test('a known season map fills every episode, so episode switches draw the still with no extra re-set', t => {
+  const h = lampa(t);
+  h.lampacStart(); h.stills(0, all);
+  assert.deepEqual(h.playlist.map(x => x.thumbnail), ['/image/one.jpg', '/image/two.jpg', '/image/three.jpg', '/image/four.jpg']);
+  const before = h.renders.length;
+  h.select(1);
+  assert.deepEqual(h.renders.slice(before), ['/image/three.jpg']);
+  h.tick(5000);
+  assert.equal(h.renders.length, before + 1);
+});
+
+test('a still arriving after the safety timeout replaces the backdrop on every row', t => {
+  const h = lampa(t);
+  h.lampacStart(); h.tick(16000);
+  assert.equal(h.renders.at(-1), '/image/backdrop.jpg');
+  h.stills(0, all);
+  assert.equal(h.renders.at(-1), '/image/two.jpg');
+  assert.ok(h.playlist.every(x => x.homelab_thumbnail === 'still'));
+});
+
+test('a miss is re-queried after its TTL and earlier backdrop rows are replaced', t => {
+  const h = lampa(t);
+  h.lampacStart(); h.stills(0, []);
+  assert.equal(h.playlist[1].thumbnail, '/image/backdrop.jpg');
+  h.tick(5 * 60 * 1000 + 1);
+  h.select(1);
+  assert.equal(h.lookups.length, 2);
+  h.stills(1, all);
+  assert.equal(h.playlist[1].thumbnail, '/image/two.jpg');
+  assert.equal(h.renders.at(-1), '/image/three.jpg');
+});
+
+test('found season maps expire so airing shows pick up new stills', t => {
+  const h = lampa(t);
+  h.lampacStart(); h.stills(0, [[1, '/one.jpg'], [2, '/two.jpg']]);
+  h.tick(6 * 60 * 60 * 1000 + 1);
+  h.select(1);
+  assert.equal(h.lookups.length, 2);
+  h.stills(1, all);
+  assert.equal(h.renders.at(-1), '/image/three.jpg');
+});
+
+test('the season cache evicts the least recently used entry beyond 32 seasons', t => {
+  const h = lampa(t);
+  h.lampacStart(); h.stills(0, all);
+  const show = id => [1, 2].map(episode => ({card: {id, name: 'Show ' + id, source: 'tmdb'}, season: 1, episode, url: 'show-' + id + '-' + episode}));
+  for (let id = 100; id < 132; id++) { h.L.Player.playlist(show(id)); h.stills(h.lookups.length - 1, [[2, '/s' + id + '.jpg']]); }
+  assert.equal(h.lookups.length, 33);
+  h.L.Player.playlist(show(100)); h.tick(0);
+  assert.equal(h.lookups.length, 33);
+  h.L.Player.playlist(show(42)); h.tick(0);
+  assert.equal(h.lookups.length, 34);
+});
+
+test('a profile change drops a pending lookup and queries again for the new profile', t => {
+  const h = lampa(t);
+  h.lampacStart();
+  h.profile('other');
+  h.L.Player.playlist(h.playlist); h.tick(0);
+  assert.equal(h.lookups.length, 2);
+  h.stills(0, [[2, '/stale.jpg']]);
+  assert.notEqual(h.playlist[1].thumbnail, '/image/stale.jpg');
+  h.stills(1, all);
+  assert.equal(h.renders.at(-1), '/image/two.jpg');
+});
+
+test('repeated re-sets during a stuck lookup still produce a single still repaint', t => {
+  const h = lampa(t);
+  h.lampacStart();
+  for (let i = 0; i < 20; i++) h.L.Player.playlist(h.playlist);
+  const before = h.renders.length;
+  h.stills(0, all);
+  assert.equal(h.renders.length, before + 1);
+  assert.equal(h.lookups.length, 1);
+});

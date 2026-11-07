@@ -141,6 +141,28 @@ minute first. A remembered voice is applied automatically only in the first 45
 seconds after the first frame (90 seconds while an external rendition is being prepared); one found
 later is announced and left in the menu instead of reloading the video.
 
+### Track menus
+
+The plugin draws Lampa's audio and subtitle menu items itself (Select's
+`onDraw`); each track's `label` stays its source name, which preferences, logs
+and other plugins match by.
+
+- Audio: a title from the voice-over's tag or folder, cleaned of extensions,
+  release tags, language words and dots/underscores (`Rus_MVO_LostFilm.mka`
+  reads `Многоголосая — LostFilm`), then a small line: language, `5.1`/`стерео`,
+  codec and `внешняя`/`встроенная`. The voice remembered for the torrent comes
+  first and is marked `★ для сериала`, then Russian, untagged, Ukrainian,
+  English and the rest, otherwise in file order. An external voice being
+  prepared shows `готовится… N с` on its item, and a failed one says so until
+  it is chosen again.
+- Subtitles: `Выкл.` first, then the group or language with `полные`,
+  `надписи` (signs, forced, songs) or `полные, для слабослышащих` (SDH), the
+  language, `ASS со стилями` for tracks drawn with their own styles, and
+  `внешние`/`встроенные`.
+- Notices: one when the remembered voice is applied (`Озвучка: LostFilm — как
+  в прошлой серии`), and one per voice when its external rendition fails and
+  the embedded audio takes over.
+
 ## Next episode warm-up
 
 On a slow torrent the next episode waits for its head before GST and the
@@ -151,7 +173,11 @@ item, only when that item is another file of the same torrent and the browser
 reports no data saver or cellular connection. The playing item is found by the
 URL Lampa listed for it (`homelab_source_url`), or by its torrent and file. It
 asks once per play of an episode (an audio switch or a retry keeps that play)
-and remembers the last 50 files it asked for, until the page reloads. While an
+and remembers the last 50 files the sidecar accepted (2xx), until the page
+reloads. A busy sidecar (429) is asked once more after 30 s, a failure (5xx or
+network) once more after 10 s; then the play gives up. The window opens only
+once `video.duration` has held the same finite value for 30 s, since a GST
+EVENT playlist grows while the task encodes ahead. While an
 external voice-over plays, it adds `?voice=<its file id>`. Each request is
 logged as a `warm-next` event.
 
@@ -192,7 +218,7 @@ External `.ass`/`.ssa` files named after the video (for example
 - The image bundles [JASSUB](https://github.com/ThaUnknown/jassub) (libass in
   WebAssembly), pinned in `extaudio/jassub/package-lock.json`, and serves it at
   `/extaudio/jassub/`. It needs Chrome 80 or Safari 17 or newer.
-- The plugin adds `<group> (ASS)` items to the subtitle menu. Choosing one
+- The plugin adds `<group>: полные/надписи (внешние)` items to the subtitle menu. Choosing one
   draws the file over the video with its own fonts; the choice is remembered
   per torrent. The encoding is detected from the BOM, then UTF-8, then
   Windows-1251.

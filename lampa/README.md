@@ -125,8 +125,12 @@ hls.js 1.4.7 stalls when one audio group mixes a muxed rendition with an
 external one. The master playlist therefore carries only the external
 rendition, and switching back to an embedded track reloads the player. The plugin also
 rewrites the variant's `CODECS` to the external codec, because hls.js creates the
-audio SourceBuffer from it. If a GST fragment layout cannot be stripped, the
-plugin falls back to the embedded track.
+audio SourceBuffer from it. If a GST fragment layout cannot be stripped, or the
+external rendition fails for good (sidecar error, missing segment), the plugin
+falls back to the embedded track; choosing the external track again prepares it
+anew. A remembered voice is applied automatically only in the first 45 seconds of
+playback (90 seconds while an external rendition is being prepared); one found
+later is announced and left in the menu instead of reloading the video.
 
 ## External ASS subtitles
 
@@ -254,7 +258,9 @@ staged update refuse, so rebuild only through that workflow.
 ## Runtime safeguards and logs
 
 The browser GST plugin bounds recovery to 180 seconds, including hls.js loader
-retries. Init segments do not count as successful playback. A terminal error
+retries. Init segments do not count as successful playback, and only manifest,
+level and main-fragment failures start the deadline; a paused video with frames
+buffered ahead is not failed by it. A terminal error
 releases the owned server task and cancels its heartbeat, track probe and pending
 restoration. Explicit Lampa pauses survive recovery even at 0:00; the initial
 paused state of a video that has not started is not treated as a user pause.
@@ -264,6 +270,13 @@ deadline solely to remove that owned task; no new start request is issued.
 If a network failure hides the ID entirely, safe targeted removal is impossible
 and the backend's inactivity handling remains the fallback. Invalid GST
 manifests are reported as errors, never retried as native raw-video playback.
+The plugin takes over a torrent only when Lampa's torrent player setting
+(`player_torrent`) is an embedded one and then pins the embedded player; external
+torrent players keep Lampa's own flow. Lampa's playlist is pointed at the item's
+original URL, so Next/Previous stay on the right episode after the GST rewrite.
+Lampa's own Playback info button stays hidden for these streams: it needs the
+legacy TorrServer hash, which the plugin removes so that Lampa's legacy GST
+heartbeat cannot reach another viewer's task.
 Plugin changes require reloading the client, not restarting Lampac.
 
 `cpu_shares: 2048` gives playback relative CPU priority under contention.

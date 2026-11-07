@@ -191,6 +191,16 @@
       return Loader;
     }
 
+    function bufferedAhead(media) {
+      var ranges = media.buffered;
+      var time = Number(media.currentTime) || 0;
+      if (!ranges) return 0;
+      for (var i = 0; i < ranges.length; i++) {
+        if (ranges.start(i) <= time + 0.5 && ranges.end(i) > time) return ranges.end(i) - time;
+      }
+      return 0;
+    }
+
     function hlsQuoted(value) {
       return String(value || '').replace(/["\r\n]/g, ' ').trim();
     }
@@ -342,6 +352,9 @@
           deadlineTimer = setTimeout(function () {
             deadlineTimer = null;
             if (disposed || Lampa.Player.playdata() !== work) return;
+            // A paused video with frames buffered ahead is not stuck: hls.js
+            // loads nothing while the buffer is full. Count again from resume.
+            if (hls.media && hls.media.paused && bufferedAhead(hls.media) >= 1) return beginDeadline();
             finishFailure();
             hls.trigger(BaseHls.Events.ERROR, Object.assign({}, lastError || {
               type: BaseHls.ErrorTypes.NETWORK_ERROR,
@@ -377,7 +390,9 @@
               reason: data.reason || (data.error && data.error.message) || (data.response && data.response.text)
             }, work);
           }
-          if (data.type === BaseHls.ErrorTypes.NETWORK_ERROR &&
+          // Only the video can stall playback: an audio rendition or subtitle
+          // fragment that fails must not start the terminal deadline.
+          if (data.type === BaseHls.ErrorTypes.NETWORK_ERROR && (!data.frag || data.frag.type === 'main') &&
               /^(manifest|level|frag)Load(Error|TimeOut)$/.test(data.details)) {
             lastError = data;
             beginDeadline();
@@ -395,7 +410,19 @@
             } else if (!abandoned) {
               abandoned = true;
               hls.stopLoad();
-              setTimeout(function () { if (!disposed) abandonExternal(work); }, 0);
+              setTimeout(function () { if (!disposed) abandonExternal(work, 'unsupported fragment layout'); }, 0);
+            }
+            return true;
+          }
+          // The external rendition failed for good (sidecar error, missing
+          // segment): the video is fine, so play the embedded audio instead.
+          if (!disposed && !terminated && data.fatal && work.homelab_external_audio && audioRenditionError(data) &&
+              Lampa.Player.playdata() === work && (abandoned || embeddedFallback(work))) {
+            handled.add(data);
+            if (!abandoned) {
+              abandoned = true;
+              hls.stopLoad();
+              setTimeout(function () { if (!disposed) abandonExternal(work, 'rendition failed'); }, 0);
             }
             return true;
           }
@@ -637,9 +664,21 @@
       // hls.js preserves EXT-X-MEDIA subtitles. Lampa's native parser can
       // reduce a muxed-audio master to its video-only variant on Safari.
       work.hls_type = 'hlsjs';
-      if (Lampa.Platform && Lampa.Platform.is('android')) work.launch_player = 'inner';
+      // Without torrent_hash Lampa would pick its main player setting, not
+      // the torrent one; masterUrl already checked that this is the embedded player.
+      work.launch_player = 'inner';
       work.hls_manifest_timeout = 90000;
+      if (work.homelab_gst_played) {
+        // A playlist item played again keeps the object of its last play.
+        // Only cross-device resume brings preferences of its own.
+        if (work.homelab_resume_at === undefined || work.homelab_resume_at === null) delete work.homelab_track_preferences;
+        delete work.homelab_external_audio;
+        delete work.homelab_retry_playback;
+      }
+      work.homelab_gst_played = true;
       if (!work.homelab_torrent_hash) {
+        // Lampa finds the playing item of its playlist by this URL.
+        work.homelab_source_url = work.url;
         var source = new URL('http://gluetun-torrserver:8090/stream/');
         source.searchParams.set('link', work.torrent_hash);
         source.searchParams.set('index', original.searchParams.get('index') || '1');
@@ -660,9 +699,18 @@
       }
     }
 
+    // Torrent player choices Lampa plays in its own embedded player; any other
+    // (Android, VLC, Infuse, webOS, an outside player...) opens an external app.
+    var EMBEDDED_PLAYERS = {inner: true, lampa: true, tizen: true, orsay: true, ios: true};
+
+    function externalTorrentPlayer() {
+      var choice = Lampa.Storage.field('player_torrent');
+      return Boolean(choice) && !EMBEDDED_PLAYERS[choice];
+    }
+
     function masterUrl(work) {
       if (!work || typeof work.url !== 'string' || !(work.homelab_torrent_hash || work.torrent_hash)) return null;
-      if (Lampa.Platform && Lampa.Platform.is('android') && Lampa.Storage.field('player_torrent') !== 'inner') return null;
+      if (externalTorrentPlayer()) return null;
       var source = Lampa.Torserver && Lampa.Torserver.toPlayUrl ? Lampa.Torserver.toPlayUrl(work.url) : work.url;
       try {
         var url = new URL(source, window.location.href);
@@ -676,7 +724,9 @@
       var url = masterUrl(state.work);
       if (!automatic && !retry) remember(state, 'audio', identity(track));
       if (!url || (!retry && track === selectedTrack(state, url))) return cancelPreparation(state);
-      if (track.external && track.unsupported && automatic) return;
+      // Only an explicit choice tries a track that already failed again.
+      if (track.external && (track.unsupported || track.failed) && automatic) return;
+      if (!automatic) track.failed = false;
       if (track.external && !track.ready) return prepareExternal(state, track, automatic);
       cancelPreparation(state);
       report('audio-switch', {auto: Boolean(automatic), track: track.label, external: Boolean(track.external)}, state.work);
@@ -769,6 +819,9 @@
       // Restore playback after a manual choice or a remembered episode preference.
       restoreTime();
       if (state.tracks) Lampa.PlayerPanel.setTracks(state.tracks);
+      // Lampa reports subtitles again only when the stream has embedded ones;
+      // drawn subtitles must follow the new video element either way.
+      if (state.assActive && state.assVideo !== video) showAss(state, state.assActive, 'new-video');
     }
 
     // Renditions are encoded from the playback position, so tell the sidecar
@@ -776,6 +829,40 @@
     function externalUrl(track, time) {
       if (time === undefined) time = Number(Lampa.PlayerVideo.video().currentTime) || 0;
       return track.url + '?at=' + Math.floor(time);
+    }
+
+    // A remembered voice is applied while playback is just starting; a late
+    // lookup or preparation only tells the viewer it is there.
+    var AUTO_APPLY_MS = 45000;
+    var AUTO_PREPARE_MS = 90000;
+
+    function lateTrack(state, track) {
+      if (state.lateNotice === track) return;
+      state.lateNotice = track;
+      report('audio-late', {track: track.label, external: Boolean(track.external)}, state.work);
+      if (Lampa.Noty) Lampa.Noty.show('Озвучка «' + track.label + '» доступна в меню');
+    }
+
+    // Lampa's panel marks the chosen item and switches it on through
+    // `enabled`, like hls.js tracks; an item's own onSelect would replace
+    // that handler and its focus return. Labels are ours, not Lampa's translations.
+    function offerTrack(state, track) {
+      track.ignore_translate = true;
+      var descriptor = Object.getOwnPropertyDescriptor(track, 'enabled');
+      if (descriptor && descriptor.set && descriptor.set.homelabState === state) return;
+      function choose(value) { if (value) selectTrack(state, track); }
+      choose.homelabState = state;
+      Object.defineProperty(track, 'enabled', {
+        configurable: true, enumerable: false,
+        get: function () { return Boolean(track.selected); },
+        set: choose
+      });
+    }
+
+    function markSelected(state) {
+      var url = masterUrl(state.work);
+      var current = url && selectedTrack(state, url);
+      (state.tracks || []).forEach(function (item) { item.selected = item === current; });
     }
 
     function cancelPreparation(state) {
@@ -799,6 +886,7 @@
           if (response.ok) {
             state.preparing = null;
             track.ready = true;
+            if (automatic && Date.now() >= state.autoUntil + AUTO_PREPARE_MS - AUTO_APPLY_MS) return lateTrack(state, track);
             return selectTrack(state, track, true);
           }
           if ((response.status === 503 || response.status === 429) && Date.now() < preparing.deadline) {
@@ -811,6 +899,8 @@
           state.preparing = null;
           console.warn('Homelab external audio:', error.message);
           report('audio-external-failed', {track: track.label, reason: error.message}, state.work);
+          // The panel marked the chosen item; the previous track still plays.
+          markSelected(state);
           if (Lampa.Noty) Lampa.Noty.show('Не удалось подготовить озвучку: ' + track.label);
         });
       }
@@ -824,14 +914,23 @@
       return carrier && state.tracks.indexOf(carrier) !== -1 ? carrier : null;
     }
 
-    function abandonExternal(work) {
+    function audioRenditionError(data) {
+      return Boolean(data.frag && data.frag.type === 'audio') || data.parent === 'audio' || /^audioTrack/.test(data.details || '');
+    }
+
+    function abandonExternal(work, reason) {
       var carrier = embeddedFallback(work);
       if (!carrier) return;
       var failed = selectedTrack(active, masterUrl(work));
-      if (failed) failed.unsupported = true;
-      console.warn('Homelab external audio: unsupported fragment layout');
-      report('audio-external-fallback', {track: failed && failed.label, to: carrier.label, reason: 'unsupported fragment layout'}, work);
-      if (Lampa.Noty) Lampa.Noty.show('Внешняя озвучка не поддерживается для этого видео');
+      var layout = reason === 'unsupported fragment layout';
+      if (failed) {
+        // A layout never changes; a failed rendition is prepared again when chosen.
+        if (layout) failed.unsupported = true;
+        else { failed.ready = false; failed.failed = true; }
+      }
+      console.warn('Homelab external audio:', reason);
+      report('audio-external-fallback', {track: failed && failed.label, to: carrier.label, reason: reason}, work);
+      if (Lampa.Noty) Lampa.Noty.show(layout ? 'Внешняя озвучка не поддерживается для этого видео' : 'Внешняя озвучка недоступна, включена встроенная');
       selectTrack(active, carrier, true);
     }
 
@@ -1728,7 +1827,7 @@
       if (!url || typeof window.fetch !== 'function' || typeof AbortController === 'undefined') return;
       var state = active = {
         work: work, abort: new AbortController(), externalAbort: new AbortController(), previousTracks: work.voiceovers,
-        embeddedProxies: {}, embeddedBroken: {}
+        embeddedProxies: {}, embeddedBroken: {}, autoUntil: Date.now() + AUTO_APPLY_MS
       };
       report('play-start', {audio: Number(url.searchParams.get('audio') || 0)}, work);
       var stored = Lampa.Storage.get(preferenceKey, {});
@@ -1766,20 +1865,19 @@
         if (active !== state || generation !== revision || Lampa.Player.playdata() !== work || !lists.embedded) return;
         state.tracks = lists.embedded.concat(lists.external);
         if (state.tracks.length < 2) return;
-        var current = selectedTrack(state, url);
+        // The URL changes with every switch; mark the track playing now.
+        var current = selectedTrack(state, masterUrl(work) || url);
         state.tracks.forEach(function (track) {
           track.selected = track === current;
-          track.onSelect = function (item) {
-            // Select invokes an item's own callback instead of the panel's
-            // default handler, so restore the controller explicitly.
-            try { selectTrack(state, item); }
-            finally { Lampa.Controller.toggle('player'); }
-          };
+          offerTrack(state, track);
         });
         work.voiceovers = state.tracks;
         Lampa.PlayerPanel.setTracks(state.tracks);
         var preferred = matchingTrack(state.tracks, state.preferences.audio);
-        if (preferred) selectTrack(state, preferred, true);
+        if (!preferred || preferred === current) return;
+        // A late lookup must not reload a video the viewer is already watching.
+        if (Date.now() < state.autoUntil) selectTrack(state, preferred, true);
+        else lateTrack(state, preferred);
       }
       embedded.catch(function (error) {
         if (error.name === 'AbortError') throw error;
@@ -1866,6 +1964,14 @@
       if (video && video.paused) instance.ready.then(function () { return redrawFrame(instance, video); }).catch(function () {});
     });
     Lampa.Player.listener.follow('create', preparePlayback);
+    Lampa.Player.listener.follow('start', function (work) {
+      // The playlist keeps copies with the URL Lampa built; the playing copy
+      // carries its rewritten URL. Point the playlist at the original one,
+      // or it falls back to the first item without an episode number.
+      if (work && work.homelab_source_url && masterUrl(work) && Lampa.PlayerPlaylist && Lampa.PlayerPlaylist.url) {
+        Lampa.PlayerPlaylist.url(work.homelab_source_url);
+      }
+    });
     Lampa.Player.listener.follow('ready', installCurrent);
     Lampa.Player.listener.follow('destroy', function () {
       if (active) report('play-stop', {}, active.work);
@@ -1885,6 +1991,12 @@
           result.subtitles = shown ? identity(shown) : {off: true};
         }
         return result;
+      },
+      // Whether retryCurrent() would restart this work in place; reads only.
+      canRetry: function (work) {
+        if (!work || work !== Lampa.Player.playdata() || !masterUrl(work) || !Lampa.PlayerVideo.video()) return false;
+        if (active) return active.work === work;
+        return typeof window.fetch === 'function' && typeof AbortController !== 'undefined';
       },
       subscribe: function (fn) { phaseListeners.push(fn); return function () { phaseListeners = phaseListeners.filter(function (value) { return value !== fn; }); }; },
       retryCurrent: function () {

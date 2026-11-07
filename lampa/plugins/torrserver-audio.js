@@ -621,12 +621,15 @@
       generation++;
       if (!active) return;
       hideAss(active, 'clear');
-      // The panel may keep this list into the next episode.
+      // The panel may keep this list into the next episode: it keeps only
+      // the stream's own tracks, without the drawn items, «Выкл.» or menu hooks.
       if (active.subtitleList) {
-        active.assItems = [];
-        active.embedded = null;
-        withAss(active, active.subtitleList);
+        var originals = (active.hlsSubs || []).filter(function (item) { return !item.homelabAss && !item.homelabOff; });
+        active.subtitleList.splice.apply(active.subtitleList, [0, active.subtitleList.length].concat(originals));
+        originals.forEach(releaseItem);
       }
+      (active.tracks || []).forEach(releaseItem);
+      clearTimeout(active.prepareTick);
       if (active.releaseStream) active.releaseStream();
       active.abort.abort();
       active.externalAbort.abort();
@@ -1051,6 +1054,49 @@
       if (line.length) line.text(details);
     }
 
+    function releaseItem(item) {
+      delete item.onDraw;
+      delete item.homelabItem;
+    }
+
+    // Lampa calls onDraw(node, element). The state is looked up then: a list
+    // the panel kept from an earlier play draws nothing of that play.
+    function drawTrack(node, track) {
+      hidden(track, 'homelabItem', node);
+      var state = active && (active.tracks || []).indexOf(track) !== -1 ? active : null;
+      if (!state) return;
+      paintTrack(state, track);
+      tickPreparation(state);
+    }
+
+    function drawSubtitle(node, item) {
+      hidden(item, 'homelabItem', node);
+      var state = active && (active.subtitleList || []).indexOf(item) !== -1 ? active : null;
+      if (state) paintSubtitle(state, item);
+    }
+
+    // Whether a drawn item is still on screen; without a DOM to ask, it is.
+    function onScreen(node) {
+      var element = node && node[0];
+      var root = window.document && window.document.documentElement;
+      return !element || !root || !root.contains || root.contains(element);
+    }
+
+    // While the menu shows a voice being prepared, its seconds count up.
+    // The tick stops when the menu closes, the preparation ends or playback does.
+    function tickPreparation(state) {
+      clearTimeout(state.prepareTick);
+      state.prepareTick = null;
+      var preparing = state.preparing;
+      if (!preparing || active !== state || !preparing.track.homelabItem || !onScreen(preparing.track.homelabItem)) return;
+      state.prepareTick = setTimeout(function () {
+        state.prepareTick = null;
+        if (state.preparing !== preparing || active !== state) return;
+        paintTrack(state, preparing.track);
+        tickPreparation(state);
+      }, 1000);
+    }
+
     function paintTrack(state, track) {
       if (track.homelabItem) paintItem(track.homelabItem, track.homelabTitle || audioTitle(track), audioDetails(state, track));
     }
@@ -1085,7 +1131,7 @@
     // that handler and its focus return. Labels are ours, not Lampa's translations.
     function offerTrack(state, track) {
       track.ignore_translate = true;
-      hidden(track, 'onDraw', function (node) { hidden(track, 'homelabItem', node); paintTrack(state, track); });
+      hidden(track, 'onDraw', drawTrack);
       var descriptor = Object.getOwnPropertyDescriptor(track, 'enabled');
       if (descriptor && descriptor.set && descriptor.set.homelabState === state) return;
       function choose(value) {
@@ -1116,6 +1162,8 @@
       clearTimeout(state.preparing.timer);
       var track = state.preparing.track;
       state.preparing = null;
+      clearTimeout(state.prepareTick);
+      state.prepareTick = null;
       paintTrack(state, track);
     }
 
@@ -1134,6 +1182,7 @@
           if (state.preparing !== preparing) return;
           if (response.ok) {
             state.preparing = null;
+            clearTimeout(state.prepareTick);
             track.ready = true;
             paintTrack(state, track);
             if (automatic && Date.now() >= state.autoUntil + AUTO_PREPARE_MS - AUTO_APPLY_MS) return lateTrack(state, track);
@@ -1147,6 +1196,7 @@
         }).catch(function (error) {
           if (error.name === 'AbortError' || state.preparing !== preparing) return;
           state.preparing = null;
+          clearTimeout(state.prepareTick);
           track.prepareFailed = true;
           console.warn('Homelab external audio:', error.message);
           report('audio-external-failed', {track: track.label, reason: error.message}, state.work);
@@ -1853,14 +1903,14 @@
       return item;
     }
 
-    function decorateSubtitles(state, items) {
+    function decorateSubtitles(items) {
       var seen = {};
       items.forEach(function (item) {
         var title = subtitleTitle(item);
         var key = title + '|' + subtitleSigns(item) + '|' + Boolean(subtitleSource(item).external);
         seen[key] = (seen[key] || 0) + 1;
         item.homelabTitle = seen[key] > 1 ? title + ' (' + seen[key] + ')' : title;
-        hidden(item, 'onDraw', function (node) { hidden(item, 'homelabItem', node); paintSubtitle(state, item); });
+        hidden(item, 'onDraw', drawSubtitle);
       });
       return items;
     }
@@ -1904,7 +1954,7 @@
       items.forEach(function (item) {
         if (!item.homelabAss && /[<>"'`]/.test(item.label)) item.label = plain(item.label);
       });
-      var all = decorateSubtitles(state, numberLabels(items.concat(state.assItems || [])));
+      var all = decorateSubtitles(numberLabels(items.concat(state.assItems || [])));
       list.splice.apply(list, [0, list.length].concat(all.length ? [offItem(list)].concat(all) : []));
       // A plain-text track already showing switches to its drawn version.
       items.forEach(function (item) {

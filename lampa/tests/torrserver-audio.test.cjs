@@ -2639,3 +2639,43 @@ test('the subtitle menu starts with «Выкл.» and tells drawn and plain trac
   h.chooseSubtitle(null);
   assert.equal(items[0].selected, true);
 });
+
+test('the seconds of a preparation count once a second while its item is on screen', async t => {
+  const h = harness(t, new Map(), { external: [anilibria], rendition: [503, 503] });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  h.chooseAudio(externalLabel);
+  await h.settle();
+  const node = draw(h.audioMenu().find(item => item.external));
+  node[0] = {};
+  const shown = [];
+  for (let i = 0; i < 3; i++) {
+    h.clock(1000);
+    h.fireTimer(1000);
+    shown.push(node.details().split(' · ')[0]);
+  }
+  assert.deepEqual(shown, ['готовится…', 'готовится… 2 с', 'готовится… 3 с']);
+  // The menu closed: the item left the page, so the count stops.
+  h.context.window.document = { documentElement: { contains: () => false } };
+  h.clock(1000);
+  h.fireTimer(1000);
+  assert.ok(![...h.timers.values()].some(timer => timer.delay === 1000), 'no tick for a closed menu');
+});
+
+test('a list the panel keeps after playback carries no menu items or hooks of that play', async t => {
+  const h = harness(t, new Map(), { external: [anilibria], ass: assLookup, raw: { 25: new TextEncoder().encode(assText) } });
+  h.start(13, 'abc', true);
+  await h.probe([japaneseAAC]);
+  await h.task('301');
+  h.emitSubtitles(firstEpisode);
+  await h.settle();
+  const kept = h.subtitleItems();
+  const tracks = h.audioMenu();
+  assert.equal(kept[0].index, -1);
+  assert.ok(kept.every(item => item.index === -1 || typeof item.onDraw === 'function'));
+  h.destroy();
+  assert.deepEqual(Array.from(kept, item => item.label), ['надписи', 'English', 'Russian'], 'only the stream\'s own tracks stay');
+  assert.ok(kept.every(item => item.onDraw === undefined && item.homelabItem === undefined));
+  assert.ok(tracks.every(item => item.onDraw === undefined));
+});

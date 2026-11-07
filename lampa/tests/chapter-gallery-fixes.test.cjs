@@ -2,6 +2,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {harness, flush} = require('./ux-harness.cjs');
 const key = '/previews/' + 'b'.repeat(40) + '/2/';
+const path = call => call.url.split('&client=')[0];
 const chapters = [
   {start: 0, end: 90, title: 'OP'}, {start: 90, end: 400, title: 'Part A'}, {start: 400, end: 406, title: 'Eyecatch'},
   {start: 406, end: 1300, title: 'Part B'}, {start: 1300, end: 1390, title: 'ED'}, {start: 1390, end: 1440, title: 'Preview'},
@@ -182,10 +183,10 @@ test('mouse and touch hover load thumbnails outside the prefetched window', asyn
 test('busy preview service responses retry with backoff instead of dropping the tile', async t => {
   const h = setup(t);
   h.coreState(info()); h.time(5); h.core.openChapters();
-  const url = h.calls[0].url;
+  const url = path(h.calls[0]);
   h.calls[0].finish(null, 503); await flush();
   assert.equal(h.calls.length, 1, 'no immediate hammering');
-  h.tick(1000); assert.equal(h.calls.length, 2); assert.equal(h.calls[1].url, url);
+  h.tick(1000); assert.equal(h.calls.length, 2); assert.equal(path(h.calls[1]), url);
   h.calls[1].finish(null, 429); await flush();
   h.tick(1999); assert.equal(h.calls.length, 2); h.tick(1); assert.equal(h.calls.length, 3);
   h.calls[2].finish({type: 'image/jpeg', size: 100}); await flush();
@@ -196,12 +197,12 @@ test('frames are sampled inside each chapter, away from its boundary, with a nea
   const h = setup(t);
   h.coreState(info([{start: 0, end: 90, title: 'OP'}, {start: 92, end: 98, title: 'Bumper'}, {start: 98, end: 1440, title: 'Story'}])); h.time(5);
   h.core.openChapters();
-  assert.equal(h.calls[0].url, key + 'frame/2.jpg?step=10', 'a chapter at zero avoids the black first frame');
+  assert.equal(path(h.calls[0]), key + 'frame/2.jpg?step=10', 'a chapter at zero avoids the black first frame');
   h.calls[0].finish({type: 'image/jpeg', size: 100}); await flush();
-  assert.equal(h.calls[1].url, key + 'frame/10.jpg?step=10', 'a short chapter without a grid point uses the nearest slot');
+  assert.equal(path(h.calls[1]), key + 'frame/10.jpg?step=10', 'a short chapter without a grid point uses the nearest slot');
   h.calls[1].finish({type: 'image/jpeg', size: 100}); await flush();
   h.tile(2).trigger('hover:focus');
-  assert.equal(h.calls[2].url, key + 'frame/11.jpg?step=10');
+  assert.equal(path(h.calls[2]), key + 'frame/11.jpg?step=10');
 });
 
 test('thumbnail cache evicts the least recently shown tile', async t => {
@@ -222,15 +223,15 @@ test('Retry-After paces busy retries, 422 is final for the tile and a network er
   h.tick(1999); assert.equal(h.calls.length, 1); h.tick(1); assert.equal(h.calls.length, 2);
   h.calls[1].finish(null, 422, {'Retry-After': '60'}); await flush();
   assert.equal(h.calls.length, 3, 'the queue moves on');
-  assert.notEqual(h.calls[2].url, h.calls[0].url);
+  assert.notEqual(path(h.calls[2]), path(h.calls[0]));
   h.tile(0).trigger('hover:focus'); assert.equal(h.calls.length, 3);
-  const url = h.calls[2].url;
+  const url = path(h.calls[2]);
   h.calls[2].fail(); await flush(); h.tick(1000);
-  assert.equal(h.calls[3].url, url);
+  assert.equal(path(h.calls[3]), url);
   h.calls[3].fail(); await flush();
-  assert.notEqual(h.calls.at(-1).url, url, 'a second network error gives up on that tile');
+  assert.notEqual(path(h.calls.at(-1)), url, 'a second network error gives up on that tile');
   h.tile(0).trigger('hover:focus'); h.tick(60000);
-  assert.equal(h.calls.filter(call => call.url === h.calls[0].url).length, 2, 'an unsupported frame is never polled again');
+  assert.equal(h.calls.filter(call => path(call) === path(h.calls[0])).length, 2, 'an unsupported frame is never polled again');
 });
 
 test('reopening the episode or rewinding into the intro takes focus again', t => {
@@ -253,4 +254,51 @@ test('after a native skip lands inside our segment the manual skip stays away', 
   assert.equal(h.skip().hasClass('hide'), true); assert.equal(h.controller(), 'player');
   h.time(95); h.time(5);
   assert.equal(h.skip().hasClass('hide'), false, 'a later pass without native skip offers ours');
+});
+
+const query = call => Object.fromEntries(new URL(call.url, 'https://lampa.test').searchParams);
+const frames = h => h.calls.filter(call => call.url.includes('/frame/'));
+const cancels = h => h.calls.filter(call => call.url === '/previews/cancel');
+
+test('each gallery open owns a client id with a strictly increasing order, including 202 polls', async t => {
+  const h = setup(t);
+  h.coreState(info()); h.time(5); h.core.openChapters();
+  h.calls[0].finish(null, 202); await flush(); h.tick(1000);
+  const [first, poll] = frames(h).map(query);
+  assert.match(first.client, /^g[A-Za-z0-9_-]{7,63}$/);
+  assert.equal(poll.client, first.client);
+  assert.equal(first.step, '10');
+  assert.ok(+poll.n > +first.n, 'every poll is newer');
+  h.L.Controller.controllers.modal.back();
+  h.core.openChapters();
+  const reopened = query(frames(h).at(-1));
+  assert.notEqual(reopened.client, first.client, 'a new open is a new client');
+});
+
+test('closing the gallery cancels its server job once with the next order number', async t => {
+  const h = setup(t);
+  h.coreState(info()); h.time(5); h.core.openChapters();
+  const sent = query(frames(h)[0]);
+  h.L.Controller.controllers.modal.back();
+  assert.equal(cancels(h).length, 1);
+  const cancel = cancels(h)[0];
+  assert.equal(cancel.options.method, 'POST'); assert.equal(cancel.options.keepalive, true);
+  assert.equal(cancel.options.headers['Content-Type'], 'application/json');
+  const body = JSON.parse(cancel.options.body);
+  assert.equal(body.client, sent.client); assert.ok(body.n > +sent.n);
+  assert.equal(frames(h)[0].options.signal.aborted, true);
+});
+
+test('closing the player cancels the gallery job', t => {
+  const h = setup(t);
+  h.coreState(info()); h.time(5); h.core.openChapters();
+  h.destroy(); h.coreState(null);
+  assert.equal(cancels(h).length, 1);
+});
+
+test('a gallery open that made no frame request sends no cancel', t => {
+  const h = setup(t);
+  h.coreState({key, enabled: true, info: null, failed: true}); h.core.openChapters();
+  h.L.Controller.controllers.modal.back();
+  assert.equal(h.active(), null); assert.equal(cancels(h).length, 0);
 });

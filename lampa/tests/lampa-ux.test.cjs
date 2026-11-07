@@ -31,18 +31,19 @@ test('gallery loaded after metadata immediately offers skip on a paused intro', 
 test('chapter gallery samples inside the chapter and keeps thumbnail generation serial', async t => {
   const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data);
   h.video().currentTime = 10; h.core.openChapters();
-  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].url, key + 'frame/5.jpg', 'the 8s chapter samples 15s inside it, not the preceding scene');
+  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].url.split('&client=')[0], key + 'frame/5.jpg?step=5', 'the 8s chapter samples 15s inside it, not the preceding scene');
   h.calls[0].finish({type: 'image/jpeg', size: 100}); await flush();
   assert.equal(h.calls.length, 2, 'only one decoder request runs at a time');
   h.L.Modal.close(); assert.equal(h.calls[1].options.signal.aborted, true);
+  assert.equal(h.calls[2].url, '/previews/cancel', 'the aborted tile releases its server job');
   h.calls[1].finish({type: 'image/jpeg', size: 100}); await flush();
-  assert.equal(h.calls.length, 2); assert.equal(h.revoked.length, 1);
+  assert.equal(h.calls.length, 3); assert.equal(h.revoked.length, 1);
 });
 
 test('chapter gallery respects the negotiated ten-second grid', t => {
   const h = harness(t); h.run('plugins/chapter-gallery.js');
   h.coreState({...data, info: {...data.info, step: 10}}); h.video().currentTime = 10; h.core.openChapters();
-  assert.equal(h.calls[0].url, key + 'frame/2.jpg?step=10', 'the 8s chapter samples the ten-second grid inside it');
+  assert.equal(h.calls[0].url.split('&client=')[0], key + 'frame/2.jpg?step=10', 'the 8s chapter samples the ten-second grid inside it');
 });
 
 test('skip buttons never auto-seek and conservative labels leave story chapters alone', t => {
@@ -75,10 +76,11 @@ test('another modal cancels thumbnail work and late responses cannot corrupt the
   const h = harness(t); h.run('plugins/chapter-gallery.js'); h.coreState(data); h.core.openChapters();
   const owned = h.modal(); h.L.Modal.open({title: 'Other', html: {}});
   assert.equal(h.calls[0].options.signal.aborted, true);
-  h.L.Modal.open(owned); assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[1].url, '/previews/cancel');
+  h.L.Modal.open(owned); assert.equal(h.calls.length, 3);
   h.calls[0].finish({type: 'image/jpeg', size: 100}); await flush();
-  h.calls[1].finish({type: 'image/jpeg', size: 100}); await flush();
-  assert.equal(h.calls.length, 3, 'the active thumbnail queue keeps running');
+  h.calls[2].finish({type: 'image/jpeg', size: 100}); await flush();
+  assert.equal(h.calls.length, 4, 'the active thumbnail queue keeps running');
 });
 
 test('playback recovery stays silent through preparation, buffering, recovery and failure while retaining one manual retry', t => {

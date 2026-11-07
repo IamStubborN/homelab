@@ -809,11 +809,15 @@ class WarmTests(unittest.TestCase):
         self.assertEqual(urlopen.call_args.args[0].get_header("Range"), "bytes=0-99999")
         self.assertEqual(source.tell(), 100000, "nothing past the limit is read")
 
-    def run_warm(self, voice_id, viewed=False):
+    def run_warm(self, voice_id, viewed=False, active=True, touch_during=False):
         app._warms.acquire()
         requests = []
         def torrent_request(path, payload):
             requests.append((path, payload))
+            if path == "/torrents":
+                return [{"hash": HASH, "stat": app.TORRENT_WORKING}] if active else []
+            if touch_during and payload["action"] == "list":
+                app.touch(HASH, 14)
             return [{"hash": HASH, "file_index": 14}] if viewed and payload["action"] == "list" else None
         with mock.patch.object(app, "read_head", side_effect=OSError("slow torrent")) as head, \
                 mock.patch.object(app, "probe_embedded") as embedded, \
@@ -834,7 +838,16 @@ class WarmTests(unittest.TestCase):
     def test_a_warm_probes_the_voice_over_being_played_and_keeps_views(self):
         _, _, audio, requests = self.run_warm(2, viewed=True)
         audio.assert_called_once_with(HASH, 2, wait=app.PROBE_BACKGROUND_SECONDS, remember_failure=False)
-        self.assertEqual([payload["action"] for _, payload in requests], ["list"], "a file viewed before stays viewed")
+        self.assertEqual([payload["action"] for path, payload in requests if path == "/viewed"], ["list"], "a file viewed before stays viewed")
+
+    def test_a_warm_never_reads_a_torrent_stopped_since_the_request(self):
+        head, embedded, audio, requests = self.run_warm(2, active=False)
+        head.assert_not_called(); embedded.assert_not_called(); audio.assert_not_called()
+        self.assertEqual([path for path, _ in requests], ["/torrents"])
+
+    def test_a_real_start_during_the_warm_keeps_the_viewed_mark(self):
+        _, _, _, requests = self.run_warm(None, touch_during=True)
+        self.assertEqual([payload["action"] for path, payload in requests if path == "/viewed"], ["list"], "the viewer's own mark stays")
 
     def test_the_voice_over_of_the_next_episode_is_found_in_the_same_folder(self):
         self.assertEqual(app.voice_candidate(FILES, 14, 1), 2)

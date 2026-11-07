@@ -176,6 +176,23 @@ _embedded_probing = {}
 _warmed = {}
 _warm_lock = threading.Lock()
 _warms = threading.BoundedSemaphore(1)
+# Last time a client asked anything about a (hash, file): a real start of a
+# warmed episode must keep the viewed mark the warm would otherwise remove.
+_touched = {}
+_touched_lock = threading.Lock()
+TOUCH_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/")
+
+
+def touch(torrent_hash, file_id, now=None):
+    with _touched_lock:
+        if len(_touched) >= 512:
+            _touched.clear()
+        _touched[(torrent_hash.lower(), file_id)] = time.monotonic() if now is None else now
+
+
+def touched_since(torrent_hash, file_id, since):
+    with _touched_lock:
+        return _touched.get((torrent_hash.lower(), file_id), -1) >= since
 _log_window = {"start": 0.0, "count": 0}
 _log_lock = threading.Lock()
 _log_write_lock = threading.Lock()
@@ -783,7 +800,15 @@ def warm(torrent_hash, file_id, voice_id, files):
     every read has ended. Failures are not remembered: the real start retries."""
     def log(error):
         print(f"warm {torrent_hash}/{file_id}: {type(error).__name__} {error}", file=sys.stderr, flush=True)
+    started = time.monotonic()
     try:
+        try:
+            # Narrow the window since serve_warm checked: a stopped torrent is never restarted by a warm.
+            if not torrent_active(torrent_hash):
+                return
+        except Exception as error:
+            log(error)
+            return
         try:
             # Every read of a file marks it viewed in TorrServer; a warm-up is not a view.
             unviewed = not viewed(torrent_hash, file_id)
@@ -801,7 +826,8 @@ def warm(torrent_hash, file_id, voice_id, files):
                 step()
             except Exception as error:
                 log(error)
-        if unviewed:
+        # The viewer may have started this episode meanwhile: then the mark is theirs.
+        if unviewed and not touched_since(torrent_hash, file_id, started):
             try:
                 torrent_request("/viewed", {"action": "rem", "hash": torrent_hash, "file_index": file_id})
             except Exception as error:
@@ -1987,6 +2013,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         split = urllib.parse.urlsplit(self.path)
         path, query = split.path, urllib.parse.parse_qs(split.query)
+        touched = TOUCH_RE.match(path)
+        if touched:
+            touch(touched.group(1), int(touched.group(2)))
         if path == "/extaudio/health":
             return self.send_json(200, {"ok": True})
         renderer = RENDERER_RE.match(path)

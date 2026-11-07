@@ -115,6 +115,87 @@ class JobsTest(unittest.TestCase):
             self.assertGreater(int(headers["Retry-After"]), 1)
         self.assertEqual(self.get("frame/5.jpg?step=10&client=bad!id")[0], 400)
 
+    def cancel(self, body):
+        request = urllib.request.Request(f"http://127.0.0.1:{self.server.server_port}/previews/cancel", data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                return response.status
+        except urllib.error.HTTPError as error:
+            error.close()
+            return error.code
+
+    def test_explicit_cancel_releases_only_that_clients_job(self):
+        started, stopped = [], []
+        def prepare(h, i, slot, step, cancelled=None):
+            started.append(slot)
+            while not cancelled():
+                time.sleep(.01)
+            stopped.append(slot)
+            raise app.Interrupted()
+        with patch.object(app, "prepare", side_effect=prepare):
+            self.assertEqual(self.get("frame/1.jpg?step=10&client=gallery-open-1&n=1")[0], 202)
+            wait_for(lambda: started == [1])
+            self.assertEqual(self.get("frame/2.jpg?step=10&client=scrub-client-a&n=1")[0], 202)
+            self.assertEqual(self.get("frame/3.jpg?step=10")[0], 202)
+            self.assertEqual(self.cancel({"client": "gallery-open-1", "n": 2}), 202)
+            wait_for(lambda: stopped == [1])
+            wait_for(lambda: started == [1, 2], 2)
+            self.assertEqual(self.cancel({"client": "scrub-client-a"}), 202)
+            wait_for(lambda: stopped == [1, 2])
+            wait_for(lambda: started == [1, 2, 3])
+            self.assertEqual(self.cancel({"client": "bad!id"}), 400)
+            self.assertEqual(self.cancel({"client": "scrub-client-a", "n": "x"}), 400)
+
+    def test_reordered_requests_of_a_client_cannot_undo_latest_wins(self):
+        gate = threading.Event()
+        started = []
+        def prepare(h, i, slot, step, cancelled=None):
+            started.append(slot)
+            gate.wait(5)
+        with patch.object(app, "prepare", side_effect=prepare):
+            try:
+                self.assertEqual(self.get("frame/9.jpg?step=10")[0], 202)
+                wait_for(lambda: started == [9])
+                self.assertEqual(self.get("frame/2.jpg?step=10&client=scrub-client-a&n=5")[0], 202)
+                self.assertEqual(self.get("frame/1.jpg?step=10&client=scrub-client-a&n=4")[0], 202)
+                self.assertIn((HASH, 1, 10, 2), app.jobs, "the newer request keeps its job")
+                self.assertNotIn((HASH, 1, 10, 1), app.jobs, "an overtaken request starts nothing")
+                self.assertEqual(self.get("frame/1.jpg?step=10&client=scrub-client-a&n=nope")[0], 400)
+            finally:
+                gate.set()
+
+    def test_transient_source_failures_are_retryable_and_backoff_counts_from_completion(self):
+        with patch.object(app, "prepare", side_effect=OSError("timed out")), patch.object(app, "TRANSIENT_BACKOFF", 30):
+            self.assertEqual(self.get("frame/5.jpg?step=10")[0], 202)
+            wait_for(lambda: all(f.done() for f, _ in app.jobs.values()))
+            status, headers = self.get("frame/5.jpg?step=10")
+            self.assertEqual(status, 503)
+            self.assertLessEqual(int(headers["Retry-After"]), 30)
+        with patch.object(app, "prepare", side_effect=app.Temporary("statistics unavailable")):
+            self.assertEqual(self.get("frame/6.jpg?step=10")[0], 202)
+            wait_for(lambda: all(f.done() for f, _ in app.jobs.values()))
+            self.assertEqual(self.get("frame/6.jpg?step=10")[0], 503)
+        def slow_failure(*args, **kwargs):
+            time.sleep(.4)
+            raise app.Unavailable("invalid frame")
+        with patch.object(app, "prepare", side_effect=slow_failure), patch.object(app, "FAILURE_BACKOFF", .6):
+            self.assertEqual(self.get("frame/7.jpg?step=10")[0], 202)
+            wait_for(lambda: all(f.done() for f, _ in app.jobs.values()))
+            time.sleep(.3)  # .7 s after submission, .3 s after completion
+            self.assertEqual(self.get("frame/7.jpg?step=10")[0], 422)
+
+    def test_tracked_clients_are_bounded(self):
+        gate = threading.Event()
+        with patch.object(app, "prepare", side_effect=lambda *a, **k: gate.wait(5)), patch.object(app, "MAX_CLIENT_JOBS", 2):
+            try:
+                self.assertEqual(self.get("frame/1.jpg?step=10&client=device-one-seek&n=1")[0], 202)
+                self.assertEqual(self.get("frame/2.jpg?step=10&client=device-one-gallery&n=1")[0], 202,
+                                 "a second client id of one device is an ordinary client")
+                self.assertEqual(self.get("frame/3.jpg?step=10&client=device-two-seek&n=1")[0], 503)
+            finally:
+                gate.set()
+
     def test_unsupported_release_is_remembered_and_not_looked_up_again(self):
         with patch.object(app, "torrent", return_value={"file_stats": [{"id": 1, "path": "Show/1.wmv"}]}) as lookup:
             self.assertEqual(self.post({"client": "player-one", "state": "playing", "seq": 1}), 422)

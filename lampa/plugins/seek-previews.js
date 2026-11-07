@@ -19,7 +19,7 @@
       subscribe: function (fn) { subscribers.push(fn); return function () { subscribers = subscribers.filter(function (value) { return value !== fn; }); }; },
       setEnabled: function (value) {
         enabled = !!value; L.Storage.set('homelab_seek_frames', enabled); hide();
-        if (current) { if (enabled) bindPreparation(current); else stopPreparation(current); }
+        if (current) { if (enabled) bindPreparation(current); else { releaseFrames(current); stopPreparation(current); } }
         publish();
       },
       retryMetadata: function () { if (current && current.failed && !current.metaRequest && Date.now() >= current.metaManualAt) startMetadata(current); }
@@ -95,6 +95,15 @@
     }
     function live(state) { return current === state && L.Player.playdata() === state.data; }
     function clientId() { return 'hl_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 12); }
+    // One frame owner for the plugin lifetime: the worker keeps only its latest
+    // seek, across files too. n orders requests that overtake each other.
+    var frameClient = clientId(), frameOrder = 0;
+    function releaseFrames(state) {
+      if (!state || !state.frameUsed) return;
+      state.frameUsed = false;
+      fetch('/previews/cancel', {method: 'POST', keepalive: true, headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({client: frameClient, n: ++frameOrder})}).catch(function () {});
+    }
     function retryAfter(response, fallback) {
       var value = response && response.headers && typeof response.headers.get === 'function' ? Number(response.headers.get('Retry-After')) : NaN;
       return Number.isFinite(value) && value > 0 ? Math.min(600, value) * 1000 : fallback;
@@ -127,6 +136,7 @@
     }
     function clear() {
       hide();
+      releaseFrames(current);
       if (current) {
         stopPreparation(current);
         (current.frames || []).forEach(function (entry) { URL.revokeObjectURL(entry.url); });
@@ -228,8 +238,9 @@
       overlay.find('.homelab-seek-preview__label').text(time(at) + (title ? ' · ' + title : ''));
     }
     function detachVideo(state) {
-      // Native Tizen/Orsay wrappers cannot remove listeners; their handlers
-      // check the events token and become inert instead.
+      // Tizen/Orsay wrappers are <object> elements: their native
+      // removeEventListener cannot remove Lampa Subscribe listeners, so every
+      // handler also checks the events token and becomes inert.
       var video = state.video, events = state.videoEvents;
       if (video && events && typeof video.removeEventListener === 'function') Object.keys(events).forEach(function (name) {
         video.removeEventListener(name, events[name]);
@@ -305,7 +316,7 @@
         if (Date.now() + delay >= deadline) return unavailable();
         state.poll = setTimeout(function () { frame(state, slot, request, deadline); }, delay);
       }
-      function transient() { retry(Math.min(5000, 1000 * Math.pow(2, state.frameFailures++))); }
+      function transient(response) { retry(Math.max(Math.min(5000, 1000 * Math.pow(2, state.frameFailures++)), retryAfter(response, 0))); }
       if (Date.now() >= deadline) return unavailable();
       if (!state.frameDeadline) state.frameDeadline = setTimeout(function () {
         if (state.frameAbort) state.frameAbort.abort();
@@ -313,10 +324,11 @@
       }, deadline - Date.now());
       state.frameAbort = new AbortController();
       // client= makes the worker drop this viewer's superseded seeks (latest wins).
-      fetch(state.base + 'frame/' + slot + '.jpg?step=' + state.info.step + '&client=' + state.frameClient, {signal: state.frameAbort.signal}).then(function (response) {
+      state.frameUsed = true;
+      fetch(state.base + 'frame/' + slot + '.jpg?step=' + state.info.step + '&client=' + frameClient + '&n=' + (++frameOrder), {signal: state.frameAbort.signal}).then(function (response) {
         if (!live(state) || state.request !== request) return;
         if (response.status === 202) return retry(1000);
-        if (response.status === 429 || response.status >= 500) return transient();
+        if (response.status === 429 || response.status >= 500) return transient(response);
         // 422 is a failed job: do not poll it during the worker's backoff.
         if (response.status === 422) return unavailable(retryAfter(response, 60000));
         if (!response.ok) return unavailable();
@@ -387,7 +399,7 @@
       seekControls();
       var base = identity(data);
       if (!base || !panelElements()) return;
-      var state = current = {data: data, base: base, metaAttempts: 0, slot: null, frameClient: clientId()};
+      var state = current = {data: data, base: base, metaAttempts: 0, slot: null};
       button.removeClass('hide');
       startMetadata(state);
       bindPreparation(state);

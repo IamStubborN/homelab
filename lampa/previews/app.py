@@ -47,12 +47,15 @@ jobs = {}
 job_owners = {}
 job_cancel = {}
 client_jobs = {}
+client_order = {}
 releases = []
 clients = {}
 closed_clients = {}
 unsupported = {}
 CLIENT = re.compile(r"[a-zA-Z0-9_-]{8,64}")
 FAILURE_BACKOFF = 60
+TRANSIENT_BACKOFF = 10
+MAX_CLIENT_JOBS = 256
 UNSUPPORTED_TTL = 600
 active_batch = None
 generation = 0
@@ -68,7 +71,15 @@ class Interrupted(Exception):
 
 
 class Busy(Unavailable):
-    """Temporary capacity limit: the client may retry soon (HTTP 503)."""
+    """Temporary capacity limit or source outage: retry soon (HTTP 503)."""
+
+    def __init__(self, message, retry_after=2):
+        super().__init__(message)
+        self.retry_after = max(1, int(math.ceil(retry_after)))
+
+
+class Temporary(Unavailable):
+    """TorrServer has no usable answer yet; not a property of the file."""
 
 
 class Failed(Unavailable):
@@ -92,7 +103,7 @@ def torrent(torrent_hash, cancelled=None):
         with urllib.request.urlopen(request, timeout=8) as response:
             data = json.loads(response.read(2 * 1024 * 1024))
         if not isinstance(data, dict):
-            raise Unavailable("invalid torrent metadata")
+            raise Temporary("invalid torrent metadata")
         # An existing idle torrent can return before its file statistics are ready.
         if data.get("file_stats") or data.get("hash") != torrent_hash or attempt:
             return data
@@ -101,7 +112,7 @@ def torrent(torrent_hash, cancelled=None):
 
 def playable(files):
     if not isinstance(files, list) or not files:
-        raise Unavailable("statistics unavailable")
+        raise Temporary("statistics unavailable")
     if len(files) > 10000:
         raise Unsupported("invalid release")
     videos = [f for f in files if isinstance(f, dict) and type(f.get("id")) is int and 1 <= f["id"] <= 999999
@@ -371,6 +382,22 @@ def interrupted(future):
     return future.cancelled() or isinstance(future.exception(), Interrupted)
 
 
+def transient(error):
+    # Source outages and slow torrent reads; decode and file problems are final.
+    return isinstance(error, (OSError, Temporary, subprocess.TimeoutExpired))
+
+
+def backoff(future):
+    """Seconds a finished job blocks its key, counted from its completion."""
+    if interrupted(future) or future.exception() is None:
+        return 0
+    return TRANSIENT_BACKOFF if transient(future.exception()) else FAILURE_BACKOFF
+
+
+def finished(future, since):
+    return getattr(future, "finished_at", since)
+
+
 def cancel_job(key):
     """Called with lock held once no owner wants the job any more."""
     if key not in jobs:
@@ -380,16 +407,40 @@ def cancel_job(key):
         forget_job(key)
 
 
-def retarget(client, key):
-    """Latest wins: a client's new request releases its previous one."""
-    previous = client_jobs.get(client)
-    client_jobs[client] = key
-    if previous is None or previous == key or previous not in job_owners:
+def release(client, keep=None):
+    """Drop the client's claim on its job unless it is `keep`."""
+    previous = client_jobs.pop(client, None)
+    if previous is None or previous == keep or previous not in job_owners:
         return
     owners = job_owners[previous]
     owners.discard(client)
     if not owners:
         cancel_job(previous)
+
+
+def retarget(client, key):
+    """Latest wins: a client's new request releases its previous one."""
+    release(client, key)
+    client_jobs[client] = key
+
+
+def newer(client, n):
+    """Requests of one client can overtake each other on a threaded server."""
+    if n is None:
+        return True
+    if n <= client_order.get(client, -1):
+        return False
+    client_order.pop(client, None)
+    client_order[client] = n
+    while len(client_order) > MAX_CLIENT_JOBS:
+        client_order.pop(next(iter(client_order)))
+    return True
+
+
+def cancel_client(client, n=None):
+    with lock:
+        if newer(client, n):
+            release(client)
 
 
 def live(key):
@@ -400,27 +451,35 @@ def live(key):
 def cleanup_jobs(now):
     # Finished failures back off; successes and interrupted work need no entry.
     for old, (future, since) in list(jobs.items()):
-        if future.done() and (interrupted(future) or future.exception() is None or now - since > FAILURE_BACKOFF):
+        if future.done() and now - finished(future, since) >= backoff(future):
             forget_job(old)
     for client in [c for c, key in client_jobs.items() if key not in jobs]:
         del client_jobs[client]
 
 
-def request_job(torrent_hash, index, slot, step=STEP, client=None):
+def request_job(torrent_hash, index, slot, step=STEP, client=None, n=None):
     key = (torrent_hash, index, step, slot)
     path = directory(torrent_hash, index, step) / ("metadata.json" if slot is None else f"{slot}.jpg")
     with lock:
         now = time.monotonic()
         cleanup_jobs(now)
-        if client is not None:
+        current = client is None or newer(client, n)
+        if client is not None and current:
+            if client not in client_jobs and len(client_jobs) >= MAX_CLIENT_JOBS:
+                raise Busy("client budget")
             retarget(client, key)
         if path.exists():
             touch(path.parent)
             return path
+        if not current:
+            return None  # Overtaken by a newer request of the same client.
         if key in jobs:
             future, since = jobs[key]
             if future.done():
-                raise Failed("retry later", FAILURE_BACKOFF - (now - since))
+                remaining = backoff(future) - (now - finished(future, since))
+                if transient(future.exception()):
+                    raise Busy("source unavailable", remaining)
+                raise Failed("retry later", remaining)
             if job_cancel[key].is_set():
                 # Superseded but still unwinding: queue a fresh job afterwards.
                 forget_job(key)
@@ -436,7 +495,10 @@ def request_job(torrent_hash, index, slot, step=STEP, client=None):
         cancel = threading.Event()
         job_cancel[key] = cancel
         job_owners[key] = {client}
-        jobs[key] = (executor.submit(foreground, torrent_hash, index, slot, step, cancel), now)
+        future = executor.submit(foreground, torrent_hash, index, slot, step, cancel)
+        # Backoff runs from completion; a slow failure must not expire early.
+        future.add_done_callback(lambda done: setattr(done, "finished_at", time.monotonic()))
+        jobs[key] = (future, now)
         wake.set()
     return None
 
@@ -450,7 +512,7 @@ def cancel_all():
 def reset_state():
     global active_batch, pause_until, generation
     with lock:
-        for collection in (jobs, job_owners, job_cancel, client_jobs, clients, closed_clients, unsupported):
+        for collection in (jobs, job_owners, job_cancel, client_jobs, client_order, clients, closed_clients, unsupported):
             collection.clear()
         releases.clear()
         active_batch = None
@@ -648,15 +710,18 @@ class Handler(BaseHTTPRequestHandler):
         try:
             # Bare URLs keep their original five-second meaning for cached clients.
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            steps, owner = query.get("step", ["5"]), query.get("client", [None])
-            if len(steps) != 1 or steps[0] not in {"5", "10"} or len(owner) != 1 or (owner[0] is not None and not CLIENT.fullmatch(owner[0])):
+            steps, owner, order = query.get("step", ["5"]), query.get("client", [None]), query.get("n", [None])
+            if (len(steps) != 1 or steps[0] not in {"5", "10"} or len(owner) != 1 or len(order) != 1
+                    or (owner[0] is not None and not CLIENT.fullmatch(owner[0]))
+                    or (order[0] is not None and not re.fullmatch(r"[0-9]{1,15}", order[0]))):
                 return self.reply(400)
-            result = request_job(torrent_hash, int(index), None if slot is None else int(slot), int(steps[0]), owner[0])
+            result = request_job(torrent_hash, int(index), None if slot is None else int(slot), int(steps[0]), owner[0],
+                                 None if order[0] is None else int(order[0]))
             if result is None:
                 return self.reply(202, b'{"status":"pending"}', "application/json")
             self.reply(200, result.read_bytes(), "application/json" if operation == "metadata" else "image/jpeg")
-        except Busy:
-            self.reply(503, b'{"status":"busy"}', "application/json", retry_after=2)
+        except Busy as error:
+            self.reply(503, b'{"status":"busy"}', "application/json", retry_after=error.retry_after)
         except Failed as error:
             self.reply(422, b'{"status":"failed"}', "application/json", retry_after=error.retry_after)
         except Unsupported:
@@ -665,8 +730,9 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(503, b'{"status":"unavailable"}', "application/json", retry_after=5)
 
     def do_POST(self):
-        match = ROUTE.fullmatch(urllib.parse.urlsplit(self.path).path)
-        if not match or match.group(3) != "prepare":
+        path = urllib.parse.urlsplit(self.path).path
+        match = ROUTE.fullmatch(path)
+        if path != "/previews/cancel" and (not match or match.group(3) != "prepare"):
             return self.reply(404)
         try:
             self.connection.settimeout(5)
@@ -678,6 +744,13 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(length))
             if not isinstance(data, dict):
                 raise ValueError("body")
+            if not match:
+                # {"client": ID, "n": optional counter}: release that client's job.
+                client, n = data.get("client"), data.get("n")
+                if not isinstance(client, str) or not CLIENT.fullmatch(client) or (n is not None and (type(n) is not int or not 0 <= n < 10 ** 15)):
+                    raise ValueError("cancel")
+                cancel_client(client, n)
+                return self.reply(202, b'{"status":"accepted"}', "application/json")
             playback(match.group(1), int(match.group(2)), data.get("client"), data.get("state"), data.get("seq"))
             self.reply(202, b'{"status":"accepted"}', "application/json")
         except (ValueError, TypeError):

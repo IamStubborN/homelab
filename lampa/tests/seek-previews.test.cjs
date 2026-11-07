@@ -7,7 +7,11 @@ const hash = 'a'.repeat(40);
 // Production always requests metadata?step=10 and the worker echoes step 10.
 const info = {version: 1, step: 10, duration: 120, chapters: [{start: 10, end: 20, title: '<Scene>'}]};
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
-const frameUrl = (index, slot) => new RegExp(`^/previews/${hash}/${index}/frame/${slot}\\.jpg\\?step=10&client=[A-Za-z0-9_-]{8,64}$`);
+const frameUrl = (index, slot) => new RegExp(`^/previews/${hash}/${index}/frame/${slot}\\.jpg\\?step=10&client=[A-Za-z0-9_-]{8,64}&n=\\d+$`);
+const owner = call => /client=([^&]+)/.exec(call.url)[1];
+const order = call => Number(/&n=(\d+)/.exec(call.url)[1]);
+const withoutOrder = call => call.url.replace(/&n=\d+$/, '');
+const cancels = h => h.calls.filter(call => call.url === '/previews/cancel');
 const jpeg = {type: 'image/jpeg', size: 100};
 
 // Selectors of Lampa's native player panel template (app.min.js html$25).
@@ -94,7 +98,9 @@ function trackVideo(h, options = {}) {
   const events = {};
   h.video.readyState = 4; h.video.paused = false;
   h.video.addEventListener = (name, fn) => { (events[name] ||= []).push(fn); };
-  if (!options.wrapper) h.video.removeEventListener = (name, fn) => { events[name] = (events[name] || []).filter(item => item !== fn); };
+  // Lampa's Tizen/Orsay wrappers are <object> elements: the native
+  // removeEventListener exists but cannot remove Lampa Subscribe listeners.
+  h.video.removeEventListener = options.wrapper ? () => {} : (name, fn) => { events[name] = (events[name] || []).filter(item => item !== fn); };
   const emit = name => (events[name] || []).slice().forEach(fn => fn());
   return {events, emit, count: () => Object.values(events).reduce((sum, list) => sum + list.length, 0)};
 }
@@ -157,15 +163,22 @@ test('rapid scrub requests only the final ten-second frame and never displays a 
   h.tick(1); assert.match(h.calls[1].url, frameUrl(1, 6));
   assert.equal(h.overlay().find('.homelab-seek-preview__label').textValue, '01:00');
   h.ready(2); assert.equal(h.calls[1].signal.aborted, true);
+  assert.equal(cancels(h).length, 1, 'changing files releases the old job on the worker');
+  assert.deepEqual(JSON.parse(cancels(h)[0].options.body), {client: owner(h.calls[1]), n: order(h.calls[1]) + 1});
+  assert.equal(cancels(h)[0].options.keepalive, true);
   h.calls[1].finish(jpeg); await flush();
   assert.equal(h.objects.length, 0, 'old-file response cannot become current thumbnail');
-  h.calls[2].finish(info); await flush();
+  h.calls.find(call => call.url.includes('/2/metadata')).finish(info); await flush();
   h.rewind(44); h.tick(450);
-  assert.match(h.calls[3].url, frameUrl(2, 4));
-  assert.notEqual(h.calls[3].url.split('client=')[1], h.calls[1].url.split('client=')[1], 'each file has its own request owner');
-  h.calls[3].finish(jpeg); await flush();
+  const next = h.frames().at(-1);
+  assert.match(next.url, frameUrl(2, 4));
+  assert.equal(owner(next), owner(h.calls[1]), 'one owner for the plugin lifetime supersedes across files');
+  assert.ok(order(next) > JSON.parse(cancels(h)[0].options.body).n, "the counter keeps rising after a cancel");
+  next.finish(jpeg); await flush();
   assert.equal(h.objects.length, 1);
   h.fire('player:destroy'); assert.deepEqual(h.revoked, ['blob:1']);
+  assert.equal(cancels(h).length, 2, 'closing playback releases the pending job');
+  h.ready(3); assert.equal(cancels(h).length, 2, 'files without frame requests send no cancel');
 });
 
 test('chapters navigate explicitly; toggling previews prevents new decoder requests', async t => {
@@ -195,7 +208,7 @@ test('mobile preview uses the native rendered target and survives a quick releas
   h.panel.events['touchmove.homelabPreview']({});
   h.panel.events['touchend.homelabPreview']();
   h.tick(1500); assert.equal(h.overlay().hidden, true);
-  h.fire('player:destroy'); h.tick(60000); assert.equal(h.calls.length, 2);
+  h.fire('player:destroy'); h.tick(60000); assert.equal(h.frames().length, 1);
 });
 
 test('an unprepared slot shows the nearest cached frame as a placeholder', async t => {
@@ -331,12 +344,21 @@ test('busy frames retry while stationary and are cancelled by another file', asy
   const h = harness(t); h.ready(); h.calls[0].finish(info); await flush();
   h.fire('panel:mouse_rewind', {method: 'move', percent: .5}); h.tick(450);
   h.calls[1].finish(null, 503); await flush(); h.tick(1000);
-  assert.equal(h.calls.length, 3); assert.equal(h.calls[2].url, h.calls[1].url);
+  assert.equal(h.calls.length, 3); assert.equal(withoutOrder(h.calls[2]), withoutOrder(h.calls[1]));
+  assert.ok(order(h.calls[2]) > order(h.calls[1]), 'every poll carries a newer counter');
   h.calls[2].finish(null, 429); await flush(); h.tick(2000);
   assert.equal(h.calls.length, 4);
   h.calls[3].finish(jpeg); await flush(); assert.equal(h.objects.length, 1);
   h.fire('panel:mouse_rewind', {method: 'move', percent: .7}); h.tick(450); h.calls[4].finish(null, 503); await flush();
-  h.ready(2); h.tick(10000); assert.equal(h.calls.length, 6, 'stale retry cannot request another file frame');
+  h.ready(2); h.tick(10000); assert.equal(h.frames().length, 4, 'stale retry cannot request another file frame');
+});
+
+test('the first busy retry honours Retry-After', async t => {
+  const h = harness(t); h.ready(); h.calls[0].finish(info); await flush();
+  h.fire('panel:mouse_rewind', {method: 'move', percent: .5}); h.tick(450);
+  h.frames()[0].finish(null, 503, {'Retry-After': '4'}); await flush();
+  h.tick(3999); assert.equal(h.frames().length, 1);
+  h.tick(1); assert.equal(h.frames().length, 2);
 });
 
 test('failed and invalid frames are not polled; the worker backoff is honoured', async t => {
@@ -420,10 +442,9 @@ test('native GST video replacement pauses preparation before the first new frame
   assert.equal(body(h.calls[3]).state, 'buffering');
 });
 
-test('native wrappers without readyState or removeEventListener still report and detach', async t => {
-  // Lampa's Tizen AVPlay/Orsay wrappers only define addEventListener.
+test('native wrappers whose listeners cannot be removed still report and go inert on close', async t => {
   const h = harness(t), video = trackVideo(h, {wrapper: true});
-  delete h.video.readyState; delete h.video.removeEventListener;
+  delete h.video.readyState;
   h.ready(); h.calls[0].finish(info); video.emit('playing');
   assert.equal(body(h.calls[1]).state, 'playing');
   h.calls[1].finish({}, 202); await flush(); h.tick(15000);

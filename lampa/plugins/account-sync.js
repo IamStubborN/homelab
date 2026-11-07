@@ -1,5 +1,13 @@
-(function () {
+(function install() {
   'use strict';
+  // Public methods exist before native storage, favorites and menu are initialized.
+  if (!window.appready) {
+    var listener = window.Lampa && window.Lampa.Listener;
+    if (listener && typeof listener.follow === 'function') listener.follow('app', function (event) {
+      if (event.type === 'ready') install();
+    });
+    return;
+  }
 
   if (window.homelabAccountSync) return;
   window.homelabAccountSync = true;

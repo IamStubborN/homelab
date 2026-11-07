@@ -8,6 +8,11 @@
     var pausedWork = null;
     var generation = 0;
     var preferenceKey = 'homelab_gst_track_preferences';
+    var phaseListeners = [];
+    var retryWork = null;
+    function phase(name, work) {
+      phaseListeners.slice().forEach(function (fn) { try { fn({type: name, work: work}); } catch (_) {} });
+    }
 
     // Playback events for `docker logs lampa-extaudio`: a page session, the
     // torrent hash prefix, the file and the position, never a URL's query.
@@ -319,6 +324,7 @@
         function finishFailure() {
           if (disposed || terminated) return;
           terminated = true;
+          phase('failed', work);
           clearDeadline();
           clearTimeout(timer);
           timer = null;
@@ -358,6 +364,7 @@
             timer = null;
             retries = 0;
             lastError = null;
+            phase('buffered', work);
           }
         });
         listen(BaseHls.Events.ERROR, function (name, data) {
@@ -406,6 +413,7 @@
           var reload = /^manifest/.test(data.details) || status === 404;
           console.warn('Homelab HLS recovery:', data.details, 'HTTP', status, 'attempt', retries);
           report('hls-recovery', {details: data.details, status: status, attempt: retries, reload: reload}, work);
+          phase('recovering', work);
           timer = setTimeout(function () {
             timer = null;
             if (disposed || terminated || Lampa.Player.playdata() !== work) return;
@@ -528,6 +536,7 @@
       stored[hash] = state.preferences;
       Object.keys(stored).slice(0, -50).forEach(function (key) { delete stored[key]; });
       Lampa.Storage.set(preferenceKey, stored);
+      phase('preferences', state.work);
     }
 
     function clear() {
@@ -662,11 +671,11 @@
       } catch (error) { return null; }
     }
 
-    function selectTrack(state, track, automatic) {
+    function selectTrack(state, track, automatic, retry) {
       if (active !== state || Lampa.Player.playdata() !== state.work) return;
       var url = masterUrl(state.work);
-      if (!automatic) remember(state, 'audio', identity(track));
-      if (!url || track === selectedTrack(state, url)) return cancelPreparation(state);
+      if (!automatic && !retry) remember(state, 'audio', identity(track));
+      if (!url || (!retry && track === selectedTrack(state, url))) return cancelPreparation(state);
       if (track.external && track.unsupported && automatic) return;
       if (track.external && !track.ready) return prepareExternal(state, track, automatic);
       cancelPreparation(state);
@@ -683,6 +692,7 @@
         rate: oldVideo.playbackRate
       };
       state.pendingPlayback = saved;
+      if (retry) { if (state.work.homelab_torrent_hash) url.searchParams.set('uid', newSessionId()); phase('preparing', state.work); }
       if (state.subtitles && !state.preferences.subtitles) {
         var selectedSubtitle = state.subtitles.find(function (sub) { return sub.mode === 'showing'; });
         state.restoreSubtitle = selectedSubtitle ? identity(selectedSubtitle) : {off: true};
@@ -699,6 +709,10 @@
       }
       state.work.url = url.href;
       state.tracks.forEach(function (item) { item.selected = item === track; });
+      replaceVideo(state, url, saved);
+    }
+
+    function replaceVideo(state, url, saved) {
       Lampa.PlayerVideo.destroy(true);
       Lampa.PlayerVideo.url(url.href, true);
       ownStream(state, url);
@@ -712,6 +726,7 @@
         clearTimeout(pauseTimer);
         video.muted = saved.muted;
         if (keepSnapshot !== true && state.pendingPlayback === saved) state.pendingPlayback = null;
+        if (restored && keepSnapshot !== true) delete state.work.homelab_retry_playback;
         video.removeEventListener('loadedmetadata', restoreTime);
         video.removeEventListener('canplay', finish);
         video.removeEventListener('playing', keepPaused);
@@ -753,7 +768,7 @@
       timer = setTimeout(cleanup, 60000);
       // Restore playback after a manual choice or a remembered episode preference.
       restoreTime();
-      Lampa.PlayerPanel.setTracks(state.tracks);
+      if (state.tracks) Lampa.PlayerPanel.setTracks(state.tracks);
     }
 
     // Renditions are encoded from the playback position, so tell the sidecar
@@ -1717,7 +1732,8 @@
       };
       report('play-start', {audio: Number(url.searchParams.get('audio') || 0)}, work);
       var stored = Lampa.Storage.get(preferenceKey, {});
-      state.preferences = stored && stored[String(work.homelab_torrent_hash || work.torrent_hash)] || {};
+      state.preferences = work.homelab_track_preferences || stored && stored[String(work.homelab_torrent_hash || work.torrent_hash)] || {};
+      work.homelab_track_preferences = state.preferences;
       var revision = generation;
       var probe = new URL(url.href);
       probe.pathname = probe.pathname.replace(/(?:master|start)\.m3u8$/, 'probe');
@@ -1855,8 +1871,49 @@
       if (active) report('play-stop', {}, active.work);
       pausedWork = null;
       clear();
+      if (retryWork) delete retryWork.homelab_retry_playback;
+      retryWork = null;
     });
-    Lampa.HomelabGstAudio = {installCurrent: installCurrent, toggleSigns: toggleSigns};
+    Lampa.HomelabGstAudio = {installCurrent: installCurrent, toggleSigns: toggleSigns,
+      preferences: function (work) {
+        var state = active, url = masterUrl(work);
+        if (!state || state.work !== work || !url) return work && work.homelab_track_preferences || {};
+        var result = Object.assign({}, state.preferences), track = selectedTrack(state, url);
+        if (track) result.audio = identity(track);
+        if (!result.subtitles && (state.subtitleList || state.subtitles)) {
+          var shown = (state.subtitleList || state.subtitles).find(function (sub) { return sub.mode === 'showing'; });
+          result.subtitles = shown ? identity(shown) : {off: true};
+        }
+        return result;
+      },
+      subscribe: function (fn) { phaseListeners.push(fn); return function () { phaseListeners = phaseListeners.filter(function (value) { return value !== fn; }); }; },
+      retryCurrent: function () {
+        var work = Lampa.Player.playdata(), url = masterUrl(work), old = Lampa.PlayerVideo.video();
+        if (!url || !old) return false;
+        var saved = active && active.pendingPlayback || ((old.readyState < 1 || old.error) && work.homelab_retry_playback) || {time: Number(old.currentTime) || 0, paused: old.paused,
+          volume: old.volume, muted: old.muted, rate: old.playbackRate};
+        work.homelab_retry_playback = saved; retryWork = work;
+        if (work.homelab_torrent_hash) url.searchParams.set('uid', newSessionId());
+        work.url = url.href;
+        if (!active) installCurrent();
+        var state = active;
+        if (!state || state.work !== work) return false;
+        if (state.cancelRestore) state.cancelRestore(true);
+        state.pendingPlayback = saved;
+        phase('preparing', work);
+        var track = selectedTrack(state, url);
+        if (track) selectTrack(state, track, true, true);
+        else {
+          if (work.homelab_external_audio) {
+            var external = new URL(work.homelab_external_audio.url, window.location.href);
+            external.searchParams.set('at', Math.floor(saved.time)); work.homelab_external_audio.url = external.href;
+          }
+          replaceVideo(state, url, saved);
+        }
+        return true;
+      }
+    };
+    if (typeof window.dispatchEvent === 'function' && window.CustomEvent) window.dispatchEvent(new window.CustomEvent('homelab:audio-ready'));
     updateSignsToggle();
   }
 

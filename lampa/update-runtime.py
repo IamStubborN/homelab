@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -24,6 +25,7 @@ MOUNTS = {
     "/lampac/module/LampaWeb/plugins/lampainit-invc.js": ("config/lampainit-invc.js", True),
     "/lampac/wwwroot/plugins/homelab": ("plugins", True),
     "/lampac/mods/Tracks": ("mods/Tracks", True),
+    "/lampac/mods/HomelabSync": ("mods/HomelabSync", True),
     "/lampac/cache": ("cache", False),
     "/lampac/database": ("database", False),
     "/lampac/logs": ("logs", False),
@@ -236,24 +238,17 @@ def stage(root, state):
     print("Staged " + generation + ". Run check next.")
 
 
-def check(root, state, record):
-    require(record["phase"] in ("staged", "checked"), "Check requires a staged candidate.")
-    model, container, mounts = current(root)
-    require(fingerprint(model, container, mounts, root) == record["fingerprint"],
-            "Deployment changed since stage. Stage again.")
-    record["phase"] = "staged"
-    save(state / "pending.json", record)
-    image = inspect("image", record["candidate"])
-    require(startup_contract(image["Config"]) == startup_contract(container["Config"]),
-            "Candidate startup contract differs from the validated baseline image/runtime.")
+def probe_candidate(root, state, record, extension):
     directory = state / record["generation"]
     probe = directory / ("probe-" + uuid.uuid4().hex[:8])
     probe.mkdir(mode=0o700)
-    # The canary never sees production secrets, plugins, databases or cache.
+    # Only our extension source is copied; no household config, data or credentials.
     config = probe / "init.conf"
+    modules = ["LampaWeb", "HomelabSync"]
     save(config, {"listen": {"version": True, "ip": "127.0.0.1", "port": 9118},
                   "chromium": {"enable": False}, "gst": {"enable": False},
-                  "BaseModule": {"LoadModules": ["LampaWeb"]}})
+                  "LampaWeb": {"autoupdate": False},
+                  "BaseModule": {"LoadModules": modules}})
     os.chown(config, 1000, 1000)
     password = probe / "passwd"
     password.write_text(uuid.uuid4().hex + uuid.uuid4().hex + "\n")
@@ -266,6 +261,15 @@ def check(root, state, record):
             "--entrypoint", "/usr/share/dotnet/dotnet"]
     for filename in ("init.conf", "passwd"):
         args += ["--mount", "type=bind,source=" + str(probe / filename) + ",target=/lampac/" + filename + ",readonly"]
+    module = probe / "HomelabSync"
+    shutil.copytree(root / "lampa/mods/HomelabSync", module)
+    manifest = load(module / "manifest.json")
+    manifest["enable"] = extension
+    (module / "manifest.json").write_text(json.dumps(manifest))
+    # Bind root is resolved by Docker; its own contents must be readable by UID 1000.
+    for path in [module, *module.rglob("*")]:
+        os.chmod(path, 0o755 if path.is_dir() else 0o644)
+    args += ["--mount", "type=bind,source=" + str(module) + ",target=/lampac/mods/HomelabSync,readonly"]
     # Keep image-bundled data (including offline Cloudflare IP lists) visible.
     # It remains in the disposable container layer, never a production bind.
     for subdir in ("cache", "database", "logs"):
@@ -278,19 +282,38 @@ def check(root, state, record):
         docker(*args, record["candidate"], "Core.dll")
         created = True
         docker("start", name)
-        require(http_ready(name),
-                "Candidate startup/local HTTP probe failed; inspect private check.log.")
+        endpoints = ("/version?type=hash", "/homelab-sync.js", "/homelab-sync/resume?uid=homelab-check") if extension else ("/version?type=hash",)
+        return http_ready(name, endpoints)
     finally:
         if created:
             try:
                 docker("logs", name, log=probe / "check.log")
             finally:
                 docker("rm", "--force", "--volumes", name)
+
+
+def check(root, state, record):
+    require(record["phase"] in ("staged", "checked"), "Check requires a staged candidate.")
+    model, container, mounts = current(root)
+    require(fingerprint(model, container, mounts, root) == record["fingerprint"],
+            "Deployment changed since stage. Stage again.")
+    record["phase"] = "staged"
+    save(state / "pending.json", record)
+    image = inspect("image", record["candidate"])
+    require(startup_contract(image["Config"]) == startup_contract(container["Config"]),
+            "Candidate startup contract differs from the validated baseline image/runtime.")
+    extension = probe_candidate(root, state, record, extension=True)
+    if not extension:
+        require(probe_candidate(root, state, record, extension=False),
+                "Candidate core startup failed even without HomelabSync; inspect private check logs.")
+    record["homelab_sync_enabled"] = extension
     require(fingerprint(*current(root), root) == record["fingerprint"],
             "Deployment changed during check. Stage again.")
     record["phase"] = "checked"
     save(state / "pending.json", record)
-    print("Candidate startup passed in network isolation. GPU and playback remain unverified.")
+    print("Candidate startup passed in network isolation; HomelabSync " +
+          ("compatible." if extension else "incompatible and will be disabled for this candidate."))
+    print("GPU and playback remain unverified.")
 
 
 def frozen_model(model, image):
@@ -321,6 +344,8 @@ def recreate(root, model_file, directory):
 
 def apply(root, state, record):
     require(record["phase"] == "checked", "Apply requires a successful check.")
+    require(isinstance(record.get("homelab_sync_enabled"), bool),
+            "Recheck the candidate to determine optional extension compatibility.")
     model, container, mounts = current(root)
     require(fingerprint(model, container, mounts, root) == record["fingerprint"],
             "Deployment changed after check. Stage and check again.")
@@ -342,6 +367,15 @@ def apply(root, state, record):
     save(state / "pending.json", record)
     require(fingerprint(*current(root), root) == record["fingerprint"],
             "Deployment changed while backing up. Roll back before staging again.")
+    manifest_path = root / "lampa/mods/HomelabSync/manifest.json"
+    manifest = load(manifest_path)
+    manifest["enable"] = record["homelab_sync_enabled"]
+    # Preserve ownership/mode; rollback's full source snapshot precedes this change.
+    with manifest_path.open("w") as stream:
+        json.dump(manifest, stream, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
     docker("image", "tag", record["candidate"], LIVE_TAG)
     # Use the real root files so normal root Compose remains the deployment owner.
     run(compose(root) + ["up", "-d", "--no-deps", "--no-build", "--pull", "never", "--force-recreate", "lampa"],

@@ -214,7 +214,11 @@ fi
 
 if tool apply --maintenance-window && healthy; then
   rm -f "$AUTO/failed-upstream"
-  notify "Lampac обновлён до новой версии upstream."
+  if [ "$(pending homelab_sync_enabled)" = False ]; then
+    notify "Lampac обновлён. Надстройка «История дома» несовместима с этой версией и отключена; остальные функции работают."
+  else
+    notify "Lampac обновлён до новой версии upstream."
+  fi
   cleanup
   exit 0
 fi

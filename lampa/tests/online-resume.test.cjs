@@ -1,0 +1,224 @@
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const {harness, flush} = require('./ux-harness.cjs');
+
+function setup(t) {
+  const h = harness(t), registry = {}, choices = {}, starts = [];
+  let active = null, requests = [], draws = [];
+  function Native(object) {
+    this.getChoice = provider => choices[provider] || {};
+    this.replaceChoice = (data, provider) => { choices[provider] = {...choices[provider], ...data}; };
+    this.startSource = function () { assert.equal(this, component); h.L.Storage.set('active_balanser', 'kinobase'); return Promise.resolve(); };
+    this.toPlayElement = file => ({url: file.url, title: file.title, timeline: {hash: '123', percent: 42, time: 50}, season: file.season, episode: file.episode});
+    this.getFileUrl = (file, done) => { requests.push(() => done({url: 'fresh-url'})); };
+    this.setDefaultQuality = work => { if (work.quality) work.url = work.quality['2160p']; };
+    this.draw = (items, params) => { draws.push(() => items.forEach(file => { file.timeline = {hash: '123'}; file.mark = () => {}; params.onRender?.(file, {}, {}); })); };
+    this.destroy = () => {};
+  }
+  registry.lampac = Native;
+  h.L.Component = {get: name => registry[name], add: (name, ctor) => { registry[name] = ctor; }};
+  h.L.Activity = {active: () => active, push(object) { active = object; component = new registry[object.component](object); }};
+  let component;
+  h.run('mods/HomelabSync/online.js');
+  const item = {card: 'tv_42', season: 2, episode: 3, position: 71, online: {provider: 'kinobase', voice: 'Preferred', season_index: 1}};
+  const movie = {id: 42, name: 'Series', source: 'tmdb', original_title: "Original's series", number_of_seasons: 2};
+  return {...h, item, movie, choices, starts, registry,
+    async open(value = item) { assert.equal(h.window.HomelabOnlineResume.resume(value, movie, () => starts.push('timeout')), true); await component.startSource(); return component; },
+    component: () => component, render() { draws.shift()(); }, resolve() { requests.shift()(); },
+    draw(items) { component.draw(items, {onEnter(file) { starts.push(file); component.getFileUrl(file, () => { h.L.Player.play(component.toPlayElement(file)); }); }}); },
+    active: value => { active = value; },
+  };
+}
+const file = (episode = 3, voice = 'Preferred') => ({season: 2, episode, voice_name: voice, title: 'Episode', url: 'ephemeral-url'});
+
+test('native online receives the TV display title instead of an Explorer placeholder without mutating the caller', async t => {
+  const h = setup(t);
+  h.movie.title = 'Фильм не найден';
+  await h.open();
+  assert.equal(h.L.Activity.active().movie.title, 'Series');
+  assert.equal(h.L.Activity.active().movie.name, 'Series');
+  assert.equal(h.L.Activity.active().movie.original_title, "Original's series");
+  assert.equal(h.movie.title, 'Фильм не найден');
+});
+
+test('online capture attaches only stable source identity and card to all native playlist works', async t => {
+  const h = setup(t), c = await h.open();
+  const first = c.toPlayElement(file()), next = c.toPlayElement(file(4));
+  assert.equal(first.card.id, 42); assert.equal(next.card.id, 42);
+  assert.deepEqual({...first.homelab_online}, {provider: 'kinobase', voice: 'Preferred', season_index: 1});
+  assert.ok(!JSON.stringify(first.homelab_online).includes('url'));
+  assert.equal(first.homelab_resume_at, undefined, 'rendering alone does not apply a resume point');
+});
+
+test('native fresh resolution starts only after asynchronous rendering and matching voice/episode', async t => {
+  const h = setup(t); await h.open(); h.draw([file(2), file(), file(4)]);
+  h.tick(0); assert.equal(h.starts.length, 0);
+  h.render(); assert.equal(h.starts.length, 0, 'do not launch midway through the native loop');
+  h.tick(0); assert.equal(h.starts.length, 1); assert.equal(h.work(), null);
+  h.resolve(); assert.equal(h.work().homelab_resume_at, 71);
+  assert.equal(h.work().timeline.percent, 0); assert.equal(h.work().timeline.time, 0, 'prevent an earlier native ask-to-continue prompt');
+  assert.equal(h.component().toPlayElement(file()).homelab_resume_at, undefined, 'one-shot resume does not stick to a playlist sibling');
+});
+
+test('a missing exact voice or provider cannot autoplay a different source', async t => {
+  const h = setup(t); await h.open(); h.draw([file(3, 'Different')]); h.render(); h.tick(0);
+  assert.deepEqual(h.starts, ['timeout'], 'a known mismatch invokes the owned failure callback instead of playing a different voice');
+  h.tick(60000); assert.deepEqual(h.starts, ['timeout'], 'failure is reported exactly once'); assert.equal(h.work(), null);
+});
+
+test('late native source responses cannot launch after profile change or cancellation', async t => {
+  const h = setup(t); await h.open(); h.draw([file()]); h.render(); h.tick(0); assert.equal(h.starts.length, 1);
+  h.profile('other'); h.resolve(); assert.equal(h.work(), null);
+});
+
+test('leaving the online activity prevents a delayed automatic selection', async t => {
+  const h = setup(t); await h.open(); h.draw([file()]); h.render(); h.active({component: 'main'}); h.tick(0);
+  assert.equal(h.starts.length, 0);
+});
+
+test('timeout cancels automatic playback even if a native resolver eventually replies', async t => {
+  const h = setup(t); await h.open(); h.draw([file()]); h.render(); h.tick(0); h.tick(60000); h.resolve();
+  assert.equal(h.work(), null); assert.equal(h.starts.at(-1), 'timeout');
+});
+
+test('online and torrent observations replace the same card without retaining previous-source fields', async t => {
+  const h = setup(t); h.run('mods/HomelabSync/continue.js');
+  h.start({card: h.movie, season: 2, episode: 3, timeline: {hash: '123'}, homelab_torrent_hash: 'a'.repeat(40), homelab_file_index: 3});
+  h.video().currentTime = 20; h.videoEvent('timeupdate'); h.calls[0].finish({success: true}); await flush();
+  h.start({card: h.movie, season: 2, episode: 4, timeline: {hash: '456'}, homelab_online: h.item.online});
+  h.video().currentTime = 30; h.videoEvent('timeupdate');
+  const online = JSON.parse(h.calls.at(-1).options.body); assert.equal(online.kind, 'online'); assert.equal(online.torrent, null); assert.equal(online.index, 0); assert.equal(online.original, "Original's series");
+  assert.equal(h.window.homelabContinue.list()[0].episode, 4); assert.equal(h.window.homelabContinue.list()[0].kind, 'online');
+});
+
+test('native cards clean up old instances when refreshed and keep one source of progress', async t => {
+  const h = setup(t); h.run('mods/HomelabSync/continue.js');
+  let model; h.rows[0].call()(value => { model = value; }); h.calls[0].finish({version: 1, items: [{...h.item, duration: 120, observed: Date.now(), title: 'Series'}]}); await flush();
+  const row = model.params.createInstance(); row.create(); const card = h.elements.find(x => x.classes.has('homelab-resume-card')); assert.ok(card);
+  row.destroy(); assert.equal(card.removed, true);
+});
+
+
+test('manual playback of another episode retires the outstanding automatic continuation', async t => {
+  const h = setup(t); await h.open(); h.draw([file()]); h.render(); h.tick(0);
+  h.L.Player.play(h.component().toPlayElement(file(4))); h.tick(60000); h.resolve();
+  assert.equal(h.work().episode, 4); assert.ok(!h.starts.includes('timeout'));
+});
+
+test('a departed activity or profile receives no stale timeout notification', async t => {
+  const h = setup(t); await h.open(); h.active({component: 'main'}); h.tick(60000);
+  assert.ok(!h.starts.includes('timeout'));
+});
+
+test('common source selection uses exact provider/voice/episode without overwriting native progress and honors chosen quality', async t => {
+  const h = setup(t);
+  assert.equal(h.window.HomelabOnlineResume.select({provider: 'kinobase', identityVoice: 'Preferred', seasonIndex: 1}, h.movie, {season: 2, episode: 3}, 1080), true);
+  const c = h.component(); await c.startSource();
+  h.draw([file(2), file(), file(4)]); h.render(); h.tick(0); h.resolve();
+  assert.equal(h.work().episode, 3); assert.equal(h.work().homelab_resume_at, undefined);
+  assert.equal(h.work().timeline.time, 50, 'manual source selection keeps the native continuation policy');
+  const work = {quality: {'2160p': 'fresh-4k', '1080p': 'fresh-fhd'}};
+  c.setDefaultQuality(work); assert.equal(work.url, 'fresh-fhd');
+  assert.deepEqual(Object.keys(work.quality), ['1080p'], 'native Player.play cannot reapply its 2160p global default');
+  const next = c.toPlayElement(file(4)); assert.equal(next.homelab_online.provider, 'kinobase');
+});
+
+
+test('recovery selection resolves a fresh exact source and attaches position plus original duration once', async t => {
+  const h = setup(t);
+  assert.equal(h.window.HomelabOnlineResume.select({provider: 'kinobase', identityVoice: 'Preferred', seasonIndex: 1}, h.movie, {season: 2, episode: 3}, 1080, {scope: 'a', position: 71, duration: 120}), true);
+  await h.component().startSource(); h.draw([file()]); h.render(); h.tick(0); h.resolve();
+  assert.equal(h.work().homelab_resume_at, 71); assert.equal(h.work().homelab_resume_from_duration, 120);
+  assert.equal(h.component().toPlayElement(file(4)).homelab_resume_at, undefined);
+  assert.equal(h.window.HomelabOnlineResume.select({provider: 'kinobase', identityVoice: 'Preferred', seasonIndex: 1}, h.movie, {season: 2, episode: 3}, 1080, {scope: 'other', position: 71, duration: 120}), false);
+});
+
+test('continue navigates away from home when the saved online source cannot be launched', t => {
+  const h = setup(t); h.run('mods/HomelabSync/continue.js'); delete h.registry.lampac;
+  h.window.homelabContinue.resume({...h.item, kind:'online', title:'Series', duration:120});
+  assert.equal(h.L.routed?.name, 'full', 'a toast alone must never strand the user on home when the picker is unavailable');
+  assert.equal(h.L.routed.value.id, 42);
+});
+
+test('first-season continuation accepts a zero season index omitted by the API serializer', async t => {
+  const h = setup(t), source = {provider:'kinobase',voice:'Preferred'};
+  assert.equal(h.window.HomelabOnlineResume.valid(source), true, 'omitted int default must mean native season index zero');
+  const c = await h.open({...h.item, season:1, episode:3, online:source});
+  assert.equal(h.choices.kinobase.season, 0);
+  h.draw([{...file(),season:1}]); h.render(); h.tick(0); h.resolve();
+  assert.equal(h.work().homelab_resume_at, 71); assert.equal(h.work().homelab_online.season_index, 0);
+});
+
+test('wire-default compatibility does not accept explicit corrupt season indices', t => {
+  const h = setup(t);
+  for (const season_index of [-1, 1.5, '0', false, '', null, 1000, NaN]) assert.equal(h.window.HomelabOnlineResume.valid({provider:'kinobase',voice:'Preferred',season_index}), false);
+});
+
+test('an online launch failure opens the source picker with the saved item instead of stranding home', t => {
+  const h = setup(t), picked=[]; h.run('mods/HomelabSync/continue.js'); delete h.registry.lampac;
+  h.window.HomelabSources={resume(item,movie){picked.push({item,movie});return true}};
+  h.window.homelabContinue.resume({...h.item,kind:'online',title:'Series',duration:120});
+  assert.equal(picked.length,1); assert.equal(picked[0].item.position,71); assert.equal(picked[0].item.episode,3); assert.equal(picked[0].movie.id,42);
+  assert.equal(h.notices.length,0); assert.equal(h.L.routed,undefined);
+});
+
+test('a source timeout opens the picker once; later metadata and other profiles cannot cause another redirect', t => {
+  const h = setup(t), picked=[]; h.run('mods/HomelabSync/continue.js');
+  h.window.HomelabSources={resume(item,movie){picked.push({item,movie});return true}};
+  h.window.homelabContinue.resume({...h.item,kind:'online',title:'Series',duration:120});
+  h.tick(60000); assert.equal(picked.length,1); h.tick(60000); assert.equal(picked.length,1);
+  h.window.homelabContinue.resume({...h.item,kind:'online',title:'Series',duration:120});
+  h.profile('other'); h.tick(60000); assert.equal(picked.length,1);
+});
+
+test('leaving home during metadata resolution or starting another video suppresses stale failure navigation', t => {
+  const h=setup(t),picked=[];let done;h.L.Api.sources.tmdb.get=(path,p,complete)=>{done=complete};h.run('mods/HomelabSync/continue.js');delete h.registry.lampac;
+  h.window.HomelabSources={resume(){picked.push(true);return true}};
+  h.window.homelabContinue.resume({...h.item,kind:'online',title:'Series',duration:120});h.active({component:'full'});done(h.movie);h.tick(5000);assert.equal(picked.length,0);
+  h.window.homelabContinue.resume({...h.item,kind:'online',title:'Series',duration:120});h.start({card:h.movie});done(h.movie);h.tick(5000);assert.equal(picked.length,0);
+});
+
+test('a saved voice mismatch opens Continue recovery once with its exact position and episode', async t => {
+  const h = setup(t), recovered = []; h.run('mods/HomelabSync/continue.js');
+  h.registry.homelab_sources = function () {};
+  h.window.HomelabSources = {resume(item, movie) { recovered.push({item, movie}); h.L.Activity.push({component: 'homelab_sources'}); return true; }};
+  h.window.homelabContinue.resume({...h.item, kind: 'online', title: 'Series', duration: 120});
+  await h.component().startSource(); h.draw([file(3, 'Different')]); h.render(); h.tick(0); h.tick(60000);
+  assert.equal(recovered.length, 1); assert.equal(recovered[0].item.position, 71); assert.equal(recovered[0].item.episode, 3);
+  assert.equal(h.L.Activity.active().component, 'homelab_sources'); assert.equal(h.work(), null);
+});
+
+test('a stale mismatch cannot redirect a different activity or profile', async t => {
+  const h = setup(t); await h.open(); h.draw([file(3, 'Different')]); h.render(); h.active({component: 'main'}); h.tick(0); h.tick(60000);
+  assert.deepEqual(h.starts, []);
+  await h.open(); h.draw([file(3, 'Different')]); h.render(); h.profile('other'); h.tick(0); h.tick(60000);
+  assert.deepEqual(h.starts, []);
+});
+
+for (const season of [null, '', false]) test(`Specials continuation rejects an unknown native season ${JSON.stringify(season)}`, async t => {
+  const h = setup(t); await h.open({...h.item, season: 0});
+  h.draw([{...file(), season}]); h.render(); h.tick(0);
+  assert.deepEqual(h.starts, []); assert.equal(h.work(), null);
+});
+
+test('an explicit native integer season zero still continues the exact Specials episode', async t => {
+  const h = setup(t); await h.open({...h.item, season: 0});
+  h.draw([{...file(), season: 0}]); h.render(); h.tick(0); h.resolve();
+  assert.equal(h.work().season, 0); assert.equal(h.work().episode, 3); assert.equal(h.work().homelab_resume_at, 71);
+});
+
+test('movie continuation does not require TV season or episode metadata', async t => {
+  const h = setup(t); delete h.movie.name; h.movie.title = 'Film';
+  await h.open({...h.item, card: 'movie_42', season: 0, episode: 0});
+  h.draw([{voice_name: 'Preferred', title: 'Film', url: 'ephemeral-url'}]); h.render(); h.tick(0); h.resolve();
+  assert.equal(h.work().card.title, 'Film'); assert.equal(h.work().homelab_resume_at, 71);
+});
+
+test('unknown native episode identities cannot autoplay as episode one', async t => {
+  const h = setup(t);
+  for (const episode of [null, '', false, true]) {
+    await h.open({...h.item, season: 0, episode: 1});
+    h.draw([{...file(), season: 0, episode}]); h.render(); h.tick(0);
+    assert.deepEqual(h.starts, []); assert.equal(h.work(), null);
+  }
+});

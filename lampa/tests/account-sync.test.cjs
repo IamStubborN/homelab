@@ -4,11 +4,11 @@ const vm = require('node:vm');
 const { test } = require('node:test');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../plugins/account-sync.js'), 'utf8');
 
-function harness() {
+function harness({ready = true} = {}) {
   const events = {};
   const timers = new Map();
   const calls = [];
-  let now = 0, id = 0, bookmarks = [], done;
+  let now = 0, id = 0, bookmarks = [], done, bookmarkReads = 0, intervalCount = 0;
   const listen = prefix => ({ follow(name, fn) { events[prefix + name] = fn; } });
   const account = {
     Permit: { sync: true, account: { profile: { id: 1 } } },
@@ -19,18 +19,20 @@ function harness() {
   };
   const player = { opened: () => player.playing, playing: false, listener: listen('player:') };
   const document = { hidden: false, addEventListener(name, fn) { events[name] = fn; } };
-  const window = { addEventListener(name, fn) { events[name] = fn; } };
+  const window = { appready: ready, addEventListener(name, fn) { events[name] = fn; } };
   const context = {
     document, window, console, Date: { now: () => now },
-    Lampa: { Account: account, Favorite: { all: () => bookmarks }, Player: player, Activity: { listener: listen('activity:') },
+    Lampa: { Account: account, Favorite: { all() { assert.equal(window.appready, true, 'Favorite methods exist before their internal data is initialized'); bookmarkReads++; return bookmarks; } }, Player: player, Activity: { listener: listen('activity:') },
       Listener: { ...listen(''), send(name, data) { calls.push([name, data]); events.activity({ type: 'start' }); } } },
     setTimeout(fn) { timers.set(++id, fn); return id; },
     clearTimeout(key) { timers.delete(key); },
-    setInterval(fn, ms) { assert.equal(ms, 60000); events.interval = fn; },
+    setInterval(fn, ms) { assert.equal(ms, 60000); intervalCount++; events.interval = fn; },
   };
+  window.Lampa = context.Lampa;
   vm.runInNewContext(source, context);
   return {
-    calls, events, player, document, account,
+    calls, events, player, document, account, window,
+    get bookmarkReads() { return bookmarkReads; }, get intervalCount() { return intervalCount; },
     advance(ms) { now += ms; },
     flush() { const pending = [...timers.values()]; timers.clear(); pending.forEach(fn => fn()); },
     complete(value = bookmarks) { bookmarks = value; done(); },
@@ -109,4 +111,17 @@ test('moving the same card between folders refreshes its markers', () => {
   h.advance(16000); h.events.interval();
   h.complete({ history: [], viewed: [{ id: 42 }] });
   assert.equal(h.calls.filter(call => Array.isArray(call)).length, 2);
+});
+
+
+test('account sync waits for native Favorite initialization and starts only once', () => {
+  const h = harness({ready: false}); h.reload();
+  assert.equal(h.bookmarkReads, 0); assert.equal(h.intervalCount, 0);
+  h.events.app({type: 'start'});
+  assert.equal(h.bookmarkReads, 0);
+  h.window.appready = true; h.events.app({type: 'ready'});
+  assert.equal(h.bookmarkReads, 1); assert.equal(h.intervalCount, 1);
+  h.flush(); assert.deepEqual(h.calls, ['timeline', 'bookmarks']);
+  h.events.app({type: 'ready'}); h.reload();
+  assert.equal(h.bookmarkReads, 1); assert.equal(h.intervalCount, 1);
 });

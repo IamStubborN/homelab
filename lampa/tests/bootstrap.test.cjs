@@ -38,7 +38,7 @@ function harness(android, initial = {}) {
   const context = { Lampa, window: { location: { origin: 'https://lampa.test' } } };
   vm.runInNewContext(bootstrap, context, { filename: 'lampainit-invc.js' });
   return {
-    hooks: context.lampainit_invc, storage, choices, listeners, writes, probes,
+    hooks: context.lampainit_invc, storage, choices, listeners, writes, probes, Lampa,
     set: Lampa.Storage.set,
     gstWork: Lampa.Torserver.gstWork,
     finishProbe() {
@@ -63,6 +63,23 @@ test('saved torrents can use embedded Android playback without first opening a n
   assert.equal(h.probes.length, 1, 'repeated setup must not cancel an in-flight TorrServer request');
   h.finishProbe();
   assert.equal(h.gstWork(), true, 'the saved torrent can now choose the embedded HLS pipeline');
+});
+
+test('bootstrap quietly filters only translated plugin success and preserves notification errors and arguments', () => {
+  const h = harness(false), calls = [];
+  let success = 'Плагин успешно подключен';
+  h.Lampa.Lang = {translate: key => key === 'plugins_add_success' ? success : key};
+  h.Lampa.Noty = {show(...args) { calls.push({receiver: this, args}); return 'shown'; }};
+  h.hooks.appload();
+  const wrapped = h.Lampa.Noty.show;
+  assert.equal(wrapped('Плагин успешно подключен'), undefined);
+  success = 'Plugin connected successfully';
+  assert.equal(wrapped(success), undefined);
+  const receiver = {}, options = {time: 8000};
+  assert.equal(wrapped.call(receiver, 'Plugin failed', options), 'shown');
+  assert.equal(calls.length, 1); assert.equal(calls[0].receiver, receiver);
+  assert.equal(calls[0].args[1], options);
+  h.hooks.appload(); assert.equal(h.Lampa.Noty.show, wrapped, 'repeated bootstrap must not stack wrappers');
 });
 
 test('switching from external to embedded discovers HLS without restarting an in-flight check', () => {

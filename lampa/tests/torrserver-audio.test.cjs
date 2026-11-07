@@ -1975,3 +1975,23 @@ test('a failed external ASS hides the switch', async t => {
   assert.equal(h.subtitleTitle(), null);
   assert.ok(button.hasClass('hide'));
 });
+
+test('a repeated manual retry retains playback state across terminal failure before metadata', async t => {
+  const h = harness(t); h.start(1, 'same-torrent', true); await h.probe(firstEpisode); await h.task('501');
+  const original = h.currentVideo();
+  original.currentTime = 37; original.paused = true; original.volume = .27; original.playbackRate = 1.5;
+  assert.equal(h.context.Lampa.HomelabGstAudio.retryCurrent(), true);
+  const retryHls = h.createHls(); retryHls.on('error', () => {}); retryHls.trigger('manifestLoading'); h.fireTimer(180000);
+  assert.equal(h.currentVideo().currentTime, 0);
+  assert.equal(h.context.Lampa.HomelabGstAudio.retryCurrent(), true); h.ready();
+  assert.equal(h.currentVideo().currentTime, 37); assert.equal(h.currentVideo().paused, true);
+  assert.equal(h.currentVideo().volume, .27); assert.equal(h.currentVideo().playbackRate, 1.5);
+  assert.equal(h.work().homelab_retry_playback, undefined, 'successful restoration releases the emergency snapshot');
+});
+
+test('cross-device resume restores recorded track identity without using this device previous torrent preference', async t => {
+  const h = harness(t);
+  h.start(1, 'same-torrent', true, {homelab_track_preferences: {audio: {title: 'japanese', language: 'ja', external: false}}});
+  await h.probe(firstEpisode); h.ready();
+  assert.equal(new URL(h.loads.at(-1)).searchParams.get('audio'), '2');
+});

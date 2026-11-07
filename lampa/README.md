@@ -1,5 +1,40 @@
 # Lampa
 
+Embedded torrent chapters and sparse seek thumbnails are implemented as a
+separate side service; see [previews/README.md](previews/README.md) for scope,
+resource limits, tests and the guarded deployment procedure. The locally prepared
+UX additions include a chapter gallery, editable manual intro/credits skipping
+and playback status/retry. Cross-device continuation and household history live
+in the separate [HomelabSync module](mods/HomelabSync/README.md). These additions
+were installed on 2026-11-01 after explicit approval; a source checkout alone
+does not install them. Clients need one reload to load the new plugins.
+
+The independent `common-sources.js` picker offers online voices and native torrent
+results together. Torrent rows show available voice metadata, codec, quality,
+size and seeds; Right/long press opens the full release title. Favorite voice
+and quality are stored per HomelabSync profile on this device and reused across
+providers. Results rank favorites first, followed by concrete online variants,
+seeded torrents and native provider fallbacks. Once a result receives focus,
+late results append without moving it or recentering the scroll.
+
+Playback recovery actions replace the permanent status button: Retry and Other
+source appear only after a fatal error or 30 seconds of stalled loading in the
+embedded player. Phase changes never add custom center-screen status text or
+notifications; native player presentation stays in charge. They never switch
+automatically. Online retry resolves a fresh
+URL from the same provider. Other source opens concrete online variants for the
+same episode and known voice. Exact voice labels rank first; whole-label aliases
+for a small set of known studios appear as clearly marked similar voices. They
+require explicit selection and do not promise equivalent cuts. Unknown or mixed
+studio labels are never guessed. When no exact match exists, a direct Other voices
+button shows the number of concrete alternatives without discarding the episode
+or saved position. The existing voice menu remains available as well. Native protected
+provider fallbacks cannot guarantee that identity and are excluded from recovery.
+The old player is fully closed before resolution, including owned GST cleanup.
+Recovery transfers absolute seconds once; substantially different durations warn,
+and a version shorter than that position starts at zero. This does not align
+edits/cuts or add recovery controls to external Android players.
+
 This module hosts the Lampa web client and Lampac NextGen online backend. The
 TorrServer module inside Lampac is deliberately disabled: torrent streaming
 uses the existing `torrserver` service from `download/compose.yml`.

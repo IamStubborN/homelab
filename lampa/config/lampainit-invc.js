@@ -9,6 +9,18 @@ var lampainit_invc = {};
   var torrentServerChecked = false;
   var checkingTorrentServer = false;
 
+  function quietPluginSuccess() {
+    var noty = Lampa.Noty, lang = Lampa.Lang;
+    if (!noty || typeof noty.show !== 'function' || !lang || typeof lang.translate !== 'function' || noty.show.homelabQuietPluginSuccess) return;
+    var show = noty.show;
+    function quiet(text) {
+      if (text === lang.translate('plugins_add_success')) return;
+      return show.apply(this, arguments);
+    }
+    quiet.homelabQuietPluginSuccess = true;
+    noty.show = quiet;
+  }
+
   function configureTorrentPlayer() {
     var android = Lampa.Platform && Lampa.Platform.is('android');
     if (android && Lampa.Params && Lampa.Params.select) {
@@ -44,6 +56,7 @@ var lampainit_invc = {};
   }
 
   function applyRuntimeSettings() {
+    quietPluginSuccess();
     var origin = window.location.origin;
 
     Lampa.Storage.set('torrserver_url', origin + '/torrserver');
@@ -119,6 +132,24 @@ var lampainit_invc = {};
         url: origin + '/plugins/homelab/torrserver-audio.js',
         status: 1,
         name: 'TorrServer audio tracks',
+        author: 'Homelab'
+      },
+      {
+        url: origin + '/plugins/homelab/seek-previews.js',
+        status: 1,
+        name: 'Главы и кадры перемотки',
+        author: 'Homelab'
+      },
+      {
+        url: origin + '/plugins/homelab/chapter-gallery.js',
+        status: 1,
+        name: 'Галерея глав и пропуски',
+        author: 'Homelab'
+      },
+      {
+        url: origin + '/plugins/homelab/playback-status.js',
+        status: 1,
+        name: 'Состояние воспроизведения',
         author: 'Homelab'
       }
     ];

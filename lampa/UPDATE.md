@@ -128,7 +128,7 @@ lock only serializes invocations of this CLI using the same state directory.
   manual review rather than being hidden by the canary's direct launch.
   After those checks it starts a disposable
   canary with `--network none`, `--cpus 1`, 2 GiB memory, 256 PIDs, no GPU, no
-  published ports and no production mounts. It uses empty cache/database/logs,
+  published ports and no production state mounts. It uses empty cache/database/logs,
   a synthetic minimal config and a random disposable password. Image-bundled
   `/lampac/data` stays visible in the disposable container layer: Lampac needs
   its bundled Cloudflare IP lists when network access is disabled. Masking that
@@ -136,11 +136,20 @@ lock only serializes invocations of this CLI using the same state directory.
   copied into the canary. It starts
   `/usr/share/dotnet/dotnet Core.dll` directly, bypassing upstream entrypoint
   scripts; no Compose dependencies or external watcher service are launched.
-  Chromium and GST are disabled in the synthetic config. Only the bundled
-  `LampaWeb` module is selected explicitly; upstream's default all-modules list
+  Chromium, GST and frontend auto-downloads are disabled in the synthetic config.
+  The bundled `LampaWeb` and a temporary copy of our `HomelabSync` source are
+  selected explicitly; upstream's default all-modules list
   otherwise compiles and initializes online providers during this offline probe.
-  The version endpoint
-  must return a successful nonempty response. The canary is removed after the
+  Both the version and generated-extension-script endpoints must return a
+  successful nonempty response. The enabled module must also return a versioned
+  resume read through `/homelab-sync/resume` using the canary’s synthetic identity.
+  If the extension fails, a second canary keeps
+  its source mounted with `manifest.enable: false` and probes the core alone.
+  A healthy core can still be approved; the pending record stores whether
+  HomelabSync must be disabled. A broken core remains blocked. Every later
+  update retries an enabled copy, including when the live module is disabled.
+  These probes check compilation and routes, not future JavaScript semantics.
+  The canary is removed after the
   check, including on ordinary failures. Its small private scratch directory
   and logs remain for diagnosis. A killed process/host outage may leave the
   isolated canary behind; it has no restart policy. Remove that exact
@@ -148,7 +157,10 @@ lock only serializes invocations of this CLI using the same state directory.
 - **apply** rejects changed Compose/config/plugin inputs or a replaced baseline
   container. It stops only Lampa, copies every supported bind with ownership
   and permissions intact, and flushes the snapshot before changing the live
-  tag. It then uses root Compose with `--no-deps --no-build --pull never` to
+  tag. After this snapshot it sets the optional module manifest to the checked
+  enable/disable decision. Its original manifest is included in rollback.
+  The existing nightly-update report mentions a disabled extension explicitly.
+  It then uses root Compose with `--no-deps --no-build --pull never` to
   recreate only Lampa and probes HTTP. This is the only step that updates the
   production tag to the candidate. A failed apply leaves a journal and exits;
   it does not silently restart again or discard rollback data.

@@ -1,4 +1,54 @@
 services:
+  lampa-previews:
+    build: ./previews
+    image: homelab/lampa-previews:latest
+    container_name: lampa-previews
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cpus: 1.0
+    cpu_shares: 256
+    mem_limit: 768m
+    pids_limit: 64
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
+    group_add:
+      - "${LAMPA_PREVIEW_RENDER_GID:-65534}"
+    environment:
+      TORRSERVER_BASE: http://gluetun-torrserver:8090
+      CACHE_DIR: /cache
+      CACHE_MAX_MB: "2048"
+      BATCH_READ_RATE: "${LAMPA_PREVIEW_READ_RATE:-8}"
+      # Set both ignored deployment variables to enable Intel decoding.
+      VAAPI_DEVICE: "${LAMPA_PREVIEW_VAAPI_DEVICE:-}"
+    volumes:
+      - ./preview-cache:/cache
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.lampa-previews.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/previews/`)"
+      - "traefik.http.routers.lampa-previews.entrypoints=http,https"
+      - "traefik.http.routers.lampa-previews.tls=true"
+      - "traefik.http.routers.lampa-previews.priority=100"
+      - "traefik.http.routers.lampa-previews.middlewares=lampa-previews-ratelimit"
+      - "traefik.http.routers.lampa-previews.observability.accessLogs=false"
+      - "traefik.http.middlewares.lampa-previews-ratelimit.ratelimit.average=4"
+      - "traefik.http.middlewares.lampa-previews-ratelimit.ratelimit.burst=8"
+      - "traefik.http.services.lampa-previews.loadbalancer.server.port=8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/previews/health', timeout=3).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   lampa-ai-adapter:
     build: ./ai-adapter
     container_name: lampa-ai-adapter
@@ -152,6 +202,7 @@ services:
       - ./config/lampainit-invc.js:/lampac/module/LampaWeb/plugins/lampainit-invc.js:ro
       - ./plugins:/lampac/wwwroot/plugins/homelab:ro
       - ./mods/Tracks:/lampac/mods/Tracks:ro
+      - ./mods/HomelabSync:/lampac/mods/HomelabSync:ro
       - ./cache:/lampac/cache
       - ./database:/lampac/database
       - ./logs:/lampac/logs

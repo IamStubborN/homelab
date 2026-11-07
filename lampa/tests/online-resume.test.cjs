@@ -269,3 +269,36 @@ test('a shifted saved season index (wrong season drawn) is reported at once inst
   assert.deepEqual(failures, ['missing']); assert.equal(h.work(), null);
   h.tick(60000); assert.deepEqual(failures, ['missing'], 'the failure is reported once');
 });
+
+// Some providers put a release tag in voice_name and the dub in translate.
+test('movie rows sharing a release-tag voice are told apart by their translation text', async t => {
+  const h = setup(t); delete h.movie.name; h.movie.title = 'Film';
+  await h.open({...h.item, card: 'movie_42', season: 0, episode: 0, online: {provider: 'kinobase', voice: 'WEB-DL', text: 'Dub B', season_index: 0}});
+  h.draw([{voice_name: 'WEB-DL', translate: 'Dub A', url: 'a'}, {voice_name: 'WEB-DL', translate: 'Dub B', url: 'b'}]); h.render(); h.tick(0);
+  assert.equal(h.starts.length, 1); assert.equal(h.starts[0].translate, 'Dub B');
+  h.resolve(); assert.equal(h.work().homelab_resume_at, 71);
+});
+
+test('identical movie rows are never guessed between', async t => {
+  const h = setup(t), failures = []; delete h.movie.name; h.movie.title = 'Film';
+  assert.equal(h.window.HomelabOnlineResume.resume({...h.item, card: 'movie_42', season: 0, episode: 0, online: {provider: 'kinobase', voice: 'WEB-DL', season_index: 0}}, h.movie, reason => failures.push(reason)), true);
+  await h.component().startSource();
+  h.draw([{voice_name: 'WEB-DL', translate: 'Dub A', url: 'a'}, {voice_name: 'WEB-DL', translate: 'Dub B', url: 'b'}]); h.render(); h.tick(0);
+  assert.deepEqual(failures, ['ambiguous']); assert.equal(h.work(), null);
+});
+
+test('movie continuation does not seed the native voice name that would rename unlabeled rows', async t => {
+  const h = setup(t); delete h.movie.name; h.movie.title = 'Film';
+  await h.open({...h.item, card: 'movie_42', season: 0, episode: 0, online: {provider: 'kinobase', voice: 'Preferred', season_index: 0}});
+  assert.equal(h.choices.kinobase.voice_name, undefined); assert.equal(h.choices.kinobase.voice_url, '');
+});
+
+test('series continuation still seeds the saved voice button', async t => {
+  const h = setup(t); await h.open(); assert.equal(h.choices.kinobase.voice_name, 'Preferred');
+});
+
+test('movie capture records the row translation text alongside the voice label', async t => {
+  const h = setup(t); delete h.movie.name; h.movie.title = 'Film'; const c = await h.open({...h.item, card: 'movie_42', season: 0, episode: 0});
+  const work = c.toPlayElement({voice_name: 'WEB-DL', translate: 'Dub B', url: 'b'});
+  assert.equal(work.homelab_online.text, 'Dub B');
+});

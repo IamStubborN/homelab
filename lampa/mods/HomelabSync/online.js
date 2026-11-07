@@ -13,7 +13,16 @@
   function refreshSpecials(work) { var refresh = specialWorks && work && specialWorks.get(work); if (refresh) refresh(); }
   function valid(source) {
     var season = source && source.season_index === undefined ? 0 : source && source.season_index;
-    return source && /^[a-z0-9_.-]{1,80}$/i.test(source.provider) && typeof source.voice === 'string' && source.voice.length <= 200 && Number.isInteger(season) && season >= 0 && season <= 999;
+    return source && /^[a-z0-9_.-]{1,80}$/i.test(source.provider) && typeof source.voice === 'string' && source.voice.length <= 200 && Number.isInteger(season) && season >= 0 && season <= 999 &&
+      (source.text === undefined || source.text === null || typeof source.text === 'string' && source.text.length <= 200);
+  }
+  // Movie rows of some providers carry a release tag ("WEB-DL", "2160p") in
+  // voice_name and the dub in translate/text, so both identify a movie row.
+  function rowText(file) { return String(file && (file.translate || file.text) || '').slice(0, 200); }
+  function rowMatches(item, file, provider) {
+    var source = item.online;
+    if (provider !== source.provider || file.voice_name !== source.voice) return false;
+    return item.card.indexOf('movie_') !== 0 || !source.text || rowText(file) === source.text;
   }
   function cancel() { if (pending) { pending.cancelled = true; clearTimeout(pending.timer); pending = null; } }
   // Same label to height mapping as the source picker ("4K" is 2160, not 4).
@@ -157,12 +166,13 @@
       comp.toPlayElement = function (file) {
         var work = play.apply(comp, arguments), movie = object.movie, choice = comp.getChoice(provider);
         var identity = {provider: provider, voice: String(file.voice_name || choice.voice_name || ''), season_index: choice.season || 0};
+        if (movie && !movie.name && rowText(file)) identity.text = rowText(file);
         if (movie && Number.isInteger(movie.id) && ['tmdb', 'cub'].indexOf(movie.source || 'tmdb') >= 0 && valid(identity)) {
           work.card = movie; work.homelab_online = identity;
           if (specialSupport && movie.name && special(file) && specials && specials.files.indexOf(file) >= 0) {
             work.timeline = specialRoad(file); rememberSpecial(work, file, specials);
           }
-          if (intent && Number.isFinite(intent.item.position) && intent.opening && !intent.positionApplied && live(intent, object) && sameFile(intent.item, file) && provider === intent.item.online.provider && identity.voice === intent.item.online.voice) {
+          if (intent && Number.isFinite(intent.item.position) && intent.opening && !intent.positionApplied && live(intent, object) && sameFile(intent.item, file) && intent.chosen === file) {
             intent.positionApplied = true;
             work.homelab_resume_at = intent.item.position;
             if (intent.fromDuration > 0) work.homelab_resume_from_duration = intent.fromDuration;
@@ -206,12 +216,12 @@
           if (rendered) rendered.apply(this, arguments);
           if (!intent || intent.finished || intent.cancelled || intent.opening) return;
           if (!round) {
-            var current = round = {match: null, mismatch: false, known: false};
+            var current = round = {match: null, matches: 0, mismatch: false, known: false};
             setTimeout(function () { if (round === current) round = null; decide(current); }, 0);
           }
           if (Number.isInteger(file.season) && file.season >= 0 && Number.isInteger(file.episode) && file.episode > 0) round.known = true;
           if (!sameFile(intent.item, file)) return;
-          if (provider === intent.item.online.provider && file.voice_name === intent.item.online.voice) { if (!round.match) round.match = {file: file, html: html, data: data}; }
+          if (rowMatches(intent.item, file, provider)) { round.matches++; if (!round.match) round.match = {file: file, html: html, data: data}; }
           else round.mismatch = true;
         };
         function decide(result) {
@@ -221,8 +231,10 @@
             else if (result.known && intent.item.card.indexOf('tv_') === 0) fail(intent, 'missing');
             return;
           }
+          // Several equal movie rows cannot be told apart: never guess.
+          if (result.matches > 1 && intent.item.card.indexOf('movie_') === 0) return fail(intent, 'ambiguous');
           if (typeof params.onEnter !== 'function') return;
-          intent.opening = true;
+          intent.opening = true; intent.chosen = result.match.file;
           params.onEnter(result.match.file, result.match.html, result.match.data);
         }
         return draw.call(comp, items, params);
@@ -230,7 +242,11 @@
       comp.destroy = function () { disposed = true; requestId++; if (intent && !intent.finished) { intent.cancelled = true; clearTimeout(intent.timer); } return destroy.apply(comp, arguments); };
       if (intent) {
         // Native choices are movie/provider scoped; seed only the requested source.
-        comp.replaceChoice({season: intent.item.online.season_index, voice_name: intent.item.online.voice, voice_url: ''}, intent.item.online.provider);
+        // Native display() names unlabeled rows after choice.voice_name, so a
+        // seeded name would make every movie row look like the saved voice.
+        var seed = {season: intent.item.online.season_index, voice_url: ''};
+        if (intent.item.card.indexOf('tv_') === 0) seed.voice_name = intent.item.online.voice;
+        comp.replaceChoice(seed, intent.item.online.provider);
       }
       return comp;
     }

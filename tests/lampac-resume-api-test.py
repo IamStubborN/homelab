@@ -53,7 +53,8 @@ assert request(area)[1]['items'][0]['kind'] == 'online', 'stale torrent must not
 for invalid in [dict(online, torrent='a' * 40), dict(online, index=1), dict(online, online=None),
                 dict(online, kind='other'), dict(online, online=dict(provider='https://private', voice='', season_index=0)),
                 dict(online, online=dict(provider='kinobase', voice='x' * 201, season_index=0)),
-                dict(online, online=dict(provider='kinobase', voice='', season_index=-1))]:
+                dict(online, online=dict(provider='kinobase', voice='', season_index=-1)),
+                dict(online, online=dict(provider='kinobase', voice='', season_index=0, text='x' * 201))]:
     assert request(area, invalid)[0] == 400
 status, body = request(area, dict(card='tv_42', deleted=True))
 assert status == 200 and not body.get('stale')

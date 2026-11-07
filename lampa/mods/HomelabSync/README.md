@@ -128,7 +128,10 @@ The explicit position is applied once, before native continuation prompts can
 interfere. Re-selecting a playlist item does not repeat its original jump. The saved
 voice is matched across every row of a native draw (movies list translations as
 rows); only a whole draw without it reports a change, and a draw of another season
-(a shifted season index) reports a missing episode at once. Any key, click or touch
+(a shifted season index) reports a missing episode at once. Movie rows are also
+identified by their translation text, because some providers put a release tag in
+`voice_name`; several equal rows are never guessed between, and the saved voice
+name is not seeded for movies (native display would rename unlabeled rows). Any key, click or touch
 in the opened component cancels the automatic start. After the component opens,
 failures and the 60-second timeout show a notice and leave the user there; only a
 launch that never opened falls back to the picker. Explicit quality labels map to

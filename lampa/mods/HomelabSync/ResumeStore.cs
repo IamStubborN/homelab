@@ -25,6 +25,8 @@ public class OnlineSource
     public string provider { get; set; }
     public string voice { get; set; }
     public int season_index { get; set; }
+    // Movie row dub/translation text when voice_name is a release tag.
+    public string text { get; set; }
 }
 public class ResumeItem
 {
@@ -97,7 +99,7 @@ public static class ResumeStore
             var source = item.online;
             if (item.torrent != null || item.index != 0 || source == null ||
                 !Match(source.provider, @"^[a-zA-Z0-9_.\-]{1,80}$") || source.voice == null || source.voice.Length > 200 ||
-                source.season_index < 0 || source.season_index > 999) return false;
+                source.season_index < 0 || source.season_index > 999 || source.text != null && source.text.Length > 200) return false;
         }
         else return false;
         item.original = Short(item.original, 200);

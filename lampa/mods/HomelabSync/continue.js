@@ -263,6 +263,7 @@
     }
     function onlineFailed(reason) {
       L.Noty.show(reason === 'changed' ? 'Сохранённая озвучка не найдена. Выберите вариант в списке' :
+        reason === 'ambiguous' ? 'Подходит несколько вариантов. Выберите нужный в списке' :
         reason === 'missing' ? 'Сохранённая серия не найдена. Выберите сезон и серию в списке' : 'Источник не ответил. Выберите вариант в списке');
     }
     if (item.kind === 'online' && item.online) {
@@ -412,7 +413,7 @@
     var tv = !!(movie.name || movie.original_name);
     if (tv && !(data.episode > 0)) return;
     var next = {card: (tv ? 'tv_' : 'movie_') + movie.id, title: plain(movie.name || movie.title), poster: movie.poster_path, backdrop: movie.backdrop_path,
-      kind: online ? 'online' : 'torrent', online: online ? {provider: online.provider, voice: online.voice, season_index: online.season_index} : null,
+      kind: online ? 'online' : 'torrent', online: online ? Object.assign({provider: online.provider, voice: online.voice, season_index: online.season_index}, online.text ? {text: String(online.text).slice(0, 200)} : {}) : null,
       torrent: online ? null : hash.toLowerCase(), index: online ? 0 : index, original: String(movie.original_title || movie.original_name || ''), date: movie.first_air_date || movie.release_date || null, timeline: String(data.timeline.hash), season: data.season || 0, episode: data.episode || 0,
       position: Math.max(0, measured.position), duration: measured.duration,
       tracks: L.HomelabGstAudio && L.HomelabGstAudio.preferences ? L.HomelabGstAudio.preferences(data) : data.homelab_track_preferences || {}};

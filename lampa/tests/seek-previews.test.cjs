@@ -13,6 +13,7 @@ const order = call => Number(/&n=(\d+)/.exec(call.url)[1]);
 const withoutOrder = call => call.url.replace(/&n=\d+$/, '');
 const cancels = h => h.calls.filter(call => call.url === '/previews/cancel');
 const jpeg = {type: 'image/jpeg', size: 100};
+const OFF = /^(hide|homelab-seek-preview--off)$/;
 
 // Selectors of Lampa's native player panel template (app.min.js html$25).
 // Anything else must fail loudly so that a typo or a native rename cannot pass.
@@ -26,7 +27,7 @@ function harness(t, beforeInstall) {
   function empty() { return {length: 0, find: () => empty(), text: () => '', on() { return this; }}; }
   function element(html = '', strict) {
     const children = new Map();
-    const e = {length: 1, htmlValue: html, textValue: '', attrs: {}, styles: {}, appended: [], rect: {left: 0, top: 0, bottom: 120, width: 100, height: 120}, hidden: /\bhide\b/.test(html), events: {},
+    const e = {length: 1, htmlValue: html, textValue: '', attrs: {}, styles: {}, appended: [], rect: {left: 0, top: 0, bottom: 120, width: 100, height: 120}, hidden: /\bhide\b|--off\b/.test(html), events: {},
       on(names, selector, fn) { for (const name of names.split(' ')) e.events[name] = typeof selector === 'function' ? selector : fn; return e; },
       off() { e.events = {}; return e; },
       find(name) {
@@ -38,7 +39,7 @@ function harness(t, beforeInstall) {
       html(value) { e.htmlValue = value; return e; }, text(value) { if (value === undefined) return e.textValue; e.textValue = value; return e; },
       attr(name, value) { e.attrs[name] = value; return e; }, removeAttr(name) { delete e.attrs[name]; return e; },
       classes: new Set(), hasClass(name) { return e.classes.has(name); },
-      addClass(name) { e.classes.add(name); if (name === 'hide') e.hidden = true; return e; }, removeClass(name) { e.classes.delete(name); if (name === 'hide') e.hidden = false; return e; },
+      addClass(name) { e.classes.add(name); if (OFF.test(name)) e.hidden = true; return e; }, removeClass(name) { e.classes.delete(name); if (OFF.test(name)) e.hidden = false; return e; },
       0: {getBoundingClientRect: () => e.rect}};
     elements.push(e); return e;
   }
@@ -74,8 +75,9 @@ function harness(t, beforeInstall) {
   const install = () => vm.runInNewContext(script, {window, Lampa: L, fetch, AbortController, URL: URLClass, setTimeout, clearTimeout, Date, Math});
   install();
   const fire = (name, value) => handlers.get(name)?.(value);
-  const overlay = () => elements.find(e => e.htmlValue.includes('homelab-seek-preview hide'));
-  return {calls, objects, revoked, storage, elements, panel, video, fire, window, L, install, overlay,
+  const overlay = () => elements.find(e => e.htmlValue.includes('homelab-seek-preview homelab-seek-preview--off'));
+  const img = () => overlay().find('.homelab-seek-preview__img'), part = name => overlay().find('.homelab-seek-preview__' + name);
+  return {calls, objects, revoked, storage, elements, panel, video, fire, window, L, install, overlay, img, part,
     handlerCount: () => handlers.size, shows: () => shows,
     tick: ms => t.mock.timers.tick(ms), menu: () => menu, selected: () => selected,
     button: () => elements.find(e => e.htmlValue.includes('<span>Главы</span>')),
@@ -161,7 +163,7 @@ test('rapid scrub requests only the final ten-second frame and never displays a 
   h.tick(300); h.fire('panel:mouse_rewind', {method: 'move', percent: .5});
   h.tick(449); assert.equal(h.calls.length, 1);
   h.tick(1); assert.match(h.calls[1].url, frameUrl(1, 6));
-  assert.equal(h.overlay().find('.homelab-seek-preview__label').textValue, '01:00');
+  assert.equal(h.part('time').textValue, '01:00');
   h.ready(2); assert.equal(h.calls[1].signal.aborted, true);
   assert.equal(cancels(h).length, 1, 'changing files releases the old job on the worker');
   assert.deepEqual(JSON.parse(cancels(h)[0].options.body), {client: owner(h.calls[1]), n: order(h.calls[1]) + 1});
@@ -184,10 +186,14 @@ test('rapid scrub requests only the final ten-second frame and never displays a 
 test('chapters navigate explicitly; toggling previews prevents new decoder requests', async t => {
   const h = harness(t); h.ready(); h.calls[0].finish(info); await flush();
   h.button().events['hover:enter']();
-  assert.equal(h.menu().items[1].title, '00:10 · ‹Scene›');
+  assert.equal(h.menu().items[0].title, '‹Scene›');
+  assert.equal(h.menu().items[0].subtitle, '00:10 · 10 с<span class="homelab-chapter-badge">сейчас</span>');
+  assert.equal(h.menu().items[0].selected, true, 'playback at 00:12 is inside the chapter: it is focused on open');
   assert.equal(h.selected(), undefined, 'a chapter is never automatically skipped');
-  h.menu().onSelect(h.menu().items[1]); assert.equal(h.selected(), 10);
-  h.menu().onSelect(h.menu().items[0]); assert.equal(h.storage.get('homelab_seek_frames'), false);
+  h.menu().onSelect(h.menu().items[0]); assert.equal(h.selected(), 10);
+  const toggle = h.menu().items.at(-1);
+  assert.equal(toggle.checkbox, true); assert.equal(toggle.checked, true);
+  toggle.checked = false; h.menu().onCheck(toggle); assert.equal(h.storage.get('homelab_seek_frames'), false);
   h.rewind(44); h.tick(1000);
   assert.equal(h.calls.length, 1);
 });
@@ -202,7 +208,7 @@ test('mobile preview uses the native rendered target and survives a quick releas
   assert.match(h.calls[1].url, frameUrl(1, 2));
   assert.equal(h.selected(), undefined);
   h.calls[1].finish(jpeg); await flush();
-  assert.equal(h.overlay().find('img').attrs.src, 'blob:1');
+  assert.equal(h.img().attrs.src, 'blob:1');
   h.tick(1049); assert.equal(h.overlay().hidden, false);
   h.tick(1); assert.equal(h.overlay().hidden, true, 'a late frame cannot keep the overlay after release');
   h.panel.events['touchmove.homelabPreview']({});
@@ -215,13 +221,15 @@ test('an unprepared slot shows the nearest cached frame as a placeholder', async
   const h = harness(t); h.ready(); h.calls[0].finish(info); await flush();
   h.fire('panel:mouse_rewind', {method: 'move', percent: 40 / 120}); h.tick(450); h.calls[1].finish(jpeg); await flush();
   h.fire('panel:mouse_rewind', {method: 'move', percent: 62 / 120});
-  assert.equal(h.overlay().find('img').attrs.src, 'blob:1');
+  assert.equal(h.img().attrs.src, 'blob:1');
   assert.ok(h.overlay().classes.has('homelab-seek-preview--near'));
   h.tick(450); h.calls[2].finish(jpeg); await flush();
-  assert.equal(h.overlay().find('img').attrs.src, 'blob:2');
+  assert.equal(h.img().attrs.src, 'blob:2');
   assert.equal(h.overlay().classes.has('homelab-seek-preview--near'), false);
   h.fire('panel:mouse_rewind', {method: 'move', percent: 115 / 120});
-  assert.equal(h.overlay().find('img').styles.display, 'none', 'distant frames are not substituted');
+  assert.equal(h.img().attrs.src, undefined, 'distant frames are not substituted');
+  assert.equal(h.overlay().classes.has('homelab-seek-preview--image'), false);
+  assert.ok(h.overlay().classes.has('homelab-seek-preview--pending'), 'the exact frame is visibly pending');
 });
 
 test('the overlay hides when the panel hides and shortly after a remote seek lands', async t => {
@@ -261,11 +269,11 @@ test('a cold frame stays pending beyond six seconds and displays when generation
 test('temporary metadata error recovers automatically and refreshes the open chapter menu', async t => {
   const h = harness(t); h.ready(); h.calls[0].finish(null, 503); await flush();
   h.button().events['hover:enter']();
-  assert.equal(h.menu().items[1].title, 'Не удалось прочитать главы');
+  assert.equal(h.menu().items[0].title, 'Не удалось прочитать главы');
   h.tick(4999); assert.equal(h.calls.length, 1);
   h.tick(1); assert.equal(h.calls.length, 2);
   h.calls[1].finish(info); await flush();
-  assert.equal(h.menu().items[1].title, '00:10 · ‹Scene›');
+  assert.equal(h.menu().items[0].title, '‹Scene›');
   h.tick(300000); assert.equal(h.calls.length, 2, 'success cancels retries and deadlines');
 });
 
@@ -289,7 +297,7 @@ test('automatic retries are bounded and reopening the failed menu allows a throt
   h.button().events['hover:enter'](); assert.equal(h.calls.length, 5, 'manual retry is rate limited');
   h.tick(5000); h.button().events['hover:enter'](); assert.equal(h.calls.length, 6);
   h.calls[5].finish(info); await flush();
-  assert.equal(h.menu().items[1].title, '00:10 · ‹Scene›');
+  assert.equal(h.menu().items[0].title, '‹Scene›');
 });
 
 test('timeout recovery ignores a late old response and close cancels pending retries', async t => {
@@ -297,7 +305,7 @@ test('timeout recovery ignores a late old response and close cancels pending ret
   assert.equal(h.calls[0].signal.aborted, true);
   h.tick(5000); assert.equal(h.calls.length, 2);
   h.calls[0].finish(info); await flush();
-  h.button().events['hover:enter'](); assert.equal(h.menu().items[1].title, 'Читаем главы…');
+  h.button().events['hover:enter'](); assert.equal(h.menu().items[0].title, 'Читаем главы…');
   h.calls[1].fail(); await flush();
   h.fire('player:destroy'); h.tick(300000);
   assert.equal(h.calls.length, 2, 'closing playback cancels the scheduled network retry');
@@ -308,7 +316,7 @@ test('metadata does not replace another selector and cancellation prevents old-f
   const owned = h.menu(), other = {title: 'Other menu', items: []};
   h.L.Select.show(other); h.calls[0].finish(info); await flush();
   assert.equal(h.menu(), other); assert.equal(h.shows(), 2);
-  assert.equal(owned.items[1].title, '00:10 · ‹Scene›', 'a stacked selector receives fresh entries without stealing focus');
+  assert.equal(owned.items[0].title, '‹Scene›', 'a stacked selector receives fresh entries without stealing focus');
   h.ready(2); h.calls[1].finish(null, 503); await flush();
   h.ready(3); h.tick(5000);
   assert.equal(h.calls.length, 3); assert.ok(h.calls[2].url.includes('/3/metadata'));
@@ -331,11 +339,12 @@ test('thumbnail tracks pointer within one slot, clamps at edges, and chapters li
   h.panel.rect = {left: 100, top: 500, bottom: 700, width: 1000, height: 200};
   h.panel.find('.player-panel__timeline').rect = {left: 120, top: 550, width: 960}; overlay.rect.width = 200;
   h.fire('panel:mouse_rewind', {method: 'move', percent: .5});
-  assert.equal(overlay.styles.left, 500); assert.equal(overlay.styles.bottom, 162);
+  const shift = () => Number(/^translate3d\((-?\d+)px,0,0\)$/.exec(overlay.styles.transform)[1]);
+  assert.equal(shift(), 400, 'centred on the pointer'); assert.equal(overlay.styles.bottom, 164);
   h.fire('panel:mouse_rewind', {method: 'move', percent: .51});
-  assert.ok(Math.abs(overlay.styles.left - 509.6) < .001, 'same-slot motion still repositions');
-  h.fire('panel:mouse_rewind', {method: 'move', percent: 0}); assert.equal(overlay.styles.left, 108);
-  h.fire('panel:mouse_rewind', {method: 'move', percent: 1}); assert.equal(overlay.styles.left, 892);
+  assert.equal(shift(), 410, 'same-slot motion still repositions');
+  h.fire('panel:mouse_rewind', {method: 'move', percent: 0}); assert.equal(shift(), 10, 'left edge keeps a margin');
+  h.fire('panel:mouse_rewind', {method: 'move', percent: 1}); assert.equal(shift(), 790, 'right edge keeps a margin');
   assert.ok(h.panel.find('.player-panel__left').appended.length, 'chapter controls belong to the left group');
   h.panel.events['mouseleave.homelabPreview'](); assert.equal(overlay.hidden, true);
 });
@@ -461,14 +470,113 @@ test('frame cache is bounded and revisits are immediate', async t => {
   const overlay = h.overlay();
   for (let slot = 0; slot < 17; slot++) {
     h.fire('panel:mouse_rewind', {method: 'move', percent: slot * 10 / 400}); h.tick(450);
-    assert.equal(overlay.find('.homelab-seek-preview__note').textValue, '');
+    assert.equal(h.part('status').textValue || '', '');
     h.calls.at(-1).finish(jpeg); await flush();
   }
   assert.deepEqual(h.revoked, ['blob:1']);
   const calls = h.calls.length;
   h.fire('panel:mouse_rewind', {method: 'move', percent: 150 / 400});
-  assert.equal(h.calls.length, calls); assert.equal(overlay.find('img').attrs.src, 'blob:16');
+  assert.equal(h.calls.length, calls); assert.equal(h.img().attrs.src, 'blob:16');
   h.fire('panel:mouse_rewind', {method: 'move', percent: 0}); h.tick(450);
   assert.equal(h.calls.length, calls + 1, 'an evicted frame can be fetched again');
   h.fire('player:destroy'); assert.equal(new Set(h.revoked).size, 17);
+});
+
+const parts = {version: 1, step: 10, duration: 120, chapters: [
+  {start: 0, end: 30, title: 'Intro'}, {start: 30, end: 80, title: 'Part'}, {start: 80, end: 120, title: ''}]};
+
+test('chapters draw timeline ticks and name the current chapter only on boundaries', async t => {
+  const h = harness(t); h.ready(); h.calls[0].finish(parts); await flush();
+  const ticks = h.panel.find('.player-panel__timeline').appended[0];
+  assert.equal(ticks.htmlValue, '<div class="homelab-chapter-tick" style="left:25.000%"></div><div class="homelab-chapter-tick" style="left:66.667%"></div>',
+    'no tick at the very start; ticks live in their own layer, not in native segments');
+  const now = h.panel.find('.player-panel__timenow').afterValue;
+  let writes = 0; const text = now.text; now.text = value => { if (value !== undefined) writes++; return text(value); };
+  assert.equal(now.textValue, 'Intro', 'named as soon as chapters arrive');
+  h.fire('video:timeupdate', {current: 5}); h.fire('video:timeupdate', {current: 6}); h.fire('video:timeupdate', {current: 29});
+  assert.equal(writes, 0, 'timeupdate inside one chapter does not touch the DOM');
+  h.fire('video:timeupdate', {current: 31}); assert.equal(now.textValue, 'Part'); assert.equal(writes, 1);
+  h.fire('video:timeupdate', {current: 95}); assert.equal(now.textValue, 'Глава 3', 'untitled chapters get a number');
+  h.fire('panel:mouse_rewind', {method: 'move', percent: 40 / 120});
+  assert.equal(h.part('time').textValue, '00:40'); assert.equal(h.part('chapter').textValue, 'Part');
+  assert.ok(h.panel.classes.has('homelab-seek-previewing'), 'the native hover time is replaced by the card');
+  h.fire('player:destroy');
+  assert.equal(ticks.htmlValue, ''); assert.equal(now.textValue, '');
+  assert.equal(h.panel.classes.has('homelab-seek-previewing'), false);
+});
+
+test('a single chapter adds no ticks or label; the placeholder is marked with its own time', async t => {
+  const h = harness(t); h.ready(); h.calls[0].finish(info); await flush();
+  assert.doesNotMatch(h.panel.find('.player-panel__timeline').appended[0].htmlValue, /homelab-chapter-tick"/);
+  h.fire('video:timeupdate', {current: 15});
+  assert.equal(h.panel.find('.player-panel__timenow').afterValue.textValue, '');
+  h.fire('panel:mouse_rewind', {method: 'move', percent: 15 / 120});
+  assert.equal(h.part('chapter').textValue, '<Scene>', 'a titled lone chapter is still named (as text, not HTML)');
+  h.tick(450); h.frames()[0].finish(jpeg); await flush();
+  h.fire('panel:mouse_rewind', {method: 'move', percent: 35 / 120});
+  assert.equal(h.part('badge').textValue, '≈ 00:10');
+  assert.ok(h.overlay().classes.has('homelab-seek-preview--pending'));
+  h.tick(450); h.frames()[1].finish(null, 404); await flush();
+  assert.equal(h.overlay().classes.has('homelab-seek-preview--pending'), false, 'a failed frame stops the shimmer');
+  assert.equal(h.part('status').textValue, '', 'the placeholder stays instead of an error');
+  h.fire('panel:mouse_rewind', {method: 'move', percent: 100 / 120}); h.tick(450);
+  h.frames()[2].finish(null, 404); await flush();
+  assert.equal(h.part('status').textValue, 'Кадр недоступен');
+});
+
+function drawMenu(h) {
+  const rows = [];
+  h.menu().items.forEach(item => {
+    if (item.chapter === undefined) return;
+    const row = h.window.jQuery('<div class="selectbox-item"></div>');
+    h.menu().onDraw(row, item); rows.push(row);
+  });
+  return rows;
+}
+const painted = row => row.find('.homelab-chapter-thumb').find('.homelab-chapter-thumb__img').styles['background-image'];
+
+test('chapter list lazily loads thumbnails near focus on its own client and cancels on close', async t => {
+  const h = harness(t); h.ready(); h.calls[0].finish(parts); await flush();
+  h.button().events['hover:enter']();
+  assert.equal(h.menu().title, 'Главы · 3');
+  const rows = drawMenu(h);
+  assert.ok(rows[0].classes.has('homelab-chapter-item'));
+  assert.equal(h.frames().length, 0, 'drawing alone requests nothing');
+  h.menu().onFocus(h.menu().items[1]); h.tick(249); assert.equal(h.frames().length, 0, 'focus is debounced');
+  h.tick(1);
+  const first = h.frames()[0];
+  assert.match(first.url, frameUrl(1, 4), 'a frame a little inside the chapter');
+  assert.ok(rows[1].find('.homelab-chapter-thumb').classes.has('homelab-chapter-thumb--loading'));
+  first.finish(null, 202); await flush(); h.tick(1000);
+  assert.equal(h.frames().length, 2); assert.ok(order(h.frames()[1]) > order(first));
+  h.frames()[1].finish(jpeg); await flush();
+  assert.equal(painted(rows[1]), 'url("blob:1")');
+  assert.match(h.frames()[2].url, frameUrl(1, 9), 'then the next row, then the previous one');
+  h.frames()[2].finish(null, 503); await flush(); h.tick(60000);
+  assert.equal(h.frames().length, 3, 'a busy worker stops the strip instead of competing with seeks');
+  h.L.Select.closeAll();
+  const cancel = cancels(h).at(-1);
+  assert.deepEqual(JSON.parse(cancel.options.body), {client: owner(first), n: order(h.frames()[2]) + 1});
+  h.fire('panel:mouse_rewind', {method: 'move', percent: 45 / 120});
+  assert.equal(h.img().attrs.src, 'blob:1', 'a chapter thumbnail is reused as the exact seek frame');
+  h.fire('panel:mouse_rewind', {method: 'move', percent: 100 / 120}); h.tick(450);
+  assert.notEqual(owner(h.frames().at(-1)), owner(first), 'seek and chapter list never supersede each other');
+  h.fire('player:destroy'); assert.ok(h.revoked.includes('blob:1'));
+});
+
+test('moving focus far away abandons the pending thumbnail; disabled frames request none', async t => {
+  const h = harness(t); h.video.duration = 1200;
+  const many = {version: 1, step: 10, duration: 1200, chapters: Array.from({length: 20}, (_, i) => ({start: i * 60, end: i * 60 + 60, title: 'C' + i}))};
+  h.ready(); h.calls[0].finish(many); await flush();
+  h.button().events['hover:enter'](); const rows = drawMenu(h);
+  h.menu().onFocus(h.menu().items[0]); h.tick(250);
+  const pending = h.frames()[0]; assert.match(pending.url, frameUrl(1, 1));
+  h.menu().onFocus(h.menu().items[15]); h.tick(250);
+  assert.equal(pending.signal.aborted, true);
+  assert.match(h.frames()[1].url, frameUrl(1, 91));
+  assert.equal(rows[0].find('.homelab-chapter-thumb').classes.has('homelab-chapter-thumb--loading'), false);
+  h.L.Select.closeAll(); h.storage.set('homelab_seek_frames', false); h.window.homelabSeekPreviews.setEnabled(false);
+  h.button().events['hover:enter'](); drawMenu(h);
+  h.menu().onFocus(h.menu().items[3]); h.tick(1000);
+  assert.equal(h.frames().length, 2);
 });

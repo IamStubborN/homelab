@@ -12,8 +12,23 @@ the separate history extension.
   hash and file index retained by `torrserver-audio.js`, including GST playback.
   External Android players, arbitrary HTTP providers and Plex files are outside
   this version's input contract.
-- A player button opens embedded chapter names and seeks to the selected start.
-  No chapter is automatically skipped. Missing chapters are reported explicitly.
+- A player button opens the chapter list (Lampa `Select`): one row per embedded
+  chapter with a 16:9 frame, start time and duration; the chapter being played
+  is marked «сейчас» and focused on open. Selecting a row seeks to its start; no
+  chapter is automatically skipped. Missing chapters are reported explicitly. The
+  «Кадры при перемотке» checkbox is the last row.
+- Chapter thumbnails are lazy: only rows within four of the focused one, after
+  250 ms of focus rest, one request at a time, a little inside the chapter (at
+  most ten seconds after its start). They use a second, list-only frame `client`
+  id, so the list never supersedes a seek and a new focus supersedes the list's
+  own pending frame; closing the list sends a cancel for that id. A 202 is polled
+  for at most 20 seconds; a 429/5xx or network error stops thumbnails until the
+  list is reopened. Disabled frames request none. Up to 64 thumbnails are kept
+  per file and double as exact seek frames.
+- With two or more chapters the timeline shows thin chapter ticks in their own
+  layer (Lampa's ad/skip segments are untouched) and the current chapter name
+  next to the elapsed time. `timeupdate` only compares against the current
+  chapter's bounds and touches the DOM on a boundary.
 - Temporary metadata failures recover with at most four automatic attempts,
   delayed by 5, 15 and 60 seconds between failures. Each attempt is limited to
   55 seconds, including polling while queued. Opening a failed chapter menu
@@ -21,10 +36,13 @@ the separate history extension.
   changing files cancels retries; late responses are ignored. An open owned
   chapter menu refreshes when metadata arrives, without replacing other menus.
 - Mouse hover, TV rewind and mobile native scrub gestures request a 320×180 JPEG
-  on a ten-second grid after 450 ms without a change of grid cell. Chapters are
-  shown with the target time. Sixteen object URLs per playing file are kept in a
-  client LRU: revisiting one is immediate. An unprepared frame shows the nearest
-  cached frame within 30 seconds, dimmed, or only the time. The overlay hides when
+  on a ten-second grid after 450 ms without a change of grid cell. The card shows
+  the frame, the target time and the chapter title; it fades in and out, stays
+  inside the panel edges and is sized in em (narrower on phones). Sixteen object
+  URLs per playing file are kept in a client LRU: revisiting one is immediate. An
+  unprepared frame shows the nearest cached frame within 30 seconds, dimmed and
+  marked «≈ time», with a shimmer while the exact frame is pending; without any
+  frame it shows the shimmer, then «Кадр недоступен» if it fails. The overlay hides when
   the panel hides, 2.5 s after the last TV/button rewind and 1.5 s after a touch
   release (the pending request survives a quick release). The plugin uses one
   frame `client` id for its lifetime, with an increasing `n`, so the worker keeps

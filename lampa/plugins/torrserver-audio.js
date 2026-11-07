@@ -613,6 +613,7 @@
       stored[hash] = state.preferences;
       Object.keys(stored).slice(0, -50).forEach(function (key) { delete stored[key]; });
       Lampa.Storage.set(preferenceKey, stored);
+      if (type === 'audio' && state.tracks) { arrangeMenu(state); repaintTracks(state); }
       phase('preferences', state.work);
     }
 
@@ -634,7 +635,7 @@
       clearTimeout(active.externalTimeout);
       clearTimeout(active.externalRetry);
       if (active.cancelRestore) active.cancelRestore();
-      if (active.work.voiceovers === active.tracks) {
+      if (active.menu && active.work.voiceovers === active.menu) {
         if (active.previousTracks === undefined) delete active.work.voiceovers;
         else active.work.voiceovers = active.previousTracks;
       }
@@ -801,9 +802,13 @@
       if (!url || (!retry && track === selectedTrack(state, url))) return cancelPreparation(state);
       // Only an explicit choice tries a track that already failed again.
       if (track.external && (track.unsupported || track.failed) && automatic) return;
-      if (!automatic) track.failed = false;
+      if (!automatic) track.failed = track.prepareFailed = false;
       if (track.external && !track.ready) return prepareExternal(state, track, automatic);
       cancelPreparation(state);
+      if (automatic && !retry && state.autoNotice === track) {
+        state.autoNotice = null;
+        notify('Озвучка: ' + audioName(track) + (seriesPlayback(state.work) ? ' — как в прошлой серии' : ' — как в прошлый раз'));
+      }
       report('audio-switch', {auto: Boolean(automatic), track: track.label, external: Boolean(track.external)}, state.work);
       if (state.cancelRestore) state.cancelRestore(true);
       var oldVideo = Lampa.PlayerVideo.video();
@@ -893,7 +898,7 @@
       timer = setTimeout(cleanup, 60000);
       // Restore playback after a manual choice or a remembered episode preference.
       restoreTime();
-      if (state.tracks) Lampa.PlayerPanel.setTracks(state.tracks);
+      if (state.tracks) Lampa.PlayerPanel.setTracks(state.menu || state.tracks);
       // Lampa reports subtitles again only when the stream has embedded ones;
       // drawn subtitles must follow the new video element either way.
       if (state.assActive && state.assVideo !== video) showAss(state, state.assActive, 'new-video');
@@ -915,7 +920,164 @@
       if (state.lateNotice === track) return;
       state.lateNotice = track;
       report('audio-late', {track: track.label, external: Boolean(track.external)}, state.work);
-      if (Lampa.Noty) Lampa.Noty.show('Озвучка «' + track.label + '» доступна в меню');
+      notify('Озвучка «' + audioName(track) + '» готова — включите её в аудиодорожках');
+    }
+
+    // Lampa puts notices into HTML unescaped.
+    function notify(text) {
+      if (Lampa.Noty) Lampa.Noty.show(plain(text));
+    }
+
+    // How tracks read in Lampa's menus. `label` stays the track's source
+    // name: preferences, logs and other plugins match by it. Each menu item
+    // is drawn from it instead: a human title, then small details.
+    var LANGUAGE_NAMES = {
+      ru: 'Русский', uk: 'Украинский', en: 'Английский', ja: 'Японский', de: 'Немецкий', fr: 'Французский',
+      es: 'Испанский', it: 'Итальянский', pt: 'Португальский', ko: 'Корейский', zh: 'Китайский', pl: 'Польский'
+    };
+    // Display only: identity() keeps its own aliases, or stored choices would stop matching.
+    var DISPLAY_LANGUAGES = {kor: 'ko', chi: 'zh', zho: 'zh', pol: 'pl', russian: 'ru', english: 'en', japanese: 'ja'};
+    // Russian first, then untagged (in practice a Russian voice-over), then the rest.
+    var LANGUAGE_ORDER = {ru: 0, '': 1, uk: 2, en: 3};
+    var CHANNEL_NAMES = {1: 'моно', 2: 'стерео', 3: '2.1', 6: '5.1', 7: '6.1', 8: '7.1'};
+    var CODEC_NAMES = {aac: 'AAC', ac3: 'AC3', eac3: 'E-AC3', dts: 'DTS', truehd: 'TrueHD', flac: 'FLAC', opus: 'Opus', mp3: 'MP3', vorbis: 'Vorbis', alac: 'ALAC'};
+    var VOICE_KINDS = [
+      [words('dub|dubbed|dubbing|дубляж|дублированн[а-яё]*|дубл[а-яё]*'), 'Дубляж'],
+      [words('mvo|многоголос[а-яё]*'), 'Многоголосая'],
+      [words('dvo|двухголос[а-яё]*'), 'Двухголосая'],
+      [words('avo|авторск[а-яё]*'), 'Авторская'],
+      [words('vo|одноголос[а-яё]*'), 'Одноголосая'],
+      [words('original|orig|оригинал[а-яё]*'), 'Оригинал']
+    ];
+    var VOICE_NOISE = words('rus|ru|russian|русск[а-яё]*|eng|en|english|англ[а-яё]*|jpn|ja|jap|japanese|японск[а-яё]*|ukr|uk|укр[а-яё]*|' +
+      'audio|sound|sounds|track|voice|voices|звук|дорожка|озвучк[а-яё]*|озвучани[а-яё]*|перевод|закадров[а-яё]*|' +
+      'профессиональн[а-яё]*|любительск[а-яё]*|ext|external|внешн[а-яё]*|stereo|mono|dts-hd|e-ac3|aac|ac3|eac3|dts|truehd|' +
+      'flac|opus|mp3|\\d\\.\\d|\\d+ch|\\d{3,4}p|web-?dl|webrip|bdrip|hdtv|x26[45]|hevc|10bit|s\\d{1,2}e\\d{1,3}|e\\d{1,3}');
+    var MEDIA_EXTENSION = /\.(?:mka|mkv|mp4|m4a|aac|ac3|eac3|dts|flac|mp3|ogg|opus|wav|ass|ssa|srt)$/i;
+
+    function displayLanguage(value) {
+      var code = languageCode(value);
+      return code === 'und' ? '' : DISPLAY_LANGUAGES[code] || code;
+    }
+
+    function languageName(value) {
+      var code = displayLanguage(value);
+      return LANGUAGE_NAMES[code] || (/^[a-z]{2,3}$/.test(code) ? code.toUpperCase() : '');
+    }
+
+    function tidy(text) {
+      return text.replace(/\(\s*\)|\[\s*\]|\{\s*\}/g, ' ').replace(/[\[\]{}]/g, ' ').replace(/\s+/g, ' ')
+        .replace(/^[\s\-_.,:;|/+&]+|[\s\-_.,:;|/+&]+$/g, '');
+    }
+
+    // A file name ("LostFilm_Rus.mka") reads as words.
+    function cleanName(text) {
+      text = String(text || '').replace(/["'«»″’]/g, '').trim();
+      var file = MEDIA_EXTENSION.test(text);
+      text = text.replace(MEDIA_EXTENSION, '');
+      if (file || /_/.test(text) || !/\s/.test(text) && (text.match(/\./g) || []).length > 1) text = text.replace(/[._]+/g, ' ');
+      return text;
+    }
+
+    function voiceKind(text) {
+      var found = '';
+      VOICE_KINDS.some(function (kind) { return String(text).match(kind[0]) ? (found = kind[1], true) : false; });
+      return found;
+    }
+
+    // "Sound / RUS / AniLibria" or "MVO | LostFilm" -> the studio.
+    function voiceStudio(text) {
+      var parts = cleanName(text).split(/\s+\/\s+|\s*\|\s*/).map(function (part) {
+        VOICE_KINDS.forEach(function (kind) { part = part.replace(kind[0], '$1'); });
+        part = tidy(part.replace(VOICE_NOISE, '$1'));
+        return /^[\d\s.]*$/.test(part) ? '' : part;
+      }).filter(Boolean);
+      return parts.length ? parts[parts.length - 1] : '';
+    }
+
+    function audioTitle(track) {
+      var kind = voiceKind((track.gstTitle || '') + ' / ' + (track.location || ''));
+      var studio = voiceStudio(track.gstTitle) || voiceStudio(track.location);
+      if (studio && kind) return kind + ' — ' + studio;
+      return studio || kind || languageName(track.language) ||
+        (track.external ? 'Внешняя озвучка' : 'Дорожка ' + ((track.index || 0) + 1));
+    }
+
+    // The short name notices use: "LostFilm", not "Дубляж — LostFilm".
+    function audioName(track) {
+      return voiceStudio(track.gstTitle) || voiceStudio(track.location) || track.homelabTitle || audioTitle(track);
+    }
+
+    function audioStatus(state, track) {
+      if (state.preparing && state.preparing.track === track) {
+        var seconds = Math.floor((Date.now() - state.preparing.started) / 1000);
+        return seconds >= 2 ? 'готовится… ' + seconds + ' с' : 'готовится…';
+      }
+      if (track.unsupported) return 'не подходит к этому видео';
+      if (track.failed || track.prepareFailed) return 'не загрузилась — выберите ещё раз';
+      return '';
+    }
+
+    function audioDetails(state, track) {
+      var parts = [];
+      var status = audioStatus(state, track);
+      if (status) parts.push(status);
+      if (matchingTrack(state.tracks || [], state.preferences.audio) === track) parts.push('★ для сериала');
+      var language = languageName(track.language);
+      if (language && (track.homelabTitle || audioTitle(track)).indexOf(language) !== 0) parts.push(language);
+      var channels = CHANNEL_NAMES[track.extra && track.extra.channels];
+      if (channels) parts.push(channels);
+      var codec = String(track.sourceCodec || '').toLowerCase();
+      codec = codec ? CODEC_NAMES[codec] || codec.toUpperCase() : track.aac ? 'AAC' : '';
+      if (codec) parts.push(codec);
+      parts.push(track.external ? 'внешняя' : 'встроенная');
+      return parts.join(' · ');
+    }
+
+    // Menu hooks and drawn nodes stay out of anything that copies or saves a track.
+    function hidden(target, name, value) {
+      Object.defineProperty(target, name, {value: value, writable: true, configurable: true, enumerable: false});
+    }
+
+    // Lampa's Select draws an item from its template, then calls onDraw.
+    function paintItem(node, title, details) {
+      if (!node || !node.find) return;
+      node.find('.selectbox-item__title').text(title);
+      var line = node.find('.selectbox-item__subtitle');
+      if (!line.length && details && window.jQuery) {
+        line = window.jQuery('<div class="selectbox-item__subtitle"></div>');
+        node.append(line);
+      }
+      if (line.length) line.text(details);
+    }
+
+    function paintTrack(state, track) {
+      if (track.homelabItem) paintItem(track.homelabItem, track.homelabTitle || audioTitle(track), audioDetails(state, track));
+    }
+
+    // An open menu follows a preparation without being redrawn.
+    function repaintTracks(state) {
+      (state.tracks || []).forEach(function (track) { paintTrack(state, track); });
+    }
+
+    // The menu: the remembered voice first, then by language, else in file
+    // order. state.tracks keeps file order for the logic; Lampa keeps this
+    // array, so it is reordered in place.
+    function arrangeMenu(state) {
+      var seen = {};
+      state.tracks.forEach(function (track) {
+        var title = audioTitle(track);
+        seen[title] = (seen[title] || 0) + 1;
+        track.homelabTitle = seen[title] > 1 ? title + ' (' + seen[title] + ')' : title;
+      });
+      var remembered = matchingTrack(state.tracks, state.preferences.audio);
+      var order = state.tracks.map(function (track, at) {
+        var language = LANGUAGE_ORDER[displayLanguage(track.language)];
+        return {track: track, at: at, rank: (track === remembered ? 0 : 10) + (language === undefined ? 4 : language)};
+      }).sort(function (a, b) { return a.rank - b.rank || a.at - b.at; }).map(function (entry) { return entry.track; });
+      if (!state.menu) state.menu = [];
+      state.menu.splice.apply(state.menu, [0, state.menu.length].concat(order));
+      return state.menu;
     }
 
     // Lampa's panel marks the chosen item and switches it on through
@@ -923,6 +1085,7 @@
     // that handler and its focus return. Labels are ours, not Lampa's translations.
     function offerTrack(state, track) {
       track.ignore_translate = true;
+      hidden(track, 'onDraw', function (node) { hidden(track, 'homelabItem', node); paintTrack(state, track); });
       var descriptor = Object.getOwnPropertyDescriptor(track, 'enabled');
       if (descriptor && descriptor.set && descriptor.set.homelabState === state) return;
       function choose(value) {
@@ -951,7 +1114,9 @@
       if (!state.preparing) return;
       state.preparing.abort.abort();
       clearTimeout(state.preparing.timer);
+      var track = state.preparing.track;
       state.preparing = null;
+      paintTrack(state, track);
     }
 
     // Keep the current audio playing until the sidecar has the rendition's
@@ -959,15 +1124,18 @@
     function prepareExternal(state, track, automatic) {
       if (state.preparing && state.preparing.track === track) return;
       cancelPreparation(state);
-      var preparing = state.preparing = {track: track, abort: new AbortController(), timer: null, deadline: Date.now() + 120000};
-      if (!automatic && Lampa.Noty) Lampa.Noty.show('Готовлю озвучку: ' + track.label);
+      var preparing = state.preparing = {track: track, abort: new AbortController(), timer: null, started: Date.now(), deadline: Date.now() + 120000};
+      track.prepareFailed = false;
+      if (!automatic) notify('Готовлю озвучку «' + audioName(track) + '»…');
       function attempt() {
         if (state.preparing !== preparing) return;
+        paintTrack(state, track);
         window.fetch(new URL(externalUrl(track), window.location.href).href, {signal: preparing.abort.signal, cache: 'no-store'}).then(function (response) {
           if (state.preparing !== preparing) return;
           if (response.ok) {
             state.preparing = null;
             track.ready = true;
+            paintTrack(state, track);
             if (automatic && Date.now() >= state.autoUntil + AUTO_PREPARE_MS - AUTO_APPLY_MS) return lateTrack(state, track);
             return selectTrack(state, track, true);
           }
@@ -979,14 +1147,21 @@
         }).catch(function (error) {
           if (error.name === 'AbortError' || state.preparing !== preparing) return;
           state.preparing = null;
+          track.prepareFailed = true;
           console.warn('Homelab external audio:', error.message);
           report('audio-external-failed', {track: track.label, reason: error.message}, state.work);
           // The panel marked the chosen item; the previous track still plays.
           markSelected(state);
-          if (Lampa.Noty) Lampa.Noty.show('Не удалось подготовить озвучку: ' + track.label);
+          paintTrack(state, track);
+          notify('Не удалось подготовить озвучку «' + audioName(track) + '»');
         });
       }
       attempt();
+    }
+
+    function seriesPlayback(work) {
+      var list = Lampa.PlayerPlaylist && typeof Lampa.PlayerPlaylist.get === 'function' ? Lampa.PlayerPlaylist.get() : work.playlist;
+      return Array.isArray(list) && list.length > 1;
     }
 
     function embeddedFallback(work) {
@@ -1012,8 +1187,17 @@
       }
       console.warn('Homelab external audio:', reason);
       report('audio-external-fallback', {track: failed && failed.label, to: carrier.label, reason: reason}, work);
-      if (Lampa.Noty) Lampa.Noty.show(layout ? 'Внешняя озвучка не поддерживается для этого видео' : 'Внешняя озвучка недоступна, включена встроенная');
-      selectTrack(active, carrier, true);
+      // Once per voice and play: a voice failing again stays quiet.
+      var state = active;
+      var key = (failed ? failed.key : '') + (layout ? ':layout' : '');
+      state.fallbackNotices = state.fallbackNotices || {};
+      if (!state.fallbackNotices[key]) {
+        state.fallbackNotices[key] = true;
+        var name = failed ? 'Озвучка «' + audioName(failed) + '»' : 'Внешняя озвучка';
+        notify(name + (layout ? ' не подходит к этому видео' : ' недоступна') + ' — включена встроенная');
+      }
+      selectTrack(state, carrier, true);
+      repaintTracks(state);
     }
 
     function selectedTrack(state, url) {
@@ -1189,6 +1373,7 @@
           if (!/^Dialogue:/im.test(text)) Lampa.Noty.show('В этих субтитрах надписи не отделены от реплик');
         }
         state.assInstance = new Renderer(rendererOptions(base, video, text, results[2], results[3]));
+        paintSubtitle(state, item);
         seeked(); // a paused video shows no new frame to draw on
       }).catch(function (error) {
         if (active !== state || state.assRequest !== request) return;
@@ -1196,6 +1381,7 @@
         report('ass-failed', {track: item.label, reason: error && error.message}, state.work);
         hideAss(state, 'failed');
         updateSignsToggle();
+        paintSubtitle(state, item);
         Lampa.Noty.show('Не удалось показать ASS-субтитры');
       });
     }
@@ -1566,6 +1752,7 @@
         item.label = item.homelabLabel = subtitleLabel(sub.title, sub.language, false);
         item.homelabSigns = signsTitle(sub.title);
         item.homelabLanguage = sub.language || '';
+        item.homelabSource = {title: sub.title || original.label, language: sub.language || '', external: false};
         // Choices are remembered by GST's name, which a choice made before
         // this probe arrived also used.
         item.gstTitle = original.label;
@@ -1594,18 +1781,88 @@
       return !title.match(FULL_WORDS) && !!title.match(SIGNS_WORDS);
     }
 
-    function subtitleLabel(title, language, external, signs) {
+    function subtitleParts(title, language, signs) {
       title = String(title || '').replace(/["'«»\u2033\u2019]/g, '').trim();
       if (signs === undefined) signs = signsTitle(title);
       var lang = LANGUAGES[String(language || '').toLowerCase()] || '';
       var group = title.replace(NOISE_WORDS, '$1').replace(/[\[\]()]/g, ' ')
         .replace(/^[\s\-_.,:;|/+&]+|[\s\-_,:;|/+&]+$/g, '').replace(/\s+/g, ' ');
       if (/^[\d\s]*$/.test(group)) group = ''; // "Субтитры 2": tracks are numbered later
-      var who = group || lang || title || 'Субтитры';
-      var what = signs ? 'надписи' : 'полные';
+      return {title: title, group: group, lang: lang, signs: signs};
+    }
+
+    function capitalized(text) {
+      return text.charAt(0).toUpperCase() + text.slice(1);
+    }
+
+    function subtitleLabel(title, language, external, signs) {
+      var parts = subtitleParts(title, language, signs);
+      var who = parts.group || parts.lang || parts.title || 'Субтитры';
+      var what = parts.signs ? 'надписи' : 'полные';
       // A group says nothing of the language unless it is the usual Russian.
-      if (group && lang && lang !== 'Русские') what += ', ' + lang.toLowerCase();
-      return plain(who.charAt(0).toUpperCase() + who.slice(1) + ': ' + what + (external ? ' (внешние)' : ''));
+      if (parts.group && parts.lang && parts.lang !== 'Русские') what += ', ' + parts.lang.toLowerCase();
+      return plain(capitalized(who) + ': ' + what + (external ? ' (внешние)' : ''));
+    }
+
+    // The subtitle menu: the group or the language as the title, then what
+    // the track covers, whether ASS draws it with its styles and where it is from.
+    var SDH_WORDS = words('sdh|cc|hoh|слабослыш[а-яё]*');
+
+    function subtitleSource(item) {
+      return item.homelabSource || {title: item.label, language: subtitleLanguage(item), external: Boolean(item.external)};
+    }
+
+    function subtitleTitle(item) {
+      var source = subtitleSource(item);
+      var parts = subtitleParts(cleanName(source.title).replace(SDH_WORDS, '$1'), source.language, subtitleSigns(item));
+      return capitalized(parts.group || parts.lang || languageName(source.language) || 'Субтитры');
+    }
+
+    function subtitleDetails(state, item) {
+      var source = subtitleSource(item);
+      var parts = subtitleParts(source.title, source.language, subtitleSigns(item));
+      var details = [];
+      if (state.assActive === item && !state.assInstance) details.push('загружаются…');
+      if (state.subtitles && matchingTrack(state.subtitles, state.preferences.subtitles) === item) details.push('★ для сериала');
+      details.push(parts.signs ? 'надписи' : String(source.title || '').match(SDH_WORDS) ? 'полные, для слабослышащих' : 'полные');
+      var title = item.homelabTitle || subtitleTitle(item);
+      if (parts.lang && title.indexOf(parts.lang) !== 0) details.push(parts.lang.toLowerCase());
+      if (item.homelabAss && !item.homelabAss.text) details.push('ASS со стилями');
+      details.push(source.external ? 'внешние' : 'встроенные');
+      return details.join(' · ');
+    }
+
+    function paintSubtitle(state, item) {
+      if (item.homelabItem) paintItem(item.homelabItem, item.homelabTitle || subtitleTitle(item), subtitleDetails(state, item));
+    }
+
+    function repaintSubtitles(state) {
+      (state.subtitleList || []).forEach(function (item) { if (!item.homelabOff) paintSubtitle(state, item); });
+    }
+
+    // Our own first item: Lampa inserts its «Отключено» only into a list without one.
+    function offItem(list) {
+      var item = {index: -1, title: 'Выкл.', homelabOff: true};
+      Object.defineProperty(item, 'selected', {
+        enumerable: true,
+        get: function () { return !list.some(function (sub) { return sub !== item && sub.mode === 'showing'; }); },
+        set: function () {}
+      });
+      // Lampa's menu sets the chosen item's mode; this one is never a track.
+      Object.defineProperty(item, 'mode', {enumerable: true, get: function () { return 'disabled'; }, set: function () {}});
+      return item;
+    }
+
+    function decorateSubtitles(state, items) {
+      var seen = {};
+      items.forEach(function (item) {
+        var title = subtitleTitle(item);
+        var key = title + '|' + subtitleSigns(item) + '|' + Boolean(subtitleSource(item).external);
+        seen[key] = (seen[key] || 0) + 1;
+        item.homelabTitle = seen[key] > 1 ? title + ' (' + seen[key] + ')' : title;
+        hidden(item, 'onDraw', function (node) { hidden(item, 'homelabItem', node); paintSubtitle(state, item); });
+      });
+      return items;
     }
 
     // Tracks that come out with the same label are numbered in menu order, so
@@ -1632,7 +1889,8 @@
             index: 1000 + number * 2 + (signs ? 1 : 0), external: true, language: sub.language || '',
             label: subtitleLabel(sub.title, sub.language, true, signs),
             homelabLabel: subtitleLabel(sub.title, sub.language, true, signs),
-            homelabAss: {url: base + sub.file + '/raw', fonts: fonts, signs: signs}, homelabSigns: signs
+            homelabAss: {url: base + sub.file + '/raw', fonts: fonts, signs: signs}, homelabSigns: signs,
+            homelabSource: {title: sub.title, language: sub.language || '', external: true}
           }));
         });
       });
@@ -1640,13 +1898,14 @@
     }
 
     function withAss(state, list) {
-      if (!state.hlsSubs) state.hlsSubs = list.filter(function (item) { return !item.homelabAss; });
+      if (!state.hlsSubs) state.hlsSubs = list.filter(function (item) { return !item.homelabAss && !item.homelabOff; });
       var items = embeddedItems(state);
       // Tracks the plugin does not rename keep GST's name, which can carry markup.
       items.forEach(function (item) {
         if (!item.homelabAss && /[<>"'`]/.test(item.label)) item.label = plain(item.label);
       });
-      list.splice.apply(list, [0, list.length].concat(numberLabels(items.concat(state.assItems || []))));
+      var all = decorateSubtitles(state, numberLabels(items.concat(state.assItems || [])));
+      list.splice.apply(list, [0, list.length].concat(all.length ? [offItem(list)].concat(all) : []));
       // A plain-text track already showing switches to its drawn version.
       items.forEach(function (item) {
         if (item.homelabOriginal && item.homelabOriginal.mode === 'showing') showWith(item, 'drawn');
@@ -1893,7 +2152,7 @@
               external: true, key: track.file + ':' + track.stream,
               url: base + track.file + '/' + track.stream + '/aac/audio.m3u8',
               codecs: EXTERNAL_CODECS,
-              language: track.language, gstTitle: track.title || '',
+              language: track.language, gstTitle: track.title || '', location: track.location || '', sourceCodec: track.codec || '',
               label: plain((track.title || track.location || 'Audio') + ' (внешняя)'),
               extra: {channels: track.channels}
             };
@@ -1955,13 +2214,15 @@
           track.selected = track === current;
           offerTrack(state, track);
         });
-        work.voiceovers = state.tracks;
-        Lampa.PlayerPanel.setTracks(state.tracks);
+        work.voiceovers = arrangeMenu(state);
+        Lampa.PlayerPanel.setTracks(state.menu);
         var preferred = matchingTrack(state.tracks, state.preferences.audio);
         if (!preferred || preferred === current) return;
         // A late lookup must not reload a video the viewer is already watching.
-        if (Date.now() < state.autoUntil) selectTrack(state, preferred, true);
-        else lateTrack(state, preferred);
+        if (Date.now() < state.autoUntil) {
+          state.autoNotice = preferred;
+          selectTrack(state, preferred, true);
+        } else lateTrack(state, preferred);
       }
       embedded.catch(function (error) {
         if (error.name === 'AbortError') throw error;
@@ -2004,6 +2265,12 @@
     // Only playback counts, not a pause or a scrub through the timeline.
     var WARM_REMAINING = 420;
     var WARM_PLAYED = 10;
+    // A GST EVENT playlist grows while the task encodes ahead: its end is
+    // known only once the duration has stopped changing for a while.
+    var WARM_STABLE_MS = 30000;
+    // One retry: a busy sidecar (429) after a while, a failure (5xx, network) sooner.
+    var WARM_BUSY_RETRY_MS = 30000;
+    var WARM_FAILED_RETRY_MS = 10000;
     var warmedFiles = [];
 
     function torrentFile(item) {
@@ -2046,12 +2313,20 @@
 
     function warmNext() {
       var state = active;
-      if (!state || state.warmed || Lampa.Player.playdata() !== state.work || !state.work.homelab_torrent_hash) return;
+      if (!state || state.warmed || state.warmBusy || Lampa.Player.playdata() !== state.work || !state.work.homelab_torrent_hash) return;
       var video = Lampa.PlayerVideo.video();
+      var duration = video && Number(video.duration);
+      var now = Date.now();
+      if (duration !== state.warmDuration) {
+        state.warmDuration = duration;
+        state.warmStableSince = now;
+        state.warmPlayed = 0;
+        state.warmLast = null;
+      }
       var time = video && Number(video.currentTime);
-      var left = video && video.duration - time;
-      if (!video || video.paused || video.seeking || !isFinite(video.duration) ||
-          !(left > 0 && left <= WARM_REMAINING) || time < video.duration / 2) {
+      var left = video && duration - time;
+      if (!video || video.paused || video.seeking || !isFinite(duration) || now - state.warmStableSince < WARM_STABLE_MS ||
+          !(left > 0 && left <= WARM_REMAINING) || time < duration / 2) {
         state.warmPlayed = 0;
         state.warmLast = null;
         return;
@@ -2060,21 +2335,33 @@
       var step = state.warmLast === null || state.warmLast === undefined ? 0 : time - state.warmLast;
       state.warmLast = time;
       if (step > 0 && step < 3) state.warmPlayed = (state.warmPlayed || 0) + step;
-      if (state.warmPlayed < WARM_PLAYED) return;
-      // Once per episode, whatever the outcome.
-      state.warmed = true;
+      if (state.warmPlayed < WARM_PLAYED || now < (state.warmRetryAt || 0)) return;
       var next = nextFile(state.work);
-      if (!next || metered()) return;
+      if (!next || metered()) { state.warmed = true; return; }
       var key = next.hash + '/' + next.index;
-      if (warmedFiles.indexOf(key) !== -1) return;
-      warmedFiles.push(key);
-      if (warmedFiles.length > 50) warmedFiles.shift();
+      if (warmedFiles.indexOf(key) !== -1) { state.warmed = true; return; }
       var url = new URL('/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + next.index + '/warm', window.location.href);
       // The sidecar probes external audio only for the voice-over being played.
       var external = state.work.homelab_external_audio;
       if (external && /^\d+:/.test(external.key)) url.searchParams.set('voice', external.key.split(':')[0]);
-      report('warm-next', {next: next.index, voice: Boolean(url.searchParams.get('voice'))}, state.work);
-      window.fetch(url.href, {method: 'POST', cache: 'no-store'}).catch(function () {});
+      state.warmAttempts = (state.warmAttempts || 0) + 1;
+      state.warmBusy = true;
+      report('warm-next', {next: next.index, voice: Boolean(url.searchParams.get('voice')), attempt: state.warmAttempts}, state.work);
+      // Once per episode only when the sidecar took it; a refusal may be retried once.
+      function failed(status) {
+        state.warmBusy = false;
+        report('warm-failed', {next: next.index, status: status, attempt: state.warmAttempts}, state.work);
+        var retry = (status === 429 || status === 0 || status >= 500) && state.warmAttempts < 2;
+        if (!retry) { state.warmed = true; return; }
+        state.warmRetryAt = Date.now() + (status === 429 ? WARM_BUSY_RETRY_MS : WARM_FAILED_RETRY_MS);
+      }
+      window.fetch(url.href, {method: 'POST', cache: 'no-store'}).then(function (response) {
+        if (!response || !response.ok) return failed(response && response.status || 0);
+        state.warmBusy = false;
+        state.warmed = true;
+        if (warmedFiles.indexOf(key) === -1) warmedFiles.push(key);
+        if (warmedFiles.length > 50) warmedFiles.shift();
+      }, function () { failed(0); });
     }
 
     Lampa.PlayerVideo.listener.follow('subs', function (event) {
@@ -2082,7 +2369,7 @@
       // Lampa may send back the list it keeps, with drawn items already in it.
       lastSubtitles = {work: Lampa.Player.playdata(), list: event.subs, originals: event.subs.map(function (sub) {
         return sub.homelabOriginal || sub;
-      }).filter(function (sub) { return !sub.homelabAss; })};
+      }).filter(function (sub) { return !sub.homelabAss && !sub.homelabOff; })};
       if (!active || Lampa.Player.playdata() !== active.work) return;
       // The panel keeps this same array, so drawn items join or replace in its menu.
       active.hlsSubs = lastSubtitles.originals;
@@ -2102,6 +2389,7 @@
       var selected = showingSubtitle(active);
       if (selected) report('subtitle-switch', {auto: false, track: selected.label, via: toggling ? 'toggle' : null});
       if (selected) remember(active, 'subtitles', identity(selected));
+      repaintSubtitles(active);
     });
     // S on a keyboard does what the panel button does, while the player has the controls.
     if (Lampa.Keypad && Lampa.Keypad.listener) Lampa.Keypad.listener.follow('keydown', function (event) {

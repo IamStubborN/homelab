@@ -37,6 +37,14 @@ PROBE_BACKGROUND_SECONDS = int(os.environ.get("PROBE_BACKGROUND_SECONDS", "180")
 MAX_CANDIDATES = 6
 MAX_TRACK_LOOKUPS = 2
 MAX_PROBES_CACHED = 256
+# Near the end of an episode the player asks for the next one to be warmed:
+# its head is read once (what GST and ffprobe open first) and its probes are
+# cached. One warm at a time, each file at most once in WARM_FORGET_SECONDS.
+WARM_HEAD_BYTES = int(os.environ.get("WARM_HEAD_MB", "8")) * 1024 * 1024
+WARM_SECONDS = 60
+WARM_FORGET_SECONDS = 6 * 3600
+# TorrServer's torrent states that are running (not only kept in its database).
+TORRENT_GETTING_INFO, TORRENT_PRELOAD, TORRENT_WORKING = 1, 2, 3
 
 AUDIO_EXTENSIONS = {
     ".mka", ".webm", ".m4a", ".aac", ".ac3", ".eac3", ".ec3", ".dts", ".dtshd",
@@ -139,6 +147,7 @@ MAX_FAILURES = 3
 FAILURE_RESET_SECONDS = 60
 SEGMENT_RE = re.compile(r"^s(\d+)\.m4s$")
 FILE_RE = re.compile(r"^(?:audio\.m3u8|init\.mp4|s\d{1,6}\.m4s)$")
+WARM_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/warm$")
 ROUTE_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(tracks|raw)|(\d{1,2})/(aac)/([^/]+))$")
 EMBEDDED_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(embedded)|sub/(\d{1,2})|attachment/(\d{1,3}))$")
 RENDERER_RE = re.compile(r"^/extaudio/jassub/([a-z0-9-]+\.(?:js|wasm|woff2|ttf|txt))$")
@@ -163,6 +172,10 @@ _subs = {}
 _subs_lock = threading.Lock()
 _library = {"faces": {}, "index": None}
 _library_lock = threading.Lock()
+_embedded_probing = {}
+_warmed = {}
+_warm_lock = threading.Lock()
+_warms = threading.BoundedSemaphore(1)
 _log_window = {"start": 0.0, "count": 0}
 _log_lock = threading.Lock()
 _log_write_lock = threading.Lock()
@@ -493,7 +506,7 @@ def fetch_raw(torrent_hash, file_id):
     return path
 
 
-def cached_probe(cache, key, command, parse, timeout=PROBE_TIMEOUT_SECONDS):
+def cached_probe(cache, key, command, parse, timeout=PROBE_TIMEOUT_SECONDS, remember_failure=True):
     with _probe_lock:
         if key in cache:
             return cache[key]
@@ -505,6 +518,8 @@ def cached_probe(cache, key, command, parse, timeout=PROBE_TIMEOUT_SECONDS):
     except subprocess.TimeoutExpired:
         raise  # A torrent that is still connecting is worth asking again.
     except (subprocess.SubprocessError, ValueError, OSError):
+        if not remember_failure:  # a warm-up must not hold back the real start
+            raise
         with _probe_lock:
             if len(_probe_failures) >= MAX_PROBES_CACHED:
                 _probe_failures.clear()
@@ -533,16 +548,17 @@ def audio_streams(probe):
     return streams
 
 
-def probe_audio(torrent_hash, file_id, timeout=PROBE_TIMEOUT_SECONDS):
+def probe_audio(torrent_hash, file_id, timeout=PROBE_TIMEOUT_SECONDS, remember_failure=True):
     command = [
         "ffprobe", "-v", "error", *INPUT_OPTIONS, "-select_streams", "a",
         "-show_entries", "stream=codec_name,profile,sample_rate,channels,duration:stream_tags=title,language,DURATION:format=duration",
         "-of", "json", stream_url(torrent_hash, file_id),
     ]
-    return cached_probe(_probe_cache, (torrent_hash, file_id), command, audio_streams, timeout=timeout)
+    return cached_probe(_probe_cache, (torrent_hash, file_id), command, audio_streams, timeout=timeout,
+                        remember_failure=remember_failure)
 
 
-def probe_audio_soon(torrent_hash, file_id, wait=PROBE_TIMEOUT_SECONDS):
+def probe_audio_soon(torrent_hash, file_id, wait=PROBE_TIMEOUT_SECONDS, remember_failure=True):
     """Streams of an audio file, or None when TorrServer has not fetched enough
     of it within `wait` seconds. The probe then carries on in the background,
     so a later lookup finds the result cached instead of starting over."""
@@ -553,7 +569,7 @@ def probe_audio_soon(torrent_hash, file_id, wait=PROBE_TIMEOUT_SECONDS):
         done = _probing.get(key)
         if done is None:
             done = _probing[key] = threading.Event()
-            threading.Thread(target=probe_in_background, args=(torrent_hash, file_id, done), daemon=True).start()
+            threading.Thread(target=probe_in_background, args=(torrent_hash, file_id, done, remember_failure), daemon=True).start()
     if not done.wait(max(0, wait)):
         return None
     with _probe_lock:
@@ -564,9 +580,9 @@ def probe_audio_soon(torrent_hash, file_id, wait=PROBE_TIMEOUT_SECONDS):
     return None  # the background probe timed out too; the next lookup starts another
 
 
-def probe_in_background(torrent_hash, file_id, done):
+def probe_in_background(torrent_hash, file_id, done, remember_failure=True):
     try:
-        probe_audio(torrent_hash, file_id, timeout=PROBE_BACKGROUND_SECONDS)
+        probe_audio(torrent_hash, file_id, timeout=PROBE_BACKGROUND_SECONDS, remember_failure=remember_failure)
     except Exception:  # failures are cached; a timeout is probed again on the next lookup
         pass
     finally:
@@ -646,26 +662,152 @@ def embedded_info(probe):
     return {"subtitles": subtitles, "fonts": fonts, "duration": duration}
 
 
-def probe_embedded(torrent_hash, file_id):
+def probe_embedded(torrent_hash, file_id, remember_failure=True):
     key = (torrent_hash, file_id, "embedded")
+    mine = None
     with _probe_lock:
         known = key in _embedded_cache
-    if not known:
-        require_video_file(torrent_hash, file_id)
-    command = [
-        "ffprobe", "-v", "error", *INPUT_OPTIONS,
-        "-show_entries", "stream=index,codec_type,codec_name,extradata_size:stream_tags=title,language,filename,mimetype"
-        ":format=duration",
-        "-of", "json", stream_url(torrent_hash, file_id),
-    ]
-    # A video that just started may need a while to fetch its header.
-    return cached_probe(_embedded_cache, key, command, embedded_info, timeout=3 * PROBE_TIMEOUT_SECONDS)
+        running = None if known else _embedded_probing.get(key)
+        if not known and running is None:
+            mine = _embedded_probing[key] = threading.Event()
+    if running is not None:
+        # A warm-up or another lookup is reading this header already; one
+        # ffprobe is enough. Probe again only if it found nothing.
+        running.wait(3 * PROBE_TIMEOUT_SECONDS)
+        with _probe_lock:
+            if key in _embedded_cache:
+                return _embedded_cache[key]
+    try:
+        if not known:
+            require_video_file(torrent_hash, file_id)
+        command = [
+            "ffprobe", "-v", "error", *INPUT_OPTIONS,
+            "-show_entries", "stream=index,codec_type,codec_name,extradata_size:stream_tags=title,language,filename,mimetype"
+            ":format=duration",
+            "-of", "json", stream_url(torrent_hash, file_id),
+        ]
+        # A video that just started may need a while to fetch its header.
+        return cached_probe(_embedded_cache, key, command, embedded_info, timeout=3 * PROBE_TIMEOUT_SECONDS,
+                            remember_failure=remember_failure)
+    finally:
+        if mine is not None:
+            with _probe_lock:
+                _embedded_probing.pop(key, None)
+            mine.set()
 
 
 def probed_embedded(torrent_hash, file_id):
     """The cached probe; events and fonts are served only for probed files."""
     with _probe_lock:
         return _embedded_cache.get((torrent_hash, file_id, "embedded"))
+
+
+def claim_warm(torrent_hash, file_id, now=None):
+    """Whether this file is still to be warmed; it then counts as warmed."""
+    now = time.monotonic() if now is None else now
+    with _warm_lock:
+        for key, since in list(_warmed.items()):
+            if now - since > WARM_FORGET_SECONDS:
+                del _warmed[key]
+        if (torrent_hash, file_id) in _warmed:
+            return False
+        while len(_warmed) >= MAX_PROBES_CACHED:
+            del _warmed[next(iter(_warmed))]  # the oldest
+        _warmed[(torrent_hash, file_id)] = now
+        return True
+
+
+def unclaim_warm(torrent_hash, file_id):
+    with _warm_lock:
+        _warmed.pop((torrent_hash, file_id), None)
+
+
+def torrent_request(path, payload):
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        f"{TORRSERVER_BASE}{path}", data=body, method="POST", headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        text = response.read().decode("utf-8")
+    return json.loads(text) if text.strip() else None
+
+
+def torrent_active(torrent_hash):
+    """Whether TorrServer is running this torrent now. `list` reports a torrent
+    kept only in its database without starting it, unlike `get`."""
+    for item in torrent_request("/torrents", {"action": "list"}) or []:
+        if isinstance(item, dict) and str(item.get("hash", "")).lower() == torrent_hash:
+            return item.get("stat") in (TORRENT_GETTING_INFO, TORRENT_PRELOAD, TORRENT_WORKING)
+    return False
+
+
+def viewed(torrent_hash, file_id):
+    return any(
+        isinstance(item, dict) and item.get("file_index") == file_id
+        for item in torrent_request("/viewed", {"action": "list", "hash": torrent_hash}) or []
+    )
+
+
+def voice_candidate(files, video_id, voice_id):
+    """The next video's file of the voice-over being played: the candidate in
+    the same folder, named the same way when the folder has several."""
+    voice = next((item for item in files if item["id"] == voice_id), None)
+    if not voice or split_name(voice["path"])[2] not in AUDIO_EXTENSIONS:
+        return None
+    folder, stem, _ = split_name(voice["path"])
+    same = [item for item in external_candidates(files, video_id) if split_name(item["path"])[0] == folder]
+    if len(same) > 1:
+        same = [item for item in same if name_shape(split_name(item["path"])[1]) == name_shape(stem)]
+    return same[0]["id"] if len(same) == 1 and same[0]["id"] != voice_id else None
+
+
+def read_head(torrent_hash, file_id):
+    """Read the first WARM_HEAD_BYTES of a file so TorrServer has them cached,
+    and return how many bytes came. Closing the request ends the read."""
+    request = urllib.request.Request(stream_url(torrent_hash, file_id), headers={"Range": f"bytes=0-{WARM_HEAD_BYTES - 1}"})
+    deadline = time.monotonic() + WARM_SECONDS
+    size = 0
+    # TorrServer may ignore the range; the read stops at the limit either way.
+    with urllib.request.urlopen(request, timeout=10) as response:
+        while size < WARM_HEAD_BYTES and time.monotonic() < deadline:
+            chunk = response.read(min(64 * 1024, WARM_HEAD_BYTES - size))
+            if not chunk:
+                break
+            size += len(chunk)
+    return size
+
+
+def warm(torrent_hash, file_id, voice_id, files):
+    """Read the head of the next episode and run the probes its playback
+    starts with, so they answer from the cache. Holds the _warms slot until
+    every read has ended. Failures are not remembered: the real start retries."""
+    def log(error):
+        print(f"warm {torrent_hash}/{file_id}: {type(error).__name__} {error}", file=sys.stderr, flush=True)
+    try:
+        try:
+            # Every read of a file marks it viewed in TorrServer; a warm-up is not a view.
+            unviewed = not viewed(torrent_hash, file_id)
+        except Exception as error:
+            log(error)
+            unviewed = False
+        steps = [
+            lambda: read_head(torrent_hash, file_id),
+            lambda: probe_embedded(torrent_hash, file_id, remember_failure=False),
+        ]
+        if voice_id is not None:
+            steps.append(lambda: probe_audio_soon(torrent_hash, voice_id, wait=PROBE_BACKGROUND_SECONDS, remember_failure=False))
+        for step in steps:
+            try:
+                step()
+            except Exception as error:
+                log(error)
+        if unviewed:
+            try:
+                torrent_request("/viewed", {"action": "rem", "hash": torrent_hash, "file_index": file_id})
+            except Exception as error:
+                log(error)
+    finally:
+        _warms.release()
 
 
 def attachment_path(torrent_hash, file_id, index):
@@ -1654,7 +1796,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_bytes(status, body, "application/json; charset=utf-8", extra=extra)
 
     def do_POST(self):
-        if urllib.parse.urlsplit(self.path).path != "/extaudio/log":
+        split = urllib.parse.urlsplit(self.path)
+        warm_match = WARM_RE.match(split.path)
+        if warm_match:
+            return self.serve_warm(warm_match.group(1).lower(), int(warm_match.group(2)), urllib.parse.parse_qs(split.query))
+        if split.path != "/extaudio/log":
             return self.send_json(404, {"error": "not found"})
         try:
             length = int(self.headers.get("Content-Length", ""))
@@ -1890,6 +2036,47 @@ class Handler(BaseHTTPRequestHandler):
         if not FILE_RE.match(name):
             return self.send_json(404, {"error": "not found"})
         return self.serve_live(torrent_hash, file_id, stream, name, query)
+
+    def serve_warm(self, torrent_hash, file_id, query):
+        if self.headers.get("Content-Length", "0") != "0":
+            self.close_connection = True  # a body is never read
+        origin = self.headers.get("Origin")
+        # Another site's page must not make TorrServer download.
+        if origin is not None and urllib.parse.urlsplit(origin).netloc != self.headers.get("Host"):
+            return self.send_json(403, {"error": "forbidden"})
+        voice = query.get("voice", [""])[0]
+        if voice and not re.fullmatch(r"\d{1,6}", voice):
+            return self.send_json(400, {"error": "bad voice"})
+        if not _warms.acquire(blocking=False):
+            return self.send_json(429, {"error": "busy"})
+        started = False
+        try:
+            try:
+                if not torrent_active(torrent_hash):
+                    return self.send_json(404, {"error": "not found"})
+                files = torrent_files(torrent_hash)
+            except urllib.error.HTTPError as error:
+                error.close()
+                return self.send_json(404, {"error": "not found"})
+            except Exception:
+                return self.send_json(502, {"error": "lookup failed"})
+            # Only a video of a torrent TorrServer is running.
+            if not any(item["id"] == file_id and split_name(item["path"])[2] in VIDEO_EXTENSIONS for item in files):
+                return self.send_json(404, {"error": "not found"})
+            if not claim_warm(torrent_hash, file_id):
+                return self.send_json(200, {"warm": "done"})
+            # External audio is probed only for the voice-over being played.
+            voice_id = voice_candidate(files, file_id, int(voice)) if voice else None
+            try:
+                threading.Thread(target=warm, args=(torrent_hash, file_id, voice_id, files), daemon=True).start()
+            except RuntimeError:
+                unclaim_warm(torrent_hash, file_id)
+                return self.send_json(503, {"error": "busy"})
+            started = True
+            return self.send_json(202, {"warm": "started"})
+        finally:
+            if not started:
+                _warms.release()
 
 
 def main():

@@ -87,7 +87,26 @@
           return result;
         };
       }
-      var specials = null, disposed = false, requestId = 0, drawn = null;
+      var specials = null, disposed = false, requestId = 0, drawn = null, rows = [], lastPlayed = null;
+      // Lampac's Back lands on the row last focused (the one started), even after the player went
+      // on through the playlist: point it at the episode that played last instead.
+      function played(work) {
+        var movie = object.movie;
+        if (!disposed && work && movie && movie.name && work.card === movie && Number.isInteger(work.episode) && work.episode > 0) lastPlayed = work;
+      }
+      function returned() {
+        var work = lastPlayed; lastPlayed = null;
+        if (disposed || !work || L.Activity.active() !== object) return;
+        var voice = work.voice_name || work.homelab_online && work.homelab_online.voice || '';
+        var row = rows.filter(function (entry) {
+          var file = entry.file;
+          return file.season === work.season && file.episode === work.episode && (!voice || !file.voice_name || file.voice_name === voice);
+        })[0], html = row && row.html;
+        // Lampac remembers a row as «last» on hover:focus; the player hands focus back right after destroy.
+        if (html && typeof html.trigger === 'function') html.trigger('hover:focus');
+      }
+      L.Player.listener.follow('start', played);
+      L.Player.listener.follow('destroy', returned);
       function owns(batch) { return !disposed && specials === batch && sync.scope() === batch.scope && L.Activity.active() === object && provider === batch.provider; }
       function specialRoad(file) {
         var movie = object.movie, hash = L.Utils.hash([0, '', file.episode, movie.original_title || movie.original_name].join(''));
@@ -242,9 +261,13 @@
         };
       }
       comp.draw = function (items, params) {
-        requestId++; drawn = Array.isArray(items) ? items : null;
+        requestId++; drawn = Array.isArray(items) ? items : null; rows = [];
+        params = Object.assign({}, params || {});
+        var shown = params.onRender;
+        params.onRender = function (file, html) { if (file && html) rows.push({file: file, html: html}); if (shown) return shown.apply(this, arguments); };
+        var args = Array.prototype.slice.call(arguments); args[1] = params;
         var batch = specials = specialSupport && object.movie.name && items.some(special) ? {files: items.filter(special), scope: sync.scope(), provider: provider, playlist: null} : null;
-        if (!batch && (!intent || intent.finished || intent.cancelled)) return draw.apply(comp, arguments);
+        if (!batch && (!intent || intent.finished || intent.cancelled)) return draw.apply(comp, args);
         params = Object.assign({}, params || {});
         var rendered = params.onRender, round = null, entered = params.onEnter;
         // A Continue landing keeps the saved point only for the focused row:
@@ -322,7 +345,12 @@
         }
         return draw.call(comp, items, params);
       };
-      comp.destroy = function () { disposed = true; requestId++; if (intent && !intent.finished) { intent.cancelled = true; clearTimeout(intent.timer); } return destroy.apply(comp, arguments); };
+      comp.destroy = function () {
+        disposed = true; requestId++; rows = []; lastPlayed = null;
+        if (typeof L.Player.listener.remove === 'function') { L.Player.listener.remove('start', played); L.Player.listener.remove('destroy', returned); }
+        if (intent && !intent.finished) { intent.cancelled = true; clearTimeout(intent.timer); }
+        return destroy.apply(comp, arguments);
+      };
       if (intent) {
         // Native choices are movie/provider scoped; seed only the requested source.
         // The voice name selects the matching voice button; providers without

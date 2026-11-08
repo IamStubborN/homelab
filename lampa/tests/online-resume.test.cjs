@@ -18,7 +18,7 @@ function setup(t, options = {}) {
       if (options.buttons) {
         const choice = choices.kinobase || {}, name = options.buttons.includes(choice.voice_name) ? choice.voice_name : options.buttons[0];
         choices.kinobase = {...choice, voice_name: name}; file.voice_name = name;
-      } file.timeline = {hash: '123'}; file.mark = () => {}; params.onRender?.(file, {}, {}); })); };
+      } file.timeline = {hash: '123'}; file.mark = () => {}; params.onRender?.(file, options.html?.(file) || {}, {}); })); };
     this.destroy = () => {};
     const root = h.window.$('<div></div>');
     this.render = () => root;
@@ -451,4 +451,30 @@ test('an unreachable Lampac server is named instead of an undefined provider', a
   const c = await h.open();
   c.noConnectToServer(new Error('network'));
   assert.match(c.render().find('.online-empty__time').text(), /^Сервер Lampac не ответил/);
+});
+
+function focusLog(h, log) { return item => { const html = h.window.$('<div class="online-prestige"></div>'); html.on('hover:focus', () => log.push(item.episode)); return html; }; }
+
+test('Back from the player lands on the episode that played last, not the one started', async t => {
+  const log = [], h = setup(t, {html: file => focusLog(h, log)(file)}), c = await h.open();
+  const files = [2, 3, 4, 5].map(episode => file(episode));
+  c.draw(files, {}); h.render();
+  h.L.Player.play(c.toPlayElement(files[1]));
+  h.L.Player.play(c.toPlayElement(files[3]));
+  h.L.Player.listener.send('destroy');
+  assert.deepEqual(log, [5]);
+  h.L.Player.listener.send('destroy');
+  assert.deepEqual(log, [5], 'only once per playback');
+});
+
+test('another voice, a movie or a closed component leaves the focus alone', async t => {
+  const log = [], h = setup(t, {html: file => focusLog(h, log)(file)}), c = await h.open();
+  const files = [2, 3].map(episode => file(episode));
+  c.draw(files, {}); h.render();
+  h.L.Player.play(c.toPlayElement(file(3, 'Other')));
+  h.L.Player.listener.send('destroy');
+  assert.deepEqual(log, []);
+  h.L.Player.play(c.toPlayElement(files[1]));
+  c.destroy(); h.L.Player.listener.send('destroy');
+  assert.deepEqual(log, []);
 });

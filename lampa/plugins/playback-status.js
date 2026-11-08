@@ -4,10 +4,10 @@
   if (!L || !$ || window.homelabPlaybackStatus || !L.Player || !L.Player.listener || !L.PlayerVideo || !L.PlayerVideo.listener || !L.PlayerPanel || !L.Noty) return;
   if (![L.Player.playdata, L.Player.listener.follow, L.PlayerVideo.video,
     L.PlayerVideo.listener.follow, L.PlayerPanel.render, L.Noty.show, L.Player.opened].every(function (fn) { return typeof fn === 'function'; })) return;
-  window.homelabPlaybackStatus = {version: 5};
-  // Short buffering blips stay invisible, Lampa's own loader covers a fast
+  window.homelabPlaybackStatus = {version: 6};
+  // Buffering mid-play stays invisible for 5 s (Lampa's spinner too), other short blips for 0.7 s; Lampa's own loader covers a fast
   // start; a long start suggests another source.
-  var DEBOUNCE = 700, START_DELAY = 2500, ESCALATE = 20000, STATS_EVERY = 2000, CTRL = 'homelab_playback_card';
+  var DEBOUNCE = 700, BUFFER_DELAY = 5000, START_DELAY = 2500, ESCALATE = 20000, STATS_EVERY = 2000, CTRL = 'homelab_playback_card';
   var state = null, boundAudio = null, retryButton = null, sourceButton = null, card = null;
   function scope() { return window.HomelabSync ? window.HomelabSync.scope() : L.Timeline.filename(); }
   function valid(s) { return state === s && L.Player.opened() && L.Player.playdata() === s.work && scope() === s.scope; }
@@ -58,6 +58,9 @@
     '.homelab-playback-card__actions{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-flex-wrap:wrap;flex-wrap:wrap;margin-top:.9em}' +
     '.homelab-playback-card__actions .simple-button{margin:0 1em 0 0;background-color:rgba(255,255,255,.1)}' +
     '.homelab-playback-card__actions .simple-button.focus{background-color:#fff;color:#000}' +
+    // Once playback has begun, Lampa's own spinner waits as long as the card.
+    '.homelab-played .player-video.video--load .player-video__loader{-webkit-animation:homelab-loader-wait 5s step-end;animation:homelab-loader-wait 5s step-end}' +
+    '@-webkit-keyframes homelab-loader-wait{from,to{visibility:hidden}}@keyframes homelab-loader-wait{from,to{visibility:hidden}}' +
     '@-webkit-keyframes homelab-playback-spin{to{-webkit-transform:rotate(360deg)}}@keyframes homelab-playback-spin{to{transform:rotate(360deg)}}' +
     '@-webkit-keyframes homelab-playback-in{from{opacity:0;-webkit-transform:translateY(.5em)}to{opacity:1;-webkit-transform:none}}@keyframes homelab-playback-in{from{opacity:0;transform:translateY(.5em)}to{opacity:1;transform:none}}';
   var ICON = {
@@ -97,7 +100,7 @@
       actions: $('<div class="homelab-playback-card__actions hide"></div>'),
       retry: $('<div class="simple-button selector hide homelab-playback-card__retry"><span>Повторить</span></div>').on('hover:enter', function () { recover(true); }),
       source: $('<div class="simple-button selector hide homelab-playback-card__source"><span>Другой источник</span></div>').on('hover:enter', function () { recover(false); }),
-      visible: false, text: {}, timer: null, statTimer: null, layout: ''};
+      player: root, visible: false, text: {}, timer: null, statTimer: null, layout: ''};
     var body = $('<div class="homelab-playback-card__body"></div>');
     card.box.attr('role', 'status').attr('aria-live', 'polite');
     card.actions.append(card.retry).append(card.source);
@@ -186,6 +189,7 @@
   function render() {
     var s = state, c = card;
     if (!c) return;
+    c.player.toggleClass('homelab-played', !!(s && valid(s) && s.playedOnce));
     clearTimeout(c.timer); c.timer = null;
     if (!s || !valid(s)) return hideCard();
     var kind = kindOf(s), now = Date.now(), waiting = kind === 'preparing' || kind === 'buffering' || kind === 'recovering';
@@ -197,7 +201,7 @@
     if (!kind || s.dismissed || menuOpen()) return hideCard();
     var elapsed = now - s.since;
     if (kind === 'preparing' && !s.escalated && elapsed >= ESCALATE && canChoose(s)) { s.escalated = true; actions(s, s.actionable); }
-    var delay = kind === 'preparing' ? START_DELAY : DEBOUNCE;
+    var delay = kind === 'preparing' ? START_DELAY : kind === 'buffering' ? BUFFER_DELAY : DEBOUNCE;
     if (waiting && elapsed < delay) { hideCard(); c.timer = setTimeout(render, delay - elapsed); return; }
     var retry = retryShown(s), source = sourceShown(s), text = content(s, kind, elapsed, retry, source);
     var layout = (waiting ? 'wait' : 'alert') + (retry ? ':retry' : '') + (source ? ':source' : ''), changed = c.layout !== layout;
@@ -313,6 +317,7 @@
   function clear() {
     if (state) { unbind(state); state.escalated = false; actions(state, false); }
     state = null;
+    if (card) card.player.removeClass('homelab-played');
     hideCard();
   }
   function start(work) {

@@ -183,11 +183,12 @@ test('a short buffering blip never shows the card, a longer one counts seconds a
   const h = harness(t); const video = realistic(h); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
   video.play(); video.data(); video.advance(2);
   const c = card(h); assert.ok(!shown(c.root));
-  video.readyState = 2; video.fire('waiting'); h.tick(600); assert.ok(!shown(c.root), 'debounced');
+  assert.ok(h.L.Player.render().classes.has('homelab-played'), "Lampa's spinner waits too");
+  video.readyState = 2; video.fire('waiting'); h.tick(4900); assert.ok(!shown(c.root), 'debounced for five seconds');
   video.data(); h.tick(2000); assert.ok(!shown(c.root));
-  video.readyState = 2; video.fire('waiting'); h.tick(700); assert.ok(shown(c.root));
-  assert.equal(c.title.text(), 'Буферизация… 1 с');
-  h.tick(3000); assert.equal(c.title.text(), 'Буферизация… 3 с');
+  video.readyState = 2; video.fire('waiting'); h.tick(5000); assert.ok(shown(c.root));
+  assert.equal(c.title.text(), 'Буферизация… 5 с');
+  h.tick(3000); assert.equal(c.title.text(), 'Буферизация… 8 с');
   assert.ok(!shown(c.retry) && !shown(c.source), 'no actions before a stall');
   video.data(); assert.ok(!shown(c.root), 'resumed playback hides at once');
 });
@@ -325,11 +326,11 @@ test('the card never takes the remote from the panel', t => {
   assert.ok(shown(buttons(h).retry) && shown(buttons(h).source));
 });
 
-test('mid-play buffering keeps the short delay and the card steps aside while a menu is open', t => {
+test('mid-play buffering keeps the five-second delay and the card steps aside while a menu is open', t => {
   const h = harness(t); let open = false; h.L.Select.opened = () => open;
   const video = realistic(h); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
   video.play(); video.data(); video.advance(2);
-  video.readyState = 2; video.fire('waiting'); h.tick(700); assert.ok(shown(card(h).root));
+  video.readyState = 2; video.fire('waiting'); h.tick(5000); assert.ok(shown(card(h).root));
   open = true; h.L.Select.show({items: []}); h.tick(0); assert.ok(!shown(card(h).root));
   h.tick(3000); assert.ok(!shown(card(h).root), 'the timer does not bring it back');
   open = false; h.L.Select.closeAll(); h.tick(0); assert.ok(shown(card(h).root));

@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect Lampac provider health every hour
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Unit=provider-stats.service
+
+[Install]
+WantedBy=timers.target

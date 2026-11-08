@@ -196,6 +196,15 @@ services:
       - "traefik.http.middlewares.lampa-forwarded.headers.customRequestHeaders.xscheme=https"
       - "traefik.http.middlewares.lampa-forwarded.headers.customRequestHeaders.xhost=lampa.${DOCKER_DOMAIN}"
       - "traefik.http.services.lampa.loadbalancer.server.port=9118"
+      # Homelab plugins are plain static files: make WebViews revalidate them (cheap 304 by ETag),
+      # so a deploy reaches every TV on its next start.
+      - "traefik.http.routers.lampa-plugins.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/plugins/homelab/`)"
+      - "traefik.http.routers.lampa-plugins.entrypoints=http,https"
+      - "traefik.http.routers.lampa-plugins.tls=true"
+      - "traefik.http.routers.lampa-plugins.priority=100"
+      - "traefik.http.routers.lampa-plugins.service=lampa"
+      - "traefik.http.routers.lampa-plugins.middlewares=lampa-forwarded,lampa-revalidate"
+      - "traefik.http.middlewares.lampa-revalidate.headers.customResponseHeaders.Cache-Control=no-cache"
     volumes:
       - ./config/init.conf:/lampac/init.conf:ro
       - ./config/passwd:/lampac/passwd:ro

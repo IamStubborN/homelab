@@ -193,6 +193,14 @@
       if (typeof native === 'function') return native.apply(this, arguments);
     };
   });
+  // Lampa scrolls to the selected row in toggle() and sets the window height only afterwards, in
+  // Layer.update(): on the first opening the window had no height yet, the scroll was clamped to
+  // the top and the list opened on episode 1. Size the window before that scroll.
+  if (L.Select && L.Select.listener && typeof L.Select.listener.follow === 'function') L.Select.listener.follow('fullshow', function (event) {
+    if (event && event.active && event.active.homelab_playlist && event.html && L.Layer && typeof L.Layer.update === 'function') {
+      try { L.Layer.update(event.html); } catch (_) {}
+    }
+  });
   // Lampa finds the playing item by URL, then by season and episode. Lampac starts an episode
   // with its chosen quality URL and some providers carry no numbers, so undefined == undefined
   // picked the first item: the playlist opened on episode 1 and Next pointed to episode 2.

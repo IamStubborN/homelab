@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """External torrent audio tracks as HLS renditions for Lampa's browser player."""
 
+import base64
 import functools
 import hashlib
 import io
@@ -440,6 +441,125 @@ def require_audio_file(torrent_hash, file_id):
         if item["id"] == file_id and split_name(item["path"])[2] in AUDIO_EXTENSIONS:
             return item.get("length", 0)
     raise Rejected("not an audio file of this torrent")
+
+
+# The «Общий» picker asks what voices a release carries when its title names
+# none. The release is added to TorrServer (without saving it to its database),
+# its largest video is probed for audio tags and its audio files give their
+# folder names. One release at a time; answers are kept for a day.
+BTIH_RE = re.compile(r"(?:^|&)xt=urn:btih:([0-9a-fA-F]{40}|[A-Za-z2-7]{32})(?:&|$)")
+VOICES_TTL_SECONDS = 24 * 3600
+VOICES_RETRY_SECONDS = 600
+VOICES_METADATA_SECONDS = 30
+MAX_VOICES = 12
+_voices_cache = {}
+_voices_lock = threading.Lock()
+_voices_lookups = threading.Semaphore(1)
+
+
+def magnet_hash(link):
+    if not isinstance(link, str) or len(link) > 4096 or not link.startswith("magnet:?"):
+        return None
+    match = BTIH_RE.search(link[len("magnet:?"):])
+    if not match:
+        return None
+    value = match.group(1)
+    if len(value) == 32:
+        value = base64.b32decode(value.upper()).hex()
+    return value.lower()
+
+
+def clean_magnet(link, torrent_hash):
+    """The magnet TorrServer gets: the hash and tracker announces only. Web seeds
+    (ws=), exact sources (xs=, as=) and anything else would make TorrServer
+    fetch an address the caller picked."""
+    trackers = []
+    for key, value in urllib.parse.parse_qsl(link[len("magnet:?"):], keep_blank_values=False):
+        scheme = urllib.parse.urlsplit(value).scheme.lower()
+        if key == "tr" and scheme in ("http", "https", "udp") and len(value) <= 300 and value not in trackers:
+            trackers.append(value)
+    query = "&".join("tr=" + urllib.parse.quote(value, safe="") for value in trackers[:20])
+    return f"magnet:?xt=urn:btih:{torrent_hash}" + ("&" + query if query else "")
+
+
+def add_torrent(link, title):
+    body = json.dumps({
+        "action": "add", "link": clean_magnet(link, magnet_hash(link)), "title": "[LAMPA] " + plain(title or "")[:150], "save_to_db": False,
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        f"{TORRSERVER_BASE}/torrents", data=body, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        response.read()
+
+
+def voice_names(streams, candidates):
+    voices, languages = [], []
+    for stream in streams:
+        tags = stream.get("tags") or {}
+        title = plain((tags.get("title") or "").strip())
+        language = plain((tags.get("language") or "").strip())
+        if title and not re.fullmatch(r"(?:sound|audio)\s*handler|audio|track\s*\d*", title, re.IGNORECASE):
+            voices.append(title)
+        languages.append(language)
+    for candidate in candidates:
+        label = (candidate.get("suffix") or candidate.get("location") or "").split(" / ")[-1].strip()
+        if label:
+            voices.append(plain(label))
+    unique = []
+    for voice in voices:
+        if voice.casefold() not in (item.casefold() for item in unique):
+            unique.append(voice)
+    return {"voices": unique[:MAX_VOICES], "languages": languages[:MAX_VOICES * 2]}
+
+
+def release_voices(link, title, now=time.monotonic):
+    torrent_hash = magnet_hash(link)
+    if not torrent_hash:
+        raise Rejected("not a magnet link")
+    with _voices_lock:
+        known = _voices_cache.get(torrent_hash)
+        if known and now() < known[0]:
+            if known[1] is None:
+                raise ProbeFailed()
+            return known[1]
+    try:
+        try:
+            files = torrent_files(torrent_hash)
+        except urllib.error.HTTPError as error:
+            error.close()
+            if error.code != 404:
+                raise
+            add_torrent(link, title)
+            files = []
+        deadline = now() + VOICES_METADATA_SECONDS
+        while not files:
+            if now() >= deadline:
+                raise NotReady()
+            time.sleep(1)
+            files = torrent_files(torrent_hash)
+        videos = [
+            item for item in files
+            if split_name(item["path"])[2] in VIDEO_EXTENSIONS and not re.search(r"(?:^|/)sample", item["path"], re.IGNORECASE)
+        ]
+        if videos:
+            video = max(videos, key=lambda item: item.get("length") or 0)
+            streams = probe_audio(torrent_hash, video["id"], timeout=3 * PROBE_TIMEOUT_SECONDS)
+            value = voice_names(streams, external_candidates(files, video["id"]))
+        else:
+            value = {"voices": [], "languages": []}
+    except NotReady:
+        raise  # a release still looking for peers is worth asking again soon
+    except Exception:
+        with _voices_lock:
+            _voices_cache[torrent_hash] = (now() + VOICES_RETRY_SECONDS, None)
+        raise
+    with _voices_lock:
+        while len(_voices_cache) >= MAX_PROBES_CACHED:
+            del _voices_cache[next(iter(_voices_cache))]
+        _voices_cache[torrent_hash] = (now() + VOICES_TTL_SECONDS, value)
+    return value
 
 
 def subtitle_fonts(files, subtitle_path, video_path):
@@ -2031,6 +2151,8 @@ class Handler(BaseHTTPRequestHandler):
             if not FONT_LIBRARY_DIR or not os.path.isfile(path):
                 return self.send_json(404, {"error": "not found"})
             return self.send_cached(path)
+        if path == "/extaudio/voices":
+            return self.serve_voices(query)
         embedded = EMBEDDED_RE.match(path)
         if embedded:
             return self.serve_embedded(embedded.group(1).lower(), int(embedded.group(2)), embedded, query)
@@ -2067,6 +2189,28 @@ class Handler(BaseHTTPRequestHandler):
         if not FILE_RE.match(name):
             return self.send_json(404, {"error": "not found"})
         return self.serve_live(torrent_hash, file_id, stream, name, query)
+
+    def serve_voices(self, query):
+        link, title = query.get("link", [""])[0], query.get("title", [""])[0]
+        # The lookup makes TorrServer add a release: only the plugin may ask. A foreign
+        # page cannot send this header without a CORS preflight, which is never allowed.
+        if self.headers.get("X-Homelab-Voices") != "1":
+            return self.send_json(403, {"error": "forbidden"})
+        if not magnet_hash(link):
+            return self.send_json(400, {"error": "magnet expected"})
+        if not _voices_lookups.acquire(blocking=False):
+            return self.send_json(429, {"error": "busy"}, {"Retry-After": "5"})
+        try:
+            value = release_voices(link, title)
+        except NotReady:
+            return self.send_json(503, {"error": "preparing"}, {"Retry-After": "10"})
+        except Rejected:
+            return self.send_json(400, {"error": "magnet expected"})
+        except Exception:
+            return self.send_json(502, {"error": "probe failed"})
+        finally:
+            _voices_lookups.release()
+        return self.send_json(200, value)
 
     def serve_warm(self, torrent_hash, file_id, query):
         if self.headers.get("Content-Length", "0") != "0":

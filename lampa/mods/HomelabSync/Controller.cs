@@ -18,7 +18,8 @@ public class HomelabSyncController : BaseController
     {
         Response.Headers["Cache-Control"] = "no-store";
         var config = JsonSerializer.Serialize(new {
-            version = 1, url = host, uid = InstanceIdentity.Assigned ?? "", token = token ?? ""
+            version = 1, url = host, uid = InstanceIdentity.Assigned ?? "", token = token ?? "",
+            assets = new { sources = AssetVersion("common-sources.js"), thumbnails = AssetVersion("playlist-thumbnails.js") }
         });
         var script = "window.homelabSyncConfig = " + config + ";\n"
             + System.IO.File.ReadAllText(Path.Combine(ModInit.modpath, "plugin.js")) + "\n"
@@ -28,7 +29,19 @@ public class HomelabSyncController : BaseController
         return ContentTo(script, "application/javascript; charset=utf-8");
     }
 
-    [HttpGet, Route("homelab-sync/resume")]
+    // The picker plugins are plain static files the WebView may cache; their modification time
+    // becomes the cache-busting version, so a deploy reaches every device on its next start.
+    static string AssetVersion(string name)
+    {
+        try
+        {
+            var file = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "plugins", "homelab", name);
+            return System.IO.File.Exists(file) ? System.IO.File.GetLastWriteTimeUtc(file).Ticks.ToString("x") : "";
+        }
+        catch { return ""; }
+    }
+
+        [HttpGet, Route("homelab-sync/resume")]
     public ActionResult Resume()
     {
         Response.Headers["Cache-Control"] = "no-store";

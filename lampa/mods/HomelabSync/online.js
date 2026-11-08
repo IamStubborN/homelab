@@ -200,6 +200,8 @@
             if (work.timeline) { work.timeline.percent = 0; work.timeline.time = 0; }
           }
         }
+        // A resolver row keeps its source so the next episode can be fetched ahead (see prefetch below).
+        if (movie && movie.name && file && file.method === 'call' && typeof file.url === 'string') hide(work, 'homelab_next', {file: file, comp: comp});
         // Native rows show only the TMDB episode name; the player and its
         // playlist also need the number.
         if (movie && movie.name && Number.isInteger(file.episode) && file.episode > 0 && typeof work.title !== 'function') {
@@ -343,6 +345,54 @@
     if (!movie.name && row.match && validMatch(row.match)) item.online.match = row.match;
     return resume(item, movie, function (reason) { L.Noty.show(reason === 'changed' ? 'Вариант изменился. Выберите озвучку в источнике' : reason === 'ambiguous' ? 'Подходит несколько вариантов. Выберите нужный в источнике' : 'Источник не ответил. Выберите другой вариант'); }, {quality: quality, fromDuration: recovery && recovery.duration});
   }
+  function hide(target, name, value) {
+    try { Object.defineProperty(target, name, {value: value, writable: true, configurable: true, enumerable: false}); } catch (_) { target[name] = value; }
+  }
+  // Next episode without a pause: Lampac resolves a "call" episode only when it is chosen, behind a
+  // loading screen. In the last minutes of the current episode its stream is fetched quietly the
+  // same way, so Next or the automatic switch starts at once. Lampac's own resolver is not used
+  // ahead of time: it shows a loading overlay and marks the episode watched before it is played.
+  var PREFETCH_BEFORE = 150, PREFETCH_TTL = 10 * 60000;
+  function lampacUrl(raw) {
+    var auth = new URL(sync.url('/lite/events')), url = new URL(raw, auth.origin);
+    if (url.origin !== auth.origin || url.pathname.indexOf('/lite/') !== 0) return '';
+    ['uid', 'token', 'account_email', 'profile_id'].forEach(function (key) { if (auth.searchParams.has(key) && !url.searchParams.has(key)) url.searchParams.set(key, auth.searchParams.get(key)); });
+    var uid = L.Storage.get('lampac_unic_id', ''), nws = L.Storage.get('lampac_nws_id', ''), email = L.Storage.get('account_email', '');
+    if (uid && !url.searchParams.has('uid')) url.searchParams.set('uid', uid);
+    if (email && !url.searchParams.has('account_email')) url.searchParams.set('account_email', email);
+    if (nws && !url.searchParams.has('nws_id')) url.searchParams.set('nws_id', nws);
+    return url.href;
+  }
+  function prefetchNext() {
+    if (!L.Player.opened() || !L.PlayerVideo || typeof L.PlayerVideo.video !== 'function' || !L.PlayerPlaylist || typeof L.PlayerPlaylist.position !== 'function') return;
+    var video = L.PlayerVideo.video(), duration = video && video.duration, current = video && video.currentTime;
+    if (!(duration > 0) || !(duration - current <= PREFETCH_BEFORE)) return;
+    var list = L.PlayerPlaylist.get(), next = Array.isArray(list) && list[L.PlayerPlaylist.position() + 1], source = next && next.homelab_next;
+    if (!source) return;
+    // A stream fetched too long ago may have expired: hand the row back to Lampac's resolver and fetch again.
+    if (next.homelab_lazy && typeof next.url === 'string' && Date.now() - next.homelab_fetched > PREFETCH_TTL) { next.url = next.homelab_lazy; next.homelab_lazy = null; next.homelab_fetching = false; }
+    if (typeof next.url !== 'function' || next.homelab_fetching) return;
+    var lazy = next.url, address = '', headers = {}, key = L.Storage.get('aesgcmkey', '');
+    try { address = lampacUrl(source.file.url); } catch (_) {}
+    if (!address || typeof fetch !== 'function') return;
+    if (key) headers['X-Kit-AesGcm'] = key;
+    hide(next, 'homelab_fetching', true);
+    var abort = typeof AbortController === 'function' ? new AbortController() : null, timer = setTimeout(function () { if (abort) abort.abort(); }, 15000);
+    fetch(address, {headers: headers, cache: 'no-store', signal: abort ? abort.signal : undefined}).then(function (response) { if (!response.ok) throw new Error('stream'); return response.json(); }).then(function (json) {
+      clearTimeout(timer);
+      // Only a plain answer for the same, still unresolved row; anything else stays with Lampac.
+      if (!L.Player.opened() || L.PlayerPlaylist.get() !== list || next.url !== lazy || !json || json.rch || typeof json.url !== 'string' || !json.url) return;
+      var file = source.file, comp = source.comp;
+      next.url = json.url; next.quality = json.quality || file.qualitys; next.segments = json.segments || file.segments;
+      next.subtitles = json.subtitles || file.subtitles; next.subtitles_call = json.subtitles_call;
+      if (json.headers) next.headers = json.headers;
+      if (json.hls_manifest_timeout) next.hls_manifest_timeout = json.hls_manifest_timeout;
+      if (comp && typeof comp.orUrlReserve === 'function') comp.orUrlReserve(next);
+      if (comp && typeof comp.setDefaultQuality === 'function') comp.setDefaultQuality(next);
+      hide(next, 'homelab_lazy', lazy); hide(next, 'homelab_fetched', Date.now());
+    }).catch(function () { clearTimeout(timer); });
+  }
+  if (L.PlayerVideo && L.PlayerVideo.listener && typeof L.PlayerVideo.listener.follow === 'function') L.PlayerVideo.listener.follow('timeupdate', prefetchNext);
   window.HomelabOnlineResume = {resume: resume, select: select, cancel: cancel, valid: valid};
   L.Player.listener.follow('ready', function (work) {
     if (pending) { pending.finished = true; clearTimeout(pending.timer); }
@@ -361,5 +411,7 @@
   var L = window.Lampa, config = window.homelabSyncConfig;
   if (window.homelabSourcesLoading || window.HomelabSources || !L || !L.Utils || typeof L.Utils.putScriptAsync !== 'function' || !config || !config.url) return;
   window.homelabSourcesLoading = true;
-  L.Utils.putScriptAsync([config.url + '/plugins/homelab/common-sources.js?v=20261108b', config.url + '/plugins/homelab/playlist-thumbnails.js?v=20261108b'], function () { window.homelabSourcesLoading = false; });
+  // The server stamps each plugin with its modification time; the fallback covers an older server.
+  var assets = config.assets || {}, version = function (value) { return /^[0-9a-f]{1,32}$/.test(value || '') ? value : '20261108d'; };
+  L.Utils.putScriptAsync([config.url + '/plugins/homelab/common-sources.js?v=' + version(assets.sources), config.url + '/plugins/homelab/playlist-thumbnails.js?v=' + version(assets.thumbnails)], function () { window.homelabSourcesLoading = false; });
 })();

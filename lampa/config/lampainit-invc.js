@@ -88,7 +88,8 @@ var lampainit_invc = {};
     // The plugin registry is ready only after Lampa opens its IndexedDB.
     if (!Lampa.Plugins || typeof Lampa.Plugins.get !== 'function') return;
 
-    var retired = [origin + '/plugins/homelab/chapter-gallery.js'];
+    // YummyAnime (1.3 MB from GitHub on every start) is unused: removed by the user's decision.
+    var retired = [origin + '/plugins/homelab/chapter-gallery.js', 'https://yummyanime.github.io/yummy-lampa-plugin/stable/index.js'];
     // Copy first: remove() mutates the registry array that get() returns.
     Lampa.Plugins.get().slice().forEach(function (plugin) {
       if (typeof plugin.url !== 'string') return;
@@ -146,6 +147,12 @@ var lampainit_invc = {};
         status: 1,
         name: 'Состояние воспроизведения',
         author: 'Homelab'
+      },
+      {
+        url: origin + '/plugins/homelab/intro-skip.js',
+        status: 1,
+        name: 'Пропуск заставок',
+        author: 'Homelab'
       }
     ];
 
@@ -163,17 +170,6 @@ var lampainit_invc = {};
 
     if (typeof Lampa.Plugins.save === 'function') Lampa.Plugins.save();
 
-    var yummyAnime = 'https://yummyanime.github.io/yummy-lampa-plugin/stable/index.js';
-    if (!Lampa.Plugins.get().some(function (plugin) { return plugin.url === yummyAnime; })) {
-      Lampa.Plugins.add({
-        url: yummyAnime,
-        status: 1,
-        name: 'YummyAnime',
-        author: 'YummyAnime'
-      });
-      Lampa.Plugins.save();
-      Lampa.Utils.putScriptAsync([yummyAnime], function () {});
-    }
   }
 
   lampainit_invc.appload = function appload() {

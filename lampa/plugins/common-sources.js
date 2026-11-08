@@ -159,6 +159,20 @@
     codec = /hevc|265/i.test(codec) ? 'HEVC' : /avc|264/i.test(codec) ? 'AVC' : String(codec).toUpperCase();
     return {title: voices.length ? voices.slice(0, 2).join(' / ') + (voices.length > 2 ? ' +' + (voices.length - 2) : '') : languages ? 'Дорожки: ' + languages : 'Озвучка не указана', codec: codec, voices: voices, languages: languages};
   }
+  // Voices read from a release's audio tracks by the extaudio sidecar, by info hash, for this app run.
+  var releaseVoiceCache = {};
+  function magnetKey(link) { var match = /[?&]xt=urn:btih:([0-9a-z]{32,40})/i.exec(String(link || '')); return match ? match[1].toLowerCase() : ''; }
+  function applyReleaseVoices(row, value) {
+    var release = row.release;
+    release.info = Object.assign({}, release.info || {});
+    if (value.voices.length) release.info.voices = value.voices.slice();
+    if (!Array.isArray(release.ffprobe) && !(release.ffprobe && release.ffprobe.streams) && value.languages.length) {
+      release.ffprobe = value.languages.map(function (language) { return {codec_type: 'audio', tags: {language: language}}; });
+    }
+    var described = row.described = describeRelease(release);
+    row.voice = described.title; row.voiceProbe = 'done';
+    row.canon = described.voices.length ? canonVoice(described.voices[0]) : {key: '', label: described.title, subs: false};
+  }
   // Torrents: enough seeds to stream is a threshold; above it the picture quality decides, then the seeds.
   var MIN_SEEDS = 3;
   function seeded(row) { return row.release && (Number(row.release.Seeders) || 0) >= MIN_SEEDS ? 1 : 0; }
@@ -543,8 +557,10 @@
           var magnet = release.MagnetUri || release.Link;
           if (!magnet || typeof release.Title !== 'string' || movie.name && !covers(release, selection)) return;
           var described = describeRelease(release);
-          add({key: 'torrent:' + (release.hash || magnet), kind: 'torrent', voice: described.title, providerName: release.Tracker || 'Торрент', qualities: qualities(release), release: release, described: described,
-            canon: described.voices.length ? canonVoice(described.voices[0]) : {key: '', label: described.title, subs: false}});
+          var row = {key: 'torrent:' + (release.hash || magnet), kind: 'torrent', voice: described.title, providerName: release.Tracker || 'Торрент', qualities: qualities(release), release: release, described: described,
+            canon: described.voices.length ? canonVoice(described.voices[0]) : {key: '', label: described.title, subs: false}};
+          if (!described.voices.length && releaseVoiceCache[magnetKey(magnet)]) applyReleaseVoices(row, releaseVoiceCache[magnetKey(magnet)]);
+          add(row);
         }); notify();
       }
       parserTimer = setTimeout(function () { if (live() && parserOwner === self && parserPending) { L.Parser.clear(); done(null, true); } }, 45000);
@@ -559,6 +575,33 @@
       if (parserOwner === self) parserOwner = null;
       parserPending = false;
       self.onlinePending = false; self.torrentPending = false;
+    };
+    // A focused torrent whose title and tracker name no voice: the extaudio sidecar adds the release
+    // to TorrServer and reads its audio tracks. Only on request, one release at a time, seeded ones.
+    var voiceBusy = false;
+    this.voices = function (row) {
+      var release = row && row.release, link = release && release.MagnetUri, key = magnetKey(link);
+      if (!live() || !release || !key || voiceBusy || row.voiceProbe || row.described && row.described.voices.length || (Number(release.Seeders) || 0) < MIN_SEEDS) return false;
+      if (releaseVoiceCache[key]) { applyReleaseVoices(row, releaseVoiceCache[key]); notify(); return true; }
+      var abort = Abort(), timer = setTimeout(function () { abort.abort(); }, 90000), url = new URL('/extaudio/voices', window.location.href);
+      url.searchParams.set('link', link); url.searchParams.set('title', String(release.Title).slice(0, 150));
+      voiceBusy = true; row.voiceProbe = 'pending'; requests.push(abort); notify();
+      function strings(list) { return Array.isArray(list) ? list.filter(function (item) { return typeof item === 'string' && item.trim(); }).slice(0, 12) : []; }
+      always(fetch(url.href, {signal: abort.signal, credentials: 'same-origin', cache: 'no-store', headers: {'X-Homelab-Voices': '1'}}).then(function (response) {
+        // 503: TorrServer is still looking for peers; a later focus asks again.
+        if (response.status === 503 || response.status === 429) return null;
+        if (!response.ok) throw new Error('voices');
+        return response.text().then(function (text) { return JSON.parse(text); });
+      }).then(function (data) {
+        if (!data) { row.voiceProbe = ''; return; }
+        var value = {voices: strings(data.voices), languages: strings(data.languages)};
+        releaseVoiceCache[key] = value;
+        applyReleaseVoices(row, value);
+      }, function () { row.voiceProbe = 'failed'; }), function () {
+        voiceBusy = false; clearTimeout(timer); requests = requests.filter(function (entry) { return entry !== abort; });
+        if (live()) { remember(); notify(); }
+      });
+      return true;
     };
     this.start = function () {
       started = true;
@@ -621,7 +664,7 @@
     var root = $('<div class="homelab-common"></div>'), head = $('<div class="homelab-common-head"></div>'), controls = $('<div class="homelab-common-controls"></div>'), tabs = $('<div class="homelab-common-tabs"></div>');
     var status = $('<div class="homelab-common-status" aria-live="polite"></div>'), statusText = $('<div class="homelab-common-status-text"></div>'), bar = $('<div class="homelab-common-bar"></div>'), barFill = $('<div class="homelab-common-bar-fill"></div>');
     var body = $('<div class="homelab-common-list"></div>'), scroll = new L.Scroll({mask: true, over: true}), hint = $('<div class="homelab-common-hint hide"></div>');
-    var search, last = null, kind = recovery ? 'online' : 'all', q = recovery ? 0 : pref.quality, tiles = {}, models = {}, shown = 20, visibleItems = [], order = [], locked = false, restoringFocus = false, more = null, torrentsOpen = null, toggled = false, rerank = null, fresh = 0, sequence = '', reorderAt = 0, dead = false, started = false, refresh, uiIntent = 0, currentScope = sync.scope();
+    var search, last = null, kind = recovery ? 'online' : 'all', q = recovery ? 0 : pref.quality, tiles = {}, models = {}, shown = 20, visibleItems = [], order = [], locked = false, restoringFocus = false, more = null, torrentsOpen = null, toggled = false, rerank = null, fresh = 0, sequence = '', reorderAt = 0, dead = false, voiceTimer = 0, started = false, refresh, uiIntent = 0, currentScope = sync.scope();
     // Grouped by voice by default; recovery lists every provider, since the point there is to pick another one.
     // untouched: until the first key press, focus follows the top (recommended) card so one OK plays it.
     var grouped = !recovery, untouched = true, placeholder = null, placeholderState = '';
@@ -763,6 +806,7 @@
         if (described.languages) model.badges.push([described.languages, '']);
         if (described.voices.length > 1) model.details += ' · ' + described.voices.slice(1, 3).join(', ');
         if (tv) model.details += ' · Выбор серии в раздаче';
+        if (row.voiceProbe === 'pending') model.details += ' · узнаю озвучку…';
       } else if (row.unavailable) model.details += ' · Не отдаёт видео';
       else if (!best) model.details += row.native ? ' · Качество неизвестно · Открыть источник' : ' · Качество уточняется';
       if (row.unavailable) { model.quality = 'нет видео'; model.qcls = 'is-off'; model.cls += ' is-unavailable'; }
@@ -797,7 +841,12 @@
         .append($('<div class="homelab-common-details"></div>')).append($('<div class="homelab-common-badges hide"></div>'));
       side.append($('<div class="homelab-common-q"></div>')).append($('<div class="homelab-common-q-note hide"></div>'));
       tile.append($('<div class="homelab-common-play"></div>')).append(text).append(side);
-      tile.on('hover:focus', function () { last = this; if (!restoringFocus) { locked = true; scroll.update(this, true); } })
+      tile.on('hover:focus', function () {
+        last = this; if (!restoringFocus) { locked = true; scroll.update(this, true); }
+        // Dwelling on a torrent without a named voice asks its audio tracks.
+        var focused = this; clearTimeout(voiceTimer);
+        voiceTimer = setTimeout(function () { if (!dead && last === focused && search && models[key] && models[key].best && search.voices) search.voices(models[key].best); }, 1200);
+      })
         .on('hover:hover hover:touch', function () { locked = true; touch(); })
         .on('hover:enter', function () { touch(); if (!models[key]) return; if (key === 'native') sourceMenu(models[key]); else open(models[key].best); })
         .on('hover:long', function () { touch(); if (models[key]) sourceMenu(models[key]); });
@@ -996,7 +1045,7 @@
     this.pause = cancel;
     this.stop = function () {};
     var unsubscribe = sync.subscribe(function () { if (sync.scope() !== currentScope) { cancel(); if (active()) L.Activity.backward(); } });
-    this.destroy = function () { dead = true; cancel(); unsubscribe(); scroll.destroy(); root.remove(); };
+    this.destroy = function () { dead = true; clearTimeout(voiceTimer); cancel(); unsubscribe(); scroll.destroy(); root.remove(); };
   }
   function addButton(movie, render, unsupported) {
     if (!movie || !render || render.find('.view--homelab-sources').length) return;

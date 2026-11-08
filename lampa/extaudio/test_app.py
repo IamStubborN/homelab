@@ -1608,3 +1608,56 @@ class HttpTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReleaseVoiceTests(unittest.TestCase):
+    MAGNET = "magnet:?xt=urn:btih:" + "a" * 40 + "&dn=Fictional"
+
+    def setUp(self):
+        app._voices_cache.clear()
+
+    def test_magnet_hash_accepts_hex_and_base32_only(self):
+        self.assertEqual(app.magnet_hash(self.MAGNET), "a" * 40)
+        self.assertEqual(app.magnet_hash("magnet:?xt=urn:btih:" + "A" * 32), "00" * 20)
+        self.assertIsNone(app.magnet_hash("http://tracker.example/file.torrent"))
+        self.assertIsNone(app.magnet_hash("magnet:?xt=urn:sha1:abc"))
+
+    def test_unknown_release_is_added_then_its_largest_video_and_audio_folders_name_the_voices(self):
+        files = [
+            {"id": 1, "path": "Show/Show.S01E01.mkv", "length": 900},
+            {"id": 2, "path": "Show/Show.S01E02.mkv", "length": 1000},
+            {"id": 3, "path": "Show/Sound/Studio One/Show.S01E02.mka", "length": 10},
+        ]
+        answers = [urllib.error.HTTPError("u", 404, "missing", {}, io.BytesIO(b"")), [], files]
+
+        def torrent_files(_):
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        streams = [{"tags": {"title": "Studio Two", "language": "rus"}}, {"tags": {"title": "SoundHandler", "language": "eng"}}]
+        with mock.patch.object(app, "torrent_files", side_effect=torrent_files), \
+                mock.patch.object(app, "add_torrent") as add, mock.patch.object(app.time, "sleep"), \
+                mock.patch.object(app, "probe_audio", return_value=streams) as probe:
+            value = app.release_voices(self.MAGNET, "Fictional")
+        add.assert_called_once_with(self.MAGNET, "Fictional")
+        self.assertEqual(probe.call_args[0][:2], ("a" * 40, 2))
+        self.assertEqual(value["voices"], ["Studio Two", "Studio One"])
+        self.assertEqual(value["languages"], ["rus", "eng"])
+        with mock.patch.object(app, "torrent_files") as again:
+            self.assertEqual(app.release_voices(self.MAGNET, ""), value)
+        again.assert_not_called()
+
+    def test_torrserver_gets_only_the_hash_and_tracker_announces(self):
+        link = ("magnet:?xt=urn:btih:" + "a" * 40 + "&dn=Name&tr=udp%3A%2F%2Ftracker.example%3A80"
+                "&ws=http%3A%2F%2F10.0.0.1%2Fx&xs=http%3A%2F%2Finternal.example%2Fy&tr=file%3A%2F%2F%2Fetc")
+        self.assertEqual(app.clean_magnet(link, "a" * 40),
+                         "magnet:?xt=urn:btih:" + "a" * 40 + "&tr=udp%3A%2F%2Ftracker.example%3A80")
+
+    def test_release_without_metadata_in_time_is_not_ready_and_not_remembered(self):
+        clock = iter(range(0, 1000, 10))
+        with mock.patch.object(app, "torrent_files", return_value=[]), mock.patch.object(app.time, "sleep"):
+            with self.assertRaises(app.NotReady):
+                app.release_voices(self.MAGNET, "", now=lambda: next(clock))
+        self.assertNotIn("a" * 40, app._voices_cache)

@@ -298,3 +298,17 @@ test('the playing item is found through its quality map when titles do not help'
   h.play({url: 'q1080-2', quality: {'1080p': 'q1080-2', '720p': 'master-2'}, title: 'Other', card, playlist: list}); h.tick(0);
   assert.equal(h.position(), 1);
 });
+
+test('the first opening sizes the playlist window before Lampa scrolls to the playing episode', t => {
+  const h = lampa(t), sized = [];
+  // Lampa scrolls to the selected row in toggle(), then sets the window height in Layer.update():
+  // with no height yet the first opening clamped the scroll to the top of the list.
+  h.L.Layer.update = where => sized.push(where);
+  h.lampacStart(); const list = h.L.PlayerPlaylist.get(), html = h.window.$('<div class="selectbox"></div>');
+  const active = {items: list};
+  h.L.Select.listener.send('preshow', {active});
+  h.L.Select.listener.send('fullshow', {active, html});
+  assert.equal(sized.length, 1); assert.equal(sized[0], html);
+  h.L.Select.listener.send('fullshow', {active: {items: [{title: 'x'}]}, html});
+  assert.equal(sized.length, 1, 'other selects are left alone');
+});

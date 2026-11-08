@@ -201,6 +201,48 @@ and other plugins match by.
   в прошлой серии`), and one per voice when its external rendition fails and
   the embedded audio takes over.
 
+## Intro skip
+
+`intro-skip.js` gives series and anime episodes Lampa's own «Пропустить» /
+«Следующая серия» button. Timestamps come from community databases:
+TheIntroDB by TMDB id and SkipDB by IMDb id (Lampac `/externalids`, once per
+show) are asked together, the first in that order with timestamps wins; anime
+with neither falls back to AniSkip through ani.zip's MAL mapping, only where the
+MAL episode number, season and episode agree. IntroDB is not used: its API
+allows only its own site (CORS). Lampa reads segments only when an episode
+starts, so a fresh start in the built-in player with nothing cached is held for
+at most 1.5 s (Back cancels it); torrents, an episode switch inside the player
+and external players are never held and only fill the cache, and the next
+episode is looked up 20 s into the current one. Only the TMDB/IMDb/MAL id,
+season and episode leave the device. Answers are kept 12 h, misses 6 h.
+Lampa's player setting «Интро и другое» decides between skipping
+automatically and showing the button.
+
+## Torrent voices from audio tracks
+
+When a seeded torrent card (3 or more seeds) in «Общий» names no voice in its
+title or parser data, dwelling on it for 1.2 s asks
+`GET /extaudio/voices?link=<magnet>&title=…`. The sidecar accepts only
+`magnet:` links and the plugin's `X-Homelab-Voices: 1` header (a foreign page
+cannot send it without a CORS preflight), hands TorrServer a magnet rebuilt from
+the hash and its http/udp trackers only (no web seeds or exact sources), adds
+the release without saving it to its database, waits up to 30 s for the file list, probes the largest video's audio
+tags and takes the folder names of its external audio files. The card then shows
+those voices and the track languages. One release at a time (429 otherwise);
+503 while TorrServer still looks for peers, asked again on a later focus;
+answers are kept a day, failures 10 minutes. The release appears in TorrServer's
+list until TorrServer drops it as inactive.
+
+## Provider statistics
+
+`provider-stats.py collect` adds the `/lite/<provider>` requests of Traefik's
+access log (`docker logs --timestamps`, Docker's write time is the cursor) to
+daily per-provider counters (requests, errors, empty answers, answers slower
+than 8 s); `report --days 7` names providers to disable in `init.conf`. Only
+provider names and numbers are stored, under the ignored `cache/`. Run it hourly
+(`provider-stats.service` / `.timer`, or a user crontab line where systemd
+units cannot be installed).
+
 ## Next episode warm-up
 
 On a slow torrent the next episode waits for its head before GST and the

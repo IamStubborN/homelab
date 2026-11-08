@@ -68,13 +68,17 @@
         clean.seasons = {};
         Object.keys(entry.seasons).forEach(function (n) { if (/^\d{1,3}$/.test(n) && Number.isInteger(entry.seasons[n])) clean.seasons[n] = entry.seasons[n]; });
       }
+      var aired = entry.aired;
+      if (aired && Number.isInteger(aired.season) && Number.isInteger(aired.episode) && /^\d{4}-\d{2}-\d{2}$/.test(aired.date || '')) clean.aired = {season: aired.season, episode: aired.episode, date: aired.date};
       result[card] = clean;
     });
     return result;
   }
   function persist() {
     var shown = items.slice(0, 50), kept = {};
-    shown.forEach(function (item) { var value = Object.assign({}, remembered[item.card] || {}, metadata[item.card] || {}); if (Object.keys(value).length) kept[item.card] = value; });
+    // Cards that only exist in Lampa's own history need their titles kept too.
+    var cards = merged().filter(function (item) { return !item.deleted; }).sort(function (a, b) { return b.observed - a.observed; }).slice(0, 50);
+    cards.forEach(function (item) { var value = Object.assign({}, remembered[item.card] || {}, metadata[item.card] || {}); if (Object.keys(value).length) kept[item.card] = value; });
     try { L.Storage.set(CACHE, {scope: scope, items: shown, metadata: kept}, true); } catch (_) {}
   }
   // Lampac omits default values such as a zero position.
@@ -186,7 +190,7 @@
   function percentOf(item) { return item.advance || !(item.duration > 0) ? 0 : Math.max(0, Math.min(100, item.position / item.duration * 100)); }
   function progressText(item) {
     var label = hasEpisode(item) ? episodeLabel(item.season, item.episode) : '';
-    if (item.advance) return 'Следующая: ' + (!label ? 'серия' : item.season === item.advance.season && item.season !== 0 ? 'Е' + item.episode : label);
+    if (item.advance) return (item.fresh ? 'Новая серия: ' : 'Следующая: ') + (!label ? 'серия' : item.season === item.advance.season && item.season !== 0 ? 'Е' + item.episode : label);
     return (label ? label + ' · ' : '') + remaining(item.position, item.duration);
   }
   function sourceLabel(item) {
@@ -204,13 +208,18 @@
         if (item.card.indexOf('tv_') !== 0) return;
         var known = metadata[item.card] || remembered[item.card], next = nextEpisode(item, known && known.seasons);
         if (!next) return;
+        // TMDB lists announced episodes too: an episode that has not aired yet is nothing to continue.
+        var aired = known && known.aired, airedAt = aired ? Date.parse(aired.date + 'T00:00:00Z') : NaN;
+        if (aired && next.season !== 0 && (next.season > aired.season || next.season === aired.season && next.episode > aired.episode)) return;
         var value = Object.assign({}, item, {season: next.season, episode: next.episode, position: 0, advance: {season: item.season, episode: item.episode}});
+        // Episodes released after the last viewing are new: they lead the row and say so.
+        if (Number.isFinite(airedAt) && airedAt > item.observed && next.season !== 0) value.fresh = true;
         // A native season index cannot be derived for another season.
         if (next.season !== item.season) delete value.online;
         result.push(value);
       } else if (item.position > 1) result.push(item);
     });
-    return result.sort(function (a, b) { return b.observed - a.observed; }).slice(0, 20);
+    return result.sort(function (a, b) { return (b.fresh ? 1 : 0) - (a.fresh ? 1 : 0) || b.observed - a.observed; }).slice(0, 20);
   }
   function enrich() {
     if (!L.Api.sources || !L.Api.sources.tmdb || !L.Api.sources.tmdb.get) return;
@@ -235,6 +244,9 @@
                 value.seasons = {};
                 data.seasons.forEach(function (season) { if (season && Number.isInteger(season.season_number) && Number.isInteger(season.episode_count)) value.seasons[season.season_number] = season.episode_count; });
               }
+              var aired = data.last_episode_to_air;
+              if (aired && Number.isInteger(aired.season_number) && Number.isInteger(aired.episode_number) && /^\d{4}-\d{2}-\d{2}$/.test(aired.air_date || ''))
+                value.aired = {season: aired.season_number, episode: aired.episode_number, date: aired.air_date};
               metadata[item.card] = value; persist();
             }
             metadataRunning--; publish(); work();
@@ -758,7 +770,7 @@
         function decorate() {
           var percent = percentOf(item), source = sourceLabel(item);
           bar.toggleClass('hide', !(percent > 0)); bar.find('div').css('width', percent + '%');
-          badge.text(source).toggleClass('hide', !source);
+          badge.text(item.fresh ? 'Новая серия' : source).toggleClass('hide', !item.fresh && !source).toggleClass('is-new', !!item.fresh);
         }
         function lookupEpisodes() {
           if (!item.episode || !Number.isInteger(item.season) || item.season < 0 || loaded) return;
@@ -860,6 +872,7 @@
     '.homelab-resume-bar div{height:100%;border-radius:1em;background:#fff}' +
     '.homelab-resume-badge{position:absolute;top:.6em;right:.6em;max-width:45%;padding:.25em .55em;border-radius:.4em;background:rgba(0,0,0,.6);color:#fff;font-size:.8em;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;z-index:1;pointer-events:none}' +
     '.homelab-resume-bar.hide,.homelab-resume-badge.hide{display:none}' +
+    '.homelab-resume-badge.is-new{background:#ffd66b;color:#000;font-weight:600}' +
     '.homelab-resume-progress .card-watched__inner{padding:.7em .8em .8em}' +
     '.homelab-resume-head{font-size:.75em;opacity:.6;padding-top:.2em}' +
     '.homelab-resume-head:empty{display:none}' +

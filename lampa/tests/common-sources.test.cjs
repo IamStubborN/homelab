@@ -14,7 +14,7 @@ function setup(t, options = {}) {
   const L = {Storage: {get: (key, value) => storage.get(key) ?? value, set: (key, value) => storage.set(key, value), field: () => true}, Utils: {hash: value => 'hash:' + value}, Component: {add: (name, ctor) => { registry[name] = ctor; }},
     Scroll() {}, Controller: {collectionFocus() {}}, Listener: {follow() {}}, Activity: {active: () => null},
     Parser: {get: (object, done, fail) => parser.push({object, done, fail}), clear: () => clears++}};
-  const window = {appready: true, Lampa: L, $: dollar, fetch: request, AbortController: options.noAbort ? undefined : AbortController,
+  const window = {appready: true, location: {href: 'https://lampac.test/'}, Lampa: L, $: dollar, fetch: request, AbortController: options.noAbort ? undefined : AbortController,
     HomelabSync: {scope: () => scope, url: pathname => 'https://lampac.test' + pathname + '?token=private-fixture&profile_id=' + scope}};
   function request(url, options) {
     return new Promise((resolve, reject) => {
@@ -613,4 +613,41 @@ test('a search with errors is not cached', async t => {
   assert.equal(h.search.onlinePending, false); assert.ok(h.search.errors.length); h.search.cancel();
   const again = new h.window.HomelabSources.Search(h.movie, h.selection, () => {}); again.start(); await flush();
   assert.ok(!again.cachedAt, 'a failed torrent search is asked again'); again.cancel();
+});
+
+test('a seeded torrent without a named voice learns it from its audio tracks once, on request', async t => {
+  const h = setup(t); await h.start();
+  const hash = 'b'.repeat(40);
+  h.parser[0].done({Results: [{Title: 'Series S02 1080p', MagnetUri: 'magnet:?xt=urn:btih:' + hash, Tracker: 'Tracker', Seeders: 9},
+    {Title: 'Series S02 720p', MagnetUri: 'magnet:?xt=urn:btih:' + 'c'.repeat(40), Seeders: 1}]});
+  const [row, weak] = h.search.rows;
+  assert.equal(row.voice, 'Озвучка не указана');
+  assert.equal(h.search.voices(weak), false, 'releases with too few seeds are not probed');
+  assert.equal(h.search.voices(row), true);
+  assert.equal(row.voiceProbe, 'pending');
+  assert.equal(h.search.voices(row), false, 'one lookup at a time');
+  const job = h.requests.find(r => r.url.pathname === '/extaudio/voices');
+  assert.equal(job.url.searchParams.get('link'), 'magnet:?xt=urn:btih:' + hash);
+  assert.equal(job.url.searchParams.get('token'), null, 'no Lampac identity goes to the sidecar');
+  assert.equal(job.options.headers['X-Homelab-Voices'], '1');
+  job.finish({voices: ['Studio Fictional', 'Studio Other'], languages: ['rus', 'rus', 'eng']}); await flush(); await flush();
+  assert.equal(row.voice, 'Studio Fictional / Studio Other');
+  assert.equal(row.described.languages, 'RU×2 · EN');
+  h.search.cancel();
+  const again = new h.window.HomelabSources.Search(h.movie, h.selection, () => {}, {fresh: true}); again.start(); await flush();
+  h.parser.at(-1).done({Results: [{Title: 'Series S02 1080p', MagnetUri: 'magnet:?xt=urn:btih:' + hash, Seeders: 9}]});
+  assert.equal(again.rows[0].voice, 'Studio Fictional / Studio Other', 'a later search reuses the answer');
+  assert.equal(h.requests.filter(r => r.url.pathname === '/extaudio/voices').length, 1);
+  again.cancel();
+});
+
+test('a release still looking for peers is asked again on a later focus', async t => {
+  const h = setup(t); await h.start();
+  h.parser[0].done({Results: [{Title: 'Series S02 1080p', MagnetUri: 'magnet:?xt=urn:btih:' + 'd'.repeat(40), Seeders: 9}]});
+  const row = h.search.rows[0];
+  h.search.voices(row);
+  h.requests.find(r => r.url.pathname === '/extaudio/voices').finish({__status: 503, error: 'preparing'}); await flush(); await flush();
+  assert.equal(row.voiceProbe, '');
+  assert.equal(h.search.voices(row), true);
+  h.search.cancel();
 });

@@ -1,0 +1,12 @@
+[Unit]
+Description=Collect Lampac provider health from the Traefik access log
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=LAMPA_ROOT=/opt/homelab
+# Counters only (provider, day, requests, failures, empty, slow, time); no paths or identities.
+ExecStart=/usr/bin/python3 -I ${LAMPA_ROOT}/lampa/provider-stats.py collect
+ExecStartPost=/bin/sh -c '/usr/bin/python3 -I "$LAMPA_ROOT/lampa/provider-stats.py" report --days 7 > "$LAMPA_ROOT/lampa/cache/provider-report.txt.tmp" && mv "$LAMPA_ROOT/lampa/cache/provider-report.txt.tmp" "$LAMPA_ROOT/lampa/cache/provider-report.txt"'
+TimeoutStartSec=5min

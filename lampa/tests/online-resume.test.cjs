@@ -409,3 +409,36 @@ test('Enter on another row after a Continue landing drops the saved point instea
   params.onEnter(rows[0]);
   assert.equal(c.toPlayElement(rows[1]).homelab_resume_at, undefined, 'the playlist cell of the saved row stays native');
 });
+
+test('the next "call" episode is fetched quietly in the last minutes, so Next starts at once', async t => {
+  const h = setup(t), c = await h.open();
+  const call = episode => ({season: 2, episode, voice_name: 'Preferred', title: 'Episode', method: 'call', url: '/lite/kinobase/video?e=' + episode});
+  const first = c.toPlayElement(call(3)), next = c.toPlayElement(call(4)), lazy = () => {};
+  next.url = lazy;
+  const list = [first, next];
+  h.L.PlayerPlaylist = {get: () => list, position: () => 0};
+  h.L.Player.play(first);
+  const video = h.L.PlayerVideo.video(); video.duration = 1200; video.currentTime = 100;
+  const asked = () => h.calls.filter(entry => String(entry.url).includes('/lite/kinobase/video'));
+  h.videoEvent('timeupdate'); assert.equal(asked().length, 0, 'nothing is fetched early in the episode');
+  video.currentTime = 1100; h.videoEvent('timeupdate'); h.videoEvent('timeupdate');
+  assert.equal(asked().length, 1, 'one request near the end');
+  const url = new URL(asked()[0].url);
+  assert.equal(url.searchParams.get('e'), '4'); assert.equal(url.searchParams.get('uid'), 'test'); assert.equal(url.searchParams.get('profile_id'), 'a');
+  asked()[0].finish({url: 'stream-4', quality: {'1080p': 'q1080', '2160p': 'q2160'}}); await flush();
+  assert.equal(next.url, 'q2160', 'the row now holds a playable stream with the default quality');
+  assert.equal(Object.keys(next).includes('homelab_lazy'), false, 'helper fields stay out of the saved playlist');
+  h.tick(11 * 60000); video.currentTime = 1150; h.videoEvent('timeupdate');
+  assert.equal(asked().length, 2, 'an old stream is fetched again before it expires');
+});
+
+test('a prefetch answer that needs the remote client is left to Lampac', async t => {
+  const h = setup(t), c = await h.open();
+  const next = c.toPlayElement({season: 2, episode: 4, voice_name: 'Preferred', title: 'Episode', method: 'call', url: '/lite/kinobase/video?e=4'}), lazy = () => {};
+  next.url = lazy;
+  h.L.PlayerPlaylist = {get: () => [{}, next], position: () => 0};
+  h.L.Player.play({});
+  const video = h.L.PlayerVideo.video(); video.duration = 1200; video.currentTime = 1100; h.videoEvent('timeupdate');
+  h.calls.filter(entry => String(entry.url).includes('/lite/'))[0].finish({rch: true}); await flush();
+  assert.equal(next.url, lazy);
+});

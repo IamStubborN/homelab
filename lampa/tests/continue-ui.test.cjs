@@ -122,3 +122,47 @@ test('titles, posters and the episode list from the last session render at once 
   assert.deepEqual(Object.keys(stored.metadata), ['tv_42']);
   assert.equal(stored.metadata.tv_42.bad, undefined);
 });
+
+test('titles of cards known only from Lampa history are kept for the next start', async t => {
+  let done;
+  const h = await row(t, [], h => {
+    h.L.Api.sources.tmdb.get = (url, params, ok) => { done = ok; };
+    h.syncRows([{hash: '7', watched_at: 5, position: 30, duration: 120, extra: JSON.stringify({card: 'tv_77', season: 1, episode: 1})}]);
+  });
+  assert.ok(done, 'the native-only card asks TMDB for its title');
+  done({name: 'Native Series', poster_path: '/native.jpg', seasons: [{season_number: 1, episode_count: 10}]}); await flush();
+  const stored = h.storage.get('homelab_continue_cache');
+  assert.equal(stored.metadata.tv_77.title, 'Native Series');
+  assert.equal(stored.metadata.tv_77.poster, '/native.jpg');
+});
+
+const finished = {...saved, position: 110, observed: Date.parse('2026-10-01T20:00:00Z')};
+const cachedMeta = aired => h => {
+  h.L.Api.sources.tmdb.get = () => {};
+  h.storage.set('homelab_continue_cache', {scope: 'a', items: [], metadata: {tv_42: {title: 'Series', seasons: {1: 10}, aired}}});
+};
+
+test('an episode released after the last viewing is marked new', async t => {
+  const h = await row(t, [finished], cachedMeta({season: 1, episode: 3, date: '2026-10-08'}));
+  assert.equal(h.overlay(), 'Новая серия: Е3');
+  const badge = h.last('homelab-resume-badge');
+  assert.equal(badge.text(), 'Новая серия'); assert.equal(badge.hasClass('is-new'), true);
+});
+
+test('an episode that has not aired yet is not offered', async t => {
+  const h = await row(t, [finished], cachedMeta({season: 1, episode: 2, date: '2026-09-30'}));
+  assert.equal(h.window.homelabContinue.list().length, 0);
+});
+
+test('an older release is the plain next episode', async t => {
+  const h = await row(t, [finished], cachedMeta({season: 1, episode: 10, date: '2026-09-01'}));
+  assert.equal(h.overlay(), 'Следующая: Е3');
+  assert.equal(h.last('homelab-resume-badge').hasClass('is-new'), false);
+});
+
+test('the last aired episode from TMDB is kept with the cached metadata', async t => {
+  let done;
+  const h = await row(t, [finished], h => { h.L.Api.sources.tmdb.get = (url, params, ok) => { done = ok; }; });
+  done({name: 'Series', seasons: [{season_number: 1, episode_count: 10}], last_episode_to_air: {season_number: 1, episode_number: 3, air_date: '2026-10-08'}}); await flush();
+  assert.equal(JSON.stringify(h.storage.get('homelab_continue_cache').metadata.tv_42.aired), JSON.stringify({season: 1, episode: 3, date: '2026-10-08'}));
+});

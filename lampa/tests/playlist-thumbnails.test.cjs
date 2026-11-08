@@ -19,7 +19,7 @@ function lampa(t, options = {}) {
     if (found) position = list.indexOf(found);
   }
   function set(value) { list = value; active(); playlistEvents.send('set', {playlist: list, position}); }
-  h.L.PlayerPlaylist = {listener: playlistEvents, get: () => list, position: () => position, set};
+  h.L.PlayerPlaylist = {listener: playlistEvents, get: () => list, position: () => position, set, url: value => { current = value; }};
   h.L.Player = {listener: playerEvents, opened: () => opened, playdata: () => work, playlist: set};
   playerEvents.follow('start', data => { current = data.url; set(data.playlist && data.playlist.length ? data.playlist : list); });
   playerEvents.follow('destroy', () => { current = ''; list = []; position = 0; });
@@ -267,4 +267,34 @@ test('the last episode still loads the season stills for the list without a Next
   assert.equal(h.lookups.length, 1);
   h.stills(0, all);
   assert.equal(h.playlist[0].thumbnail, '/image/one.jpg');
+});
+
+test('a Lampac episode started with a quality URL and no numbers is still found as the playing item', t => {
+  const h = lampa(t), card = h.playlist[0].card, nexts = [];
+  // Fictional provider without season/episode on its items; the episode plays a quality URL, so the
+  // native matcher (url, then numbers where undefined matches undefined) lands on item 0.
+  const list = [1, 2, 3, 4].map(n => ({url: 'call-' + n, title: 'Серия ' + n + ' · Name ' + n, card}));
+  list[2].url = 'master-3';
+  h.L.PlayerPlaylist.listener.follow('set', e => nexts.push(e.playlist[e.position + 1] && e.playlist[e.position + 1].title));
+  h.play({url: 'q1080-3', quality: {'1080p': 'q1080-3'}, title: 'Серия 3 · Name 3', card, playlist: list}); h.tick(0);
+  assert.equal(h.position(), 2, 'the playing episode is the current item');
+  assert.equal(nexts.at(-1), 'Серия 4 · Name 4', 'Next points at the following episode');
+  list[0].selected = true;
+  h.L.Select.listener.send('preshow', {active: {items: list}});
+  assert.deepEqual(list.map(entry => !!entry.selected), [false, false, true, false], 'the playlist opens on the playing episode');
+});
+
+test('the Next card shows the episode name without the number prefix', t => {
+  const h = lampa(t);
+  const title = h.L.PlayerPanel.render().find('.player-next__episode-title');
+  title.text('Серия 33 · Когда-нибудь');
+  h.lampacStart(); h.tick(0);
+  assert.equal(title.text(), 'Когда-нибудь');
+});
+
+test('the playing item is found through its quality map when titles do not help', t => {
+  const h = lampa(t), card = h.playlist[0].card;
+  const list = [1, 2, 3].map(n => ({url: 'master-' + n, title: 'Same', card}));
+  h.play({url: 'q1080-2', quality: {'1080p': 'q1080-2', '720p': 'master-2'}, title: 'Other', card, playlist: list}); h.tick(0);
+  assert.equal(h.position(), 1);
 });

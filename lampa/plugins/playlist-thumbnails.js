@@ -184,16 +184,69 @@
   if (L.Select && L.Select.listener && typeof L.Select.listener.follow === 'function') L.Select.listener.follow('preshow', function (event) {
     var active = event && event.active;
     if (!active || active.homelab_playlist || !L.Player.opened() || !Array.isArray(active.items) || active.items !== L.PlayerPlaylist.get()) return;
-    var native = active.onDraw;
+    var native = active.onDraw, index = currentIndex(active.items, L.Player.playdata());
+    // The Select focuses the selected row: make it the playing episode.
+    if (index >= 0 && !active.items[index].selected) active.items.forEach(function (entry, i) { if (entry) entry.selected = i === index; });
     active.homelab_playlist = true;
     active.onDraw = function (row, entry) {
       try { mark(row, entry); } catch (_) {}
       if (typeof native === 'function') return native.apply(this, arguments);
     };
   });
-  L.PlayerPlaylist.listener.follow('set', decorate);
+  // Lampa finds the playing item by URL, then by season and episode. Lampac starts an episode
+  // with its chosen quality URL and some providers carry no numbers, so undefined == undefined
+  // picked the first item: the playlist opened on episode 1 and Next pointed to episode 2.
+  function sameNumber(a, b) { return a !== undefined && a !== null && a !== '' && +a === +b; }
+  function currentIndex(list, work) {
+    if (!work) return -1;
+    var urls = [work.url, work.homelab_source_url].filter(function (url) { return typeof url === 'string' && url; });
+    if (work.quality && typeof work.quality === 'object') Object.keys(work.quality).forEach(function (key) {
+      var value = work.quality[key]; if (typeof value === 'string' && value) urls.push(value); else if (value && typeof value.url === 'string') urls.push(value.url);
+    });
+    function numbered(entry) { return sameNumber(entry.episode, work.episode) && sameNumber(entry.season, work.season); }
+    var hasNumbers = sameNumber(work.episode, work.episode) && sameNumber(work.season, work.season);
+    var byUrl = list.filter(function (entry) { return entry && typeof entry.url === 'string' && urls.indexOf(entry.url) >= 0 && (!hasNumbers || !sameNumber(entry.episode, entry.episode) || numbered(entry)); });
+    if (byUrl.length === 1) return list.indexOf(byUrl[0]);
+    var byNumber = hasNumbers ? list.filter(function (entry) { return entry && numbered(entry); }) : [];
+    if (byNumber.length === 1) return list.indexOf(byNumber[0]);
+    var title = typeof work.title === 'string' && work.title ? work.title : '', byTitle = title ? list.filter(function (entry) { return entry && entry.title === title; }) : [];
+    return byTitle.length === 1 ? list.indexOf(byTitle[0]) : -1;
+  }
+  var correcting = false;
+  function locate(event) {
+    if (correcting || !L.Player.opened() || typeof L.PlayerPlaylist.url !== 'function' || typeof L.PlayerPlaylist.set !== 'function') return false;
+    var list = event && event.playlist;
+    if (!Array.isArray(list) || L.PlayerPlaylist.get() !== list) return false;
+    var index = currentIndex(list, L.Player.playdata()), entry = list[index];
+    if (index < 0 || index === event.position || typeof entry.url !== 'string' || !entry.url) return false;
+    // Lampa matches by URL first: a duplicated URL could not hold the corrected position.
+    if (list.some(function (other) { return other !== entry && other && other.url === entry.url; })) return false;
+    // Point Lampa at the playing item and announce the list again: the Next card, Prev/Next
+    // and the playlist's focus all follow the corrected position.
+    correcting = true;
+    try { L.PlayerPlaylist.url(entry.url); L.PlayerPlaylist.set(list); } finally { correcting = false; }
+    return true;
+  }
+  // The Next card already says «Следующая серия»; the episode number prefix only repeats it.
+  function plainNext() {
+    var title = L.PlayerPanel && typeof L.PlayerPanel.render === 'function' ? L.PlayerPanel.render().find('.player-next__episode-title') : window.$('.player-next__episode-title');
+    if (!title || !title.length) return;
+    for (var i = 0; i < title.length; i++) {
+      var node = window.$(title[i]), text = String(node.text() || ''), plain = text.replace(/^(?:Серия|Спецвыпуск) \d+ · /, '');
+      if (plain !== text) node.text(plain);
+    }
+  }
+  L.PlayerPlaylist.listener.follow('set', function (event) {
+    if (locate(event)) return;
+    try { plainNext(); } catch (_) {}
+    decorate(event);
+  });
   L.Player.listener.follow('ready', function () {
-    clearTimeout(ready); ready = setTimeout(function () { decorate({playlist: L.PlayerPlaylist.get(), position: L.PlayerPlaylist.position()}); }, 0);
+    // The first set of a playback happens before the player is opened; correct the position here.
+    clearTimeout(ready); ready = setTimeout(function () {
+      var event = {playlist: L.PlayerPlaylist.get(), position: L.PlayerPlaylist.position()};
+      if (!locate(event)) { try { plainNext(); } catch (_) {} decorate(event); }
+    }, 0);
   });
   L.Player.listener.follow('destroy', reset);
   window.homelabPlaylistThumbnails = true;

@@ -108,6 +108,7 @@ function harness(t) {
     phase(type) { phaseEvents.forEach(fn => fn({type, work})); },
     profile(value) { profile = value; scope = value; storageEvents.send('change', {name: 'account'}); syncEvents.forEach(fn => fn()); },
     syncRows(value) { syncRows = value; },
+    pick() { const item = select && Array.isArray(select.items) ? select.items.find(entry => entry.selected) : null; if (item) this.choose(item); return item; },
     choose(item) { const previous = select; select = null; controller = {name: modal ? 'modal' : 'player'}; selectEvents.send('hide', {active: previous}); previous.onSelect(item); },
     tick: ms => t.mock.timers.tick(ms),
   };

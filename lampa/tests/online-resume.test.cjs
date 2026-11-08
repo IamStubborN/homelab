@@ -373,3 +373,39 @@ test('a movie match with out-of-range positions is rejected before opening', t =
   assert.equal(valid({provider: 'kinobase', voice: '', season_index: 0, match: {index: 0, count: 1, translate: 'x'.repeat(201)}}), false);
   assert.equal(valid({provider: 'kinobase', voice: '', season_index: 0, match: {count: 1}}), true);
 });
+
+test('continue focuses the saved voice and episode row without starting it; Enter on that row resumes the saved point', async t => {
+  const h = setup(t), focused = [];
+  h.L.Controller.collectionFocus = target => { focused.push(target); };
+  h.L.Controller.enabled = () => ({name: 'content'});
+  assert.equal(h.window.HomelabOnlineResume.resume(h.item, h.movie, () => h.starts.push('failed'), {focus: true}), true);
+  const c = h.component(); await c.startSource();
+  const rows = [file(2), file(), file(4)];
+  h.draw(rows); h.render(); h.tick(0);
+  assert.equal(h.starts.length, 0, 'the video is not started');
+  assert.equal(focused.length, 1, 'the saved episode row receives focus');
+  h.tick(60000); assert.equal(h.starts.length, 0, 'no timeout notice after landing on the row');
+  assert.equal(c.toPlayElement(rows[0]).homelab_resume_at, undefined, 'another episode starts from its own progress');
+  const work = c.toPlayElement(rows[1]);
+  assert.equal(work.homelab_resume_at, 71, 'the user\'s Enter on the saved row resumes the saved point');
+  assert.equal(c.toPlayElement(rows[1]).homelab_resume_at, undefined, 'applied once');
+});
+
+test('series play elements carry the episode number for the player and its playlist', async t => {
+  const h = setup(t), c = await h.open();
+  assert.equal(c.toPlayElement(file()).title, 'Серия 3 · Episode');
+  assert.equal(c.toPlayElement({...file(), title: '3 серия'}).title, '3 серия', 'a title that already has the number is kept');
+  assert.equal(c.toPlayElement({...file(5), season: 0, title: 'Recap'}).title, 'Спецвыпуск 5 · Recap');
+});
+
+test('Enter on another row after a Continue landing drops the saved point instead of spending it on the playlist', async t => {
+  const h = setup(t);
+  h.L.Controller.collectionFocus = () => {}; h.L.Controller.enabled = () => ({name: 'content'});
+  h.window.HomelabOnlineResume.resume(h.item, h.movie, () => {}, {focus: true});
+  const c = h.component(); await c.startSource();
+  const rows = [file(2), file(), file(4)];
+  let params;
+  c.draw(rows, {onEnter() {}, onRender() { params = this; }}); h.render(); h.tick(0);
+  params.onEnter(rows[0]);
+  assert.equal(c.toPlayElement(rows[1]).homelab_resume_at, undefined, 'the playlist cell of the saved row stays native');
+});

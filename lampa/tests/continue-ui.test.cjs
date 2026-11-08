@@ -99,3 +99,26 @@ test('an online next episode in another season cannot be marked watched with the
   h.elements.filter(e => e.classes.has('homelab-resume-card')).at(-1).trigger('hover:long');
   assert.deepEqual([...h.select().items].map(x => x.title), ['Убрать из ряда', 'Выбрать источник']);
 });
+
+test('programmatic refocus of the row does not replay the card bounce; a remote move does', async t => {
+  const h = await row(t, [saved, {...saved, card: 'tv_43', title: 'Other', observed: 900}]);
+  const element = h.last('homelab-resume-row');
+  h.tick(1000); h.row.toggle();
+  assert.equal(element.hasClass('homelab-resume-quiet'), true, 'startup and reload refocus stay still');
+  h.L.Controller.controllers.homelab_resume.right();
+  assert.equal(element.hasClass('homelab-resume-quiet'), false, 'a remote move bounces the next card');
+});
+
+test('titles, posters and the episode list from the last session render at once on the next start', async t => {
+  const h = await row(t, [{...saved, title: undefined}], h => {
+    h.L.Api.sources.tmdb.get = () => {};
+    h.storage.set('homelab_continue_cache', {scope: 'a', items: [], metadata: {tv_42: {title: 'Cached title', poster: '/cached.jpg', bad: '<x>'}, 'bad key': {title: 'x'}}});
+    h.storage.set('homelab_continue_episodes', {'a|tv_42:1:2': [{episode_number: 2, name: 'Second'}, {episode_number: 3, name: 'Third'}]});
+  });
+  const shown = h.window.homelabContinue.list()[0];
+  assert.equal(shown.title, 'Cached title'); assert.equal(shown.poster, '/cached.jpg');
+  assert.equal(h.overlay(), '2 · Second', 'the cached episode list is painted before any lookup');
+  const stored = h.storage.get('homelab_continue_cache');
+  assert.deepEqual(Object.keys(stored.metadata), ['tv_42']);
+  assert.equal(stored.metadata.tv_42.bad, undefined);
+});

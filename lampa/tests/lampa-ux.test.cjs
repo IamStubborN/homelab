@@ -31,6 +31,8 @@ test('continue loads once for concurrent callers and explicitly resumes high-per
   assert.ok(first && second); assert.equal(h.window.homelabContinue.list().length, 1);
   h.window.homelabContinue.resume(h.window.homelabContinue.list()[0]);
   h.L.sourceLookup.success({file_stats: [{id: 1, path: 'Series/02.mkv'}]});
+  assert.equal(h.work(), null, 'continue offers the episode instead of starting it');
+  assert.equal(h.select().items.find(item => item.selected).subtitle, 'осталось меньше минуты'); h.pick();
   assert.equal(h.video().currentTime, 105); assert.equal(h.work().timeline.continued, true);
   assert.equal(h.work().homelab_track_preferences.audio.title, 'Preferred');
   assert.ok(!JSON.stringify(h.calls).includes('/gst/'), 'resume persistence must not contain a session URL');
@@ -45,6 +47,8 @@ test('torrent continue restores the naturally ordered full release and keeps the
     {id: 23, path: 'Series/S01E10.mkv'}, {id: 77, path: 'Series/S01E02.mkv'}, {id: 41, path: 'Series/S01E01.mkv'},
     {id: 5, path: 'Series/Subs/S01E02.ru.ass'}, {id: 6, path: 'poster.jpg'},
   ]});
+  assert.deepEqual(h.select().items.map(item => item.entry.id), [41, 77, 23]); assert.equal(h.select().items[1].selected, true);
+  h.pick();
   assert.deepEqual(Array.from(h.L.playlistData, work => work.id), [41, 77, 23]);
   assert.equal(h.L.playlistData[1], h.work()); assert.equal(h.work().url, '/gst/session/master.m3u8');
   assert.equal(h.work().timeline.hash, '123'); assert.equal(h.video().currentTime, 112);
@@ -63,7 +67,7 @@ test('optional metadata timeouts retain selected playback and late responses can
   h.L.Api.sources.tmdb.get = (path, params, done) => { complete = done; };
   h.run('mods/HomelabSync/continue.js'); h.window.homelabContinue.resume(entry());
   h.L.sourceLookup.success({file_stats: [{id: 1, path: 'Series/S01E02.mkv'}]});
-  h.tick(2000); assert.equal(h.video().currentTime, 112); assert.equal(h.L.playlistData.length, 1);
+  h.tick(2000); h.pick(); assert.equal(h.video().currentTime, 112); assert.equal(h.L.playlistData.length, 1);
   const current = h.work(); complete({id: 42, name: 'Series', original_name: 'Original', number_of_seasons: 1});
   assert.equal(h.work(), current);
 });
@@ -75,7 +79,7 @@ test('continue retains native video formats while explicit samples cannot become
     {id: 1, path: 'Series/S01E01.mkv'}, {id: 2, path: 'Series/S01E02.3gp'},
     {id: 3, path: 'Series/Sample/S01E01.sample.mkv'}, {id: 4, path: 'Series/Trailer.mkv'},
   ]});
-  assert.deepEqual(Array.from(h.L.playlistData, work => work.id), [1, 2]);
+  h.pick(); assert.deepEqual(Array.from(h.L.playlistData, work => work.id), [1, 2]);
 });
 
 test('a newer later native episode replaces the captured one without its source; stale closes and other cuts do not', async t => {
@@ -120,7 +124,7 @@ test('only the latest continue intent may launch or fall back after asynchronous
   h.window.homelabContinue.resume(entry()); const old = h.L.sourceLookup;
   h.window.homelabContinue.resume({...entry(), card: 'tv_43', title: 'Second'});
   h.L.sourceLookup.success({file_stats: [{id: 1, path: 'second.mkv'}]});
-  old.failure(); h.tick(8000);
+  old.failure(); h.tick(8000); h.pick();
   assert.equal(h.L.routed, undefined); assert.equal(h.work().card.id, 43);
 });
 

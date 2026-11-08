@@ -21,14 +21,17 @@
     L.Utils.secondsToTime, L.Player.opened, window.$,
     sync.scope, sync.pull, sync.rows, sync.extra, sync.subscribe].every(function (fn) { return typeof fn === 'function'; })) return;
   var items = [], scope = '', reading = null, readAt = -Infinity, listeners = [], playing = null, pending = {}, sending = null, restore = null, metadata = {}, resolving = {}, metadataQueue = [], metadataRunning = 0, resumeIntent = null, writeTimer = null, writeError = false, readError = false, external = null, loadedOnce = false;
-  var CACHE = 'homelab_continue_cache', DAY = 86400000, NEWER = 120000;
+  var CACHE = 'homelab_continue_cache', EPISODES = 'homelab_continue_episodes', DAY = 86400000, NEWER = 120000;
+  // Titles, posters and season sizes from the last session, so the row
+  // starts in its final look instead of repainting each tile as TMDB answers.
+  var remembered = {}, lastKey = 0;
   // Any key, click or touch while a launch is still being prepared hands
   // control back to the user (the online component then owns its own input).
   function interrupted() {
     var intent = resumeIntent;
     if (intent && !intent.launched && Date.now() - intent.created >= 500) cancelResume();
   }
-  if (L.Keypad && L.Keypad.listener && typeof L.Keypad.listener.follow === 'function') L.Keypad.listener.follow('keydown', interrupted);
+  if (L.Keypad && L.Keypad.listener && typeof L.Keypad.listener.follow === 'function') L.Keypad.listener.follow('keydown', function () { lastKey = Date.now(); interrupted(); });
   if (typeof document !== 'undefined' && document && typeof document.addEventListener === 'function') ['mousedown', 'touchstart'].forEach(function (name) { document.addEventListener(name, interrupted, true); });
   function intentNew() { return resumeIntent = {created: Date.now()}; }
   function cancelResume() { if (window.HomelabOnlineResume) window.HomelabOnlineResume.cancel(); if (resumeIntent) clearTimeout(resumeIntent.timer); resumeIntent = null; }
@@ -36,7 +39,7 @@
   function context() {
     var key = sync.scope();
     if (scope !== key) {
-      scope = key; items = cached(key); metadata = {}; resolving = {}; metadataQueue = []; metadataRunning = 0; readAt = -Infinity; pending = {}; writeError = false; readError = false; loadedOnce = false; external = null;
+      scope = key; items = cached(key); remembered = cachedMetadata(key); metadata = {}; resolving = {}; metadataQueue = []; metadataRunning = 0; readAt = -Infinity; pending = {}; writeError = false; readError = false; loadedOnce = false; external = null;
       clearTimeout(writeTimer);
       if (reading) reading.abort.abort(); reading = null;
       if (sending) sending.abort.abort(); sending = null;
@@ -52,7 +55,28 @@
     try { value = L.Storage.get(CACHE, null); } catch (_) {}
     return key && value && value.scope === key && Array.isArray(value.items) ? value.items.map(normal).filter(accepted) : [];
   }
-  function persist() { try { L.Storage.set(CACHE, {scope: scope, items: items.slice(0, 50)}, true); } catch (_) {} }
+  function cachedMetadata(key) {
+    var value = null, result = {};
+    try { value = L.Storage.get(CACHE, null); } catch (_) {}
+    if (!key || !value || value.scope !== key || !value.metadata || typeof value.metadata !== 'object') return result;
+    Object.keys(value.metadata).forEach(function (card) {
+      var entry = value.metadata[card], clean = {};
+      if (!/^(tv|movie)_\d+$/.test(card) || !entry || typeof entry !== 'object') return;
+      if (typeof entry.title === 'string') clean.title = plain(entry.title).slice(0, 200);
+      ['poster', 'backdrop'].forEach(function (name) { if (typeof entry[name] === 'string' && /^\/[\w.-]+$/.test(entry[name])) clean[name] = entry[name]; });
+      if (entry.seasons && typeof entry.seasons === 'object') {
+        clean.seasons = {};
+        Object.keys(entry.seasons).forEach(function (n) { if (/^\d{1,3}$/.test(n) && Number.isInteger(entry.seasons[n])) clean.seasons[n] = entry.seasons[n]; });
+      }
+      result[card] = clean;
+    });
+    return result;
+  }
+  function persist() {
+    var shown = items.slice(0, 50), kept = {};
+    shown.forEach(function (item) { var value = Object.assign({}, remembered[item.card] || {}, metadata[item.card] || {}); if (Object.keys(value).length) kept[item.card] = value; });
+    try { L.Storage.set(CACHE, {scope: scope, items: shown, metadata: kept}, true); } catch (_) {}
+  }
   // Lampac omits default values such as a zero position.
   function normal(item) { return item && !item.deleted && item.position === undefined ? Object.assign({}, item, {position: 0}) : item; }
   function accepted(item) {
@@ -138,7 +162,7 @@
         season: Number.isInteger(extra.season) && extra.season >= 0 ? extra.season : undefined, episode: extra.episode || 0,
         timeline: row.hash != null ? String(row.hash) : undefined, position: row.position, duration: row.duration, observed: row.watched_at};
     });
-    return Object.keys(byCard).map(function (key) { return Object.assign({}, byCard[key], metadata[key] || {}); });
+    return Object.keys(byCard).map(function (key) { return Object.assign({}, byCard[key], remembered[key] || {}, metadata[key] || {}); });
   }
   // Lampa marks an episode watched at 90%; Continue then offers the next one.
   function nextEpisode(item, seasons) {
@@ -178,7 +202,7 @@
       if (item.deleted || !(item.duration > 0)) return;
       if (watched(item)) {
         if (item.card.indexOf('tv_') !== 0) return;
-        var next = nextEpisode(item, metadata[item.card] && metadata[item.card].seasons);
+        var known = metadata[item.card] || remembered[item.card], next = nextEpisode(item, known && known.seasons);
         if (!next) return;
         var value = Object.assign({}, item, {season: next.season, episode: next.episode, position: 0, advance: {season: item.season, episode: item.episode}});
         // A native season index cannot be derived for another season.
@@ -211,7 +235,7 @@
                 value.seasons = {};
                 data.seasons.forEach(function (season) { if (season && Number.isInteger(season.season_number) && Number.isInteger(season.episode_count)) value.seasons[season.season_number] = season.episode_count; });
               }
-              metadata[item.card] = value;
+              metadata[item.card] = value; persist();
             }
             metadataRunning--; publish(); work();
           }
@@ -329,7 +353,7 @@
         var adapter = window.HomelabOnlineResume, launched = false;
         // Once the native component is shown the user stays there: a failure
         // only explains what to choose instead of navigating away.
-        try { launched = adapter && adapter.resume(item, value || card(item), function (reason) { if (resumeIntent === onlineIntent) cancelResume(); onlineFailed(reason); }); } catch (_) {}
+        try { launched = adapter && adapter.resume(item, value || card(item), function (reason) { if (resumeIntent === onlineIntent) cancelResume(); onlineFailed(reason); }, {focus: true}); } catch (_) {}
         if (L.Activity && typeof L.Activity.active === 'function') owner = L.Activity.active();
         if (!launched) unavailable(value);
       };
@@ -355,7 +379,7 @@
         if (item.advance) {
           var next = playlist.find(function (entry) { return entry.episode === item.episode && (!Number.isInteger(entry.season) || entry.season === item.season); });
           if (!next) return chooseSource('Следующая серия не найдена в раздаче. Выберите источник');
-          L.Player.play(next); L.Player.playlist(playlist); return;
+          return offer(playlist, next);
         }
         var work = playlist.find(function (entry) { return entry.id === item.index; });
         if (!work) {
@@ -369,7 +393,19 @@
           playlist = [work];
           L.Noty.show('Не удалось восстановить список серий. Доступна выбранная серия');
         }
-        L.Player.play(work); L.Player.playlist(playlist);
+        offer(playlist, work);
+      }
+      // The release's files with the saved one focused: the user starts it.
+      function offer(playlist, chosen) {
+        if (!L.Select || typeof L.Select.show !== 'function') { L.Player.play(chosen); L.Player.playlist(playlist); return; }
+        var previous = L.Controller.enabled().name;
+        L.Select.show({title: plain(item.title || 'Продолжить просмотр'), items: playlist.map(function (entry) {
+          return {title: entry.title, subtitle: entry !== chosen ? '' : item.advance ? 'Следующая серия' : remaining(item.position, item.duration), selected: entry === chosen, entry: entry};
+        }), onBack: function () { L.Controller.toggle(previous); }, onSelect: function (choice) {
+          if (!choice || !choice.entry || context() !== key) { L.Select.close(); return L.Controller.toggle(previous); }
+          if (L.Player.opened()) { L.Select.close(); L.Controller.toggle(previous); return L.Noty.show('Сначала закройте текущий просмотр'); }
+          L.Player.play(choice.entry); L.Player.playlist(playlist);
+        }});
       }
       var stored = data.data;
       try { if (typeof stored === 'string') stored = JSON.parse(stored); } catch (_) { stored = null; }
@@ -607,6 +643,26 @@
     var index = season.findIndex(function (ep) { return ep.episode_number === item.episode; });
     return index < 0 ? [] : season.slice(index, index + 5);
   }
+  // The focus overlay's episode list from the last session, so a focused
+  // tile does not grow from one line to the list while the app starts.
+  function storedWindow(item) {
+    var value = null;
+    try { value = L.Storage.get(EPISODES, null); } catch (_) {}
+    var rows = value && value[scope + '|' + item.card + ':' + item.season + ':' + item.episode];
+    return Array.isArray(rows) ? rows.filter(function (row) { return row && Number.isInteger(row.episode_number); }).map(function (row) { return {episode_number: row.episode_number, name: plain(row.name).slice(0, 200)}; }) : [];
+  }
+  function storeWindow(item, rows) {
+    var value = null;
+    try { value = L.Storage.get(EPISODES, null); } catch (_) {}
+    if (!value || typeof value !== 'object' || Array.isArray(value)) value = {};
+    var name = scope + '|' + item.card + ':' + item.season + ':' + item.episode, wanted = {};
+    list().forEach(function (entry) { wanted[scope + '|' + entry.card + ':' + entry.season + ':' + entry.episode] = true; });
+    // Other profiles keep their entries; this profile keeps only its row.
+    Object.keys(value).forEach(function (key) { if (key.indexOf(scope + '|') === 0 && !wanted[key]) delete value[key]; });
+    if (Object.keys(value).length > 200) value = {};
+    value[name] = rows.map(function (row) { return {episode_number: row.episode_number, name: plain(row.name).slice(0, 200)}; });
+    try { L.Storage.set(EPISODES, value, true); } catch (_) {}
+  }
   function ResumeRow() {
     var self = this, bus = L.Subscribe(), html = window.$('<div class="homelab-resume-row"><div class="homelab-resume-title">Продолжить просмотр</div><div class="homelab-resume-sync"></div></div>');
     var scroll = new L.Scroll({horizontal: true, step: 300}), last = null, key = '', stamp = '', destroyed = false, cards = [], byCard = {}, order = '', orderList = [], seasons = {}, seasonScope = sync.scope(), empty = null;
@@ -709,7 +765,12 @@
           clearTimeout(timer); timer = setTimeout(function () {
             if (!alive || destroyed || !tile.hasClass('focus')) return;
             var scope = sync.scope(), selected = item; loaded = true;
-            episodes(selected, function (rows) { if (alive && !destroyed && sync.scope() === scope && selected.season === item.season && selected.episode === item.episode) paint(episodeWindow(item, rows)); });
+            episodes(selected, function (rows) {
+              if (!alive || destroyed || sync.scope() !== scope || selected.season !== item.season || selected.episode !== item.episode) return;
+              var shown = episodeWindow(item, rows);
+              if (JSON.stringify(shown.map(function (row) { return [row.episode_number, plain(row.name)]; })) !== JSON.stringify(displayed.map(function (row) { return [row.episode_number, plain(row.name)]; }))) paint(shown);
+              if (shown.length) storeWindow(item, shown);
+            });
           }, 500);
         }
         tile.on('hover:focus hover:touch hover:hover', lookupEpisodes);
@@ -718,7 +779,7 @@
         // No footer under the title: progress and source live on the poster.
         tile.find('.card__age').remove();
         tile.find('.card__icons-inner').append(window.$('<div class="card__icon icon--history"></div>'));
-        decorate(); paint([]);
+        decorate(); paint(hasEpisode(item) ? storedWindow(item) : []);
         byCard[item.card] = {native: native, update: function (value) {
           var previous = card(item), changedEpisode = item.season !== value.season || item.episode !== value.episode;
           item = value;
@@ -731,7 +792,7 @@
             // Keep the loader's existing handlers and update only its source.
             tile.find('.card__img').attr('src', typeof native.getPosterPath === 'function' ? native.getPosterPath() : current.poster_path ? L.Api.img(current.poster_path) : './img/img_broken.svg');
           }
-          if (changedEpisode) { clearTimeout(timer); loaded = false; displayed = []; }
+          if (changedEpisode) { clearTimeout(timer); loaded = false; displayed = hasEpisode(item) ? storedWindow(item) : []; }
           paint(displayed);
           if (changedEpisode && tile.hasClass('focus')) lookupEpisodes();
         }};
@@ -746,7 +807,7 @@
         last = byCard[key] ? byCard[key].native.render(true) : cards.length ? cards[0].render(true) : null;
       }
       L.Layer.visible(scroll.render(true));
-      if (focused && changedOrder) { L.Controller.collectionSet(scroll.render(true)); L.Controller.collectionFocus(last || false, scroll.render(true)); }
+      if (focused && changedOrder) { quiet(); L.Controller.collectionSet(scroll.render(true)); L.Controller.collectionFocus(last || false, scroll.render(true)); }
     }
     // Long press (or remote hold) opens the card's actions. Removal keeps the
     // tombstone semantics; focus moves to a neighbour only when the card leaves.
@@ -772,14 +833,17 @@
     }
     this.create = function () { rowCount++; scroll.body().addClass('homelab-resume-items mapping--line'); html.append(scroll.render()); listeners.push(draw); draw(); };
     this.render = function (js) { return js ? html[0] : html; };
+    // Lampa restarts the card focus bounce whenever focus is set again; only
+    // a remote press should bounce, not the reloads while the app starts.
+    function quiet(on) { html.toggleClass('homelab-resume-quiet', on !== false && Date.now() - lastKey > 500); }
     function move(step) {
       var tiles = scroll.render(true).querySelectorAll('.selector'), index = Array.prototype.indexOf.call(tiles, last), next = index + step;
-      if (next >= 0 && next < tiles.length) L.Controller.collectionFocus(tiles[next], scroll.render(true));
+      if (next >= 0 && next < tiles.length) { quiet(false); L.Controller.collectionFocus(tiles[next], scroll.render(true)); }
       else if (step < 0) self.emit('left');
     }
     this.toggle = function () {
       L.Controller.add('homelab_resume', {link: self, toggle: function () {
-        L.Controller.collectionSet(scroll.render(true)); L.Controller.collectionFocus(last || false, scroll.render(true)); self.emit('toggle'); self.emit('active');
+        quiet(); L.Controller.collectionSet(scroll.render(true)); L.Controller.collectionFocus(last || false, scroll.render(true)); self.emit('toggle'); self.emit('active');
       }, right: function () { move(1); },
       left: function () { move(-1); },
       up: function () { self.emit('up'); }, down: function () { self.emit('down'); }, back: function () { self.emit('back'); }});
@@ -807,7 +871,8 @@
     '.homelab-resume-track{height:.2em;background:rgba(255,255,255,.25);margin-top:.4em;border-radius:1em;overflow:hidden}' +
     '.homelab-resume-track div{height:100%;background:#fff}' +
     '.homelab-ep:not(.homelab-ep--current) .homelab-resume-track div{background:rgba(255,255,255,.55)}' +
-    '.homelab-resume-empty{padding:1em;opacity:.7}'));
+    '.homelab-resume-empty{padding:1em;opacity:.7}' +
+    '.homelab-resume-quiet .homelab-resume-card .card__view{-webkit-animation:none!important;animation:none!important}'));
   L.ContentRows.add({name: 'homelab_continue', title: 'Продолжить просмотр', index: 0, screen: ['main'],
     // Resolve at once from the cached list: Main waits for its whole first
     // batch of rows, so a slow Lampac must not hold the home screen.

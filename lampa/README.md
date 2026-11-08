@@ -14,8 +14,9 @@ The independent `common-sources.js` picker offers online voices and native torre
 results together. By default it shows one card per online voice: Enter plays the
 best source of that voice (playable first, highest quality, a measured height over
 a declared one), the card names how many other sources stand behind it, and Right
-or a long press lists every source plus a toggle for the favourite voice (shown as
-a star and a chip that can change or clear it). The view chip switches to a flat
+or a long press lists every source (every release for a torrent card). Torrents
+fold into one «Торренты» row below the online voices, and native fallbacks share
+one «Открыть в источниках» row. The view chip switches to a flat
 list of every source; recovery pickers start flat. The top card is highlighted as
 the recommendation and, until the first key press, keeps the focus so one OK plays
 it. Quality is a single badge (4K, 1080p, ...) marked as measured or declared; rows
@@ -23,9 +24,8 @@ whose source hands out no video are dimmed and sorted last. Torrent cards carry
 seeds, size and codec badges; Right/long press shows the full release title. A
 status line with a spinner and bar reports how many online providers have answered
 and whether torrents are still searched; an empty result explains what to change.
-Favorite voice and quality are stored per HomelabSync profile on this device and
-reused across providers. Results rank favorites first, followed by concrete online
-variants, seeded torrents and native provider fallbacks. Once a result receives
+The quality tab is stored per HomelabSync profile on this device and reused
+across providers. Results rank concrete online variants first, followed by seeded torrents and native provider fallbacks. Once a result receives
 focus, late results append without moving it or recentering the scroll. Online
 voices whose quality is only known at playback stay visible under every quality
 tab, marked as to be clarified. Leaving mid-search marks the list as interrupted;

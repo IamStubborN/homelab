@@ -66,7 +66,7 @@ test('source search repairs a TV Explorer placeholder on its own copy', async t 
 test('common picker discovers voices for exactly one episode with two catalog requests and no media resolution', async t => {
   const h = setup(t); await h.start();
   await h.finish('/lite/events', [h.source('one'), h.source('two'), h.source('three')]);
-  assert.equal(h.requests.filter(r => r.url.pathname.startsWith('/lite/') && !r.completed).length, 2);
+  assert.equal(h.requests.filter(r => r.url.pathname.startsWith('/lite/') && !r.completed).length, 3, 'all three providers are asked at once');
   h.pages.set('seasons', {'.videos__item': [{method: 'link', text: 'Сезон 1', url: '/lite/one?s=1'}, {method: 'link', text: 'Сезон 2', url: '/lite/one?s=2'}]});
   h.pages.set('episode', {'.videos__item': [{method: 'call', text: 'Episode 2', season: 2, episode: 2}, {method: 'play', text: 'Episode 3', season: 2, episode: 3, url: '/media', quality: {'1080p': '/media'}}],
     '.videos__button': [{active: true, text: 'Preferred', url: '/lite/one?s=2'}, {text: 'Alternate', url: '/lite/one?s=2&voice=alternate'}]});
@@ -81,11 +81,12 @@ test('common picker discovers voices for exactly one episode with two catalog re
   assert.deepEqual(Array.from(rows, r => r.voice), ['Preferred', 'Alternate']);
   assert.equal(rows[0].seasonIndex, 1); assert.equal(rows[0].identityVoice, 'Preferred');
   assert.deepEqual(Array.from(rows[0].qualities), [1080]); assert.deepEqual(Array.from(rows[1].qualities), []);
-  assert.equal(h.search.onlinePending, false); assert.equal(h.peak(), 2);
+  assert.equal(h.search.onlinePending, false); assert.equal(h.peak(), 3, 'providers are asked in parallel, up to five at once');
   assert.ok(h.requests.every(r => !r.url.pathname.includes('media')));
   assert.ok(!h.requests.some(r => r.url.searchParams.get('s') === '1'));
   assert.equal(h.requests.filter(r => r.url.searchParams.get('voice') === 'alternate').length, 1, 'voice links are visited once');
-  assert.ok(h.requests.slice(1).every((r, i) => r.started - h.requests[i].started >= 350), 'cached catalog pages are paced too');
+  const own = h.requests.filter(r => r.url.pathname.startsWith('/lite/one'));
+  assert.ok(own.slice(1).every((r, i) => r.started - own[i].started >= 350), 'pages of one provider are paced; providers do not wait for each other');
   h.search.cancel();
 });
 
@@ -143,26 +144,28 @@ test('polling and per-request timeouts terminate without leaving an endless sear
 });
 
 
-test('release labels use actual voice metadata, retain codec and never invent a voice from the release title', t => {
+test('release labels prefer voice metadata, fall back to the voices listed in the release title and retain codec', t => {
   const h = setup(t), describe = h.window.HomelabSources.describeRelease;
   const unknown = describe({Title: 'Series S02 WEB-DL 1080p HEVC Huge Studio Name', info: {voices: [], videotype: 'sdr'}});
-  assert.equal(unknown.title, 'Озвучка в раздаче'); assert.equal(unknown.codec, 'HEVC');
+  assert.equal(unknown.title, 'Озвучка не указана'); assert.equal(unknown.codec, 'HEVC');
+  assert.deepEqual(Array.from(describe({Title: 'Series S02 1080p | D, P | LostFilm, Кубик в Кубе'}).voices), ['Дубляж', 'Многоголосый', 'LostFilm', 'Кубик в Кубе']);
   assert.equal(describe({Title: 'Release', info: {voices: ['Preferred', 'Other', 'Third']}}).title, 'Preferred / Other +1');
   const probe = describe({ffprobe: [{codec_type: 'video', codec_name: 'h264'}, {codec_type: 'audio', tags: {title: 'Preferred'}}, {codec_type: 'audio', tags: {handler_name: 'Audio Handler'}}]});
   assert.equal(probe.title, 'Preferred'); assert.equal(probe.codec, 'AVC');
 });
 
-test('favorite voice and quality are profile scoped, validated and reused across providers', t => {
+test('quality is profile scoped and validated; rows rank online, seeded torrents by quality, then native', t => {
   const h = setup(t), api = h.window.HomelabSources;
-  api.preferences({voice: 'Preferred', quality: 1080});
-  assert.equal(api.preferences().quality, 1080);
+  api.preferences({quality: 1080});
+  assert.equal(api.preferences().quality, 1080); assert.equal(api.preferences().voice, undefined, 'there is no favourite voice');
   const row = (key, voice, extra = {}) => ({key, kind: 'online', identityVoice: voice, providerName: key, qualities: [1080], ...extra});
-  const rows = [row('z', 'Other'), row('b', 'Preferred'), row('a', 'preferred'), row('t1', '', {kind: 'torrent', release: {Seeders: 3}}), row('t2', '', {kind: 'torrent', release: {Seeders: 30}}), row('n', 'Preferred', {native: true})];
-  rows.sort((a,b) => api.compareRows(a,b,api.preferences()));
-  assert.deepEqual(rows.map(r => r.key), ['a', 'b', 'z', 't2', 't1', 'n']);
-  api.preferences({quality: 999, voice: 'x'.repeat(201)}); assert.equal(api.preferences().voice, 'Preferred');
-  h.profile('b'); assert.equal(api.preferences().voice, ''); assert.equal(api.preferences().quality, 0);
-  h.profile('profile-a'); assert.equal(api.preferences().voice, 'Preferred');
+  const rows = [row('z', 'Other'), row('b', 'Preferred'), row('a', 'preferred'), row('t1', '', {kind: 'torrent', release: {Seeders: 300}, qualities: [720]}),
+    row('t2', '', {kind: 'torrent', release: {Seeders: 4}, qualities: [2160]}), row('t3', '', {kind: 'torrent', release: {Seeders: 1}, qualities: [2160]}), row('n', 'Preferred', {native: true})];
+  rows.sort((a, b) => api.compareRows(a, b));
+  assert.deepEqual(rows.map(r => r.key), ['a', 'b', 'z', 't2', 't1', 't3', 'n'], 'quality beats seeds once a release is seeded; dead releases sink');
+  api.preferences({quality: 999}); assert.equal(api.preferences().quality, 1080);
+  h.profile('b'); assert.equal(api.preferences().quality, 0);
+  h.profile('profile-a'); assert.equal(api.preferences().quality, 1080);
 });
 
 test('recovery fully closes the owned player before opening exact episode alternatives and rejects stale callbacks', t => {
@@ -296,7 +299,7 @@ test('movie call items take their dub from translate/text, never a release tag i
     {method: 'call', text: 'Licensed Dub', voice_name: '2160p', url: '/lite/one/video?i=3'},
     {method: 'play', text: '720p', url: '/media/c'}]});
   await h.finish('/lite/events', [h.source('one')]); await h.finish('/lite/one', 'film');
-  assert.deepEqual(Array.from(search.rows, r => r.identityVoice), ['Studio Alpha', 'Studio Alpha - cut', 'Licensed Dub', 'Licensed Dub', 'Film']);
+  assert.deepEqual(Array.from(search.rows, r => r.identityVoice), ['Studio Alpha', 'Studio Alpha - cut', 'Licensed Dub', 'Licensed Dub', 'Без названия']);
   assert.ok(search.rows.every(r => !/WEB-DL|2160p/.test(r.voice.split(' · ')[0])), 'release tags never become the voice title');
   assert.equal(new Set(search.rows.map(r => r.key)).size, 5, 'identical dubs stay separate rows');
   assert.notEqual(search.rows[2].voice, search.rows[3].voice, 'identical dubs get distinguishable labels');
@@ -419,7 +422,7 @@ test('rows without quality learn the real height from the source once the catalo
   assert.deepEqual(Array.from(row('Studio D').qualities), []); assert.ok(!row('Studio D').unavailable);
   // Rows that already know their quality are never probed.
   assert.ok(!h.requests.some(r => r.url.searchParams.get('f') === 'e'));
-  const order = h.search.rows.slice().sort((a, b) => h.window.HomelabSources.compareRows(a, b, {}));
+  const order = h.search.rows.slice().sort((a, b) => h.window.HomelabSources.compareRows(a, b));
   assert.equal(order[order.length - 1].voice, 'Studio B');
   h.search.cancel();
 });
@@ -515,19 +518,18 @@ test('bodies without an allowed content type or above the size cap are never rea
   h.search.cancel();
 });
 
-test('probes wait for live discovery to finish and share the catalog pacing', async t => {
+test('probes start once their provider has no catalog pages left and share its pacing', async t => {
   const h = setup(t); await h.start();
   await h.finish('/lite/events', {life: true, memkey: 'fixture'});
   h.pages.set('probe', {'.videos__item': [{method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio A', url: '/lite/one/video?f=a'}]});
   await h.finish('/lifeevents', {ready: false, online: [h.source('one')]});
   await h.finish('/lite/one', 'probe');
-  h.search.probe(h.search.rows); h.tick(400); await flush();
-  assert.ok(!h.requests.some(r => r.url.pathname === '/lite/one/video'), 'discovery is still running');
   assert.deepEqual({...h.search.providers}, {total: 1, done: 1});
-  await h.finish('/lifeevents', {ready: true, online: [h.source('one')]});
+  h.search.probe(h.search.rows); h.tick(400); await flush();
   const probe = h.requests.find(r => r.url.pathname === '/lite/one/video'); assert.ok(probe);
   const previous = h.requests[h.requests.indexOf(probe) - 1];
   assert.ok(probe.started - previous.started >= 350, 'own probes are paced like catalog pages');
+  await h.finish('/lifeevents', {ready: true, online: [h.source('one')]});
   h.search.cancel();
 });
 
@@ -566,4 +568,49 @@ test('rows group by voice with the best playable source first; torrents and nati
     row('t', 'Dub', [1080], {kind: 'torrent'}), row('n', 'Dub', [], {native: true})]);
   assert.deepEqual(JSON.parse(JSON.stringify(groups.map(g => g.rows.map(r => r.key)))), [['c', 'b', 'a'], ['d'], ['t'], ['n']]);
   assert.equal(groups[0].best.key, 'c', 'measured beats declared at the same height; unavailable is last');
+});
+
+test('voice names from different providers fold into one canonical voice', t => {
+  const canon = setup(t).window.HomelabSources.canonVoice;
+  const key = value => canon(value).key;
+  assert.equal(key('HDrezka Studio'), key('Rezka')); assert.equal(key('LostFilm'), key('Lost Film'));
+  assert.equal(canon('LostFilm').label, 'LostFilm');
+  assert.notEqual(key('LostFilm'), key('LostFilm (UKR)'), 'another language stays apart');
+  assert.equal(canon('Многоголосый закадровый').label.indexOf('Многоголосый'), 0);
+  assert.equal(canon('Субтитры').subs, true);
+});
+
+test('a finished search is reused for ten minutes unless refreshed', async t => {
+  const h = setup(t); await h.start();
+  h.parser[0].done({Results: []});
+  h.pages.set('one', {'.videos__item': [{method: 'play', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio A', url: '/media', quality: {'1080p': '/media'}}]});
+  await h.finish('/lite/events', [h.source('one')]); await h.finish('/lite/one', 'one');
+  assert.equal(h.search.onlinePending, false); h.search.cancel();
+  const count = h.requests.length, Search = h.window.HomelabSources.Search;
+  const again = new Search(h.movie, h.selection, () => {}); again.start(); await flush();
+  assert.equal(h.requests.length, count, 'no request while the cache is fresh');
+  assert.ok(again.cachedAt); assert.deepEqual(Array.from(again.rows, r => r.voice), ['Studio A']); again.cancel();
+  const fresh = new Search(h.movie, h.selection, () => {}, {fresh: true}); fresh.start(); await flush();
+  assert.ok(h.requests.length > count, 'Refresh asks the providers again'); assert.ok(!fresh.cachedAt); fresh.cancel();
+  h.tick(11 * 60000);
+  const late = new Search(h.movie, h.selection, () => {}); late.start(); await flush();
+  assert.ok(!late.cachedAt, 'the cache expires'); late.cancel();
+});
+
+test('labels without a studio or a type never merge, and fillers do not hide a studio', t => {
+  const canon = setup(t).window.HomelabSources.canonVoice;
+  assert.equal(canon('Русский').key, ''); assert.equal(canon('Озвучка').key, '');
+  assert.equal(canon('Red Head Sound (Украинский)').key, canon('RHS (UKR)').key);
+  assert.equal(canon('Многоголосый закадровый').key, canon('Многоголосый').key);
+  assert.notEqual(canon('Субтитры').key, canon('Оригинал').key);
+});
+
+test('a search with errors is not cached', async t => {
+  const h = setup(t); await h.start();
+  h.parser[0].fail();
+  h.pages.set('one', {'.videos__item': [{method: 'play', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio A', url: '/media', quality: {'1080p': '/media'}}]});
+  await h.finish('/lite/events', [h.source('one')]); await h.finish('/lite/one', 'one');
+  assert.equal(h.search.onlinePending, false); assert.ok(h.search.errors.length); h.search.cancel();
+  const again = new h.window.HomelabSources.Search(h.movie, h.selection, () => {}); again.start(); await flush();
+  assert.ok(!again.cachedAt, 'a failed torrent search is asked again'); again.cancel();
 });

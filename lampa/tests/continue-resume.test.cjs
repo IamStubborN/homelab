@@ -87,7 +87,7 @@ test('staggered metadata and updated progress preserve native card DOM and focus
   assert.ok(initial.every(tile=>!tile.removed),'new progress/episode must retain each native instance');
   initial[0].trigger('hover:enter');
   h.L.sourceLookup.success({file_stats:[{id:1,path:'Series.S01E03.mkv'}],data:{movie:{id:42,name:'Series',original_name:'Original series',number_of_seasons:1}}});
-  assert.equal(h.work().episode,3); assert.equal(h.video().currentTime,40,'retained handlers use current item, not the initial snapshot');
+  h.pick(); assert.equal(h.work().episode,3); assert.equal(h.video().currentTime,40,'retained handlers use current item, not the initial snapshot');
 });
 
 test('torrent continuation stops after navigation during source lookup or optional metadata', t => {

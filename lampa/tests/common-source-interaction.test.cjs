@@ -91,7 +91,8 @@ test('unknown-quality native sources remain reachable under a saved quality and 
   await h.finish('/lite/events', [{balanser: 'one', name: 'One', show: true, url: '/lite/one'}]);
   await h.finish('/lite/one', {rch: true});
   assert.equal(h.rows().length, 1);
-  assert.match(h.rows()[0].find('.homelab-common-details').text(), /Качество неизвестно/);
+  assert.equal(h.rows()[0].find('.homelab-common-voice').text(), 'Открыть в источниках');
+  assert.match(h.rows()[0].find('.homelab-common-details').text(), /One · выбор внутри источника/);
 });
 
 for (const event of ['hover:hover', 'hover:touch']) test(`${event} freezes existing result order without scrolling or changing focus`, async t => {
@@ -141,7 +142,7 @@ test('a saved quality keeps unknown-quality online voices visible and labelled, 
 
 test('focusing "more" inside the list scrolls it into view', async t => {
   const h = setup(t);
-  h.parser[0].done({Results: Array.from({length: 22}, (_, i) => ({Title: 'Series S01 720p ' + i, Link: 'magnet:' + i, Tracker: 'T'}))}); h.tick(150);
+  h.parser[0].done({Results: Array.from({length: 22}, (_, i) => ({Title: 'Series S01 720p ' + i, Link: 'magnet:' + i, Tracker: 'T', info: {voices: ['Voice ' + i]}}))}); h.tick(150);
   const more = h.more(); assert.ok(more); const before = h.scrollCalls();
   h.fire(more, 'hover:focus');
   assert.equal(h.scrollCalls(), before + 1);
@@ -171,7 +172,7 @@ test('a refused online handoff keeps the search running; leaving mid-search show
 
 test('remote navigation ignores scrolled-out tiles, walks the list in order and Left at the edge opens the menu', async t => {
   const h = setup(t);
-  h.parser[0].done({Results: [0, 1, 2].map(i => ({Title: 'Series S01 720p ' + i, Link: 'magnet:' + i, Tracker: 'T'}))}); h.tick(150);
+  h.parser[0].done({Results: [0, 1, 2].map(i => ({Title: 'Series S01 720p ' + i, Link: 'magnet:' + i, Tracker: 'T', info: {voices: ['Voice ' + i]}}))}); h.tick(150);
   const rect = (top, left = 0, width = 100, height = 20) => ({top, left, width, height, bottom: top + height, right: left + width});
   const view = h.component.render()[0].querySelectorAll('.scroll')[0]; view.rect = rect(100, 0, 400, 300);
   for (const node of h.component.render()[0].querySelectorAll('.selector')) node.rect = rect(-1000, 0);
@@ -209,7 +210,7 @@ test('an online row whose identity the bridge cannot accept opens the native sou
 
 test('Right on the "more" button is a no-op', async t => {
   const h = setup(t);
-  h.parser[0].done({Results: Array.from({length: 22}, (_, i) => ({Title: 'Series S01 720p ' + i, Link: 'magnet:' + i, Tracker: 'T'}))}); h.tick(150);
+  h.parser[0].done({Results: Array.from({length: 22}, (_, i) => ({Title: 'Series S01 720p ' + i, Link: 'magnet:' + i, Tracker: 'T', info: {voices: ['Voice ' + i]}}))}); h.tick(150);
   const more = h.more(), box = (top, left) => ({top, left, width: 100, height: 20, bottom: top + 20, right: left + 100});
   for (const node of h.component.render()[0].querySelectorAll('.selector')) node.rect = box(0, 400); // controls to the upper right
   more.rect = box(300, 0); h.L.Controller.collectionFocus(more, h.component.render());
@@ -241,7 +242,7 @@ test('one card per voice plays its best source and names how many sources stand 
   assert.equal(top.find('.homelab-common-pick').text(), 'Рекомендуем');
   assert.match(top.find('.homelab-common-details').text(), /^Two · ещё 1 источник$/);
   assert.equal(top.find('.homelab-common-q').text(), '1080p');
-  assert.match(h.status(), /Найдено: 2 варианта · 3 источника/);
+  assert.match(h.status(), /Найдено: 2 озвучки · до 1080p/);
   h.fire(top, 'hover:enter'); assert.deepEqual(picked, ['two'], 'Enter plays the best source of the voice');
 });
 
@@ -261,20 +262,15 @@ test('focus follows the recommendation until the first key press, then never jum
   assert.equal(voice(h.rows().at(-1)), 'Studio C', 'late results append below');
 });
 
-test('Right lists every source of a voice and long press sets the favourite shown as a star', async t => {
+test('Right lists every source of a voice; there is no favourite voice', async t => {
   const h = await grouped(t), picked = [];
   h.window.HomelabOnlineResume = {select: row => { picked.push(row.provider); return true; }};
   h.L.Controller.controllers.content.right();
   const menu = h.select(); assert.match(menu.title, /2 источника · Studio A/);
-  assert.deepEqual(JSON.parse(JSON.stringify(menu.items.map(item => item.title))), ['Two · лучший', 'One', '★ Сделать любимой озвучкой']);
+  assert.deepEqual(JSON.parse(JSON.stringify(menu.items.map(item => item.title))), ['Two · лучший', 'One']);
   assert.match(menu.items[0].subtitle, /1080p · заявлено/); assert.equal(menu.items[1].subtitle, 'Качество уточняется');
   menu.onSelect(menu.items[1]); assert.deepEqual(picked, ['one'], 'an alternative source can be chosen explicitly');
-  h.L.Controller.toggle('content');
-  h.fire(h.rows()[1], 'hover:long'); h.select().onSelect(h.select().items.at(-1));
-  assert.equal(h.window.HomelabSources.preferences().voice, 'Studio B');
-  assert.deepEqual(JSON.parse(JSON.stringify(h.rows().map(voice))), ['★ Studio B', 'Studio A'], 'the favourite voice moves first');
-  assert.ok(h.control('★ Studio B'), 'a chip shows the favourite and lets it be changed');
-  h.fire(h.rows()[0], 'hover:long'); assert.equal(h.select().items.at(-1).title, 'Убрать из любимых');
+  assert.ok(!h.elements.some(node => node.classes.has('homelab-common-favorite')));
 });
 
 test('the view chip switches between voice cards and every source', async t => {
@@ -318,4 +314,37 @@ test('voice cards probe only their leader; alternates are asked when their sourc
   assert.equal(probes(), 0, 'Studio A is led by a source with a known quality, so its unknown alternate waits');
   h.L.Controller.controllers.content.right(); h.tick(1000); await flush();
   assert.equal(probes(), 1, 'opening the source list probes the alternate');
+});
+
+test('torrents fold into one section under online voices and open on Enter', async t => {
+  const h = setup(t);
+  h.parser[0].done({Results: [{Title: 'Series S01 1080p', Link: 'magnet:a', Tracker: 'T', Seeders: 20, info: {voices: ['Torrent Voice']}}]});
+  await h.finish('/lite/events', [{balanser: 'one', name: 'One', show: true, url: '/lite/one'}]);
+  h.pages.set('a', episodePage('Studio A')); await h.finish('/lite/one', 'a'); h.tick(150);
+  const section = () => h.component.render()[0].querySelectorAll('.homelab-common-section')[0];
+  assert.deepEqual(h.rows().map(voice), ['Studio A'], 'with an online voice the torrents are folded');
+  assert.match(section().text(), /Торренты · 1 раздача — показать/);
+  h.fire(section(), 'hover:enter');
+  assert.deepEqual(h.rows().map(voice), ['Studio A', 'Torrent Voice']);
+  assert.match(section().text(), /▾ Торренты/);
+});
+
+test('native fallbacks share one row whose Enter lists the sources', async t => {
+  const h = setup(t), pushes = [];
+  const push = h.L.Activity.push; h.L.Activity.push = value => { pushes.push(value); push(value); };
+  h.parser[0].done({Results: []});
+  await h.finish('/lite/events', twoProviders.slice(0, 2));
+  await h.finish('/lite/one', {rch: true}); await h.finish('/lite/two', {rch: true}); h.tick(150);
+  assert.equal(h.rows().length, 1); assert.equal(voice(h.rows()[0]), 'Открыть в источниках');
+  h.fire(h.rows()[0], 'hover:enter');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.select().items.map(item => item.title))), ['One', 'Two']);
+  h.select().onSelect(h.select().items[1]);
+  assert.equal(pushes.at(-1).lampac_custom_select, 'two');
+});
+
+test('with torrents only there is no section header: the first card is the recommended release', async t => {
+  const h = setup(t);
+  h.parser[0].done({Results: [{Title: 'Series S01 1080p', Link: 'magnet:a', Tracker: 'T', Seeders: 20, info: {voices: ['Torrent Voice']}}]}); h.tick(150);
+  assert.equal(h.component.render()[0].querySelectorAll('.homelab-common-section').length, 0);
+  assert.equal(h.focused(), h.rows()[0]); assert.equal(h.rows()[0].find('.homelab-common-pick').text(), 'Рекомендуем');
 });

@@ -192,12 +192,19 @@
           if (specialSupport && movie.name && special(file) && specials && specials.files.indexOf(file) >= 0) {
             work.timeline = specialRoad(file); rememberSpecial(work, file, specials);
           }
-          if (intent && Number.isFinite(intent.item.position) && intent.opening && !intent.positionApplied && live(intent, object) && sameFile(intent.item, file) && intent.chosen === file) {
+          if (intent && Number.isFinite(intent.item.position) && !intent.positionApplied && sameFile(intent.item, file) && intent.chosen === file &&
+            (intent.opening && live(intent, object) || intent.armed && sync.scope() === intent.scope && L.Activity.active() === object)) {
             intent.positionApplied = true;
             work.homelab_resume_at = intent.item.position;
             if (intent.fromDuration > 0) work.homelab_resume_from_duration = intent.fromDuration;
             if (work.timeline) { work.timeline.percent = 0; work.timeline.time = 0; }
           }
+        }
+        // Native rows show only the TMDB episode name; the player and its
+        // playlist also need the number.
+        if (movie && movie.name && Number.isInteger(file.episode) && file.episode > 0 && typeof work.title !== 'function') {
+          var label = (file.season === 0 ? 'Спецвыпуск ' : 'Серия ') + file.episode, text = String(work.title || '').trim();
+          if (!new RegExp('(^|\\D)' + file.episode + '(\\D|$)').test(text)) work.title = text ? label + ' · ' + text : label;
         }
         return work;
       };
@@ -224,7 +231,13 @@
         var batch = specials = specialSupport && object.movie.name && items.some(special) ? {files: items.filter(special), scope: sync.scope(), provider: provider, playlist: null} : null;
         if (!batch && (!intent || intent.finished || intent.cancelled)) return draw.apply(comp, arguments);
         params = Object.assign({}, params || {});
-        var rendered = params.onRender, round = null;
+        var rendered = params.onRender, round = null, entered = params.onEnter;
+        // A Continue landing keeps the saved point only for the focused row:
+        // Enter on another row builds a playlist that also holds that row.
+        if (typeof entered === 'function') params.onEnter = function (file) {
+          if (intent && intent.armed && file !== intent.chosen) intent.armed = false;
+          return entered.apply(this, arguments);
+        };
         // Native rendering is one synchronous loop per draw; decide after it,
         // so a saved voice that is not the first row (movies) still matches.
         params.onRender = function (file, html, data) {
@@ -281,6 +294,13 @@
           }
           // Several equal movie rows cannot be told apart: never guess.
           if (result.matches > 1 && intent.item.card.indexOf('movie_') === 0) return fail(intent, 'ambiguous');
+          // Continue lands on the saved voice and episode; the user starts it.
+          if (intent.focus) {
+            intent.finished = true; intent.armed = true; intent.chosen = result.match.file; clearTimeout(intent.timer);
+            var row = result.match.html, target = row && row[0] || row, root = row && typeof row.closest === 'function' ? row.closest('.scroll') : null;
+            if (target && typeof L.Controller.collectionFocus === 'function' && (!L.Controller.enabled || L.Controller.enabled().name === 'content')) L.Controller.collectionFocus(target, root && root[0] || target);
+            return;
+          }
           if (typeof params.onEnter !== 'function') return;
           intent.opening = true; intent.chosen = result.match.file;
           params.onEnter(result.match.file, result.match.html, result.match.data);
@@ -308,7 +328,7 @@
     movie = Object.assign({}, movie);
     if (movie.name) movie.title = movie.name;
     item = Object.assign({}, item, {online: Object.assign({}, item.online, {season_index: item.online.season_index === undefined ? 0 : item.online.season_index})});
-    var intent = pending = {id: ++sequence, item: item, scope: sync.scope(), cancelled: false, failed: failed, quality: options && options.quality, fromDuration: options && options.fromDuration, created: Date.now()};
+    var intent = pending = {id: ++sequence, item: item, scope: sync.scope(), cancelled: false, failed: failed, quality: options && options.quality, fromDuration: options && options.fromDuration, focus: !!(options && options.focus), created: Date.now()};
     intent.timer = setTimeout(function () { fail(intent, 'timeout'); }, 60000);
     var activity = intent.activity = {component: 'lampac', movie: movie, title: 'Онлайн', url: '', search: movie.title || movie.name,
       search_one: movie.title || movie.name, search_two: movie.original_title || movie.original_name, page: 1,

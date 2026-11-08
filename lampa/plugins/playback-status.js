@@ -4,10 +4,10 @@
   if (!L || !$ || window.homelabPlaybackStatus || !L.Player || !L.Player.listener || !L.PlayerVideo || !L.PlayerVideo.listener || !L.PlayerPanel || !L.Noty) return;
   if (![L.Player.playdata, L.Player.listener.follow, L.PlayerVideo.video,
     L.PlayerVideo.listener.follow, L.PlayerPanel.render, L.Noty.show, L.Player.opened].every(function (fn) { return typeof fn === 'function'; })) return;
-  window.homelabPlaybackStatus = {version: 6};
+  window.homelabPlaybackStatus = {version: 7};
   // Buffering mid-play stays invisible for 5 s (Lampa's spinner too), other short blips for 0.7 s; Lampa's own loader covers a fast
   // start; a long start suggests another source.
-  var DEBOUNCE = 700, BUFFER_DELAY = 5000, START_DELAY = 2500, ESCALATE = 20000, STATS_EVERY = 2000, CTRL = 'homelab_playback_card';
+  var DEBOUNCE = 700, BUFFER_DELAY = 5000, FROZEN = 3000, START_DELAY = 2500, ESCALATE = 20000, STATS_EVERY = 2000, CTRL = 'homelab_playback_card';
   var state = null, boundAudio = null, retryButton = null, sourceButton = null, card = null;
   function scope() { return window.HomelabSync ? window.HomelabSync.scope() : L.Timeline.filename(); }
   function valid(s) { return state === s && L.Player.opened() && L.Player.playdata() === s.work && scope() === s.scope; }
@@ -278,7 +278,7 @@
   function cancelStall(s) { clearTimeout(s.stall); s.stall = null; }
   function unbind(s) {
     if (!s) return;
-    cancelStall(s); clearTimeout(s.rebind);
+    cancelStall(s); clearTimeout(s.rebind); clearTimeout(s.frozen); s.nudging = false;
     // The Tizen AVPlay wrapper has no removeEventListener; currentVideo() guards stale events.
     if (s.video && typeof s.video.removeEventListener === 'function') Object.keys(s.events).forEach(function (name) { s.video.removeEventListener(name, s.events[name]); });
     s.video = null;
@@ -290,13 +290,32 @@
     // A replacement's initial zero is not a playback observation from the old video.
     s.started = false; s.userPaused = false; s.playedOnce = false; s.reserve = !!s.work.url_reserve;
     function waiting() { if (currentVideo(s)) { if (!s.stuck) { s.stuck = true; s.stuckAt = video.currentTime; } set(s.phase === 'recovering' ? 'recovering' : 'buffering', s.actionable); arm(s); } }
+    // WebKit can freeze after a seek or a resume with data buffered and no waiting event:
+    // the clock stands still while the player shows playback. Nudge it once, then treat it as buffering.
+    function watch(nudged) {
+      if (s.video !== video) return;
+      if (!nudged) s.nudging = false;
+      clearTimeout(s.frozen);
+      var at = video.currentTime;
+      s.frozen = setTimeout(function () {
+        s.frozen = null;
+        if (!currentVideo(s) || s.video !== video || window.document && window.document.hidden || video.paused || video.seeking || video.ended || video.readyState < 3 || Math.abs(video.currentTime - at) > .2) return;
+        if (nudged) return waiting();
+        s.nudging = true;
+        try { video.currentTime = at + .5; } catch (error) { s.nudging = false; waiting(); }
+      }, FROZEN);
+    }
     function ready(phase) { if (currentVideo(s)) { cancelStall(s); capture(s); if (phase === 'playing') s.playedOnce = true; set(phase); } }
     s.events = {waiting: waiting, stalled: waiting, playing: function () { ready('playing'); }, canplay: function () { ready('ready'); },
       pause: function () { if (!video.ended) s.userPaused = true; cancelStall(s); if (currentVideo(s)) render(); },
-      play: function () { s.userPaused = false; if (currentVideo(s)) { arm(s); render(); } },
+      play: function () { s.userPaused = false; if (currentVideo(s)) { arm(s); render(); watch(false); } },
       // A seek into missing torrent pieces may never complete.
       seeking: function () { if (currentVideo(s)) { cancelStall(s); capture(s); if (!video.paused) arm(s); } },
-      seeked: function () { if (currentVideo(s)) { capture(s); if (!video.paused && video.readyState < 3) waiting(); } },
+      seeked: function () {
+        if (!currentVideo(s)) return;
+        var nudged = s.nudging; s.nudging = false; capture(s);
+        if (!video.paused && video.readyState < 3) waiting(); else if (!video.paused) watch(nudged);
+      },
       timeupdate: function () {
         if (!currentVideo(s)) return;
         capture(s);

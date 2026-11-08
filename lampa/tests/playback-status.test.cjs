@@ -335,3 +335,34 @@ test('mid-play buffering keeps the five-second delay and the card steps aside wh
   h.tick(3000); assert.ok(!shown(card(h).root), 'the timer does not bring it back');
   open = false; h.L.Select.closeAll(); h.tick(0); assert.ok(shown(card(h).root));
 });
+
+test('playback frozen after a seek with data buffered is nudged once, then shown as buffering', t => {
+  const h = harness(t); const video = realistic(h); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
+  video.play(); video.data(); video.advance(2);
+  const c = card(h);
+  // An intro skip: the target is buffered, WebKit answers seeked and then never moves the clock.
+  video.currentTime = 153.03; video.fire('seeking'); video.fire('seeked');
+  h.tick(2900); assert.equal(video.currentTime, 153.03);
+  h.tick(100); assert.equal(video.currentTime, 153.53, 'nudged half a second ahead');
+  video.fire('seeked'); h.tick(3000);
+  assert.equal(video.currentTime, 153.53, 'nudged only once');
+  h.tick(5000); assert.ok(shown(c.root)); assert.match(c.title.text(), /^Буферизация/);
+  video.advance(1); assert.ok(!shown(c.root), 'progress hides the card');
+});
+
+test('a seek or a resume that plays on is never nudged', t => {
+  const h = harness(t); const video = realistic(h); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
+  video.play(); video.data(); video.advance(2);
+  video.currentTime = 100; video.fire('seeking'); video.fire('seeked'); video.advance(4);
+  assert.equal(video.currentTime, 104);
+  video.pause(); h.tick(300000); video.paused = false; video.fire('play'); video.advance(4);
+  assert.equal(video.currentTime, 108);
+  assert.ok(!shown(card(h).root));
+});
+
+test('a resume after a long pause that never moves the clock is nudged', t => {
+  const h = harness(t); const video = realistic(h); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
+  video.play(); video.data(); video.advance(2); video.pause(); h.tick(300000);
+  const at = video.currentTime; video.paused = false; video.fire('play'); h.tick(3000);
+  assert.equal(video.currentTime, at + .5);
+});

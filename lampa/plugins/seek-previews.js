@@ -61,7 +61,7 @@
       seekPanel = panel[0]; seekButtons = [];
       [false, true].forEach(function (forward) {
         var button = $('<div class="button selector homelab-seek-step homelab-seek-' + (forward ? 'forward' : 'back') + '" role="button"></div>');
-        button.html('<svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><g' + (forward ? ' transform="translate(32 0) scale(-1 1)"' : '') + '><path d="M7 10a11 11 0 1 1-2 12M7 4v6H1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g><text x="16" y="20" text-anchor="middle" fill="currentColor" font-size="12" font-weight="600"></text></svg>');
+        button.html('<svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><g' + (forward ? ' transform="translate(32 0) scale(-1 1)"' : '') + '><path d="M16 6A11 11 0 1 1 8.22 9.22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M11 6l5-3.5v7z" fill="currentColor"/></g><text x="16" y="20.5" text-anchor="middle" fill="currentColor" font-size="10" font-weight="700"></text></svg>');
         button.on('hover:enter', function () {
           var data = L.Player.playdata(), video = L.PlayerVideo.video();
           if (!data || data.iptv || panel.hasClass('panel--norewind') || !video || !Number.isFinite(video.duration) || video.duration <= 0) return;

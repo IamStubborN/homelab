@@ -20,6 +20,9 @@ function setup(t, options = {}) {
         choices.kinobase = {...choice, voice_name: name}; file.voice_name = name;
       } file.timeline = {hash: '123'}; file.mark = () => {}; params.onRender?.(file, {}, {}); })); };
     this.destroy = () => {};
+    const root = h.window.$('<div></div>');
+    this.render = () => root;
+    this.noConnectToServer = function () { root.find('.online-empty__time').text('Поиск на (undefined) не дал результатов'); };
   }
   registry.lampac = Native;
   h.L.Component = {get: name => registry[name], add: (name, ctor) => { registry[name] = ctor; }};
@@ -441,4 +444,11 @@ test('a prefetch answer that needs the remote client is left to Lampac', async t
   const video = h.L.PlayerVideo.video(); video.duration = 1200; video.currentTime = 1100; h.videoEvent('timeupdate');
   h.calls.filter(entry => String(entry.url).includes('/lite/'))[0].finish({rch: true}); await flush();
   assert.equal(next.url, lazy);
+});
+
+test('an unreachable Lampac server is named instead of an undefined provider', async t => {
+  const h = setup(t);
+  const c = await h.open();
+  c.noConnectToServer(new Error('network'));
+  assert.match(c.render().find('.online-empty__time').text(), /^Сервер Lampac не ответил/);
 });

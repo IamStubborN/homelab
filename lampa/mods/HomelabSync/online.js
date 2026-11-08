@@ -74,6 +74,19 @@
       var comp = new Original(object), provider = object.balanser || '', intent = pending && object.homelab_online_intent === pending.id ? pending : null;
       if (![comp.toPlayElement, comp.startSource, comp.getChoice, comp.replaceChoice, comp.draw, comp.getFileUrl, comp.destroy].every(function (fn) { return typeof fn === 'function'; })) return comp;
       var source = comp.startSource, play = comp.toPlayElement, draw = comp.draw, resolve = comp.getFileUrl, destroy = comp.destroy;
+      // Lampac names the provider it could not reach; when its server itself did not answer (a
+      // restart, a lost network) no provider was chosen yet and the text read «Поиск на (undefined)».
+      if (typeof comp.noConnectToServer === 'function' && typeof comp.render === 'function') {
+        var unreachable = comp.noConnectToServer;
+        comp.noConnectToServer = function (error) {
+          var result = unreachable.apply(comp, arguments);
+          try {
+            var line = comp.render().find('.online-empty__time');
+            if (!(error && error.accsdb) && /\((?:undefined)?\)/.test(String(line.text() || ''))) line.text('Сервер Lampac не ответил. Вернитесь назад и откройте источник снова через минуту');
+          } catch (_) {}
+          return result;
+        };
+      }
       var specials = null, disposed = false, requestId = 0, drawn = null;
       function owns(batch) { return !disposed && specials === batch && sync.scope() === batch.scope && L.Activity.active() === object && provider === batch.provider; }
       function specialRoad(file) {

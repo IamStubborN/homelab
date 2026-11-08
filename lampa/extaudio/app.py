@@ -551,7 +551,10 @@ def release_voices(link, title, now=time.monotonic):
             value = {"voices": [], "languages": []}
     except NotReady:
         raise  # a release still looking for peers is worth asking again soon
-    except Exception:
+    except subprocess.TimeoutExpired:
+        raise NotReady() from None  # the header is still downloading; TorrServer keeps fetching it
+    except Exception as error:
+        print(f"voices lookup failed for {torrent_hash}: {type(error).__name__}", file=sys.stderr, flush=True)
         with _voices_lock:
             _voices_cache[torrent_hash] = (now() + VOICES_RETRY_SECONDS, None)
         raise

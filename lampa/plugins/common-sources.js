@@ -578,14 +578,14 @@
     };
     // A focused torrent whose title and tracker name no voice: the extaudio sidecar adds the release
     // to TorrServer and reads its audio tracks. Only on request, one release at a time, seeded ones.
-    var voiceBusy = false;
+    var voiceBusy = false, lastVoiceRow = null;
     this.voices = function (row) {
       var release = row && row.release, link = release && release.MagnetUri, key = magnetKey(link);
       if (!live() || !release || !key || voiceBusy || row.voiceProbe || row.described && row.described.voices.length || (Number(release.Seeders) || 0) < MIN_SEEDS) return false;
       if (releaseVoiceCache[key]) { applyReleaseVoices(row, releaseVoiceCache[key]); notify(); return true; }
       var abort = Abort(), timer = setTimeout(function () { abort.abort(); }, 90000), url = new URL('/extaudio/voices', window.location.href);
       url.searchParams.set('link', link); url.searchParams.set('title', String(release.Title).slice(0, 150));
-      voiceBusy = true; row.voiceProbe = 'pending'; requests.push(abort); notify();
+      voiceBusy = true; row.voiceProbe = 'pending'; lastVoiceRow = row; requests.push(abort); notify();
       function strings(list) { return Array.isArray(list) ? list.filter(function (item) { return typeof item === 'string' && item.trim(); }).slice(0, 12) : []; }
       always(fetch(url.href, {signal: abort.signal, credentials: 'same-origin', cache: 'no-store', headers: {'X-Homelab-Voices': '1'}}).then(function (response) {
         // 503: TorrServer is still looking for peers; a later focus asks again.
@@ -593,7 +593,12 @@
         if (!response.ok) throw new Error('voices');
         return response.text().then(function (text) { return JSON.parse(text); });
       }).then(function (data) {
-        if (!data) { row.voiceProbe = ''; return; }
+        if (!data) {
+          // Still preparing: TorrServer keeps fetching, so ask again while this card stays the last asked.
+          row.voiceProbe = ''; row.voiceAttempts = (row.voiceAttempts || 0) + 1;
+          if (row.voiceAttempts < 3) { var again = setTimeout(function () { if (lastVoiceRow === row) self.voices(row); }, 15000); timers.push(again); }
+          return;
+        }
         var value = {voices: strings(data.voices), languages: strings(data.languages)};
         releaseVoiceCache[key] = value;
         applyReleaseVoices(row, value);

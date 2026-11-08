@@ -648,6 +648,8 @@ test('a release still looking for peers is asked again on a later focus', async 
   h.search.voices(row);
   h.requests.find(r => r.url.pathname === '/extaudio/voices').finish({__status: 503, error: 'preparing'}); await flush(); await flush();
   assert.equal(row.voiceProbe, '');
-  assert.equal(h.search.voices(row), true);
+  h.tick(15000); await flush();
+  assert.equal(h.requests.filter(r => r.url.pathname === '/extaudio/voices').length, 2, 'asked again by itself after 15 s');
+  assert.equal(row.voiceProbe, 'pending');
   h.search.cancel();
 });

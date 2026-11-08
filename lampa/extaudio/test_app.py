@@ -1655,6 +1655,14 @@ class ReleaseVoiceTests(unittest.TestCase):
         self.assertEqual(app.clean_magnet(link, "a" * 40),
                          "magnet:?xt=urn:btih:" + "a" * 40 + "&tr=udp%3A%2F%2Ftracker.example%3A80")
 
+    def test_a_probe_that_times_out_is_not_ready_and_not_remembered(self):
+        files = [{"id": 1, "path": "Show/Show.S01E01.mkv", "length": 900}]
+        with mock.patch.object(app, "torrent_files", return_value=files), \
+                mock.patch.object(app, "probe_audio", side_effect=subprocess.TimeoutExpired("ffprobe", 30)):
+            with self.assertRaises(app.NotReady):
+                app.release_voices(self.MAGNET, "")
+        self.assertNotIn("a" * 40, app._voices_cache)
+
     def test_release_without_metadata_in_time_is_not_ready_and_not_remembered(self):
         clock = iter(range(0, 1000, 10))
         with mock.patch.object(app, "torrent_files", return_value=[]), mock.patch.object(app.time, "sleep"):

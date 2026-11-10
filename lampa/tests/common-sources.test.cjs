@@ -404,7 +404,7 @@ test('rows without quality learn the real height from the source once the catalo
     {method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio B', url: '/lite/one/video?f=b'},
     {method: 'play', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio C', url: '/proxy/c.m3u8'},
     {method: 'play', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio D', url: '/proxy/d.mp4'},
-    {method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio E', url: '/lite/one/video?f=e', quality: {'720p': '/x'}}]});
+    {method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio E', url: '/lite/one/video?f=e', maxquality: '2160p'}]});
   await h.finish('/lite/one', 'films');
   h.search.probe(h.search.rows);
   const row = voice => h.search.rows.find(r => r.voice === voice);
@@ -420,8 +420,11 @@ test('rows without quality learn the real height from the source once the catalo
   // A direct file is never downloaded and stays unknown.
   await h.finish('/proxy/d.mp4', {__type: 'video/mp4'});
   assert.deepEqual(Array.from(row('Studio D').qualities), []); assert.ok(!row('Studio D').unavailable);
-  // Rows that already know their quality are never probed.
-  assert.ok(!h.requests.some(r => r.url.searchParams.get('f') === 'e'));
+  // A claimed quality is checked too: the stream manifest of the top quality decides.
+  assert.equal(row('Studio E').claimed, 2160);
+  await h.finish('/lite/one/video', {method: 'play', url: '/proxy/e.m3u8', quality: {'2160p': '/proxy/e.m3u8', '720p': '/proxy/e7'}});
+  await h.finish('/proxy/e.m3u8', '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1280x720\ne.m3u8\n');
+  assert.deepEqual(Array.from(row('Studio E').qualities), [720]); assert.equal(row('Studio E').measured, true);
   const order = h.search.rows.slice().sort((a, b) => h.window.HomelabSources.compareRows(a, b));
   assert.equal(order[order.length - 1].voice, 'Studio B');
   h.search.cancel();
@@ -652,4 +655,48 @@ test('a release still looking for peers is asked again on a later focus', async 
   assert.equal(h.requests.filter(r => r.url.pathname === '/extaudio/voices').length, 2, 'asked again by itself after 15 s');
   assert.equal(row.voiceProbe, 'pending');
   h.search.cancel();
+});
+
+function qualityLog(h, data, reports) {
+  h.window.HomelabQuality = {load: () => Promise.resolve(data), report: (...args) => reports.push(args),
+    fact: (value, provider, season, voice) => value.rows[[provider.toLowerCase(), season, voice.trim().toLowerCase()].join('|')] || null,
+    doubtful: (value, provider) => { const stats = value.providers[provider]; return !!stats && stats.total >= 3 && stats.inflated * 3 >= stats.total; }};
+  return new h.window.HomelabSources.Search(h.movie, h.selection, () => {});
+}
+
+test('the household quality log replaces claims it has measured and doubts providers that inflate', async t => {
+  const h = setup(t), reports = [];
+  const search = qualityLog(h, {version: 1, rows: {'three|2|studio c': {height: 720, claimed: 2160, source: 'play'}}, providers: {one: {total: 3, inflated: 2}}}, reports);
+  search.start(); await flush();
+  await h.finish('/lite/events', [h.source('one'), h.source('two'), h.source('three')]);
+  const page = (voice, quality, f) => ({'.videos__item': [{method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: voice, url: '/lite/x/video?f=' + f, maxquality: quality}]});
+  h.pages.set('a', page('Studio A', '2160p', 'a')); h.pages.set('b', page('Studio B', '1080p', 'b')); h.pages.set('c', page('Studio C', '2160p', 'c'));
+  await h.finish('/lite/one', 'a'); await h.finish('/lite/two', 'b'); await h.finish('/lite/three', 'c');
+  const row = voice => search.rows.find(r => r.voice === voice);
+  assert.equal(row('Studio A').doubtful, true, 'an unchecked 4K of a provider that inflates');
+  assert.deepEqual(Array.from(row('Studio C').qualities), [720]); assert.equal(row('Studio C').verified, 'play');
+  const order = search.rows.slice().sort((a, b) => h.window.HomelabSources.compareRows(a, b)).map(r => r.voice);
+  assert.deepEqual(Array.from(order), ['Studio B', 'Studio C', 'Studio A']);
+  // Its probe checks the claim against the top quality's manifest and logs the result.
+  search.probe([row('Studio A')]);
+  await h.finish('/lite/x/video', {method: 'play', url: '/proxy/a.m3u8', quality: {'2160p': '/proxy/a.m3u8'}});
+  await h.finish('/proxy/a.m3u8', '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1280x720\na.m3u8\n');
+  assert.deepEqual(Array.from(row('Studio A').qualities), [720]); assert.equal(row('Studio A').doubtful, false);
+  assert.deepEqual(reports.map(args => Array.from(args).slice(1)), [['one', 2, 'Studio A', 2160, 720, 'probe']]);
+  search.cancel();
+});
+
+test('a claimed quality whose manifest cannot be read stays a claim and is not logged', async t => {
+  const h = setup(t), reports = [];
+  const search = qualityLog(h, {version: 1, rows: {}, providers: {}}, reports);
+  search.start(); await flush();
+  await h.finish('/lite/events', [h.source('one')]);
+  h.pages.set('a', {'.videos__item': [{method: 'call', text: '3 серия', season: 2, episode: 3, voice_name: 'Studio A', url: '/lite/x/video?f=a', maxquality: '2160p'}]});
+  await h.finish('/lite/one', 'a');
+  const row = search.rows.find(r => r.voice === 'Studio A');
+  search.probe([row]);
+  // The resolver points at the 720p stream: its manifest says nothing about the 4K entry.
+  await h.finish('/lite/x/video', {method: 'play', url: '/proxy/a720.m3u8', quality: {'2160p': '/proxy/a4k.m3u8', '720p': '/proxy/a720.m3u8'}});
+  assert.ok(!row.measured); assert.deepEqual(reports, []);
+  search.cancel();
 });

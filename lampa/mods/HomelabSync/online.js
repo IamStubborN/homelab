@@ -338,7 +338,13 @@
         try { openAtNewest(); } catch (_) {}
         params = Object.assign({}, params || {});
         var shown = params.onRender;
-        params.onRender = function (file, html) { if (file && html) rows.push({file: file, html: html}); if (shown) return shown.apply(this, arguments); };
+        params.onRender = function (file, html) {
+          if (file && html) rows.push({file: file, html: html});
+          var result = shown ? shown.apply(this, arguments) : undefined;
+          // Rows whose real quality is known show it instead of the source's claim.
+          if (file && html && window.HomelabQuality) try { window.HomelabQuality.decorate(object.movie, provider, comp.getChoice(provider), file, html); } catch (_) {}
+          return result;
+        };
         var args = Array.prototype.slice.call(arguments); args[1] = params;
         var batch = specials = specialSupport && object.movie.name && items.some(special) ? {files: items.filter(special), scope: sync.scope(), provider: provider, playlist: null} : null;
         if (!batch && (!intent || intent.finished || intent.cancelled)) return draw.apply(comp, args);

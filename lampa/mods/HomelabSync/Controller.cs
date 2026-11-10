@@ -25,6 +25,7 @@ public class HomelabSyncController : BaseController
             + System.IO.File.ReadAllText(Path.Combine(ModInit.modpath, "plugin.js")) + "\n"
             + System.IO.File.ReadAllText(Path.Combine(ModInit.modpath, "history.js")) + "\n"
             + System.IO.File.ReadAllText(Path.Combine(ModInit.modpath, "online.js")) + "\n"
+            + System.IO.File.ReadAllText(Path.Combine(ModInit.modpath, "quality.js")) + "\n"
             + System.IO.File.ReadAllText(Path.Combine(ModInit.modpath, "continue.js"));
         return ContentTo(script, "application/javascript; charset=utf-8");
     }
@@ -71,5 +72,34 @@ public class HomelabSyncController : BaseController
         if (result == null) return BadRequest();
         if (result.full) return StatusCode(507);
         return Json(new { success = true, stale = result.stale, result.observed });
+    }
+
+    [HttpGet, Route("homelab-sync/quality")]
+    public ActionResult Quality(string card)
+    {
+        Response.Headers["Cache-Control"] = "no-store";
+        if (requestInfo.user_uid == null) return Unauthorized();
+        return Json(QualityStore.Read(card));
+    }
+
+    [HttpPost, Route("homelab-sync/quality")]
+    public async Task<ActionResult> SaveQuality()
+    {
+        Response.Headers["Cache-Control"] = "no-store";
+        if (requestInfo.user_uid == null) return Unauthorized();
+        if (Request.ContentLength > 2048) return StatusCode(413);
+        var buffer = new byte[2049];
+        int count = 0;
+        while (count < buffer.Length)
+        {
+            int read = await Request.Body.ReadAsync(buffer.AsMemory(count), HttpContext.RequestAborted);
+            if (read == 0) break;
+            count += read;
+        }
+        if (count > 2048) return StatusCode(413);
+        QualityReport report;
+        try { report = JsonSerializer.Deserialize<QualityReport>(buffer.AsSpan(0, count)); }
+        catch (JsonException) { return BadRequest(); }
+        return QualityStore.Save(report) ? Json(new { success = true }) : BadRequest();
     }
 }

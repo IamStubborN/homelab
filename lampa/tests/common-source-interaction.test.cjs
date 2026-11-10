@@ -65,6 +65,7 @@ function setup(t, options = {}) {
       textContent: value.text || '', classList: {contains: name => name === 'active' && value.active},
     }))}; return template;
   }};
+  if (options.facts) h.window.HomelabQuality = options.facts;
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../plugins/common-sources.js'), 'utf8'),
     {window: h.window, Lampa: h.L, document, fetch: request, AbortController, URL, setTimeout, clearTimeout, Date, console});
   if (options.quality) h.window.HomelabSources.preferences({quality: options.quality});
@@ -311,9 +312,9 @@ test('voice cards probe only their leader; alternates are asked when their sourc
   await h.finish('/lite/events', twoProviders.slice(0, 2));
   h.pages.set('two', episodePage('Studio A', {method: 'play', quality: {'1080p': '/media'}})); h.pages.set('one', episodePage('Studio A'));
   await h.finish('/lite/two', 'two'); h.tick(150); await h.finish('/lite/one', 'one'); h.tick(3000); await flush();
-  assert.equal(probes(), 0, 'Studio A is led by a source with a known quality, so its unknown alternate waits');
+  assert.equal(probes(), 1, 'the leader\'s claimed quality is checked; its unknown alternate waits');
   h.L.Controller.controllers.content.right(); h.tick(1000); await flush();
-  assert.equal(probes(), 1, 'opening the source list probes the alternate');
+  assert.equal(probes(), 2, 'opening the source list probes the alternate');
 });
 
 test('torrents fold into one section under online voices and open on Enter', async t => {
@@ -347,4 +348,16 @@ test('with torrents only there is no section header: the first card is the recom
   h.parser[0].done({Results: [{Title: 'Series S01 1080p', Link: 'magnet:a', Tracker: 'T', Seeders: 20, info: {voices: ['Torrent Voice']}}]}); h.tick(150);
   assert.equal(h.component.render()[0].querySelectorAll('.homelab-common-section').length, 0);
   assert.equal(h.focused(), h.rows()[0]); assert.equal(h.rows()[0].find('.homelab-common-pick').text(), 'Рекомендуем');
+});
+
+test('a source that named 4K but was measured at 720p shows the measured quality and the claim', async t => {
+  const facts = {load: () => Promise.resolve({version: 1, providers: {}, rows: {'one|1|studio a': {height: 720, claimed: 2160, source: 'probe'}}}),
+    fact: (data, provider, season, voice) => data.rows[[provider, season, voice.toLowerCase()].join('|')] || null, doubtful: () => false, report() {}};
+  const h = setup(t, {facts});
+  h.parser[0].done({Results: []});
+  h.pages.set('a', episodePage('Studio A', {maxquality: '2160p'}));
+  await h.finish('/lite/events', [{balanser: 'one', name: 'One', show: true, url: '/lite/one'}]); await h.finish('/lite/one', 'a'); h.tick(150);
+  const row = h.rows()[0];
+  assert.equal(row.find('.homelab-common-q').text(), '720p');
+  assert.match(row.find('.homelab-common-q-note').children.map(node => node.text()).join(''), /проверено · заявлено 4K/);
 });

@@ -176,13 +176,15 @@
   // Torrents: enough seeds to stream is a threshold; above it the picture quality decides, then the seeds.
   var MIN_SEEDS = 3;
   function seeded(row) { return row.release && (Number(row.release.Seeders) || 0) >= MIN_SEEDS ? 1 : 0; }
+  // An unchecked claim of a provider known to inflate its quality ranks as unknown until a probe checks it.
+  function rankQuality(row) { return row.doubtful && !row.measured ? 0 : row.qualities[0] || 0; }
   // tie (optional) breaks equal-quality rows before the name order; groups use it for their source count.
   function compareRows(a, b, tie) {
     var match = (a.unavailable ? 1 : 0) - (b.unavailable ? 1 : 0); if (match) return match;
     function group(row) { return row.native ? 2 : row.kind === 'online' ? 0 : 1; }
     match = group(a) - group(b); if (match) return match;
     if (a.release && b.release) { match = seeded(b) - seeded(a); if (match) return match; }
-    match = (b.qualities[0] || 0) - (a.qualities[0] || 0); if (match) return match;
+    match = rankQuality(b) - rankQuality(a); if (match) return match;
     if (a.release && b.release) { match = (Number(b.release.Seeders) || 0) - (Number(a.release.Seeders) || 0); if (match) return match; }
     match = tie ? tie(a, b) : 0;
     return match || String(a.providerName).localeCompare(String(b.providerName)) || a.key.localeCompare(b.key);
@@ -267,7 +269,17 @@
     }
     function notify() { if (live()) { remember(); changed(self); } }
     function later(fn, delay) { var timer = setTimeout(function () { if (live()) fn(); }, delay); timers.push(timer); }
-    function add(row) { if (!live() || seenRows[row.key]) return; seenRows[row.key] = true; self.rows.push(row); notify(); }
+    // Household quality log (HomelabSync): heights a probe or a playback really showed, per provider voice.
+    var facts = null, Q = window.HomelabQuality && typeof window.HomelabQuality.load === 'function' ? window.HomelabQuality : null;
+    function factSeason() { return movie.name ? selection.season : 0; }
+    function known(row) {
+      if (!facts || row.native || row.kind !== 'online' || row.measured) return;
+      var fact = Q.fact(facts, row.provider, factSeason(), row.factVoice || '');
+      if (fact) { row.qualities = [fact.height]; row.measured = true; row.verified = fact.source; row.doubtful = false; }
+      else row.doubtful = !!row.claimed && Q.doubtful(facts, row.provider);
+    }
+    if (Q) Q.load(movie).then(function (data) { if (!live() || !data) return; facts = data; self.rows.forEach(known); notify(); }).catch(function () {});
+    function add(row) { if (!live() || seenRows[row.key]) return; seenRows[row.key] = true; known(row); self.rows.push(row); notify(); }
     function server(path) {
       var address = sync.url(path); if (!address) throw new Error('identity'); return new URL(address);
     }
@@ -323,7 +335,7 @@
     var probeQueue = [], probing = 0, probes = 0, leaders = 0, probeUrls = {}, probed = {}, PROBE_TTL = 30 * 60000;
     function probeApply(row, value) {
       if (value.unavailable) row.unavailable = true;
-      else { row.qualities = value.qualities.slice(); row.measured = true; }
+      else { row.qualities = value.qualities.slice(); row.measured = true; row.verified = 'probe'; }
     }
     function probeCached(key) {
       var entry = probeCache.values[key];
@@ -332,7 +344,8 @@
     // Catalog rows only remember where they could be probed; a cached answer applies at once without a request.
     function probeable(row, raw) {
       // Without a native AbortController a hung or media response could not be stopped: skip probing entirely.
-      if (row.native || row.qualities.length || typeof raw !== 'string' || !raw || !window.AbortController) return;
+      // A claimed quality is checked too: sources name heights their stream does not have.
+      if (row.native || row.measured || typeof raw !== 'string' || !raw || !window.AbortController) return;
       var key = scope + '\n' + row.provider + '\n' + raw, cached = probeCached(key);
       if (cached) return probeApply(row, cached);
       probeUrls[row.key] = {url: raw, key: key};
@@ -345,7 +358,7 @@
     this.probe = function (rows, lazy) {
       (rows || []).forEach(function (row) {
         var target = row && probeUrls[row.key];
-        if (!live() || !target || probed[row.key] || row.qualities.length || row.unavailable || probes >= 24 || !lazy && leaders >= 12) return;
+        if (!live() || !target || probed[row.key] || row.measured || row.unavailable || probes >= 24 || !lazy && leaders >= 12) return;
         probed[row.key] = true; probes++; if (!lazy) leaders++;
         probeQueue.push({row: row, url: target.url, key: target.key});
       });
@@ -395,26 +408,44 @@
         return probeRead(response, abort).then(function (text) { return {status: response.status, trusted: trusted, text: text}; });
       }), function () { clearTimeout(timer); requests = requests.filter(function (entry) { return entry !== abort; }); });
     }
-    function probeJob(job, raw, hop) {
+    // declared: heights the resolved JSON named; its stream manifest (when it is the top quality's) decides.
+    function probeJob(job, raw, hop, declared) {
       var row = job.row;
+      function settle(list) {
+        probeRemember(job.key, {qualities: list}); row.qualities = list; row.measured = true; row.verified = 'probe'; row.doubtful = false;
+        if (Q && row.kind === 'online' && !row.native) Q.report(movie, row.provider, factSeason(), row.factVoice || '', row.claimed || 0, list[0], 'probe');
+        notify();
+      }
+      // Heights the resolver only named. A row the listing gave no quality takes them as before; a listing claim
+      // is only shown, neither «проверено» nor logged, until its manifest is read.
+      function asDeclared(list) {
+        list = list || declared; if (!live() || !list || !list.length || row.measured) return;
+        if (!row.claimed) return settle(list);
+        row.qualities = list.slice(); notify();
+      }
       return probeFetch(raw, row.provider).then(function (result) {
         if (!live()) return;
         if (result.status === 404 || result.status === 410) {
           if (result.trusted) { probeRemember(job.key, {unavailable: true}); row.unavailable = true; notify(); }
           return;
         }
-        if (result.status >= 300) return;
+        if (result.status >= 300) return asDeclared();
         var json; try { json = JSON.parse(result.text); } catch (_) {}
         if (json && typeof json === 'object') {
-          var found = qualities({quality: json.quality || json.qualitys, maxquality: json.maxquality});
-          if (found.length) { probeRemember(job.key, {qualities: found}); row.qualities = found; row.measured = true; return notify(); }
-          if (typeof json.url === 'string' && json.url && !hop) return probeJob(job, json.url, 1);
+          var map = json.quality || json.qualitys, found = qualities({quality: map, maxquality: json.maxquality});
+          if (typeof json.url === 'string' && json.url && !hop) {
+            var labels = map && typeof map === 'object' ? Object.keys(map) : [];
+            var top = labels.reduce(function (best, label) { return quality(label) > quality(best) ? label : best; }, labels[0]);
+            // The manifest measures the top quality only when it is that quality's stream.
+            if (!labels.length || map[top] === json.url) return probeJob(job, json.url, 1, found).catch(function () { asDeclared(found); });
+          }
+          if (found.length) return asDeclared(found);
           // Explicit "file not found" style errors only; not cached, since providers reuse error texts for quota.
           if (!json.accsdb && /not\s*found|не\s*найден|удал[её]н|removed|deleted|нет\s+видео|no\s+video/i.test(typeof json.error === 'string' ? json.error : '')) { row.unavailable = true; notify(); }
           return;
         }
         var best = /^\s*#EXTM3U/.test(result.text) ? hlsQuality(result.text) : 0;
-        if (best) { probeRemember(job.key, {qualities: [best]}); row.qualities = [best]; row.measured = true; notify(); }
+        if (best) settle([best]); else asDeclared();
       });
     }
     // A row is probed as soon as its own provider has no catalog page left, not after the whole search.
@@ -461,6 +492,9 @@
         var labels = {};
         matching.forEach(function (file) {
           var row = {kind: 'online', provider: source.key, providerName: source.name, seasonIndex: state.seasonIndex, qualities: qualities(file)}, identityVoice;
+          row.claimed = row.qualities[0] || 0;
+          // Quality log key, the same one native rows and playback use (HomelabSync resume identity).
+          row.factVoice = movie.name ? String(voice || file.voice_name || '') : String(file.translate || file.text || '').trim().slice(0, 200);
           if (movie.name) {
             identityVoice = voice || file.voice_name || 'Неизвестно';
             row.key = source.key + ':' + state.seasonIndex + ':' + identityVoice + ':' + row.qualities.join(',');
@@ -637,7 +671,7 @@
   function bestFirst(a, b) {
     var match = (a.unavailable ? 1 : 0) - (b.unavailable ? 1 : 0); if (match) return match;
     match = seeded(b) - seeded(a); if (match) return match;
-    match = (b.qualities[0] || 0) - (a.qualities[0] || 0); if (match) return match;
+    match = rankQuality(b) - rankQuality(a); if (match) return match;
     if (a.release && b.release) { match = (Number(b.release.Seeders) || 0) - (Number(a.release.Seeders) || 0); if (match) return match; }
     match = (b.measured ? 1 : 0) - (a.measured ? 1 : 0);
     return match || String(a.providerName).localeCompare(String(b.providerName)) || a.key.localeCompare(b.key);
@@ -817,10 +851,15 @@
       if (row.unavailable) { model.quality = 'нет видео'; model.qcls = 'is-off'; model.cls += ' is-unavailable'; }
       else if (best) { model.quality = qualityName(best); model.qcls = best >= 2160 ? 'is-uhd' : best >= 1080 ? 'is-hd' : 'is-sd'; }
       else { model.quality = '—'; model.qcls = 'is-none'; }
-      if (!row.unavailable && best && row.kind === 'online') model.note = row.measured ? 'проверено' : 'заявлено';
+      if (!row.unavailable && best && row.kind === 'online') {
+        model.note = row.verified === 'play' ? 'по просмотру' : row.measured ? 'проверено' : row.doubtful ? 'заявлено, не проверено' : 'заявлено';
+        // The source said more than its stream has.
+        if (row.measured && row.claimed > best) model.note += ' · заявлено ' + qualityName(row.claimed);
+      }
+      model.measured = !!row.measured;
       model.pick = hero ? 'Рекомендуем' + (row.measured ? ' · проверено' : '') : '';
       if (hero) model.cls += ' is-hero';
-      model.sig = [model.voice, model.details, model.quality, model.qcls, model.note, model.pick, model.cls, model.badges.join(',')].join('|');
+      model.sig = [model.voice, model.details, model.quality, model.qcls, model.note, model.measured, model.pick, model.cls, model.badges.join(',')].join('|');
       return model;
     }
     function fill(tile, model) {
@@ -835,8 +874,8 @@
       var badges = tile.find('.homelab-common-badges').empty().toggleClass('hide', !model.badges.length);
       model.badges.forEach(function (badge) { badges.append($('<span class="homelab-common-badge ' + badge[1] + '"></span>').text(badge[0])); });
       var badge = tile.find('.homelab-common-q'); badge.removeClass(badge.data('cls') || '').addClass(model.qcls).data('cls', model.qcls).text(model.quality);
-      var note = tile.find('.homelab-common-q-note').toggleClass('hide', !model.note).toggleClass('is-measured', model.note === 'проверено').empty();
-      if (model.note === 'проверено') note.append($('<span class="homelab-common-check"></span>').html(CHECK));
+      var note = tile.find('.homelab-common-q-note').toggleClass('hide', !model.note).toggleClass('is-measured', !!model.measured).empty();
+      if (model.measured) note.append($('<span class="homelab-common-check"></span>').html(CHECK));
       if (model.note) note.append($('<span></span>').text(model.note));
     }
     function card(key) {
@@ -861,7 +900,7 @@
       if (row.unavailable) return 'Не отдаёт видео';
       if (row.native) return 'Открыть в источнике';
       if (!row.qualities.length) return 'Качество уточняется';
-      return row.qualities.map(qualityName).join(' / ') + (row.kind === 'online' ? row.measured ? ' · проверено' : ' · заявлено' : '');
+      return row.qualities.map(qualityName).join(' / ') + (row.kind === 'online' ? (row.verified === 'play' ? ' · по просмотру' : row.measured ? ' · проверено' : ' · заявлено') + (row.measured && row.claimed > (row.qualities[0] || 0) ? ' (заявлено ' + qualityName(row.claimed) + ')' : '') : '');
     }
     // Right / long press: every source behind the card, or every release of a torrent group.
     function releaseLine(entry) {

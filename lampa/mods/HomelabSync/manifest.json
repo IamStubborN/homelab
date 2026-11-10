@@ -1,5 +1,10 @@
 {
   "enable": true,
   "dynamic": true,
-  "tree": ["Controller.cs", "ModInit.cs", "ResumeStore.cs"]
+  "tree": [
+    "Controller.cs",
+    "ModInit.cs",
+    "ResumeStore.cs",
+    "QualityStore.cs"
+  ]
 }

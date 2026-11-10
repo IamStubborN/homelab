@@ -33,14 +33,14 @@
       catch (error) { return new TextDecoder('windows-1251').decode(bytes); }
     }
 
-    function fetchBytes(url, cancelled, attempts) {
-      return window.fetch(url).then(function (response) {
+    function fetchBytes(url, cancelled, attempts, init) {
+      return window.fetch(url, init).then(function (response) {
         // The sidecar answers 503 while its download slots are busy.
         if ((response.status === 503 || response.status === 429) && attempts > 1 && !cancelled()) {
           var delay = Math.min(10, Number(response.headers && response.headers.get('Retry-After')) || 2) * 1000;
           return new Promise(function (resolve) { setTimeout(resolve, delay); }).then(function () {
             if (cancelled()) throw new Error('cancelled');
-            return fetchBytes(url, cancelled, attempts - 1);
+            return fetchBytes(url, cancelled, attempts - 1, init);
           });
         }
         if (!response.ok) throw new Error('download failed: ' + response.status);
@@ -146,11 +146,16 @@
       video.addEventListener('seeked', seeked);
       state.assSeeked = function () { video.removeEventListener('seeked', seeked); };
       if (item.homelabAss.events) return showEmbeddedAss(state, item, video, base, cancelled);
-      var content = fetchBytes(new URL(item.homelabAss.url, window.location.href).href, cancelled, 5);
+      // Online files: only the plugin may make the sidecar fetch one.
+      var content = fetchBytes(new URL(item.homelabAss.url, window.location.href).href, cancelled, item.homelabAss.online ? 3 : 5,
+        item.homelabAss.online ? {headers: {'X-Homelab-Subtitles': '1'}} : undefined);
       Promise.all([loadAssRenderer(base), content, fetchFonts(item.homelabAss.fonts, cancelled), fontLibrary(base)]).then(function (results) {
         if (cancelled()) return;
         var Renderer = results[0];
         var text = decodeSubtitle(results[1]);
+        if (item.homelabAss.online) item.homelabAss.text = CONVERTED_MARK.test(text);
+        // Converted text follows Lampa's subtitle settings, as embedded SRT does.
+        if (item.homelabAss.text) text = textStyle(text);
         if (item.homelabAss.signs) {
           text = signsOnly(text);
           if (!/^Dialogue:/im.test(text)) Lampa.Noty.show('В этих субтитрах надписи не отделены от реплик');
@@ -165,6 +170,10 @@
         hideAss(state, 'failed');
         updateSignsToggle();
         paintSubtitle(state, item);
+        if (item.homelabAss.online) {
+          Lampa.Noty.show('Субтитры показаны простым текстом');
+          return onlineFallback(state, item);
+        }
         Lampa.Noty.show('Не удалось показать ASS-субтитры');
       });
     }

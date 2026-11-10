@@ -65,7 +65,7 @@
       var title = item.homelabTitle || subtitleTitle(item);
       if (parts.lang && title.indexOf(parts.lang) !== 0) details.push(parts.lang.toLowerCase());
       if (item.homelabAss && !item.homelabAss.text) details.push('ASS со стилями');
-      details.push(source.external ? 'внешние' : 'встроенные');
+      details.push(source.online ? 'от источника' : source.external ? 'внешние' : 'встроенные');
       return details.join(' · ');
     }
 
@@ -194,7 +194,8 @@
     }
 
     function subtitleFile(item) {
-      return item.homelabAss && item.homelabAss.url || null;
+      // Online forced and full come as separate files of one language.
+      return item.homelabAss && !item.homelabAss.online && item.homelabAss.url || null;
     }
 
     // "AniLibria" of "AniLibria: надписи".

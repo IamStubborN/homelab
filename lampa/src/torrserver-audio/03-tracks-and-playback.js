@@ -50,7 +50,8 @@
       state.preferences[type] = preference;
       var stored = Lampa.Storage.get(preferenceKey, {});
       if (!stored || typeof stored !== 'object' || Array.isArray(stored)) stored = {};
-      var hash = String(state.work.homelab_torrent_hash || state.work.torrent_hash);
+      var hash = state.online ? state.preferenceKey : String(state.work.homelab_torrent_hash || state.work.torrent_hash);
+      if (!hash) return phase('preferences', state.work);
       delete stored[hash];
       stored[hash] = state.preferences;
       Object.keys(stored).slice(0, -50).forEach(function (key) { delete stored[key]; });

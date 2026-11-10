@@ -1669,3 +1669,114 @@ class ReleaseVoiceTests(unittest.TestCase):
             with self.assertRaises(app.NotReady):
                 app.release_voices(self.MAGNET, "", now=lambda: next(clock))
         self.assertNotIn("a" * 40, app._voices_cache)
+
+
+class OnlineSubtitleTests(unittest.TestCase):
+    VTT = b"WEBVTT\n\n00:01.000 --> 00:02.500\n<i>\xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82</i>\n"
+    SRT = b"1\n00:00:01,000 --> 00:00:02,500\nHello\n"
+
+    def setUp(self):
+        app._online_subtitles.clear()
+
+    def serve(self, routes):
+        seen = []
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append((self.path, dict(self.headers)))
+                status, headers, body = routes.get(self.path, (404, {}, b""))
+                self.send_response(status)
+                for key, value in headers.items():
+                    self.send_header(key, value)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return server.server_address[1], seen
+
+    def test_only_lampac_proxy_files_are_read_inside_docker(self):
+        self.assertEqual(app.online_subtitle_source("https://lampa.test/proxy/abc.vtt", "lampa.test"), app.LAMPAC_BASE + "/proxy/abc.vtt")
+        self.assertEqual(app.online_subtitle_source("https://127.0.0.1:9118/proxy/abc.vtt?x=1", "lampa.test"), app.LAMPAC_BASE + "/proxy/abc.vtt?x=1")
+        self.assertEqual(app.online_subtitle_source("/proxy/abc", "lampa.test"), app.LAMPAC_BASE + "/proxy/abc")
+        self.assertEqual(app.online_subtitle_source("https://cdn.example/sub.vtt#x", "lampa.test"), "https://cdn.example/sub.vtt")
+        for link in ("/proxy/../admin", "/proxy/%2e%2e/admin", "/proxy//x", "/proxy/a%2Fb", "/lite/events", "/admin",
+                     "file:///etc/passwd", "https://user:pw@cdn.example/a", "gopher://cdn.example/", None):
+            with self.subTest(link=link):
+                self.assertNotEqual(app.online_subtitle_source(link, "lampa.test") or "", app.LAMPAC_BASE + "/admin")
+                if link is None or not str(link).startswith("https://"):
+                    self.assertIsNone(app.online_subtitle_source(link, "lampa.test"))
+
+    def test_private_and_unresolvable_hosts_are_not_public(self):
+        self.assertFalse(app.public_host("127.0.0.1"))
+        self.assertFalse(app.public_host("10.0.0.1"))
+        self.assertFalse(app.public_host("invalid.invalid"))
+        with self.assertRaises(app.Rejected):
+            app.read_online_subtitle("http://127.0.0.1:1/sub.vtt")
+
+    def test_a_public_host_is_read_at_the_checked_address_with_its_player_referer(self):
+        port, seen = self.serve({"/1/sub.vtt": (200, {}, self.VTT), "/plain.vtt": (200, {}, self.VTT),
+                                 "/moved": (302, {"Location": "http://10.0.0.5/x"}, b"")})
+        with mock.patch.object(app, "public_addresses", side_effect=lambda host, p: ["127.0.0.1"] if host != "10.0.0.5" else None):
+            self.assertEqual(app.read_online_subtitle(f"http://0a-1.userplay.live:{port}/1/sub.vtt"), self.VTT)
+            app.read_online_subtitle(f"http://cdn.example:{port}/plain.vtt")
+            with self.assertRaises(app.Rejected, msg="a redirect to a private address is refused"):
+                app.read_online_subtitle(f"http://cdn.example:{port}/moved")
+        self.assertEqual(seen[0][1].get("Host"), f"0a-1.userplay.live:{port}")
+        self.assertEqual(seen[0][1].get("Referer"), "https://scalp-as.stloadi.live/")
+        self.assertNotIn("Referer", seen[1][1])
+
+    def test_lampac_is_read_without_an_address_check_and_errors_carry_the_status(self):
+        port, seen = self.serve({"/proxy/a.vtt": (200, {}, self.VTT)})
+        with mock.patch.object(app, "LAMPAC_BASE", f"http://127.0.0.1:{port}"):
+            self.assertEqual(app.read_online_subtitle(f"http://127.0.0.1:{port}/proxy/a.vtt"), self.VTT)
+            with self.assertRaises(app.FetchFailed) as caught:
+                app.read_online_subtitle(f"http://127.0.0.1:{port}/proxy/missing.vtt")
+        self.assertEqual(caught.exception.status, 404)
+
+    def test_webvtt_and_srt_become_marked_ass_and_ass_passes_unchanged(self):
+        cp1251 = "1\n00:00:01,000 --> 00:00:02,500\nПривет\n".encode("cp1251")
+        for body in (self.VTT, self.SRT, b"\xef\xbb\xbf" + self.SRT, cp1251):
+            with self.subTest(body=body[:12]):
+                ass, converted = app.subtitle_to_ass(body)
+                self.assertTrue(converted)
+                self.assertIn(app.CONVERTED_MARK.encode(), ass)
+                self.assertIn(b"Style: Default", ass)
+                self.assertRegex(ass, rb"Dialogue: 0,0:00:01\.00,0:00:02\.50,Default")
+        self.assertIn("Привет".encode(), app.subtitle_to_ass(cp1251)[0])
+        original = b"[Script Info]\nScriptType: v4.00+\n"
+        self.assertEqual(app.subtitle_to_ass(original), (original, False))
+        with self.assertRaises(app.Rejected):
+            app.subtitle_to_ass(b"<html>403</html>")
+
+    def test_endpoint_needs_the_plugin_header_and_answers_ass(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = f"http://127.0.0.1:{server.server_address[1]}/extaudio/online/subtitle?url="
+        def get(link, header=True):
+            request = urllib.request.Request(base + urllib.parse.quote(link, safe=""), headers={"X-Homelab-Subtitles": "1"} if header else {})
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return response.status, response.headers, response.read()
+            except urllib.error.HTTPError as error:
+                with error:
+                    return error.code, error.headers, error.read()
+        with mock.patch.object(app, "read_online_subtitle", return_value=self.VTT) as read:
+            self.assertEqual(get("/proxy/a.vtt", header=False)[0], 403)
+            self.assertEqual(get("/lite/events")[0], 400)
+            status, headers, body = get("/proxy/a.vtt")
+            self.assertEqual((status, headers["X-Subtitle-Converted"]), (200, "1"))
+            self.assertIn(b"[Events]", body)
+            get("/proxy/a.vtt")
+            self.assertEqual(read.call_count, 1, "a file is fetched once while cached")
+        with mock.patch.object(app, "read_online_subtitle", return_value=b"<html>"):
+            self.assertEqual(get("/proxy/b.vtt")[0], 415)
+        with mock.patch.object(app, "read_online_subtitle", side_effect=app.FetchFailed(403)):
+            self.assertEqual(get("/proxy/c.vtt")[0], 404)
+        with mock.patch.object(app, "read_online_subtitle", side_effect=app.Rejected("url not allowed")):
+            self.assertEqual(get("https://10.0.0.1/a.vtt")[0], 400)

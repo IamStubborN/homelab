@@ -78,11 +78,12 @@ function fakeElement(html = '') {
   return element;
 }
 
-function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null, attachments = {}, library = null, platform = null, playlist = null, connection = null, warm = [] } = {}) {
+function harness(t, storage = new Map(), { android = false, external = [], rendition = [], mse = [], ass = null, raw = {}, embedded = null, events = null, attachments = {}, library = null, platform = null, playlist = null, connection = null, warm = [], online = {} } = {}) {
   const notices = [];
   const playlistUrls = [];
   const runas = [];
   let work = false;
+  let nativeShowing = null;
   let video = createVideo();
   let audioMenu = [];
   let subtitles = [];
@@ -135,7 +136,16 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       listener: settings,
     },
     Controller: { toggle() {}, enabled: () => ({ name: controller }) }, Keypad: { listener: keypad }, Platform: { is: name => android && name === 'android' || name === platform },
-    Player: { playdata: () => work, listener: player, runas: need => { runas.push(need); } },
+    Player: { playdata: () => work, listener: player, runas: need => { runas.push(need); },
+      // Lampa 3.4.6 Subtitles.custom: its own items, switched through `mode`, sent as 'subs'.
+      subtitles(list) {
+        subtitles = list.map((sub, index) => {
+          const item = {...sub, index};
+          Object.defineProperty(item, 'mode', {get: () => nativeShowing === item.url ? 'showing' : 'disabled', set(value) { if (value === 'showing') nativeShowing = item.url; else if (nativeShowing === item.url) nativeShowing = null; }});
+          return item;
+        });
+        playerVideo.send('subs', {subs: subtitles});
+      } },
     PlayerVideo: {
       listener: playerVideo, video: () => video,
       // Replacing the video (savemeta) keeps the panel's subtitle list; only
@@ -203,6 +213,10 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
         if (/^\/extaudio\/[^/]+\/\d+\/sub\/\d+$/.test(new URL(url).pathname)) {
           const payload = events(new URL(url));
           return Promise.resolve(payload ? {ok: true, json: async () => payload} : {ok: false, status: 502});
+        }
+        if (new URL(url).pathname === '/extaudio/online/subtitle') {
+          const bytes = online[new URL(url).searchParams.get('url')];
+          return Promise.resolve({ok: Boolean(bytes), status: bytes ? 200 : 404, arrayBuffer: async () => bytes.buffer});
         }
         if (new URL(url).pathname === '/extaudio/fonts/index.json') {
           return Promise.resolve(library ? {ok: true, json: async () => library} : {ok: false, status: 404});
@@ -312,6 +326,27 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       player.send('start', work);
     },
     external() { player.send('external', work); },
+    nativeShowing: () => nativeShowing,
+    // Lampa's quality switch: PlayerVideo.destroy(true), then a new element.
+    replaceVideoElement() { video = createVideo(); },
+    // A play Lampa hands to an external player: create, then external, no start.
+    playExternal(fields = {}) {
+      destroy();
+      work = { url: 'https://lampa.test/proxy/abc/video.m3u8', ...fields };
+      player.send('create', {data: work});
+      player.send('external', work);
+      return work;
+    },
+    // An online source's play, as Lampac's online screen starts it.
+    playOnline(fields = {}, ready = true) {
+      destroy();
+      work = { url: 'https://lampa.test/proxy/abc/video.m3u8', title: 'Серия 1', ...fields };
+      video = createVideo();
+      player.send('create', {data: work});
+      player.send('start', work);
+      if (ready) player.send('ready', work);
+      return work;
+    },
     // The production order: Lampa sends create (the plugin rewrites the URL), start, ready.
     play(file = 1, hash = 'same-torrent', fields = {}) { this.start(file, hash, true, fields); },
     // Lampa plays a playlist item again with the object of its last play.
@@ -2789,4 +2824,85 @@ test('an online stream tells the quality log which variant it plays', t => {
   hls.levels = [{height: 480}, {height: 1080}, {height: 720}]; hls.currentLevel = 0;
   assert.deepEqual({...work.homelab_levels()}, {top: 1080, current: 480});
   assert.equal(Object.keys(work).includes('homelab_levels'), false, 'kept out of saved play data');
+});
+
+
+const onlineVtt = '[Script Info]\n; homelab: converted from plain text\nScriptType: v4.00+\n\n[V4+ Styles]\nStyle: Default,Arial,16,&H00FFFFFF\n\n[Events]\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Привет\n';
+const onlineSubs = [
+  {label: 'Рус. форсированные - 1', url: 'https://lampa.test/proxy/forced.vtt'},
+  {label: 'Рус. полные - 2', url: 'https://lampa.test/proxy/full.vtt'},
+  {label: 'Eng. full - 3', url: 'https://cdn.example/en.vtt'}
+];
+
+test('an online source keeps its subtitle files from Lampa and lists them as drawn tracks', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), {online: {'https://lampa.test/proxy/full.vtt': new TextEncoder().encode(onlineVtt)}});
+  const work = h.playOnline({subtitles: onlineSubs, card: {id: 7}});
+  await h.settle();
+  assert.equal(work.subtitles, undefined, 'Lampa does not draw them as plain text too');
+  assert.deepEqual(h.subtitleMenu(), ['Русские: надписи', 'Русские: полные', 'Английские: полные']);
+  assert.equal(h.subtitleTitle(), null, 'nothing starts without a reason');
+  h.chooseSubtitle('Русские: полные');
+  await h.settle();
+  const request = h.requests.find(item => new URL(item.url).pathname === '/extaudio/online/subtitle');
+  assert.equal(new URL(request.url).searchParams.get('url'), 'https://lampa.test/proxy/full.vtt');
+  assert.equal(request.options.headers['X-Homelab-Subtitles'], '1');
+  assert.equal(FakeAss.instances.length, 1);
+  assert.match(FakeAss.instances[0].options.subContent, /^Style: Default,Arial,17,/m, 'converted text follows Lampa subtitle settings');
+});
+
+test('an online choice returns on the next episode of the same title', async t => {
+  FakeAss.instances.length = 0;
+  const files = {'https://lampa.test/proxy/full.vtt': new TextEncoder().encode(onlineVtt)};
+  const h = harness(t, new Map(), {online: files});
+  h.playOnline({subtitles: onlineSubs, card: {id: 7}});
+  await h.settle();
+  h.chooseSubtitle('Русские: полные');
+  await h.settle();
+  h.playOnline({subtitles: onlineSubs, card: {id: 7}});
+  await h.settle();
+  assert.equal(h.subtitleTitle(), 'Русские: полные');
+  assert.equal(FakeAss.instances.length, 2);
+});
+
+test('a subtitled voice starts its full Russian track', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), {online: {'https://lampa.test/proxy/full.vtt': new TextEncoder().encode(onlineVtt)}});
+  h.playOnline({subtitles: onlineSubs, card: {id: 8}, homelab_online: {provider: 'aladin', voice: 'Субтитры'}});
+  await h.settle();
+  assert.equal(h.subtitleTitle(), 'Русские: полные');
+});
+
+test('a refused online file goes back to Lampa and shows as text', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), {online: {}});
+  h.playOnline({subtitles: onlineSubs, card: {id: 9}});
+  await h.settle();
+  h.chooseSubtitle('Английские: полные');
+  await h.settle();
+  assert.deepEqual(h.notices, ['Субтитры показаны простым текстом']);
+  assert.equal(h.nativeShowing(), 'https://cdn.example/en.vtt', 'Lampa draws the same file itself');
+  assert.deepEqual(h.subtitleMenu(), onlineSubs.map(sub => sub.label), 'its own items replace the drawn ones');
+});
+
+test('an external player and a torrent keep their subtitle files', t => {
+  const h = harness(t);
+  assert.deepEqual(h.playExternal({subtitles: onlineSubs}).subtitles, onlineSubs);
+  const torrent = h.playOnline({subtitles: onlineSubs, torrent_hash: 'abc', url: 'https://lampa.test/stream/x.mkv?link=abc&index=1&play'});
+  assert.deepEqual(torrent.subtitles, onlineSubs);
+});
+
+test('drawn online subtitles follow a new video element after a quality switch', async t => {
+  FakeAss.instances.length = 0;
+  const h = harness(t, new Map(), {online: {'https://lampa.test/proxy/full.vtt': new TextEncoder().encode(onlineVtt)}});
+  h.playOnline({subtitles: onlineSubs, card: {id: 10}});
+  await h.settle();
+  h.chooseSubtitle('Русские: полные');
+  await h.settle();
+  h.replaceVideoElement();
+  h.firstFrame();
+  await h.settle();
+  assert.equal(FakeAss.instances.length, 2);
+  assert.equal(FakeAss.instances[1].options.video, h.video());
+  assert.ok(FakeAss.instances[0].destroyed);
 });

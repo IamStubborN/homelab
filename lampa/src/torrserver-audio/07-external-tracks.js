@@ -54,8 +54,9 @@
     function installCurrent() {
       var work = Lampa.Player.playdata();
       var url = masterUrl(work);
-      if (active && active.work === work && url) return;
+      if (active && active.work === work && (url || active.online)) return;
       clear();
+      if (!url && work) return installOnline(work);
       if (!url || typeof window.fetch !== 'function' || typeof AbortController === 'undefined') return;
       var state = active = {
         work: work, abort: new AbortController(), externalAbort: new AbortController(), previousTracks: work.voiceovers,

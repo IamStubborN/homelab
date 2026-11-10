@@ -107,6 +107,28 @@
     }
     return value;
   }
+  // Subtitle languages a source names: "RU · EN", "" when it names none it knows.
+  var SUBTITLE_LANGUAGES = [['RU', /рус|russian|^ru$|^rus$/i], ['EN', /англ|english|^en$|^eng$/i], ['UK', /укр|ukrain|^uk$|^ukr$/i], ['JA', /япон|japan|^ja$|^jpn$/i]];
+  function subtitleLanguages(names) {
+    var found = [];
+    names.forEach(function (name) {
+      var text = String(name || '').trim(), words = text.split(/[^a-zа-яё]+/i);
+      SUBTITLE_LANGUAGES.forEach(function (entry) {
+        if ((entry[1].test(text) || words.some(function (word) { return entry[1].test(word); })) && found.indexOf(entry[0]) < 0) found.push(entry[0]);
+      });
+    });
+    return found.join(' · ');
+  }
+  // Whether a release or online file carries subtitles: {langs} or null.
+  function releaseSubtitles(release, streams) {
+    var subs = streams.filter(function (s) { return s.codec_type === 'subtitle'; });
+    if (subs.length) return {langs: subtitleLanguages(subs.map(function (s) { var tags = s.tags || {}; return tags.language || tags.title || ''; }))};
+    return /(?:^|[^a-zа-яё])(?:subs?|субтитры|sub\s*rus|rus\s*sub)(?=$|[^a-zа-яё])/i.test(String(release.Title || '')) ? {langs: ''} : null;
+  }
+  function onlineSubtitles(file) {
+    var list = Array.isArray(file.subtitles) ? file.subtitles.filter(function (sub) { return sub && sub.url; }) : [];
+    return list.length ? {langs: subtitleLanguages(list.map(function (sub) { return sub.label || sub.language || ''; }))} : null;
+  }
   function describeRelease(release) {
     var info = release.info || {}, streams = Array.isArray(release.ffprobe) ? release.ffprobe : release.ffprobe && release.ffprobe.streams || [], voices = Array.isArray(info.voices) ? info.voices.filter(function (v) { return typeof v === 'string' && v.trim(); }) : [];
     if (!voices.length) streams.filter(function (s) { return s.codec_type === 'audio'; }).forEach(function (s) {
@@ -124,7 +146,8 @@
     var languages = langs.map(function (name) { return counts[name] > 1 ? name + '×' + counts[name] : name; }).join(' · ');
     var video = streams.find(function (s) { return s.codec_type === 'video'; }), codec = video && video.codec_name || (String(release.Title || '').match(/\b(?:HEVC|AVC|AV1|H[. ]?26[45]|x26[45]|VP9)\b/i) || [''])[0];
     codec = /hevc|265/i.test(codec) ? 'HEVC' : /avc|264/i.test(codec) ? 'AVC' : String(codec).toUpperCase();
-    return {title: voices.length ? voices.slice(0, 2).join(' / ') + (voices.length > 2 ? ' +' + (voices.length - 2) : '') : languages ? 'Дорожки: ' + languages : 'Озвучка не указана', codec: codec, voices: voices, languages: languages};
+    return {title: voices.length ? voices.slice(0, 2).join(' / ') + (voices.length > 2 ? ' +' + (voices.length - 2) : '') : languages ? 'Дорожки: ' + languages : 'Озвучка не указана', codec: codec, voices: voices, languages: languages,
+      subtitles: releaseSubtitles(release, streams)};
   }
   // Voices read from a release's audio tracks by the extaudio sidecar, by info hash, for this app run.
   var releaseVoiceCache = {};

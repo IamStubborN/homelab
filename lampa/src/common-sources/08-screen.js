@@ -138,10 +138,11 @@
       }
       var voice = !grouped ? row.voice : row.kind === 'torrent' ? (row.canon && row.canon.label || row.voice) : row.canon && row.canon.label || row.identityVoice || row.voice;
       if (voice === UNNAMED) voice = UNNAMED + ' · ' + row.providerName;
-      var subs = item.rows.some(function (entry) { return entry.canon && entry.canon.subs; });
+      var subs = item.rows.some(function (entry) { return entry.canon && entry.canon.subs; }), langs = subtitleLanguagesOf(item.rows);
       var model = {voice: voice, badges: [], cls: row.kind === 'torrent' ? 'is-torrent' : 'is-online', icon: row.kind === 'torrent' ? MAGNET : PLAY, note: ''};
       model.details = row.providerName + ' · ' + (count > 1 ? 'ещё ' + plural(count - 1, row.kind === 'torrent' ? ['раздача', 'раздачи', 'раздач'] : SOURCES) : row.kind === 'torrent' ? 'Торрент' : 'Онлайн');
-      if (subs) model.badges.push(['субтитры', '']);
+      // Subtitle tracks (an online file, a release's streams or title), or a subtitled voice.
+      if (langs !== null || subs) model.badges.push(['субтитры' + (langs ? ' ' + langs : ''), 'is-subs']);
       if (row.release) {
         var described = row.described || (row.described = describeRelease(row.release)), size = Number(row.release.Size || row.release.size), seeds = Number(row.release.Seeders);
         if (Number.isFinite(seeds)) model.badges.push([plural(seeds, ['сид', 'сида', 'сидов']), seeds >= MIN_SEEDS ? 'is-seeds' : 'is-dead']);
@@ -201,16 +202,32 @@
         .on('hover:long', function () { touch(); if (models[key]) sourceMenu(models[key]); });
       return tile;
     }
+    function rowSubtitles(row) {
+      if (row.subtitles !== undefined) return row.subtitles;
+      if (row.release && !row.described) row.described = describeRelease(row.release);
+      return row.described && row.described.subtitles || null;
+    }
+    // null when no row has subtitles, else their languages ("" when unnamed).
+    function subtitleLanguagesOf(rows) {
+      var found = null;
+      rows.forEach(function (row) {
+        var subtitles = rowSubtitles(row); if (!subtitles) return;
+        found = (found || '').split(' · ').concat(subtitles.langs.split(' · ')).filter(function (lang, index, all) { return lang && all.indexOf(lang) === index; }).join(' · ');
+      });
+      return found;
+    }
+    function subtitleNote(row) { var subtitles = rowSubtitles(row); return subtitles ? 'субтитры' + (subtitles.langs ? ' ' + subtitles.langs : '') : ''; }
     function rowLine(row) {
       if (row.unavailable) return 'Не отдаёт видео';
       if (row.native) return 'Открыть в источнике';
-      if (!row.qualities.length) return 'Качество уточняется';
-      return row.qualities.map(qualityLabel).join(' / ') + (row.kind === 'online' ? (row.verified === 'play' ? ' · по просмотру' : row.measured ? ' · проверено' : ' · заявлено') + (row.measured && row.claimed > (row.qualities[0] || 0) ? ' (заявлено ' + qualityLabel(row.claimed) + ')' : '') : '');
+      var note = subtitleNote(row), subtitles = note ? ' · ' + note : '';
+      if (!row.qualities.length) return 'Качество уточняется' + subtitles;
+      return row.qualities.map(qualityLabel).join(' / ') + (row.kind === 'online' ? (row.verified === 'play' ? ' · по просмотру' : row.measured ? ' · проверено' : ' · заявлено') + (row.measured && row.claimed > (row.qualities[0] || 0) ? ' (заявлено ' + qualityLabel(row.claimed) + ')' : '') : '') + subtitles;
     }
     // Right / long press: every source behind the card, or every release of a torrent group.
     function releaseLine(entry) {
       var size = Number(entry.release.Size || entry.release.size), seeds = Number(entry.release.Seeders);
-      return [entry.qualities.length ? qualityLabel(entry.qualities[0]) : '', Number.isFinite(seeds) ? plural(seeds, ['сид', 'сида', 'сидов']) : '', size > 0 ? (size / 1073741824).toFixed(1).replace('.', ',') + ' ГБ' : '', entry.providerName].filter(Boolean).join(' · ');
+      return [entry.qualities.length ? qualityLabel(entry.qualities[0]) : '', Number.isFinite(seeds) ? plural(seeds, ['сид', 'сида', 'сидов']) : '', size > 0 ? (size / 1073741824).toFixed(1).replace('.', ',') + ' ГБ' : '', subtitleNote(entry), entry.providerName].filter(Boolean).join(' · ');
     }
     function sourceMenu(item) {
       var row = item.best, items = [];

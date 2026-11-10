@@ -30,7 +30,7 @@
         var matching = files.filter(function (file) { return !movie.name || Number.isInteger(file.season) && file.season >= 0 && Number.isInteger(file.episode) && file.episode > 0 && file.season === selection.season && file.episode === selection.episode; });
         var labels = {};
         matching.forEach(function (file) {
-          var row = {kind: 'online', provider: source.key, providerName: source.name, seasonIndex: state.seasonIndex, qualities: listedQualities(file)}, identityVoice;
+          var row = {kind: 'online', provider: source.key, providerName: source.name, seasonIndex: state.seasonIndex, qualities: listedQualities(file), subtitles: onlineSubtitles(file)}, identityVoice;
           row.claimed = row.qualities[0] || 0;
           // Quality log key, the same one native rows and playback use (HomelabSync resume identity).
           row.factVoice = movie.name ? String(voice || file.voice_name || '') : String(file.translate || file.text || '').trim().slice(0, 200);

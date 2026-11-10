@@ -39,6 +39,7 @@
       if (masterUrl(work)) pausedWork = work;
     });
     Lampa.PlayerVideo.listener.follow('play', function () {
+      followVideo();
       var video = Lampa.PlayerVideo.video();
       if (active && active.work === Lampa.Player.playdata() && active.autoUntil === Infinity) active.autoUntil = Date.now() + AUTO_APPLY_MS;
       if (pausedWork === Lampa.Player.playdata() && video && !video.paused) pausedWork = null;
@@ -52,6 +53,7 @@
     });
     Lampa.Player.listener.follow('create', preparePlayback);
     Lampa.Player.listener.follow('start', function (work) {
+      takeOnlineSubtitles(work);
       // The playlist keeps copies with the URL Lampa built; the playing copy
       // carries its rewritten URL. Point the playlist at the original one,
       // or it falls back to the first item without an episode number.

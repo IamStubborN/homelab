@@ -4,13 +4,17 @@
 import base64
 import functools
 import hashlib
+import http.client
 import io
+import ipaddress
 import json
 import math
 import os
 import re
 import shutil
 import signal
+import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -455,6 +459,181 @@ MAX_VOICES = 12
 _voices_cache = {}
 _voices_lock = threading.Lock()
 _voices_lookups = threading.Semaphore(1)
+
+
+# ── Online subtitles: a provider's WebVTT/SRT file converted for JASSUB ──
+# Lampac's own subtitle links (/proxy/…) are read from Lampac inside Docker;
+# other links only from public addresses, connecting to the very address that
+# was checked. The answer is always ASS, never the fetched bytes of an
+# arbitrary page, so the endpoint is no general proxy.
+LAMPAC_BASE = os.environ.get("LAMPAC_BASE", "http://lampa:9118").rstrip("/")
+ONLINE_SUBTITLE_MAX_BYTES = 4 * 1024 * 1024
+ONLINE_SUBTITLE_TTL = 3600
+ONLINE_SUBTITLE_SECONDS = 25  # the whole fetch, redirects included
+# Hosts that serve subtitles only to their own player page.
+ONLINE_SUBTITLE_REFERERS = {"userplay.live": "https://scalp-as.stloadi.live/"}
+ONLINE_SUBTITLE_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+CONVERTED_MARK = "; homelab: converted from plain text"
+SRT_TIME_RE = re.compile(r"^\s*\d+\s*\r?\n\s*\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}\s*-->", re.M)
+_online_subtitles = {}
+_online_subtitle_lock = threading.Lock()
+_online_subtitle_fetches = threading.Semaphore(4)
+
+
+class FetchFailed(Exception):
+    def __init__(self, status):
+        super().__init__(f"HTTP {status}")
+        self.status = status
+
+
+def public_addresses(host, port):
+    """The host's addresses when every one of them is public, else None."""
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError, OSError):
+        return None
+    addresses = [info[4][0] for info in infos]
+    if not addresses or not all(ipaddress.ip_address(address.split("%")[0]).is_global for address in addresses):
+        return None
+    return addresses
+
+
+def public_host(host):
+    return public_addresses(host, None) is not None
+
+
+def online_subtitle_source(link, own_host):
+    """The URL to read for a link the page saw, or None when it may not be read.
+    Only the link's form is checked here; addresses are checked when connecting."""
+    if not isinstance(link, str) or len(link) > 8192:
+        return None
+    parts = urllib.parse.urlsplit(link)
+    if parts.scheme not in ("http", "https", "") or parts.username or parts.password:
+        return None
+    path = parts.path or ""
+    # Lampac names itself by the page's host, or by 127.0.0.1 in rjson answers.
+    if path.startswith("/proxy/") and (not parts.netloc or parts.netloc in (own_host, "127.0.0.1:9118")):
+        # Only its proxied files: no other Lampac route, no way out of /proxy/.
+        if ".." in path or "//" in path or "\\" in path or re.search(r"%(?:2e|2f|5c)", path, re.I):
+            return None
+        return LAMPAC_BASE + path + ("?" + parts.query if parts.query else "")
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return None
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+
+
+class PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, host, port, address, timeout):
+        super().__init__(host, port, timeout=timeout)
+        self.address = address
+
+    def connect(self):
+        self.sock = socket.create_connection((self.address, self.port), self.timeout)
+
+
+class PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, host, port, address, timeout):
+        super().__init__(host, port, timeout=timeout, context=ssl.create_default_context())
+        self.address = address
+
+    def connect(self):
+        sock = socket.create_connection((self.address, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+def read_online_subtitle(url, now=time.monotonic):
+    deadline = now() + ONLINE_SUBTITLE_SECONDS
+    trusted = url.startswith(LAMPAC_BASE + "/")
+    for _ in range(4):
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise Rejected("url not allowed")
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        if trusted:
+            address = parts.hostname
+        else:
+            addresses = public_addresses(parts.hostname, port)
+            if not addresses:
+                raise Rejected("url not allowed")
+            address = addresses[0]
+        headers = {"User-Agent": ONLINE_SUBTITLE_AGENT, "Accept": "*/*", "Accept-Encoding": "identity"}
+        host = parts.hostname
+        for suffix, referer in ONLINE_SUBTITLE_REFERERS.items():
+            if host == suffix or host.endswith("." + suffix):
+                headers["Referer"] = referer
+                headers["Origin"] = referer.rstrip("/")
+        kind = PinnedHTTPSConnection if parts.scheme == "https" else PinnedHTTPConnection
+        connection = kind(host, port, address, max(1, min(15, deadline - now())))
+        try:
+            connection.request("GET", (parts.path or "/") + ("?" + parts.query if parts.query else ""), headers=headers)
+            response = connection.getresponse()
+            if response.status in (301, 302, 303, 307, 308) and response.getheader("Location"):
+                url = urllib.parse.urljoin(url, response.getheader("Location"))
+                trusted = False  # a redirect leaves Lampac's trust behind
+                continue
+            if response.status != 200:
+                raise FetchFailed(response.status)
+            chunks, size = [], 0
+            while True:
+                if now() > deadline:
+                    raise Rejected("too slow")
+                chunk = response.read(64 * 1024)
+                if not chunk:
+                    return b"".join(chunks)
+                size += len(chunk)
+                if size > ONLINE_SUBTITLE_MAX_BYTES:
+                    raise Rejected("too large")
+                chunks.append(chunk)
+        finally:
+            connection.close()
+    raise Rejected("too many redirects")
+
+
+def subtitle_text(body):
+    if body.startswith(b"\xef\xbb\xbf"):
+        return body[3:].decode("utf-8", "replace")
+    if body.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return body.decode("utf-16", "replace")
+    try:
+        return body.decode("utf-8")
+    except UnicodeDecodeError:
+        # Russian files without a BOM are often still Windows-1251.
+        return body.decode("cp1251", "replace")
+
+
+def subtitle_to_ass(body):
+    """(ASS bytes, whether it was converted from plain text)."""
+    text = subtitle_text(body)
+    head = text.lstrip()[:4096]
+    if head.startswith("[Script Info]"):
+        return text.encode("utf-8"), False
+    if head.startswith("WEBVTT"):
+        source = "webvtt"
+    elif SRT_TIME_RE.search(head):
+        source = "srt"
+    else:
+        raise Rejected("not a subtitle")
+    # The input format is named: ffmpeg must never guess one that reads other URLs.
+    result = subprocess.run(
+        ["ffmpeg", "-nostdin", "-v", "error", "-f", source, "-i", "pipe:0", "-f", "ass", "pipe:1"],
+        input=text.encode("utf-8"), capture_output=True, timeout=20)
+    if result.returncode != 0 or b"[Events]" not in result.stdout:
+        raise Rejected("conversion failed")
+    # The plugin styles converted text by Lampa's subtitle settings, and only it.
+    return result.stdout.replace(b"[Script Info]\n", ("[Script Info]\n" + CONVERTED_MARK + "\n").encode(), 1), True
+
+
+def online_subtitle(url, now=time.monotonic):
+    with _online_subtitle_lock:
+        cached = _online_subtitles.get(url)
+        if cached and now() - cached[0] < ONLINE_SUBTITLE_TTL:
+            return cached[1], cached[2]
+    body, converted = subtitle_to_ass(read_online_subtitle(url))
+    with _online_subtitle_lock:
+        _online_subtitles[url] = (now(), body, converted)
+        for key in sorted(_online_subtitles, key=lambda key: _online_subtitles[key][0])[:-32]:
+            del _online_subtitles[key]
+    return body, converted
 
 
 def magnet_hash(link):
@@ -2156,6 +2335,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_cached(path)
         if path == "/extaudio/voices":
             return self.serve_voices(query)
+        if path == "/extaudio/online/subtitle":
+            return self.serve_online_subtitle(query)
         embedded = EMBEDDED_RE.match(path)
         if embedded:
             return self.serve_embedded(embedded.group(1).lower(), int(embedded.group(2)), embedded, query)
@@ -2192,6 +2373,30 @@ class Handler(BaseHTTPRequestHandler):
         if not FILE_RE.match(name):
             return self.send_json(404, {"error": "not found"})
         return self.serve_live(torrent_hash, file_id, stream, name, query)
+
+    def serve_online_subtitle(self, query):
+        # Only the plugin may make the sidecar fetch: a foreign page cannot send
+        # this header without a CORS preflight, which is never allowed.
+        if self.headers.get("X-Homelab-Subtitles") != "1":
+            return self.send_json(403, {"error": "forbidden"})
+        url = online_subtitle_source(query.get("url", [""])[0], self.headers.get("Host", ""))
+        if not url:
+            return self.send_json(400, {"error": "url not allowed"})
+        if not _online_subtitle_fetches.acquire(timeout=10):
+            return self.send_json(503, {"error": "busy"}, {"Retry-After": "2"})
+        try:
+            body, converted = online_subtitle(url)
+        except Rejected as error:
+            return self.send_json(415 if str(error) == "not a subtitle" else 400, {"error": str(error)})
+        except FetchFailed as error:
+            return self.send_json(404 if error.status in (403, 404, 410) else 502, {"error": "fetch failed"})
+        except Exception as error:
+            print(f"online subtitle failed: {type(error).__name__} {error}", file=sys.stderr, flush=True)
+            return self.send_json(502, {"error": "fetch failed"})
+        finally:
+            _online_subtitle_fetches.release()
+        self.send_bytes(200, body, "text/x-ssa; charset=utf-8", "private, max-age=3600",
+                        {"X-Subtitle-Converted": "1" if converted else "0"})
 
     def serve_voices(self, query):
         link, title = query.get("link", [""])[0], query.get("title", [""])[0]

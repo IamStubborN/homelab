@@ -700,3 +700,18 @@ test('a claimed quality whose manifest cannot be read stays a claim and is not l
   assert.ok(!row.measured); assert.deepEqual(reports, []);
   search.cancel();
 });
+
+test('releases name their subtitles from ffprobe streams or the title', t => {
+  const h = setup(t), describe = h.window.HomelabSources.describeRelease;
+  const probed = describe({Title: 'Show', ffprobe: [{codec_type: 'subtitle', tags: {language: 'rus'}}, {codec_type: 'subtitle', tags: {language: 'eng'}}, {codec_type: 'subtitle', tags: {language: 'rus', title: 'Надписи'}}]});
+  assert.equal(probed.subtitles.langs, 'RU · EN');
+  assert.equal(describe({Title: 'Show S01 1080p | Sub'}).subtitles.langs, '');
+  assert.equal(describe({Title: 'Show S01 1080p | Субтитры'}).subtitles.langs, '');
+  assert.equal(describe({Title: 'Show S01 1080p | Subaru Studio'}).subtitles, null, 'a word that starts with sub is no subtitle');
+  assert.equal(describe({Title: 'Show S01 1080p'}).subtitles, null);
+});
+
+test('one subtitle label may name several languages', t => {
+  const h = setup(t), describe = h.window.HomelabSources.describeRelease;
+  assert.equal(describe({Title: 'Show', ffprobe: [{codec_type: 'subtitle', tags: {title: 'Russian, English'}}]}).subtitles.langs, 'RU · EN');
+});

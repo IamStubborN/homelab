@@ -1,3 +1,4 @@
+// Built by tools/build.cjs from src/homelab-sync/history.js: edit the sources there and rebuild.
 (function install() {
   'use strict';
   // Public methods exist before native storage, favorites and menu are initialized.
@@ -65,6 +66,7 @@
   }
   function dayTitle(stamp) { var days = daysAgo(stamp); return days <= 0 ? 'Сегодня' : days === 1 ? 'Вчера' : calendar(stamp); }
   function clock(stamp) { var date = new Date(stamp); return date.getHours() + ':' + ('0' + date.getMinutes()).slice(-2); }
+  // Time left as short Russian copy: "осталось 1 ч 5 мин".
   function remaining(position, duration) {
     var rest = Math.max(0, duration - position), minutes = Math.round(rest / 60);
     if (rest < 60) return 'осталось меньше минуты';

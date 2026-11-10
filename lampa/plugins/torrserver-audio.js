@@ -1,3 +1,4 @@
+// Built by tools/build.cjs from src/torrserver-audio: edit the sources there and rebuild.
 // Isolated browser playback and track preferences for Lampac GStreamer.
 (function () {
   'use strict';
@@ -76,6 +77,7 @@
       } catch (error) {}
     }
 
+    // ── HLS: MP4 fragment surgery, retrying and audio/subtitle loaders for hls.js ──
     var MP4_CONTAINERS = {moov: 1, trak: 1, mdia: 1, minf: 1, stbl: 1, mvex: 1, moof: 1, traf: 1};
 
     function mp4Boxes(view, start, end) {
@@ -557,6 +559,7 @@
     }
 
     installHlsResilience();
+    // ── Track identity, remembered choices, own GST streams and switching them ──
     function newSessionId() {
       // Each replacement gets its own task: a slow obsolete request must not
       // finish later and dispose the current episode/audio task on the server.
@@ -926,6 +929,7 @@
       notify('Озвучка «' + audioName(track) + '» готова — включите её в аудиодорожках');
     }
 
+    // ── The audio menu: labels, drawing, preparing an external voice ──
     // Lampa puts notices into HTML unescaped.
     function notify(text) {
       if (Lampa.Noty) Lampa.Noty.show(plain(text));
@@ -1266,6 +1270,7 @@
       return embedded.filter(function (track) { return track.aac; })[0] || current || {index: index};
     }
 
+    // ── ASS/SSA subtitles drawn with JASSUB, fonts and the text fallback ──
     var assModule = null;
     var assImport;
     var lastSubtitles = null;
@@ -1812,6 +1817,7 @@
       });
     }
 
+    // ── The subtitle menu: labels, signs-only toggle, embedded and external items ──
     // Menu labels read "<who>: <what>", like the audio menu: the group or the
     // language, then full subtitles or signs only. External files end in
     // "(внешние)", as external audio ends in "(внешняя)".
@@ -2158,6 +2164,7 @@
       applySubtitles(state, withAss(state, state.subtitleList));
     }
 
+    // ── External .mka/.srt files from the sidecar and installing the current playback ──
     // A pending lookup waits up to 10 s in the sidecar for the files it is
     // still reading, so about four minutes in all.
     var EXTERNAL_LOOKUPS = 20;
@@ -2310,6 +2317,7 @@
       ownStream(state, url);
     }
 
+    // ── Warming up the next file of the torrent near the end of an episode ──
     // Near the end of an episode the sidecar reads the head of the next one
     // (a few MB) and probes it, so a slow torrent starts it sooner.
     // Only playback counts, not a pause or a scrub through the timeline.
@@ -2414,6 +2422,7 @@
       }, function () { failed(0); });
     }
 
+    // ── Player and key events, retry, Lampa.HomelabGstAudio ──
     Lampa.PlayerVideo.listener.follow('subs', function (event) {
       if (!Array.isArray(event.subs)) return;
       // Lampa may send back the list it keeps, with drawn items already in it.

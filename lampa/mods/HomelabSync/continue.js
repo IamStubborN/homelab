@@ -1,3 +1,4 @@
+// Built by tools/build.cjs from src/homelab-sync/continue: edit the sources there and rebuild.
 (function install() {
   'use strict';
   // Public methods exist before native storage, favorites and menu are initialized.
@@ -168,6 +169,7 @@
     });
     return Object.keys(byCard).map(function (key) { return Object.assign({}, byCard[key], remembered[key] || {}, metadata[key] || {}); });
   }
+  // ── Labels and the row list: next episode, progress text, metadata ──
   // Lampa marks an episode watched at 90%; Continue then offers the next one.
   function nextEpisode(item, seasons) {
     if (!Number.isInteger(item.season) || item.season < 0 || !(item.episode > 0)) return null;
@@ -178,7 +180,7 @@
     return following ? {season: following, episode: 1} : null;
   }
   function watched(item) { return item.duration > 0 && item.position / item.duration >= .9; }
-  // Short Russian copy for the focus overlay.
+  // Time left as short Russian copy: "осталось 1 ч 5 мин".
   function remaining(position, duration) {
     var rest = Math.max(0, duration - position), minutes = Math.round(rest / 60);
     if (rest < 60) return 'осталось меньше минуты';
@@ -257,6 +259,7 @@
     }
     work();
   }
+  // ── Opening a card: the captured source, the picker or the torrent files ──
   function card(item) {
     var tv = item.card.indexOf('tv_') === 0, result = {id: +item.card.split('_')[1], source: 'tmdb', poster_path: item.poster, backdrop_path: item.backdrop};
     result.title = plain(item.title || (tv ? 'Сериал #' : 'Фильм #') + result.id);
@@ -428,6 +431,7 @@
       metadataFor(intent, launch);
     }, fail);
   }
+  // ── Saving progress to the server while playing ──
   function drain() {
     if (sending) return;
     clearTimeout(writeTimer);
@@ -650,6 +654,7 @@
     playing = null; detachRestore(); publish();
   });
   sync.subscribe(function () { context(); if (!L.Player.opened()) load(); });
+  // ── The home screen row: «Продолжить просмотр» and «Новые серии» ──
   var audioBound;
   function audioReady() {
     var audio = L.HomelabGstAudio;

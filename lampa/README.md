@@ -10,6 +10,14 @@ in the separate [HomelabSync module](mods/HomelabSync/README.md). These addition
 were installed on 2026-11-01 after explicit approval; a source checkout alone
 does not install them. Clients need one reload to load the new plugins.
 
+## Sources and build
+
+Large plugins live as ordered parts in `src/` and helpers shared by several plugins in
+`src/shared/` (pulled in by a `// @include shared/<file>` line). `node tools/build.cjs`
+concatenates them into the served files (`plugins/*.js`, `mods/HomelabSync/*.js`), which stay
+committed, so deployment copies files as before. A built file starts with a «Built by» line: edit
+its sources, rebuild, and `node --test tests/` fails while a built file is stale.
+
 The independent `common-sources.js` picker offers online voices and native torrent
 results together. By default it shows one card per online voice: Enter plays the
 best source of that voice (playable first, highest quality, a measured height over

@@ -1,3 +1,4 @@
+// Built by tools/build.cjs from src/playlist-thumbnails.js: edit the sources there and rebuild.
 (function install() {
   'use strict';
   if (!window.appready) {
@@ -130,6 +131,7 @@
   }
   // The native playlist is a Select of the playlist items. Each row gets its
   // saved progress (live for the current one), a watched mark and «Сейчас».
+  // Time left as short Russian copy: "осталось 1 ч 5 мин".
   function remaining(position, duration) {
     var rest = Math.max(0, duration - position), minutes = Math.round(rest / 60);
     if (rest < 60) return 'осталось меньше минуты';

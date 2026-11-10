@@ -478,3 +478,44 @@ test('another voice, a movie or a closed component leaves the focus alone', asyn
   c.destroy(); h.L.Player.listener.send('destroy');
   assert.deepEqual(log, []);
 });
+
+const progress = (episode, at, season = 2) => ({extra: JSON.stringify({card: 'tv_42', season, episode}), watched_at: at});
+
+test('the episode list opens at the newest episode watched on any device', async t => {
+  const h = setup(t), c = await h.open();
+  h.syncRows([progress(3, 100), progress(7, 300), progress(5, 200), {extra: JSON.stringify({card: 'tv_9', season: 2, episode: 9}), watched_at: 999}]);
+  h.choices.kinobase = {episodes_view: {1: 4, 2: 3}};
+  c.draw([file(3), file(7)], {});
+  assert.deepEqual(JSON.parse(JSON.stringify(h.choices.kinobase.episodes_view)), {1: 4, 2: 7});
+});
+
+test('a list left open moves to newer progress from another device, and only then', async t => {
+  const log = [], h = setup(t, {html: file => focusLog(h, log)(file)}), c = await h.open();
+  h.syncRows([progress(3, 100)]);
+  const files = [3, 4, 5].map(episode => file(episode));
+  c.draw(files, {}); h.render(); h.L.Controller.toggle('select');
+  h.syncPublish(); assert.deepEqual(log, [], 'nothing new');
+  h.syncRows([progress(3, 100), progress(5, 400)]); h.syncPublish();
+  assert.deepEqual(log, [], 'not under a menu');
+  h.L.Controller.toggle('content'); h.syncPublish();
+  assert.deepEqual(log, [5]);
+  h.syncPublish(); assert.deepEqual(log, [5], 'the same progress moves it once');
+  h.syncRows([progress(3, 100), progress(5, 450)]); h.syncPublish();
+  assert.deepEqual(log, [5], 'another TV still saving the same episode does not pull focus again');
+  h.syncRows([progress(3, 100), progress(5, 400), progress(4, 500)]);
+  h.L.Player.play(c.toPlayElement(files[0])); h.syncPublish();
+  assert.deepEqual(log, [5], 'never under the player');
+  c.destroy(); h.syncRows([progress(4, 900)]); h.syncPublish();
+  assert.deepEqual(log, [5], 'a closed list is left alone');
+});
+
+test('the episode just played here is not focused again by its own progress', async t => {
+  const log = [], h = setup(t, {html: file => focusLog(h, log)(file)}), c = await h.open();
+  h.syncRows([progress(3, 100)]);
+  const files = [3, 4, 5].map(episode => file(episode));
+  c.draw(files, {}); h.render();
+  h.L.Player.play(c.toPlayElement(files[2])); h.L.Player.listener.send('destroy');
+  h.L.Controller.toggle('content'); log.length = 0;
+  h.syncRows([progress(3, 100), progress(5, 600)]); h.syncPublish();
+  assert.deepEqual(log, []);
+});

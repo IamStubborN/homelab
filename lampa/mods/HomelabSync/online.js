@@ -92,7 +92,7 @@
       // on through the playlist: point it at the episode that played last instead.
       function played(work) {
         var movie = object.movie;
-        if (!disposed && work && movie && movie.name && work.card === movie && Number.isInteger(work.episode) && work.episode > 0) lastPlayed = work;
+        if (!disposed && work && movie && movie.name && work.card === movie && Number.isInteger(work.episode) && work.episode > 0) { lastPlayed = work; place = work.season + ':' + work.episode; }
       }
       function returned() {
         var work = lastPlayed; lastPlayed = null;
@@ -107,6 +107,47 @@
       }
       L.Player.listener.follow('start', played);
       L.Player.listener.follow('destroy', returned);
+      // Lampac scrolls the list to the episode last started on this device (its local choice).
+      // Household progress knows the newest one from any device: open the list there, and move a
+      // list left open (a TV in standby) when newer progress arrives.
+      // seen: newest progress time handled; place: the episode the list was last put on (opened,
+      // played or moved to). A list moves only to a different episode, so saves from a TV that is
+      // still playing the same episode, or this TV's own progress after Back, never pull focus again.
+      var seen = 0, place = '', seenScope = sync.scope(), unsubscribe = typeof sync.subscribe === 'function' ? sync.subscribe(refreshed) : null;
+      function newest() {
+        var movie = object.movie, key = movie && movie.name && Number.isInteger(movie.id) ? 'tv_' + movie.id : '', best = null;
+        if (!key || typeof sync.rows !== 'function') return null;
+        sync.rows().forEach(function (row) {
+          var x = sync.extra(row);
+          if (row.deleted || x.card !== key || !Number.isInteger(x.season) || !(x.episode > 0)) return;
+          if (!best || row.watched_at > best.at) best = {season: x.season, episode: x.episode, at: row.watched_at || 0};
+        });
+        return best;
+      }
+      function openAtNewest() {
+        var last = newest(); if (!last) return;
+        seen = Math.max(seen, last.at); place = last.season + ':' + last.episode;
+        var choice = comp.getChoice(provider) || {}, view = Object.assign({}, choice.episodes_view || {});
+        if (view[last.season] === last.episode) return;
+        view[last.season] = last.episode;
+        comp.replaceChoice({episodes_view: view}, provider);
+      }
+      function refreshed() {
+        if (disposed || L.Activity.active() !== object || L.Player.opened()) return;
+        if (sync.scope() !== seenScope) { seenScope = sync.scope(); seen = 0; place = ''; }
+        // Leave the list alone while a menu or filter is over it; the next pull retries.
+        if (!L.Controller.enabled || L.Controller.enabled().name !== 'content') return;
+        var last = newest(); if (!last || last.at <= seen) return;
+        seen = last.at;
+        var key = last.season + ':' + last.episode; if (key === place) return;
+        var row = rows.filter(function (entry) { return +entry.file.season === last.season && +entry.file.episode === last.episode; })[0], html = row && row.html;
+        if (!html || typeof html.trigger !== 'function') return;
+        place = key;
+        // collectionFocus moves the navigator and itself sends hover:focus (Lampac then records «last»).
+        if (typeof L.Controller.collectionFocus !== 'function') return html.trigger('hover:focus');
+        var root = typeof html.closest === 'function' ? html.closest('.scroll') : null;
+        L.Controller.collectionFocus(html[0] || html, root && root[0] || html[0] || html);
+      }
       function owns(batch) { return !disposed && specials === batch && sync.scope() === batch.scope && L.Activity.active() === object && provider === batch.provider; }
       function specialRoad(file) {
         var movie = object.movie, hash = L.Utils.hash([0, '', file.episode, movie.original_title || movie.original_name].join(''));
@@ -262,6 +303,7 @@
       }
       comp.draw = function (items, params) {
         requestId++; drawn = Array.isArray(items) ? items : null; rows = [];
+        try { openAtNewest(); } catch (_) {}
         params = Object.assign({}, params || {});
         var shown = params.onRender;
         params.onRender = function (file, html) { if (file && html) rows.push({file: file, html: html}); if (shown) return shown.apply(this, arguments); };
@@ -347,6 +389,7 @@
       };
       comp.destroy = function () {
         disposed = true; requestId++; rows = []; lastPlayed = null;
+        if (typeof unsubscribe === 'function') unsubscribe();
         if (typeof L.Player.listener.remove === 'function') { L.Player.listener.remove('start', played); L.Player.listener.remove('destroy', returned); }
         if (intent && !intent.finished) { intent.cancelled = true; clearTimeout(intent.timer); }
         return destroy.apply(comp, arguments);

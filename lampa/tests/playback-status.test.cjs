@@ -456,3 +456,29 @@ test('after a fallback to the reserve, Retry does not reload the primary that fa
   video.seeking = true; video.currentTime = 100; video.fire('seeking'); h.tick(10000);
   assert.equal(loads.length, 0); assert.equal(calls.length, 1, 'looked up again instead');
 });
+
+function idlePanel(h) {
+  const log = []; let visible = true;
+  Object.assign(h.L.PlayerPanel, {visibleStatus: () => visible, toPlayer() { log.push('hidden'); visible = false; h.L.Controller.toggle('player'); }});
+  return {log, show() { visible = true; }};
+}
+
+test('the player panel hides after 10 s without a key while the video plays, like Plex', t => {
+  const h = harness(t), video = realistic(h); h.run('plugins/playback-status.js');
+  const panel = idlePanel(h); h.start({homelab_torrent_hash: hash});
+  video.play(); video.data(); h.L.Controller.toggle('player_panel');
+  h.tick(6000); h.L.Keypad.listener.send('keydown', {code: 39});
+  h.tick(6000); assert.deepEqual(panel.log, [], 'a key restarts the wait');
+  h.tick(5000); assert.deepEqual(panel.log, ['hidden']);
+  assert.equal(h.L.Controller.enabled().name, 'player');
+});
+
+test('the panel stays while paused, under a menu, and after the player closed', t => {
+  const h = harness(t), video = realistic(h); h.run('plugins/playback-status.js');
+  const panel = idlePanel(h); h.start({homelab_torrent_hash: hash});
+  video.play(); video.data(); h.L.Controller.toggle('player_panel');
+  video.pause(); h.tick(15000); assert.deepEqual(panel.log, [], 'paused');
+  video.play(); h.L.Controller.toggle('select'); h.tick(15000); assert.deepEqual(panel.log, [], 'a menu is open');
+  h.L.Controller.toggle('player_panel'); h.L.Player.listener.send('destroy'); h.L.Player.opened = () => false;
+  h.tick(15000); assert.deepEqual(panel.log, [], 'closed');
+});

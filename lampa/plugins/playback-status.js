@@ -4,7 +4,7 @@
   if (!L || !$ || window.homelabPlaybackStatus || !L.Player || !L.Player.listener || !L.PlayerVideo || !L.PlayerVideo.listener || !L.PlayerPanel || !L.Noty) return;
   if (![L.Player.playdata, L.Player.listener.follow, L.PlayerVideo.video,
     L.PlayerVideo.listener.follow, L.PlayerPanel.render, L.Noty.show, L.Player.opened].every(function (fn) { return typeof fn === 'function'; })) return;
-  window.homelabPlaybackStatus = {version: 9};
+  window.homelabPlaybackStatus = {version: 10};
   // Buffering mid-play stays invisible for 5 s (Lampa's spinner too), other short blips for 0.7 s; Lampa's own loader covers a fast
   // start; a long start suggests another source.
   var DEBOUNCE = 700, BUFFER_DELAY = 5000, FROZEN = 3000, HUNG = 10000, START_DELAY = 2500, ESCALATE = 20000, STATS_EVERY = 2000, CTRL = 'homelab_playback_card';
@@ -432,5 +432,24 @@
   });
   if (window.HomelabSync && window.HomelabSync.subscribe) window.HomelabSync.subscribe(function () { if (state && scope() !== state.scope) clear(); });
   audioReady(); window.addEventListener('homelab:audio-ready', audioReady);
-  if (L.Player.opened()) { start(L.Player.playdata()); if (state) bind(state); }
+  // Lampa hides the panel after 3 s only while its buttons are not focused: once the remote went
+  // down to them it stays over the picture. Like Plex, hide it after IDLE without a key, a click or
+  // a touch while the video plays; a pause, a menu or our own failure buttons keep it.
+  var IDLE = 10000, lastInput = Date.now(), idleTimer = null;
+  function touched() { lastInput = Date.now(); }
+  function idleCheck() {
+    idleTimer = null;
+    if (!L.Player.opened()) return;
+    idleTimer = setTimeout(idleCheck, 1000);
+    if (Date.now() - lastInput < IDLE || typeof L.PlayerPanel.visibleStatus !== 'function' || typeof L.PlayerPanel.toPlayer !== 'function' || !L.PlayerPanel.visibleStatus()) return;
+    var video = L.PlayerVideo.video(), p = L.PlayerPanel.render();
+    if (controller() !== 'player_panel' || !video || video.paused || state && (state.actionable || state.escalated) || p && p.hasClass && p.hasClass('panel--footer-open')) return;
+    L.PlayerPanel.toPlayer();
+  }
+  if (L.Keypad && L.Keypad.listener && typeof L.Keypad.listener.follow === 'function') L.Keypad.listener.follow('keydown', touched);
+  if (typeof document !== 'undefined' && document && typeof document.addEventListener === 'function') ['mousedown', 'mousemove', 'touchstart', 'wheel'].forEach(function (name) { document.addEventListener(name, touched, true); });
+  function watchIdle() { touched(); clearTimeout(idleTimer); idleTimer = setTimeout(idleCheck, 1000); }
+  L.Player.listener.follow('start', watchIdle);
+  L.Player.listener.follow('destroy', function () { clearTimeout(idleTimer); idleTimer = null; });
+  if (L.Player.opened()) { start(L.Player.playdata()); if (state) bind(state); watchIdle(); }
 })();

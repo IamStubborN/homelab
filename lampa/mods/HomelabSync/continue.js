@@ -675,9 +675,11 @@
     value[name] = rows.map(function (row) { return {episode_number: row.episode_number, name: plain(row.name).slice(0, 200)}; });
     try { L.Storage.set(EPISODES, value, true); } catch (_) {}
   }
-  function ResumeRow() {
-    var self = this, bus = L.Subscribe(), html = window.$('<div class="homelab-resume-row"><div class="homelab-resume-title">Продолжить просмотр</div><div class="homelab-resume-sync"></div></div>');
-    var scroll = new L.Scroll({horizontal: true, step: 300}), last = null, key = '', stamp = '', destroyed = false, cards = [], byCard = {}, order = '', orderList = [], seasons = {}, seasonScope = sync.scope(), empty = null;
+  // One line of tiles: what is being watched ('continue') or episodes released since ('fresh').
+  function ResumeLine(kind, focus) {
+    var fresh = kind === 'fresh', self = this, bus = L.Subscribe(), html = window.$('<div class="homelab-resume-row' + (fresh ? ' homelab-resume-fresh hide' : '') + '"><div class="homelab-resume-title"></div><div class="homelab-resume-sync"></div></div>');
+    html.find('.homelab-resume-title').text(fresh ? 'Новые серии' : 'Продолжить просмотр');
+    var scroll = new L.Scroll({horizontal: true, step: 300}), last = null, stamp = '', destroyed = false, cards = [], byCard = {}, order = '', orderList = [], seasons = {}, seasonScope = sync.scope(), empty = null;
     function clearSeasons() { Object.keys(seasons).forEach(function (name) { clearTimeout(seasons[name].timer); }); seasons = {}; }
     function clearCards() { cards.splice(0).forEach(function (native) { native.destroy(); }); byCard = {}; order = ''; }
     scroll.onScroll = function () { L.Layer.visible(scroll.render(true)); };
@@ -715,17 +717,18 @@
     function draw() {
       if (destroyed) return;
       if (seasonScope !== sync.scope()) { clearSeasons(); clearCards(); seasonScope = sync.scope(); stamp = ''; }
-      var data = list(), next = JSON.stringify({items: data, warning: writeError || readError, ready: loadedOnce, minute: Math.floor(Date.now() / 60000)});
+      var data = list().filter(function (item) { return !!item.fresh === fresh; }), next = JSON.stringify({items: data, warning: writeError || readError, ready: loadedOnce, minute: Math.floor(Date.now() / 60000)});
       if (next === stamp) return; stamp = next;
       var focused = L.Controller.own(self), nextOrder = JSON.stringify(data.map(function (item) { return item.card; })), changedOrder = nextOrder !== order, wanted = {};
-      html.find('.homelab-resume-sync').text(writeError || readError ? 'Продолжение не синхронизировано: показаны последние данные' : '');
+      html.find('.homelab-resume-sync').text(!fresh && (writeError || readError) ? 'Продолжение не синхронизировано: показаны последние данные' : '');
+      html.toggleClass('hide', fresh && !data.length);
       data.forEach(function (item) {
         wanted[item.card] = true;
         if (byCard[item.card]) { byCard[item.card].update(item); return; }
         var alive = true, timer = null, loaded = false, displayed = [];
         var native = L.Maker.make('Card', card(item), function (mask) { return mask.only('Card', 'Icons', 'Release', 'Callback'); });
         native.use({onEnter: function () { resume(item); }, onFocus: function (target) {
-          key = item.card; last = target; scroll.update(last, true); self.emit('active');
+          focus.card = item.card; last = target; scroll.update(last, true); self.emit('active');
         }, onDestroy: function () { alive = false; clearTimeout(timer); }});
         native.create();
         var tile = native.render().addClass('homelab-resume-card');
@@ -814,11 +817,13 @@
       if (empty) empty.text(loadedOnce ? 'Здесь появятся незавершённые просмотры' : 'Загрузка…');
       if (changedOrder) {
         order = nextOrder; orderList = data.map(function (item) { return item.card; }); scroll.clear(); empty = null;
-        if (!cards.length) { empty = window.$('<div class="homelab-resume-empty selector"></div>').text(loadedOnce ? 'Здесь появятся незавершённые просмотры' : 'Загрузка…'); scroll.append(empty); }
+        if (!cards.length && !fresh) { empty = window.$('<div class="homelab-resume-empty selector"></div>').text(loadedOnce ? 'Здесь появятся незавершённые просмотры' : 'Загрузка…'); scroll.append(empty); }
         cards.forEach(function (native) { scroll.append(native.render(true)); });
-        last = byCard[key] ? byCard[key].native.render(true) : cards.length ? cards[0].render(true) : null;
+        last = byCard[focus.card] ? byCard[focus.card].native.render(true) : cards.length ? cards[0].render(true) : null;
       }
       L.Layer.visible(scroll.render(true));
+      // The last new episode left (watched, removed): hand focus back to the line above.
+      if (focused && !cards.length && fresh) { last = null; return self.emit('up'); }
       if (focused && changedOrder) { quiet(); L.Controller.collectionSet(scroll.render(true)); L.Controller.collectionFocus(last || false, scroll.render(true)); }
     }
     // Long press (or remote hold) opens the card's actions. Removal keeps the
@@ -837,13 +842,15 @@
           if (!choice || destroyed) return;
           var index = orderList.indexOf(item.card), neighbour = orderList[index + 1] || orderList[index - 1] || '';
           if (choice.action === 'source') return resume(item, {choose: true});
-          if (choice.action === 'remove') { key = neighbour; dismiss(item.card); return; }
+          if (choice.action === 'remove') { focus.card = neighbour; dismiss(item.card); return; }
           if (choice.action !== 'watched' || !markWatched(item)) return;
-          key = list().some(function (entry) { return entry.card === item.card; }) ? item.card : neighbour;
+          focus.card = list().some(function (entry) { return entry.card === item.card && !!entry.fresh === fresh; }) ? item.card : neighbour;
           publish(); drain();
         }});
     }
-    this.create = function () { rowCount++; scroll.body().addClass('homelab-resume-items mapping--line'); html.append(scroll.render()); listeners.push(draw); draw(); };
+    this.empty = function () { return !cards.length; };
+    this.has = function (cardKey) { return !!byCard[cardKey]; };
+    this.create = function () { scroll.body().addClass('homelab-resume-items mapping--line'); html.append(scroll.render()); listeners.push(draw); draw(); };
     this.render = function (js) { return js ? html[0] : html; };
     // Lampa restarts the card focus bounce whenever focus is set again; only
     // a remote press should bounce, not the reloads while the app starts.
@@ -855,15 +862,38 @@
     }
     this.toggle = function () {
       L.Controller.add('homelab_resume', {link: self, toggle: function () {
+        // Re-toggled by name (a menu closing) after its last tile left: go back up instead.
+        if (fresh && !cards.length) return self.emit('up');
         quiet(); L.Controller.collectionSet(scroll.render(true)); L.Controller.collectionFocus(last || false, scroll.render(true)); self.emit('toggle'); self.emit('active');
       }, right: function () { move(1); },
       left: function () { move(-1); },
       up: function () { self.emit('up'); }, down: function () { self.emit('down'); }, back: function () { self.emit('back'); }});
       L.Controller.toggle('homelab_resume');
     };
-    this.destroy = function () { destroyed = true; rowCount--; listeners = listeners.filter(function (fn) { return fn !== draw; }); clearCards(); clearSeasons(); scroll.destroy(); html.remove(); self.emit('destroy'); };
+    this.destroy = function () { destroyed = true; listeners = listeners.filter(function (fn) { return fn !== draw; }); clearCards(); clearSeasons(); scroll.destroy(); html.remove(); self.emit('destroy'); };
+  }
+  // The home screen row: «Продолжить просмотр», and under it «Новые серии» when there are any.
+  // Both live in one Main row, so an empty second line never takes a step of the remote.
+  function ResumeRow() {
+    var self = this, bus = L.Subscribe(), html = window.$('<div class="homelab-resume-group"></div>');
+    // The focused card is shared, so focus follows a card that moves between the lines.
+    var focus = {card: ''}, watching = new ResumeLine('continue', focus), fresh = new ResumeLine('fresh', focus), destroyed = false;
+    function current() { return fresh.has(focus.card) ? fresh : watching; }
+    function relay(name) { return function () { self.emit.apply(self, [name].concat([].slice.call(arguments))); }; }
+    watching.use({onDown: function () { if (fresh.empty()) self.emit('down'); else fresh.toggle(); }, onUp: relay('up'), onBack: relay('back'), onLeft: relay('left'), onActive: relay('active'), onToggle: relay('toggle')});
+    fresh.use({onUp: function () { if (!destroyed) watching.toggle(); }, onDown: relay('down'), onBack: relay('back'), onLeft: relay('left'), onActive: relay('active'), onToggle: relay('toggle')});
+    this.use = function (module) { Object.keys(module).forEach(function (name) {
+      if (/^on[A-Z]/.test(name)) bus.follow(name.slice(2).toLowerCase(), function (args) { module[name].apply(self, args || []); });
+    }); };
+    this.emit = function (name) { bus.send(name.toLowerCase(), [].slice.call(arguments, 1)); };
+    this.create = function () { rowCount++; watching.create(); fresh.create(); html.append(watching.render()).append(fresh.render()); };
+    this.render = function (js) { return js ? html[0] : html; };
+    this.toggle = function () { current().toggle(); };
+    this.destroy = function () { destroyed = true; rowCount--; watching.destroy(); fresh.destroy(); html.remove(); self.emit('destroy'); };
   }
   window.$('head').append(window.$('<style></style>').text('.homelab-resume-row{padding:1em 0}' +
+    '.homelab-resume-row.hide{display:none}' +
+    '.homelab-resume-fresh{padding-top:0}' +
     '.homelab-resume-items{display:flex;align-items:stretch}' +
     '.homelab-resume-title{white-space:normal;font-size:1.8em;margin:0 .6em .8em}' +
     '.homelab-resume-card{flex-shrink:0}' +

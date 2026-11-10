@@ -102,7 +102,7 @@ test('an online next episode in another season cannot be marked watched with the
 
 test('programmatic refocus of the row does not replay the card bounce; a remote move does', async t => {
   const h = await row(t, [saved, {...saved, card: 'tv_43', title: 'Other', observed: 900}]);
-  const element = h.last('homelab-resume-row');
+  const element = h.all('homelab-resume-row')[0];
   h.tick(1000); h.row.toggle();
   assert.equal(element.hasClass('homelab-resume-quiet'), true, 'startup and reload refocus stay still');
   h.L.Controller.controllers.homelab_resume.right();
@@ -165,4 +165,64 @@ test('the last aired episode from TMDB is kept with the cached metadata', async 
   const h = await row(t, [finished], h => { h.L.Api.sources.tmdb.get = (url, params, ok) => { done = ok; }; });
   done({name: 'Series', seasons: [{season_number: 1, episode_count: 10}], last_episode_to_air: {season_number: 1, episode_number: 3, air_date: '2026-10-08'}}); await flush();
   assert.equal(JSON.stringify(h.storage.get('homelab_continue_cache').metadata.tv_42.aired), JSON.stringify({season: 1, episode: 3, date: '2026-10-08'}));
+});
+
+const lines = h => { const [watching, fresh] = h.all('homelab-resume-row'); return {watching, fresh}; };
+const tiles = line => line.querySelectorAll('.homelab-resume-card').length;
+
+test('new episodes get their own line under the one being watched, which keeps its own order', async t => {
+  const h = await row(t, [finished, {...saved, card: 'tv_43', title: 'Other', observed: 900}], cachedMeta({season: 1, episode: 3, date: '2026-10-08'}));
+  const {watching, fresh} = lines(h);
+  assert.equal(watching.find('.homelab-resume-title').text(), 'Продолжить просмотр');
+  assert.equal(fresh.find('.homelab-resume-title').text(), 'Новые серии');
+  assert.equal(tiles(watching), 1); assert.equal(tiles(fresh), 1);
+  assert.equal(fresh.hasClass('hide'), false);
+});
+
+test('the remote walks down into new episodes and back up', async t => {
+  const h = await row(t, [finished, {...saved, card: 'tv_43', title: 'Other', observed: 900}], cachedMeta({season: 1, episode: 3, date: '2026-10-08'}));
+  const moves = []; h.row.use({onDown: () => moves.push('down'), onUp: () => moves.push('up')});
+  h.row.toggle(); const top = h.L.Controller.enabled().link;
+  h.L.Controller.controllers.homelab_resume.down();
+  assert.notEqual(h.L.Controller.enabled().link, top, 'into the new episodes');
+  h.L.Controller.controllers.homelab_resume.up();
+  assert.equal(h.L.Controller.enabled().link, top, 'back to watching');
+  h.L.Controller.controllers.homelab_resume.up(); assert.deepEqual(moves, ['up'], 'above the row');
+  h.L.Controller.controllers.homelab_resume.down(); h.L.Controller.controllers.homelab_resume.down();
+  assert.deepEqual(moves, ['up', 'down'], 'below the row');
+});
+
+test('without new episodes the second line is hidden and never a stop', async t => {
+  const plain = await row(t, [saved]), seen = []; plain.row.use({onDown: () => seen.push('down')});
+  assert.equal(lines(plain).fresh.hasClass('hide'), true);
+  plain.row.toggle(); plain.L.Controller.controllers.homelab_resume.down();
+  assert.deepEqual(seen, ['down'], 'no empty stop');
+});
+
+test('when the last new episode leaves its line, focus goes back up', async t => {
+  const h = await row(t, [finished, {...saved, card: 'tv_43', title: 'Other', observed: 900}], cachedMeta({season: 1, episode: 3, date: '2026-10-08'}));
+  h.row.toggle(); const top = h.L.Controller.enabled().link;
+  h.L.Controller.controllers.homelab_resume.down();
+  h.window.homelabContinue.dismiss('tv_42'); await flush();
+  assert.equal(lines(h).fresh.hasClass('hide'), true);
+  assert.equal(h.L.Controller.enabled().link, top);
+});
+
+test('coming back up from the row below lands on the new episodes line it was left from', async t => {
+  const h = await row(t, [finished, {...saved, card: 'tv_43', title: 'Other', observed: 900}], cachedMeta({season: 1, episode: 3, date: '2026-10-08'}));
+  h.row.toggle(); const top = h.L.Controller.enabled().link;
+  h.L.Controller.controllers.homelab_resume.down(); const lower = h.L.Controller.enabled().link;
+  h.L.Controller.toggle('items_line');
+  h.row.toggle();
+  assert.equal(h.L.Controller.enabled().link, lower);
+  assert.notEqual(lower, top);
+});
+
+test('an emptied new episodes line toggled again by name hands focus back up', async t => {
+  const h = await row(t, [finished, {...saved, card: 'tv_43', title: 'Other', observed: 900}], cachedMeta({season: 1, episode: 3, date: '2026-10-08'}));
+  h.row.toggle(); const top = h.L.Controller.enabled().link;
+  h.L.Controller.controllers.homelab_resume.down(); h.L.Controller.toggle('select');
+  h.window.homelabContinue.dismiss('tv_42'); await flush();
+  h.L.Controller.toggle('homelab_resume');
+  assert.equal(h.L.Controller.enabled().link, top);
 });

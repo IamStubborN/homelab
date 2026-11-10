@@ -536,9 +536,20 @@
   function matchOf(match) {
     return {index: match.index || 0, count: match.count, text: match.text || '', translate: match.translate || '', voice_name: match.voice_name || ''};
   }
-  function snapshot(state, force) {
+  // A hand start before the video reports anything: its stored position, if it is one to continue from.
+  function again() { return !!(L.Storage.field && L.Storage.field('player_timecode') === 'again'); }
+  function launchPoint(state) {
+    var road = state.data.timeline;
+    // In «start over» mode the stored position is not where playback goes.
+    if (!state.launch || state.last || state.external || !road || again()) return null;
+    return Number.isFinite(road.time) && road.time > 1 && road.percent < 90 && road.duration > 0 && road.duration <= 86400 ? {position: road.time, duration: road.duration} : null;
+  }
+  function snapshot(state, force, atStart) {
     if ((playing !== state && external !== state) || context() !== state.scope || (!state.external && state.data.homelab_resume_at != null && !state.applied)) return;
-    var data = state.data, movie = data.card, measured = measure(state);
+    var data = state.data, movie = data.card;
+    // Until Lampa has moved the video to the stored position it reports the start: keep the stored one.
+    if (!atStart && !state.external && data.timeline && data.timeline.continued === false && !again()) return;
+    var measured = atStart ? launchPoint(state) : measure(state) || launchPoint(state);
     if (!movie || !movie.id || !data.timeline || !measured) return;
     // Ids from other catalogues (Kinopoisk, anime plugins) are not TMDB ids.
     if (['tmdb', 'cub'].indexOf(String(movie.source || 'tmdb')) < 0) return;
@@ -556,7 +567,10 @@
       tracks: L.HomelabGstAudio && L.HomelabGstAudio.preferences ? L.HomelabGstAudio.preferences(data) : data.homelab_track_preferences || {}};
     var stamp = JSON.stringify(next);
     if (stamp !== state.stamp) {
-      state.stamp = stamp; state.last = Object.assign(next, {observed: Math.max(Date.now(), state.last ? state.last.observed + 1 : 0)});
+      // An episode started by hand is the one being watched, even an earlier one than the record
+      // (a playlist that went on overnight): stamp it past every record and native row of the card.
+      var base = state.launch && !state.last ? stampFor(next.card) : Date.now();
+      state.stamp = stamp; state.last = Object.assign(next, {observed: Math.max(base, state.last ? state.last.observed + 1 : 0)});
     }
     if (force || Date.now() - state.saved >= 15000) queue(state);
   }
@@ -620,8 +634,10 @@
     if (resumeIntent) { clearTimeout(resumeIntent.timer); resumeIntent = null; }
     external = null;
     if (playing) queue(playing);
-    playing = {data: data, scope: context(), url: sync.url('/homelab-sync/resume'), saved: -Infinity};
+    // Playlist steps (the next episode, also automatic ones) carry continue_play; a start by hand does not.
+    playing = {data: data, scope: context(), url: sync.url('/homelab-sync/resume'), saved: -Infinity, launch: !!data && !data.continue_play && data.homelab_resume_at == null};
     bindResume(playing);
+    if (playing.launch) snapshot(playing, true, true);
   });
   L.PlayerVideo.listener.follow('loadeddata', function () { bindResume(playing); });
   L.PlayerVideo.listener.follow('timeupdate', function () { if (playing) snapshot(playing, false); });

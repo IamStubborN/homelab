@@ -133,7 +133,7 @@ test('a server-clamped stamp is adopted', async t => {
 
 test('a write the server rejected as older does not shadow the newer server record', async t => {
   const h = await loaded(t, [{...saved, episode: 5, observed: Date.now() + 100000}]);
-  h.start({card: {id: 42, name: 'Series'}, season: 1, episode: 2, timeline: {hash: '123'}, homelab_torrent_hash: hash, homelab_file_index: 1});
+  h.start({card: {id: 42, name: 'Series'}, season: 1, episode: 2, timeline: {hash: '123'}, homelab_torrent_hash: hash, homelab_file_index: 1, continue_play: true});
   h.video().currentTime = 50; h.videoEvent('timeupdate');
   h.calls.at(-1).finish({success: true, stale: true}); await flush();
   assert.equal(h.window.homelabContinue.list()[0].episode, 5);
@@ -210,4 +210,36 @@ test('a record whose zero position the server omitted still shadows older native
   const h = await loaded(t, [rest]);
   h.syncRows([native({season: 1, episode: 1}, {hash: '9', watched_at: 500, position: 40})]);
   assert.equal(h.window.homelabContinue.list().length, 0);
+});
+
+test('an episode started by hand wins over a later one the playlist reached, even before the video reports', async t => {
+  const h = await loaded(t, [{...saved, episode: 7, position: 600, observed: Date.now() + 100000}]);
+  h.syncRows([{extra: JSON.stringify({card: 'tv_42', season: 1, episode: 7}), hash: '9', position: 600, duration: 1400, watched_at: Date.now() + 200000}]);
+  h.video().duration = NaN;
+  h.start({card: {id: 42, name: 'Series'}, season: 1, episode: 3, timeline: {hash: '123', time: 300, duration: 1400, percent: 21, continued: false}, homelab_torrent_hash: hash, homelab_file_index: 1});
+  const item = h.window.homelabContinue.list()[0];
+  assert.equal(item.episode, 3); assert.equal(item.position, 300);
+  assert.ok(item.observed > Date.now() + 200000, 'past the record and the native row');
+  h.L.Player.listener.send('destroy'); await flush();
+  assert.equal(h.window.homelabContinue.list()[0].episode, 3, 'leaving at once keeps it');
+});
+
+test('a hand start of a finished or unstarted episode waits for the video, and playlist steps keep the old rule', async t => {
+  const h = await loaded(t, [{...saved, episode: 7, position: 60, duration: 1400, observed: Date.now() + 100000}]);
+  h.video().duration = NaN;
+  h.start({card: {id: 42, name: 'Series'}, season: 1, episode: 3, timeline: {hash: '123', time: 1300, duration: 1400, percent: 93}, homelab_torrent_hash: hash, homelab_file_index: 1});
+  assert.equal(h.window.homelabContinue.list()[0].episode, 7, 'a watched episode starts over: nothing to continue from yet');
+  h.L.Player.listener.send('destroy');
+  h.start({card: {id: 42, name: 'Series'}, season: 1, episode: 4, timeline: {hash: '124', time: 300, duration: 1400, percent: 21}, homelab_torrent_hash: hash, homelab_file_index: 1, continue_play: true});
+  assert.equal(h.window.homelabContinue.list()[0].episode, 7, 'a playlist step is not a hand start');
+});
+
+test('in start-over mode a hand start is recorded from the video, not from the stored position', async t => {
+  const h = await loaded(t, [{...saved, episode: 7, position: 60, duration: 1400, observed: Date.now() + 100000}]);
+  h.storage.set('player_timecode', 'again'); h.video().duration = NaN;
+  h.start({card: {id: 42, name: 'Series'}, season: 1, episode: 3, timeline: {hash: '123', time: 300, duration: 1400, percent: 21, continued: false}, homelab_torrent_hash: hash, homelab_file_index: 1});
+  assert.equal(h.window.homelabContinue.list()[0].episode, 7);
+  h.video().duration = 1400; h.video().currentTime = 20; h.videoEvent('timeupdate');
+  const item = h.window.homelabContinue.list()[0];
+  assert.equal(item.episode, 3); assert.equal(item.position, 20);
 });

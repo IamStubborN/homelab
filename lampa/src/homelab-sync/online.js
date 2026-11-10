@@ -1,0 +1,535 @@
+(function install() {
+  'use strict';
+  if (!window.appready) {
+    if (window.Lampa && Lampa.Listener) Lampa.Listener.follow('app', function (event) { if (event.type === 'ready') install(); });
+    return;
+  }
+  var L = window.Lampa, sync = window.HomelabSync;
+  if (window.HomelabOnlineResume || !L || !sync || !L.Component || !L.Component.get || !L.Component.add || !L.Activity || !L.Activity.push || !L.Activity.active) return;
+  var pending = null, sequence = 0, attempts = 0, specialWorks = typeof WeakMap === 'function' ? new WeakMap() : null, specialTimer;
+  var specialSupport = specialWorks && L.PlayerPlaylist && L.PlayerPlaylist.listener && L.Timeline && L.Utils &&
+    [L.PlayerPlaylist.listener.follow, L.PlayerPlaylist.get, L.Player.playlist, L.Player.playdata, L.Player.opened, L.Player.close, L.Timeline.view, L.Timeline.link, L.Timeline.render, L.Utils.hash].every(function (fn) { return typeof fn === 'function'; });
+  function special(file) { return file && file.season === 0 && Number.isInteger(file.episode) && file.episode > 0; }
+  function refreshSpecials(work) { var refresh = specialWorks && work && specialWorks.get(work); if (refresh) refresh(); }
+  function valid(source) {
+    var season = source && source.season_index === undefined ? 0 : source && source.season_index;
+    return source && /^[a-z0-9_.-]{1,80}$/i.test(source.provider) && typeof source.voice === 'string' && source.voice.length <= 200 && Number.isInteger(season) && season >= 0 && season <= 999 &&
+      (source.text === undefined || source.text === null || typeof source.text === 'string' && source.text.length <= 200) &&
+      (source.match === undefined || source.match === null || validMatch(source.match));
+  }
+  function short(value) { return value === undefined || value === null || typeof value === 'string' && value.length <= 200; }
+  // A movie row position from the picker (url only for this session) or a capture.
+  function validMatch(match) {
+    // The server omits a zero index on read.
+    var index = match && match.index === undefined ? 0 : match && match.index;
+    return typeof match === 'object' && Number.isInteger(index) && index >= 0 && index < 10000 &&
+      (match.count === undefined || Number.isInteger(match.count) && match.count > index && match.count <= 10000) &&
+      (match.url === undefined || typeof match.url === 'string' && match.url.length <= 4000) &&
+      short(match.text) && short(match.translate) && short(match.voice_name);
+  }
+  function clean(value) { return String(value || '').trim(); }
+  // Native movie rows show the title for quality-only or default labels.
+  function movieText(file, movie) {
+    var text = clean(file && file.text);
+    return /\d+p/i.test(text) || text === 'По умолчанию' ? clean(movie && (movie.title || movie.name)) : text;
+  }
+  // Movie rows of some providers carry a release tag ("WEB-DL", "2160p") in
+  // voice_name and the dub in translate/text, so both identify a movie row.
+  function rowText(file) { return String(file && (file.translate || file.text) || '').slice(0, 200); }
+  function rowMatches(item, file, provider) {
+    var source = item.online;
+    if (provider !== source.provider || file.voice_name !== source.voice) return false;
+    return item.card.indexOf('movie_') !== 0 || !source.text || rowText(file) === source.text;
+  }
+  function cancel() { if (pending) { pending.cancelled = true; clearTimeout(pending.timer); pending = null; } }
+  // @include shared/quality.js
+  // Any key, click or touch in the opened component hands control to the user.
+  function interrupted() {
+    var intent = pending;
+    if (!intent || intent.opening || intent.finished || Date.now() - intent.created < 500 || L.Activity.active() !== intent.activity) return;
+    cancel();
+  }
+  if (L.Keypad && L.Keypad.listener && typeof L.Keypad.listener.follow === 'function') L.Keypad.listener.follow('keydown', interrupted);
+  if (typeof document !== 'undefined' && document && typeof document.addEventListener === 'function') ['mousedown', 'touchstart'].forEach(function (name) { document.addEventListener(name, interrupted, true); });
+  function live(intent, object) { return !intent.cancelled && !intent.finished && sync.scope() === intent.scope && L.Activity.active() === object && !L.Player.opened(); }
+  function fail(intent, reason) {
+    if (pending !== intent || !live(intent, intent.activity)) return;
+    intent.finished = true; clearTimeout(intent.timer);
+    if (typeof intent.failed === 'function') intent.failed(reason);
+  }
+  function sameFile(item, file) {
+    return item.card.indexOf('movie_') === 0 || Number.isInteger(file.season) && file.season >= 0 && Number.isInteger(file.episode) && file.episode > 0 && file.season === item.season && file.episode === item.episode;
+  }
+  function wrap() {
+    var Original = L.Component.get('lampac');
+    if (typeof Original !== 'function') return false;
+    if (Original.homelabOnlineResume) return true;
+    function Component(object) {
+      var comp = new Original(object), provider = object.balanser || '', intent = pending && object.homelab_online_intent === pending.id ? pending : null;
+      if (![comp.toPlayElement, comp.startSource, comp.getChoice, comp.replaceChoice, comp.draw, comp.getFileUrl, comp.destroy].every(function (fn) { return typeof fn === 'function'; })) return comp;
+      var source = comp.startSource, play = comp.toPlayElement, draw = comp.draw, resolve = comp.getFileUrl, destroy = comp.destroy;
+      // Lampac names the provider it could not reach; when its server itself did not answer (a
+      // restart, a lost network) no provider was chosen yet and the text read «Поиск на (undefined)».
+      if (typeof comp.noConnectToServer === 'function' && typeof comp.render === 'function') {
+        var unreachable = comp.noConnectToServer;
+        comp.noConnectToServer = function (error) {
+          var result = unreachable.apply(comp, arguments);
+          try {
+            var line = comp.render().find('.online-empty__time');
+            if (!(error && error.accsdb) && /\((?:undefined)?\)/.test(String(line.text() || ''))) line.text('Сервер Lampac не ответил. Вернитесь назад и откройте источник снова через минуту');
+          } catch (_) {}
+          return result;
+        };
+      }
+      var specials = null, disposed = false, requestId = 0, drawn = null, rows = [], lastPlayed = null;
+      // Lampac's Back lands on the row last focused (the one started), even after the player went
+      // on through the playlist: point it at the episode that played last instead.
+      function played(work) {
+        var movie = object.movie;
+        if (!disposed && work && movie && movie.name && work.card === movie && Number.isInteger(work.episode) && work.episode > 0) { lastPlayed = work; place = work.season + ':' + work.episode; }
+      }
+      function returned() {
+        var work = lastPlayed; lastPlayed = null;
+        if (disposed || !work || L.Activity.active() !== object) return;
+        var voice = work.voice_name || work.homelab_online && work.homelab_online.voice || '';
+        var row = rows.filter(function (entry) {
+          var file = entry.file;
+          return file.season === work.season && file.episode === work.episode && (!voice || !file.voice_name || file.voice_name === voice);
+        })[0], html = row && row.html;
+        // Lampac remembers a row as «last» on hover:focus; the player hands focus back right after destroy.
+        if (html && typeof html.trigger === 'function') html.trigger('hover:focus');
+      }
+      L.Player.listener.follow('start', played);
+      L.Player.listener.follow('destroy', returned);
+      // Lampac scrolls the list to the episode last started on this device (its local choice).
+      // Household progress knows the newest one from any device: open the list there, and move a
+      // list left open (a TV in standby) when newer progress arrives.
+      // seen: newest progress time handled; place: the episode the list was last put on (opened,
+      // played or moved to). A list moves only to a different episode, so saves from a TV that is
+      // still playing the same episode, or this TV's own progress after Back, never pull focus again.
+      var seen = 0, place = '', seenScope = sync.scope(), unsubscribe = typeof sync.subscribe === 'function' ? sync.subscribe(refreshed) : null;
+      function newest(regular) {
+        var movie = object.movie, key = movie && movie.name && Number.isInteger(movie.id) ? 'tv_' + movie.id : '', best = null;
+        if (!key || typeof sync.rows !== 'function') return null;
+        sync.rows().forEach(function (row) {
+          var x = sync.extra(row);
+          if (row.deleted || x.card !== key || !Number.isInteger(x.season) || !(x.episode > 0) || regular && x.season < 1) return;
+          if (!best || row.watched_at > best.at) best = {season: x.season, episode: x.episode, at: row.watched_at || 0};
+        });
+        return best;
+      }
+      function openAtNewest() {
+        var last = newest(); if (!last) return;
+        seen = Math.max(seen, last.at); place = last.season + ':' + last.episode;
+        var choice = comp.getChoice(provider) || {}, view = Object.assign({}, choice.episodes_view || {});
+        if (view[last.season] === last.episode) return;
+        view[last.season] = last.episode;
+        comp.replaceChoice({episodes_view: view}, provider);
+      }
+      // Lampac picks the season by its position in the provider's season list, stored per device.
+      // Before it reads that choice, point it at the household's newest season. A Continue launch
+      // brings its own season, and a season picked in the filter loads its episodes directly.
+      // Lampac's own «s» attribute first, then the provider's season id, the title, the url.
+      function seasonOf(item) {
+        if (Number.isInteger(item.season)) return item.season;
+        if (Number.isInteger(item.id) && item.id >= 0 && item.id < 1000) return item.id;
+        var title = String(item.name || item.text || ''), match = /^\s*(\d+)\s*сезон/i.exec(title) || /(?:сезон|season)\s*(\d+)/i.exec(title) || /[?&]s=(\d+)(?:&|$)/.exec(String(item.url || ''));
+        return match ? +match[1] : null;
+      }
+      // Once per opened list: a later season list (a voice switch, a replay) keeps a season picked here.
+      var seasonPlaced = false;
+      function openSeason(str) {
+        if (seasonPlaced || intent && !intent.finished && !intent.cancelled || typeof comp.parseJsonDate !== 'function') return;
+        var items = comp.parseJsonDate(str, '.videos__item');
+        if (!Array.isArray(items) || items.length < 2 || items.some(function (item) { return !item || item.method !== 'link' || item.similar; })) return;
+        seasonPlaced = true;
+        var seasons = items.map(seasonOf), last = newest();
+        // A special the provider does not list: go by the newest regular episode.
+        if (last && seasons.indexOf(last.season) < 0 && last.season === 0) last = newest(true);
+        var index = last ? seasons.indexOf(last.season) : -1;
+        if (index < 0 || seasons.lastIndexOf(last.season) !== index) return;
+        var choice = comp.getChoice(provider) || {};
+        if (choice.season !== index) comp.replaceChoice({season: index}, provider);
+      }
+      if (typeof comp.parse === 'function') {
+        var parse = comp.parse;
+        comp.parse = function (str) {
+          if (!disposed) try { openSeason(str); } catch (_) {}
+          return parse.apply(this, arguments);
+        };
+      }
+      function refreshed() {
+        if (disposed || L.Activity.active() !== object || L.Player.opened()) return;
+        if (sync.scope() !== seenScope) { seenScope = sync.scope(); seen = 0; place = ''; }
+        // Leave the list alone while a menu or filter is over it; the next pull retries.
+        if (!L.Controller.enabled || L.Controller.enabled().name !== 'content') return;
+        var last = newest(); if (!last || last.at <= seen) return;
+        seen = last.at;
+        var key = last.season + ':' + last.episode; if (key === place) return;
+        var row = rows.filter(function (entry) { return +entry.file.season === last.season && +entry.file.episode === last.episode; })[0], html = row && row.html;
+        if (!html || typeof html.trigger !== 'function') return;
+        place = key;
+        // collectionFocus moves the navigator and itself sends hover:focus (Lampac then records «last»).
+        if (typeof L.Controller.collectionFocus !== 'function') return html.trigger('hover:focus');
+        var root = typeof html.closest === 'function' ? html.closest('.scroll') : null;
+        L.Controller.collectionFocus(html[0] || html, root && root[0] || html[0] || html);
+      }
+      function owns(batch) { return !disposed && specials === batch && sync.scope() === batch.scope && L.Activity.active() === object && provider === batch.provider; }
+      function specialRoad(file) {
+        var movie = object.movie, hash = L.Utils.hash([0, '', file.episode, movie.original_title || movie.original_name].join(''));
+        return file.timeline && String(file.timeline.hash) === String(hash) ? file.timeline : L.Timeline.view(hash, L.Timeline.link(movie, 0, file.episode));
+      }
+      function specialViewed(file, html, data, batch) {
+        if (!L.Template || typeof L.Template.get !== 'function' || typeof L.Storage.cache !== 'function' || !html || typeof html.find !== 'function' || !data || typeof file.mark !== 'function' || typeof file.voice_name !== 'string') return;
+        var legacy = data.hash_behold;
+        if (typeof legacy !== 'number' && typeof legacy !== 'string') return;
+        var records = batch.marks || (batch.marks = new WeakMap()), record = records.get(file);
+        if (record && file.mark === record.mark) { record.html = html; return record.paint(); }
+        var original = file.mark, movie = object.movie, hash = L.Utils.hash([0, '', file.episode, movie.original_title || movie.original_name, file.voice_name].join(''));
+        record = {html: html};
+        function viewed() { var values = L.Storage.get('online_view', []); return Array.isArray(values) ? values : []; }
+        record.paint = function () {
+          record.html.find('.online-prestige__viewed').remove();
+          if (viewed().indexOf(hash) !== -1) record.html.find('.online-prestige__img').append('<div class="online-prestige__viewed">' + L.Template.get('icon_viewed', {}, true) + '</div>');
+        };
+        file.mark = record.mark = function () {
+          if (!owns(batch)) return;
+          var existed = viewed().indexOf(legacy) !== -1, store = L.Storage.set;
+          L.Storage.set = function (name) {
+            var args = Array.prototype.slice.call(arguments);
+            if (name === 'online_view') args[2] = true;
+            return store.apply(this, args);
+          };
+          try { original.apply(this, arguments); } finally { L.Storage.set = store; }
+          if (!owns(batch)) return;
+          var values = viewed().filter(function (value) { return existed || value !== legacy; });
+          if (values.indexOf(hash) === -1) values.push(hash);
+          L.Storage.set('online_view', values.slice(-5000));
+          if (!existed && typeof L.Storage.remove === 'function') L.Storage.remove('online_view', legacy);
+          record.paint();
+        };
+        file.unmark = function () {
+          if (!owns(batch)) return;
+          L.Storage.set('online_view', viewed().filter(function (value) { return value !== hash; }));
+          if (typeof L.Storage.remove === 'function') L.Storage.remove('online_view', hash);
+          record.paint();
+        };
+        records.set(file, record); record.paint();
+      }
+      function lazyPeer(file, batch) {
+        var cell = comp.toPlayElement(file), marked = cell.callback;
+        cell.callback = function () {
+          if (!owns(batch) || L.Player.playdata() !== cell) return;
+          if (typeof marked === 'function') marked();
+          if (cell.subtitles_call && typeof comp.loadSubtitles === 'function') comp.loadSubtitles(cell.subtitles_call);
+        };
+        cell.url = function (done) {
+          var token = ++requestId, previous = L.Player.playdata();
+          function current() { return token === requestId && owns(batch) && L.Player.opened() && L.Player.playdata() === previous && L.PlayerPlaylist.get() === batch.playlist; }
+          function unavailable() {
+            if (!current()) return;
+            var movie = object.movie, identity = cell.homelab_online;
+            L.Player.close();
+            setTimeout(function () {
+              if (token !== requestId || !owns(batch) || L.Player.opened()) return;
+              var picker = window.HomelabSources, item = {card: 'tv_' + movie.id, season: 0, episode: file.episode, position: 0, duration: 0, online: identity};
+              if (picker && typeof picker.resume === 'function' && picker.resume(item, movie)) return;
+              L.Noty.show('Серия недоступна. Выберите источник');
+              L.Activity.push({component: 'lampac', movie: movie, title: 'Онлайн', search: movie.title || movie.name, search_one: movie.title || movie.name, search_two: movie.original_title || movie.original_name, page: 1, lampac_custom_select: identity.provider});
+            }, 0);
+          }
+          try {
+            resolve.call(comp, file, function (stream, metadata) {
+              if (!current()) return;
+              if (!stream || typeof stream.url !== 'string' || !stream.url) return unavailable();
+              metadata = metadata || {};
+              cell.url = stream.url; cell.headers = metadata.headers || stream.headers;
+              cell.quality = metadata.quality || file.qualitys;
+              cell.segments = metadata.segments || file.segments; cell.subtitles = stream.subtitles || file.subtitles;
+              cell.subtitles_call = metadata.subtitles_call || stream.subtitles_call;
+              cell.hls_manifest_timeout = metadata.hls_manifest_timeout || stream.hls_manifest_timeout;
+              if (stream.vast && stream.vast.url) ['url', 'msg', 'region', 'platform', 'screen'].forEach(function (name) { cell['vast_' + name] = stream.vast[name]; });
+              cell.isonline = true;
+              if (typeof comp.orUrlReserve === 'function') comp.orUrlReserve(cell);
+              if (typeof comp.setDefaultQuality === 'function') comp.setDefaultQuality(cell);
+              done();
+            }, true);
+          } catch (_) { unavailable(); }
+        };
+        return cell;
+      }
+      function rememberSpecial(work, file, batch) {
+        specialWorks.set(work, function () {
+          if (!owns(batch) || !L.Player.opened() || L.Player.playdata() !== work) return;
+          clearTimeout(specialTimer);
+          specialTimer = setTimeout(function () {
+            if (!owns(batch) || !L.Player.opened() || L.Player.playdata() !== work) return;
+            var shown = L.PlayerPlaylist.get();
+            if (!Array.isArray(shown) || shown.length !== 1 || shown[0] !== work) return;
+            if (!batch.playlist) {
+              var files = batch.files.filter(function (entry) { return entry.voice_name === work.homelab_online.voice; }).slice().sort(function (a, b) { return a.episode - b.episode; });
+              if (files.length < 2) return;
+              batch.files = files;
+              batch.playlist = files.map(function (entry) { return entry === file ? work : lazyPeer(entry, batch); });
+            } else batch.playlist[batch.files.indexOf(file)] = work;
+            L.Player.playlist(batch.playlist);
+          }, 0);
+        });
+      }
+      comp.startSource = function () {
+        return Promise.resolve(source.apply(comp, arguments)).then(function (result) { provider = L.Storage.get('active_balanser', ''); return result; });
+      };
+      comp.toPlayElement = function (file) {
+        var work = play.apply(comp, arguments), movie = object.movie, choice = comp.getChoice(provider);
+        var identity = {provider: provider, voice: String(file.voice_name || choice.voice_name || ''), season_index: choice.season || 0};
+        if (movie && !movie.name && rowText(file)) identity.text = rowText(file);
+        // Record the row position for a later resume (never its resolver url).
+        var position = movie && !movie.name && drawn ? drawn.indexOf(file) : -1;
+        if (position >= 0) identity.match = {index: position, count: drawn.length, text: movieText(file, movie).slice(0, 200), translate: clean(file.translate).slice(0, 200), voice_name: clean(file.voice_name).slice(0, 200)};
+        if (movie && Number.isInteger(movie.id) && ['tmdb', 'cub'].indexOf(movie.source || 'tmdb') >= 0 && valid(identity)) {
+          work.card = movie; work.homelab_online = identity;
+          // The quality the provider page names for this row: the quality log keys rows by it.
+          work.homelab_claimed = listedQualities(file)[0] || 0;
+          if (specialSupport && movie.name && special(file) && specials && specials.files.indexOf(file) >= 0) {
+            work.timeline = specialRoad(file); rememberSpecial(work, file, specials);
+          }
+          if (intent && Number.isFinite(intent.item.position) && !intent.positionApplied && sameFile(intent.item, file) && intent.chosen === file &&
+            (intent.opening && live(intent, object) || intent.armed && sync.scope() === intent.scope && L.Activity.active() === object)) {
+            intent.positionApplied = true;
+            work.homelab_resume_at = intent.item.position;
+            if (intent.fromDuration > 0) work.homelab_resume_from_duration = intent.fromDuration;
+            if (work.timeline) { work.timeline.percent = 0; work.timeline.time = 0; }
+          }
+        }
+        // A resolver row keeps its source so the next episode can be fetched ahead (see prefetch below).
+        if (movie && movie.name && file && file.method === 'call' && typeof file.url === 'string') hide(work, 'homelab_next', {file: file, comp: comp});
+        // Native rows show only the TMDB episode name; the player and its
+        // playlist also need the number.
+        if (movie && movie.name && Number.isInteger(file.episode) && file.episode > 0 && typeof work.title !== 'function') {
+          var label = (file.season === 0 ? 'Спецвыпуск ' : 'Серия ') + file.episode, text = String(work.title || '').trim();
+          if (!new RegExp('(^|\\D)' + file.episode + '(\\D|$)').test(text)) work.title = text ? label + ' · ' + text : label;
+        }
+        return work;
+      };
+      comp.getFileUrl = function (file, callback) {
+        requestId++;
+        var args = Array.prototype.slice.call(arguments), guarded = intent && intent.opening && !intent.finished;
+        if (guarded) args[1] = function () { if (live(intent, object)) callback.apply(this, arguments); };
+        return resolve.apply(comp, args);
+      };
+      if (typeof comp.setDefaultQuality === 'function') {
+        var defaultQuality = comp.setDefaultQuality;
+        comp.setDefaultQuality = function (work) {
+          defaultQuality.apply(comp, arguments);
+          if (intent && intent.quality && work.quality) Object.keys(work.quality).some(function (key) {
+            if (qualityHeight(key) !== intent.quality) return false;
+            work.url = work.quality[key];
+            // Native Player.play applies the global default again for multi-quality maps.
+            var chosen = {}; chosen[key] = work.quality[key]; work.quality = chosen; return true;
+          });
+        };
+      }
+      comp.draw = function (items, params) {
+        requestId++; drawn = Array.isArray(items) ? items : null; rows = [];
+        try { openAtNewest(); } catch (_) {}
+        params = Object.assign({}, params || {});
+        var shown = params.onRender;
+        params.onRender = function (file, html) {
+          if (file && html) rows.push({file: file, html: html});
+          var result = shown ? shown.apply(this, arguments) : undefined;
+          // Rows whose real quality is known show it instead of the source's claim.
+          if (file && html && window.HomelabQuality) try { window.HomelabQuality.decorate(object.movie, provider, comp.getChoice(provider), file, html); } catch (_) {}
+          return result;
+        };
+        var args = Array.prototype.slice.call(arguments); args[1] = params;
+        var batch = specials = specialSupport && object.movie.name && items.some(special) ? {files: items.filter(special), scope: sync.scope(), provider: provider, playlist: null} : null;
+        if (!batch && (!intent || intent.finished || intent.cancelled)) return draw.apply(comp, args);
+        params = Object.assign({}, params || {});
+        var rendered = params.onRender, round = null, entered = params.onEnter;
+        // A Continue landing keeps the saved point only for the focused row:
+        // Enter on another row builds a playlist that also holds that row.
+        if (typeof entered === 'function') params.onEnter = function (file) {
+          if (intent && intent.armed && file !== intent.chosen) intent.armed = false;
+          return entered.apply(this, arguments);
+        };
+        // Native rendering is one synchronous loop per draw; decide after it,
+        // so a saved voice that is not the first row (movies) still matches.
+        params.onRender = function (file, html, data) {
+          if (batch && owns(batch) && special(file)) {
+            file.timeline = specialRoad(file);
+            if (html && typeof html.find === 'function') html.find('.online-prestige__timeline').empty().append(L.Timeline.render(file.timeline));
+            specialViewed(file, html, data, batch);
+          }
+          if (rendered) rendered.apply(this, arguments);
+          if (!intent || intent.finished || intent.cancelled || intent.opening) return;
+          if (!round) {
+            var current = round = {match: null, matches: 0, mismatch: false, known: false, rows: []};
+            setTimeout(function () { if (round === current) round = null; decide(current); }, 0);
+          }
+          if (Number.isInteger(file.season) && file.season >= 0 && Number.isInteger(file.episode) && file.episode > 0) round.known = true;
+          round.rows.push({file: file, html: html, data: data});
+          if (!sameFile(intent.item, file)) return;
+          if (rowMatches(intent.item, file, provider)) { round.matches++; if (!round.match) round.match = {file: file, html: html, data: data}; }
+          else round.mismatch = true;
+        };
+        // Movie rows: exact url (this session), else the same position on an
+        // identical page, each confirmed by translation/text.
+        function confirmed(file, match) {
+          if (clean(match.voice_name) && clean(file.voice_name) && clean(file.voice_name) !== clean(match.voice_name)) return false;
+          if (clean(match.translate) && clean(file.translate)) return clean(file.translate) === clean(match.translate);
+          if (clean(match.text)) return movieText(file, object.movie) === clean(match.text);
+          return true;
+        }
+        function movieRow(result, match) {
+          if (provider !== intent.item.online.provider) return {reason: 'changed'};
+          if (match.url) {
+            var byUrl = result.rows.filter(function (row) { return row.file.url === match.url; });
+            if (byUrl.length > 1) return {reason: 'ambiguous'};
+            if (byUrl.length === 1) return confirmed(byUrl[0].file, match) ? {row: byUrl[0]} : {reason: 'changed'};
+          }
+          var at = result.rows.find(function (row) { return items.indexOf(row.file) === (match.index || 0); });
+          if (at && (match.count === undefined || match.count === items.length) && confirmed(at.file, match)) return {row: at};
+          var similar = result.rows.filter(function (row) { return (clean(match.translate) || clean(match.text)) && confirmed(row.file, match); });
+          if (similar.length > 1) return {reason: 'ambiguous'};
+          return similar.length ? {row: similar[0]} : {reason: 'changed'};
+        }
+        function decide(result) {
+          if (!intent || !live(intent, object) || intent.opening) return;
+          var match = intent.item.card.indexOf('movie_') === 0 && intent.item.online.match;
+          if (match) {
+            var found = movieRow(result, match);
+            if (!found.row) return fail(intent, found.reason);
+            result = {match: found.row, matches: 1};
+          }
+          if (!result.match) {
+            if (result.mismatch) fail(intent, 'changed');
+            else if (result.known && intent.item.card.indexOf('tv_') === 0) fail(intent, 'missing');
+            return;
+          }
+          // Several equal movie rows cannot be told apart: never guess.
+          if (result.matches > 1 && intent.item.card.indexOf('movie_') === 0) return fail(intent, 'ambiguous');
+          // Continue lands on the saved voice and episode; the user starts it.
+          if (intent.focus) {
+            intent.finished = true; intent.armed = true; intent.chosen = result.match.file; clearTimeout(intent.timer);
+            var row = result.match.html, target = row && row[0] || row, root = row && typeof row.closest === 'function' ? row.closest('.scroll') : null;
+            if (target && typeof L.Controller.collectionFocus === 'function' && (!L.Controller.enabled || L.Controller.enabled().name === 'content')) L.Controller.collectionFocus(target, root && root[0] || target);
+            return;
+          }
+          if (typeof params.onEnter !== 'function') return;
+          intent.opening = true; intent.chosen = result.match.file;
+          params.onEnter(result.match.file, result.match.html, result.match.data);
+        }
+        return draw.call(comp, items, params);
+      };
+      comp.destroy = function () {
+        disposed = true; requestId++; rows = []; lastPlayed = null;
+        if (typeof unsubscribe === 'function') unsubscribe();
+        if (typeof L.Player.listener.remove === 'function') { L.Player.listener.remove('start', played); L.Player.listener.remove('destroy', returned); }
+        if (intent && !intent.finished) { intent.cancelled = true; clearTimeout(intent.timer); }
+        return destroy.apply(comp, arguments);
+      };
+      if (intent) {
+        // Native choices are movie/provider scoped; seed only the requested source.
+        // The voice name selects the matching voice button; providers without
+        // buttons reset it before display(), and movie rows are still
+        // confirmed by translation/text/match.
+        comp.replaceChoice({season: intent.item.online.season_index, voice_url: '', voice_name: intent.item.online.voice}, intent.item.online.provider);
+      }
+      return comp;
+    }
+    Component.homelabOnlineResume = true;
+    L.Component.add('lampac', Component);
+    return true;
+  }
+  function resume(item, movie, failed, options) {
+    cancel();
+    if (!valid(item.online) || !wrap()) return false;
+    // Explorer supplies a "film not found" title when a TV card has only name.
+    movie = Object.assign({}, movie);
+    if (movie.name) movie.title = movie.name;
+    item = Object.assign({}, item, {online: Object.assign({}, item.online, {season_index: item.online.season_index === undefined ? 0 : item.online.season_index})});
+    var intent = pending = {id: ++sequence, item: item, scope: sync.scope(), cancelled: false, failed: failed, quality: options && options.quality, fromDuration: options && options.fromDuration, focus: !!(options && options.focus), created: Date.now()};
+    intent.timer = setTimeout(function () { fail(intent, 'timeout'); }, 60000);
+    var activity = intent.activity = {component: 'lampac', movie: movie, title: 'Онлайн', url: '', search: movie.title || movie.name,
+      search_one: movie.title || movie.name, search_two: movie.original_title || movie.original_name, page: 1,
+      lampac_custom_select: item.online.provider, homelab_online_intent: intent.id};
+    L.Activity.push(activity);
+    return true;
+  }
+  function select(row, movie, selection, quality, recovery) {
+    if (recovery && recovery.scope !== sync.scope()) return false;
+    var item = {card: (movie.name ? 'tv_' : 'movie_') + movie.id, season: selection.season, episode: selection.episode, position: recovery ? recovery.position : null,
+      online: {provider: row.provider, voice: row.identityVoice, season_index: row.seasonIndex}};
+    if (!movie.name && row.match && validMatch(row.match)) item.online.match = row.match;
+    return resume(item, movie, function (reason) { L.Noty.show(reason === 'changed' ? 'Вариант изменился. Выберите озвучку в источнике' : reason === 'ambiguous' ? 'Подходит несколько вариантов. Выберите нужный в источнике' : 'Источник не ответил. Выберите другой вариант'); }, {quality: quality, fromDuration: recovery && recovery.duration});
+  }
+  function hide(target, name, value) {
+    try { Object.defineProperty(target, name, {value: value, writable: true, configurable: true, enumerable: false}); } catch (_) { target[name] = value; }
+  }
+  // Next episode without a pause: Lampac resolves a "call" episode only when it is chosen, behind a
+  // loading screen. In the last minutes of the current episode its stream is fetched quietly the
+  // same way, so Next or the automatic switch starts at once. Lampac's own resolver is not used
+  // ahead of time: it shows a loading overlay and marks the episode watched before it is played.
+  var PREFETCH_BEFORE = 150, PREFETCH_TTL = 10 * 60000;
+  function lampacUrl(raw) {
+    var auth = new URL(sync.url('/lite/events')), url = new URL(raw, auth.origin);
+    if (url.origin !== auth.origin || url.pathname.indexOf('/lite/') !== 0) return '';
+    ['uid', 'token', 'account_email', 'profile_id'].forEach(function (key) { if (auth.searchParams.has(key) && !url.searchParams.has(key)) url.searchParams.set(key, auth.searchParams.get(key)); });
+    var uid = L.Storage.get('lampac_unic_id', ''), nws = L.Storage.get('lampac_nws_id', ''), email = L.Storage.get('account_email', '');
+    if (uid && !url.searchParams.has('uid')) url.searchParams.set('uid', uid);
+    if (email && !url.searchParams.has('account_email')) url.searchParams.set('account_email', email);
+    if (nws && !url.searchParams.has('nws_id')) url.searchParams.set('nws_id', nws);
+    return url.href;
+  }
+  function prefetchNext() {
+    if (!L.Player.opened() || !L.PlayerVideo || typeof L.PlayerVideo.video !== 'function' || !L.PlayerPlaylist || typeof L.PlayerPlaylist.position !== 'function') return;
+    var video = L.PlayerVideo.video(), duration = video && video.duration, current = video && video.currentTime;
+    if (!(duration > 0) || !(duration - current <= PREFETCH_BEFORE)) return;
+    var list = L.PlayerPlaylist.get(), next = Array.isArray(list) && list[L.PlayerPlaylist.position() + 1], source = next && next.homelab_next;
+    if (!source) return;
+    // A stream fetched too long ago may have expired: hand the row back to Lampac's resolver and fetch again.
+    if (next.homelab_lazy && typeof next.url === 'string' && Date.now() - next.homelab_fetched > PREFETCH_TTL) { next.url = next.homelab_lazy; next.homelab_lazy = null; next.homelab_fetching = false; }
+    if (typeof next.url !== 'function' || next.homelab_fetching) return;
+    var lazy = next.url, address = '', headers = {}, key = L.Storage.get('aesgcmkey', '');
+    try { address = lampacUrl(source.file.url); } catch (_) {}
+    if (!address || typeof fetch !== 'function') return;
+    if (key) headers['X-Kit-AesGcm'] = key;
+    hide(next, 'homelab_fetching', true);
+    var abort = typeof AbortController === 'function' ? new AbortController() : null, timer = setTimeout(function () { if (abort) abort.abort(); }, 15000);
+    fetch(address, {headers: headers, cache: 'no-store', signal: abort ? abort.signal : undefined}).then(function (response) { if (!response.ok) throw new Error('stream'); return response.json(); }).then(function (json) {
+      clearTimeout(timer);
+      // Only a plain answer for the same, still unresolved row; anything else stays with Lampac.
+      if (!L.Player.opened() || L.PlayerPlaylist.get() !== list || next.url !== lazy || !json || json.rch || typeof json.url !== 'string' || !json.url) return;
+      var file = source.file, comp = source.comp;
+      next.url = json.url; next.quality = json.quality || file.qualitys; next.segments = json.segments || file.segments;
+      next.subtitles = json.subtitles || file.subtitles; next.subtitles_call = json.subtitles_call;
+      if (json.headers) next.headers = json.headers;
+      if (json.hls_manifest_timeout) next.hls_manifest_timeout = json.hls_manifest_timeout;
+      if (comp && typeof comp.orUrlReserve === 'function') comp.orUrlReserve(next);
+      if (comp && typeof comp.setDefaultQuality === 'function') comp.setDefaultQuality(next);
+      hide(next, 'homelab_lazy', lazy); hide(next, 'homelab_fetched', Date.now());
+    }).catch(function () { clearTimeout(timer); });
+  }
+  if (L.PlayerVideo && L.PlayerVideo.listener && typeof L.PlayerVideo.listener.follow === 'function') L.PlayerVideo.listener.follow('timeupdate', prefetchNext);
+  window.HomelabOnlineResume = {resume: resume, select: select, cancel: cancel, valid: valid};
+  L.Player.listener.follow('ready', function (work) {
+    if (pending) { pending.finished = true; clearTimeout(pending.timer); }
+    refreshSpecials(work);
+  });
+  if (specialSupport) {
+    L.PlayerPlaylist.listener.follow('set', function () { refreshSpecials(L.Player.playdata()); });
+    L.Player.listener.follow('destroy', function () { clearTimeout(specialTimer); });
+  }
+  function ready() { if (!wrap() && ++attempts < 120) setTimeout(ready, 500); }
+  ready();
+})();
+
+// Load the independent picker from the existing read-only plugins directory.
+(function () {
+  var L = window.Lampa, config = window.homelabSyncConfig;
+  if (window.homelabSourcesLoading || window.HomelabSources || !L || !L.Utils || typeof L.Utils.putScriptAsync !== 'function' || !config || !config.url) return;
+  window.homelabSourcesLoading = true;
+  // The server stamps each plugin with its modification time; the fallback covers an older server.
+  var assets = config.assets || {}, version = function (value) { return /^[0-9a-f]{1,32}$/.test(value || '') ? value : '20261108d'; };
+  L.Utils.putScriptAsync([config.url + '/plugins/homelab/common-sources.js?v=' + version(assets.sources), config.url + '/plugins/homelab/playlist-thumbnails.js?v=' + version(assets.thumbnails)], function () { window.homelabSourcesLoading = false; });
+})();

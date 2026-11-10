@@ -1,3 +1,4 @@
+// Built by tools/build.cjs from src/homelab-sync/quality.js: edit the sources there and rebuild.
 (function install() {
   'use strict';
   if (!window.appready) {
@@ -10,24 +11,38 @@
   var L = window.Lampa, sync = window.HomelabSync;
   if (window.HomelabQuality || !L || !sync || !window.fetch || typeof Promise !== 'function') return;
   var HEIGHTS = [360, 480, 576, 720, 1080, 1440, 2160], cache = {}, TTL = 5 * 60000;
-  function height(label) {
+  // Quality labels and picture sizes, the same in every plugin.
+  // "4K", "UHD", "1080p", "720i", "WEB-DL 2160p" → 2160, 1080, 720, 2160; anything else → 0.
+  function qualityHeight(label) {
     var text = String(label || '');
     if (/\b(4k|uhd)\b/i.test(text)) return 2160;
     var match = /(?:^|\D)(2160|1440|1080|720|576|480|360)(?:p|i|\D|$)/i.exec(text);
     return match ? +match[1] : 0;
   }
-  // Width first: cinema crops (1920x800) still count as 1080p.
-  function standard(width, height) {
+  // A decoded or announced picture size → its quality. Width first: cinema crops (1920x800) still count as 1080p.
+  function pictureHeight(width, height) {
     var steps = [[3800, 2160], [2500, 1440], [1800, 1080], [1200, 720], [1000, 576], [800, 480]];
     for (var i = 0; i < steps.length; i++) if (width >= steps[i][0] || height >= steps[i][1] * 0.9) return steps[i][1];
     return width || height ? 360 : 0;
   }
-  function name(value) { return value === 2160 ? '4K' : value ? value + 'p' : ''; }
+  // 2160 → "4K", 1080 → "1080p", 0 → "".
+  function qualityLabel(value) { return value === 2160 ? '4K' : value ? value + 'p' : ''; }
+  // Heights a provider page names for a file, best first: its quality map, a tag in its text, else maxquality.
+  // Lampa's online screen moves the map to "qualitys" and leaves the first label in "quality".
+  function listedQualities(file) {
+    var map = [file.quality, file.qualitys].filter(function (value) { return value && typeof value === 'object'; })[0] || {};
+    var found = Object.keys(map).map(qualityHeight).filter(Boolean);
+    var named = qualityHeight(file.text || file.Title || file.title) || qualityHeight(file.info && file.info.quality);
+    if (named) found.push(named);
+    if (!found.length && file.maxquality) { named = qualityHeight(file.maxquality); if (named) found.push(named); }
+    return found.filter(function (q, i) { return found.indexOf(q) === i; }).sort(function (a, b) { return b - a; });
+  }
   function cardOf(movie) {
     if (!movie || !Number.isInteger(movie.id) || movie.id <= 0 || ['tmdb', 'cub'].indexOf(String(movie.source || 'tmdb')) < 0) return '';
     return (movie.name || movie.original_name ? 'tv_' : 'movie_') + movie.id;
   }
-  function key(provider, season, voice) { return String(provider || '').toLowerCase() + '|' + (season || 0) + '|' + String(voice || '').trim().toLowerCase(); }
+  // One row per provider voice and the quality its page names: two variants of one voice (4K and 1080p) stay apart.
+  function key(provider, season, voice, claimed) { return String(provider || '').toLowerCase() + '|' + (season || 0) + '|' + String(voice || '').trim().toLowerCase() + '|' + (claimed || 0); }
   function load(movie) {
     var card = cardOf(movie), url = card && sync.url('/homelab-sync/quality');
     if (!url) return Promise.resolve(null);
@@ -47,8 +62,8 @@
     var stats = data && data.providers && data.providers[String(provider || '').toLowerCase()];
     return !!stats && (stats.total || 0) >= 3 && (stats.inflated || 0) * 3 >= stats.total;
   }
-  function fact(data, provider, season, voice) {
-    var row = data && data.rows && data.rows[key(provider, season, voice)];
+  function fact(data, provider, season, voice, claimed) {
+    var row = data && data.rows && data.rows[key(provider, season, voice, claimed)];
     return row && HEIGHTS.indexOf(row.height) >= 0 ? row : null;
   }
   function report(movie, provider, season, voice, claimed, measured, source) {
@@ -68,24 +83,25 @@
     if (!html || typeof html.find !== 'function' || !file) return;
     var season = movie && movie.name ? file.season : 0;
     load(movie).then(function (data) {
-      var known = fact(data, provider, season, rowVoice(movie, file, choice)), badge = html.find('.online-prestige__quality');
+      var listed = listedQualities(file)[0] || 0, known = fact(data, provider, season, rowVoice(movie, file, choice), listed), badge = html.find('.online-prestige__quality');
       if (!known || !badge.length) return;
-      var claimed = Math.max(known.claimed || 0, height(badge.text()));
-      badge.text(name(known.height) + (claimed > known.height ? ' · заявлено ' + name(claimed) : ' ✓'))
+      var claimed = Math.max(listed, qualityHeight(badge.text()));
+      badge.text(qualityLabel(known.height) + (claimed > known.height ? ' · заявлено ' + qualityLabel(claimed) : ' ✓'))
         .attr('title', known.source === 'play' ? 'Качество по просмотру' : 'Качество проверено по потоку');
     });
   }
   // Playback: the largest decoded picture over 90 s of actual play, for the top quality the source
-  // offered (a lower quality the user picked says nothing about the source).
+  // offered (a lower quality the user picked says nothing about the source). With an adaptive stream
+  // only time on its top variant counts: on a slow network the player may never climb that far.
   var PLAYED = 90000, STEP = 5000, watch = null;
   function selected(work) {
     var map = work.quality && typeof work.quality === 'object' ? work.quality : null, labels = map ? Object.keys(map) : [];
-    if (!labels.length) return {top: true, claimed: 0};
-    var top = labels.reduce(function (best, label) { return height(label) > height(best) ? label : best; }, labels[0]);
+    if (!labels.length) return {top: true};
+    var top = labels.reduce(function (best, label) { return qualityHeight(label) > qualityHeight(best) ? label : best; }, labels[0]);
     var url = typeof work.url === 'string' ? work.url : '';
     var current = labels.filter(function (label) { return map[label] === url; })[0];
     // A url that matches no entry (a proxy, a switch inside the player) may be any quality.
-    return {top: labels.length === 1 || !!current && height(current) >= height(top), claimed: height(top)};
+    return {top: labels.length === 1 || !!current && qualityHeight(current) >= qualityHeight(top)};
   }
   function tick(state) {
     if (watch !== state) return;
@@ -93,12 +109,15 @@
     if (!L.Player.opened() || L.Player.playdata() !== state.work) return stop(state);
     var video = L.PlayerVideo && typeof L.PlayerVideo.video === 'function' ? L.PlayerVideo.video() : null;
     if (!video || video.paused || !(video.videoHeight > 0)) return;
-    state.played += STEP; state.best = Math.max(state.best, standard(video.videoWidth, video.videoHeight));
+    var levels = null;
+    try { levels = typeof state.work.homelab_levels === 'function' ? state.work.homelab_levels() : null; } catch (error) {}
+    if (levels && levels.top > 0 && levels.current > 0 && levels.current < levels.top) return;
+    state.played += STEP; state.best = Math.max(state.best, pictureHeight(video.videoWidth, video.videoHeight));
     if (state.played >= PLAYED && state.best > state.sent) {
-      var pick = selected(state.work);
-      if (!pick.top) return;
+      if (!selected(state.work).top) return;
       state.sent = state.best;
-      report(state.work.card, state.online.provider, state.season, state.voice, pick.claimed, state.best, 'play');
+      // The key and the verdict use the height the provider page named, as the picker sees it.
+      report(state.work.card, state.online.provider, state.season, state.voice, state.work.homelab_claimed || 0, state.best, 'play');
     }
   }
   function stop(state) { if (state && watch === state) { clearTimeout(state.timer); watch = null; } }

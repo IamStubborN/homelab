@@ -258,6 +258,11 @@
       var BaseHls = window.Hls;
       if (!BaseHls || BaseHls.homelabResilience) return;
 
+      // Fatal network errors are retried 2 + 4 + … + 14 s apart, then every 15 s, enough for a Lampac
+      // restart or a network gap. hls.js retries inside each attempt too, so a wall-clock deadline (180 s
+      // for torrents, 150 s online) is what ends a stream that does not come back.
+      var RECOVERIES = 12, RELOADS = 4;
+      function retryDelay(attempt) { return Math.min(attempt * 2000, 15000); }
       function policy(firstByte, total, retries) {
         return {default: {
           maxTimeToFirstByteMs: firstByte, maxLoadTimeMs: total,
@@ -266,9 +271,88 @@
         }};
       }
 
+      // Online streams through this Lampac (/lite/…, /proxy/…). A Lampac restart or a network gap
+      // breaks their fragment loads for a minute or so, and Lampa's own hls.js setup gives up at once.
+      function onlineSource(work) {
+        try {
+          var url = new URL(work && typeof work.url === 'string' ? work.url : '', window.location.href);
+          return url.origin === window.location.origin && /^\/(?:lite|proxy)\//.test(url.pathname) ? url : null;
+        } catch (error) { return null; }
+      }
+      // One deadline from the first recovered error: hls.js retries inside each attempt as well, so the
+      // attempts alone would stretch a dead stream to many minutes. Before the first picture only two
+      // attempts, so a source that never worked reaches Lampa's reserve URL quickly.
+      var ONLINE_DEADLINE = 150000, ONLINE_STARTUP = 2;
+      function OnlineHls(config, work) {
+        var hls = new BaseHls(config), listen = hls.on.bind(hls), destroy = hls.destroy.bind(hls);
+        var retries = 0, timer = null, deadline = null, disposed = false, terminated = false, started = false, outage = false;
+        var lastError = null, handled = new WeakSet();
+        // The quality log counts a playback only while the adaptive stream plays its top variant.
+        try {
+          Object.defineProperty(work, 'homelab_levels', {configurable: true, writable: true, enumerable: false, value: function () {
+            var levels = hls.levels || [], top = 0, current = levels[hls.currentLevel];
+            levels.forEach(function (level) { top = Math.max(top, level && level.height || 0); });
+            return {top: top, current: current && current.height || 0};
+          }});
+        } catch (error) {}
+        function settle() { clearTimeout(deadline); deadline = null; retries = 0; outage = false; lastError = null; }
+        // Only a buffered main fragment proves the stream is back.
+        listen(BaseHls.Events.FRAG_BUFFERED, function (name, data) {
+          if (!data.frag || data.frag.type !== 'main' || data.frag.sn === 'initSegment' || timer !== null || terminated) return;
+          started = true;
+          if (retries) { settle(); phase('buffered', work); }
+        });
+        function recover(data) {
+          if (handled.has(data)) return true;
+          if (disposed || terminated || !data.fatal || data.type !== BaseHls.ErrorTypes.NETWORK_ERROR || Lampa.Player.playdata() !== work) return false;
+          // Video and its audio rendition come through the same Lampac; subtitles never stop the picture.
+          if (data.frag && data.frag.type !== 'main' && data.frag.type !== 'audio') return false;
+          if (!/^(manifest|level|frag)Load(Error|TimeOut)$/.test(data.details)) return false;
+          // A restart answers nothing or 502/503/504, then 404 for a while until Lampac has loaded its
+          // modules. A 404 without that outage is an expired link, and 403 stays refused.
+          var status = data.response && (data.response.code || data.response.status) || 0;
+          if (!status || status >= 500) outage = true;
+          if (status && status !== 408 && status !== 429 && status < 500 && !(status === 404 && outage)) return false;
+          if (timer !== null) { handled.add(data); return true; }
+          if (retries >= (started ? RECOVERIES : ONLINE_STARTUP)) return false;
+          handled.add(data);
+          retries++; lastError = data;
+          if (deadline === null) deadline = setTimeout(expire, ONLINE_DEADLINE);
+          report('hls-recovery', {details: data.details, status: status, attempt: retries, online: true}, work);
+          phase('recovering', work);
+          // Links Lampac kept in memory are gone after a restart: resolve the stream again then.
+          var reload = /^manifest/.test(data.details) || status === 404;
+          timer = setTimeout(function () {
+            timer = null;
+            if (disposed || terminated || Lampa.Player.playdata() !== work) return;
+            var position = hls.media && hls.media.currentTime || 0;
+            if (reload) { hls.config.startPosition = position; hls.loadSource(work.url || hls.url); }
+            else hls.startLoad(position);
+          }, retryDelay(retries));
+          return true;
+        }
+        function expire() {
+          deadline = null;
+          if (disposed || terminated || Lampa.Player.playdata() !== work) return;
+          terminated = true; clearTimeout(timer); timer = null; hls.stopLoad();
+          hls.trigger(BaseHls.Events.ERROR, Object.assign({}, lastError || {type: BaseHls.ErrorTypes.NETWORK_ERROR, details: 'fragLoadTimeOut'}, {fatal: true}));
+        }
+        hls.on = function (event, callback, context) {
+          if (event !== BaseHls.Events.ERROR) return listen(event, callback, context);
+          return listen(event, function (name, data) {
+            if (recover(data)) return;
+            if (data.fatal && (retries || terminated) && Lampa.Player.playdata() === work) phase('failed', work);
+            callback.call(context || hls, name, data);
+          }, context);
+        };
+        hls.destroy = function () { disposed = true; clearTimeout(timer); clearTimeout(deadline); return destroy(); };
+        return hls;
+      }
+
       function HomelabHls(config) {
         var work = Lampa.Player.playdata();
         var source = masterUrl(work);
+        if (!source && onlineSource(work)) return new OnlineHls(config, work);
         if (!source || source.origin !== window.location.origin) return new BaseHls(config);
 
         config = Object.assign({}, config);
@@ -290,6 +374,7 @@
         var listen = hls.on.bind(hls);
         var destroy = hls.destroy.bind(hls);
         var retries = 0;
+        var reloads = 0;
         var timer = null;
         var deadlineTimer = null;
         var terminated = false;
@@ -349,6 +434,7 @@
             clearTimeout(timer);
             timer = null;
             retries = 0;
+            reloads = 0;
             lastError = null;
             phase('buffered', work);
           }
@@ -407,10 +493,11 @@
           if (status && status !== 404 && status !== 408 && status !== 429 && status < 500) return false;
           if (!/^(manifest|level|frag)Load(Error|TimeOut)$/.test(data.details)) return false;
           if (timer !== null) { handled.add(data); return true; }
-          if (retries >= 2) return false;
-          handled.add(data);
-          retries++;
           var reload = /^manifest/.test(data.details) || status === 404;
+          // A reload starts a new GST task, so fewer of them; resuming fragment loads is cheap.
+          if (retries >= RECOVERIES || reload && reloads >= RELOADS) return false;
+          handled.add(data);
+          retries++; if (reload) reloads++;
           console.warn('Homelab HLS recovery:', data.details, 'HTTP', status, 'attempt', retries);
           report('hls-recovery', {details: data.details, status: status, attempt: retries, reload: reload}, work);
           phase('recovering', work);
@@ -440,7 +527,7 @@
               hls.loadSource(source.href);
               if (active && active.work === work) ownStream(active, source);
             } else hls.startLoad(position);
-          }, retries * 2000);
+          }, retryDelay(retries));
           return true;
         }
 

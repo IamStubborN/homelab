@@ -46,7 +46,7 @@ public static class QualityStore
 {
     static readonly object gate = new();
     static readonly int[] Heights = { 0, 360, 480, 576, 720, 1080, 1440, 2160 };
-    const int MaxTitles = 2000, MaxRows = 60;
+    const int MaxTitles = 2000, MaxRows = 120;
     const long Ttl = 60L * 24 * 3600 * 1000, ProbeTtl = 7L * 24 * 3600 * 1000;
     static string FileName => Path.Combine("database", "homelab-sync-quality.json");
     static QualityData cache;
@@ -57,7 +57,8 @@ public static class QualityStore
         report.season >= 0 && report.season <= 999 && report.voice != null && report.voice.Length <= 200 &&
         Heights.Contains(report.claimed) && Heights.Contains(report.measured) && report.measured > 0 &&
         (report.source == "probe" || report.source == "play");
-    static string Key(QualityReport report) => report.provider.ToLowerInvariant() + "|" + report.season + "|" + report.voice.Trim().ToLowerInvariant();
+    // Two variants of one voice that name different qualities (4K and 1080p) stay apart.
+    static string Key(QualityReport report) => report.provider.ToLowerInvariant() + "|" + report.season + "|" + report.voice.Trim().ToLowerInvariant() + "|" + report.claimed;
     // The lower measurement wins: a manifest can name a height its picture does not have.
     public static int Effective(QualityFact fact) => fact.play > 0 && (fact.probe == 0 || fact.play < fact.probe) ? fact.play : fact.probe;
 
@@ -75,7 +76,8 @@ public static class QualityStore
     }
 
     // Facts still trusted: a probe is redone after a week (sources add better copies), a playback stays longer.
-    static bool Live(QualityFact fact, long now) => now - fact.at < (fact.play > 0 ? Ttl : ProbeTtl);
+    // Rows saved before the key named the claimed height match no reader any more: a key ends with its claim.
+    static bool Live(string key, QualityFact fact, long now) => key.EndsWith("|" + fact.claimed) && now - fact.at < (fact.play > 0 ? Ttl : ProbeTtl);
 
     public static object Read(string card)
     {
@@ -85,14 +87,14 @@ public static class QualityStore
             long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var rows = new Dictionary<string, object>();
             if (card != null && data.titles.TryGetValue(card, out var title))
-                foreach (var entry in title.rows.Where(r => Live(r.Value, now)))
+                foreach (var entry in title.rows.Where(r => Live(r.Key, r.Value, now)))
                     rows[entry.Key] = new { height = Effective(entry.Value), entry.Value.claimed, source = entry.Value.play > 0 ? "play" : "probe" };
             // Honesty counts only live facts, so evicted or expired rows never leave stale votes.
             var providers = new Dictionary<string, ProviderHonesty>();
             foreach (var pair in data.titles.Values.SelectMany(t => t.rows))
             {
                 var fact = pair.Value;
-                if (fact.claimed <= 0 || !Live(fact, now)) continue;
+                if (fact.claimed <= 0 || !Live(pair.Key, fact, now)) continue;
                 var provider = pair.Key[..pair.Key.IndexOf('|')];
                 if (!providers.TryGetValue(provider, out var honesty)) providers[provider] = honesty = new ProviderHonesty();
                 honesty.total++; if (Effective(fact) < fact.claimed) honesty.inflated++;

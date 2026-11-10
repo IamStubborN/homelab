@@ -1,3 +1,4 @@
+// Built by tools/build.cjs from src/common-sources: edit the sources there and rebuild.
 (function install() {
   'use strict';
   if (!window.appready) {
@@ -32,6 +33,7 @@
     return {signal: signal, abort: function () { if (signal.aborted) return; signal.aborted = true; listeners.splice(0).forEach(function (fn) { fn(); }); }};
   }
   function always(promise, fn) { return promise.then(function (value) { fn(); return value; }, function (error) { fn(); throw error; }); }
+  // ── Voice labels: studios, types, languages; torrent release voices ──
   var ITEM_TAG = /^(?:web[\s-]?dl|webrip|hdrip|bdrip|blu[\s-]?ray|hdtv|camrip|ts|4k|uhd|hdr|sdr|\d{3,4}[pi])$/i;
   function voiceKey(value) { return String(value || '').toLowerCase().replace(/[\s._-]+/g, ' ').trim(); }
   // Whole-label studio aliases (normalized: lower case, ё→е, punctuation to spaces) and a display name.
@@ -173,6 +175,7 @@
     row.voice = described.title; row.voiceProbe = 'done';
     row.canon = described.voices.length ? canonVoice(described.voices[0]) : {key: '', label: described.title, subs: false};
   }
+  // ── Row order and parsing provider pages ──
   // Torrents: enough seeds to stream is a threshold; above it the picture quality decides, then the seeds.
   var MIN_SEEDS = 3;
   function seeded(row) { return row.release && (Number(row.release.Seeders) || 0) >= MIN_SEEDS ? 1 : 0; }
@@ -189,28 +192,35 @@
     match = tie ? tie(a, b) : 0;
     return match || String(a.providerName).localeCompare(String(b.providerName)) || a.key.localeCompare(b.key);
   }
-  function quality(value) {
-    var text = String(value || '');
+  // Quality labels and picture sizes, the same in every plugin.
+  // "4K", "UHD", "1080p", "720i", "WEB-DL 2160p" → 2160, 1080, 720, 2160; anything else → 0.
+  function qualityHeight(label) {
+    var text = String(label || '');
     if (/\b(4k|uhd)\b/i.test(text)) return 2160;
     var match = /(?:^|\D)(2160|1440|1080|720|576|480|360)(?:p|i|\D|$)/i.exec(text);
     return match ? +match[1] : 0;
   }
-  function qualities(file) {
-    var found = Object.keys(file.quality || file.qualitys || {}).map(quality).filter(Boolean);
-    var named = quality(file.text || file.Title || file.title) || quality(file.info && file.info.quality);
-    if (named) found.push(named);
-    if (!found.length && file.maxquality) { named = quality(file.maxquality); if (named) found.push(named); }
-    return found.filter(function (q, i) { return found.indexOf(q) === i; }).sort(function (a, b) { return b - a; });
-  }
-  // Width first: cinema crops (1920x800) still count as 1080p.
-  function standard(width, height) {
+  // A decoded or announced picture size → its quality. Width first: cinema crops (1920x800) still count as 1080p.
+  function pictureHeight(width, height) {
     var steps = [[3800, 2160], [2500, 1440], [1800, 1080], [1200, 720], [1000, 576], [800, 480]];
     for (var i = 0; i < steps.length; i++) if (width >= steps[i][0] || height >= steps[i][1] * 0.9) return steps[i][1];
     return width || height ? 360 : 0;
   }
+  // 2160 → "4K", 1080 → "1080p", 0 → "".
+  function qualityLabel(value) { return value === 2160 ? '4K' : value ? value + 'p' : ''; }
+  // Heights a provider page names for a file, best first: its quality map, a tag in its text, else maxquality.
+  // Lampa's online screen moves the map to "qualitys" and leaves the first label in "quality".
+  function listedQualities(file) {
+    var map = [file.quality, file.qualitys].filter(function (value) { return value && typeof value === 'object'; })[0] || {};
+    var found = Object.keys(map).map(qualityHeight).filter(Boolean);
+    var named = qualityHeight(file.text || file.Title || file.title) || qualityHeight(file.info && file.info.quality);
+    if (named) found.push(named);
+    if (!found.length && file.maxquality) { named = qualityHeight(file.maxquality); if (named) found.push(named); }
+    return found.filter(function (q, i) { return found.indexOf(q) === i; }).sort(function (a, b) { return b - a; });
+  }
   function hlsQuality(text) {
     var best = 0;
-    String(text).replace(/RESOLUTION=(\d+)x(\d+)/gi, function (all, width, height) { best = Math.max(best, standard(+width, +height)); return all; });
+    String(text).replace(/RESOLUTION=(\d+)x(\d+)/gi, function (all, width, height) { best = Math.max(best, pictureHeight(+width, +height)); return all; });
     return best;
   }
   function covers(release, selection) {
@@ -241,6 +251,7 @@
     if (movie.name) movie.title = movie.name;
     return movie;
   }
+  // ── Search: the catalog walk across providers (one closure, continued in 05 and 06) ──
   var UNNAMED = 'Без названия', SEARCH_TTL = 10 * 60000, searchCache = {keys: [], values: {}};
   function Search(movie, selection, changed, options) {
     movie = movieCard(movie); options = options || {};
@@ -274,7 +285,7 @@
     function factSeason() { return movie.name ? selection.season : 0; }
     function known(row) {
       if (!facts || row.native || row.kind !== 'online' || row.measured) return;
-      var fact = Q.fact(facts, row.provider, factSeason(), row.factVoice || '');
+      var fact = Q.fact(facts, row.provider, factSeason(), row.factVoice || '', row.claimed || 0);
       if (fact) { row.qualities = [fact.height]; row.measured = true; row.verified = fact.source; row.doubtful = false; }
       else row.doubtful = !!row.claimed && Q.doubtful(facts, row.provider);
     }
@@ -327,6 +338,7 @@
     function fallback(source, label) {
       add({key: 'source:' + source.key, kind: 'online', provider: source.key, providerName: source.name, voice: label || 'Выбрать в источнике', native: true, qualities: []});
     }
+    // ── Search: checking the real quality of rows ──
     // Rows without quality ask their source once, after the catalog is done: the call JSON or the HLS master
     // (RESOLUTION) gives the real height. The UI asks only for each voice card's leader (at most 12 per search) and,
     // lazily, for the alternatives of a card whose source list is opened (24 in total). Only an own-Lampac 404/410 or an
@@ -432,10 +444,10 @@
         if (result.status >= 300) return asDeclared();
         var json; try { json = JSON.parse(result.text); } catch (_) {}
         if (json && typeof json === 'object') {
-          var map = json.quality || json.qualitys, found = qualities({quality: map, maxquality: json.maxquality});
+          var map = json.quality || json.qualitys, found = listedQualities({quality: map, maxquality: json.maxquality});
           if (typeof json.url === 'string' && json.url && !hop) {
             var labels = map && typeof map === 'object' ? Object.keys(map) : [];
-            var top = labels.reduce(function (best, label) { return quality(label) > quality(best) ? label : best; }, labels[0]);
+            var top = labels.reduce(function (best, label) { return qualityHeight(label) > qualityHeight(best) ? label : best; }, labels[0]);
             // The manifest measures the top quality only when it is that quality's stream.
             if (!labels.length || map[top] === json.url) return probeJob(job, json.url, 1, found).catch(function () { asDeclared(found); });
           }
@@ -460,6 +472,7 @@
         })(probeQueue.splice(index, 1)[0]);
       }
     }
+    // ── Search: provider catalog pages, seasons and voices ──
     function voiceSeen(source, seasonIndex, text) {
       var key = source.key + ':' + seasonIndex + ':' + voiceKey(text);
       if (voicesSeen[key]) return true;
@@ -491,7 +504,7 @@
         var matching = files.filter(function (file) { return !movie.name || Number.isInteger(file.season) && file.season >= 0 && Number.isInteger(file.episode) && file.episode > 0 && file.season === selection.season && file.episode === selection.episode; });
         var labels = {};
         matching.forEach(function (file) {
-          var row = {kind: 'online', provider: source.key, providerName: source.name, seasonIndex: state.seasonIndex, qualities: qualities(file)}, identityVoice;
+          var row = {kind: 'online', provider: source.key, providerName: source.name, seasonIndex: state.seasonIndex, qualities: listedQualities(file)}, identityVoice;
           row.claimed = row.qualities[0] || 0;
           // Quality log key, the same one native rows and playback use (HomelabSync resume identity).
           row.factVoice = movie.name ? String(voice || file.voice_name || '') : String(file.translate || file.text || '').trim().slice(0, 200);
@@ -591,7 +604,7 @@
           var magnet = release.MagnetUri || release.Link;
           if (!magnet || typeof release.Title !== 'string' || movie.name && !covers(release, selection)) return;
           var described = describeRelease(release);
-          var row = {key: 'torrent:' + (release.hash || magnet), kind: 'torrent', voice: described.title, providerName: release.Tracker || 'Торрент', qualities: qualities(release), release: release, described: described,
+          var row = {key: 'torrent:' + (release.hash || magnet), kind: 'torrent', voice: described.title, providerName: release.Tracker || 'Торрент', qualities: listedQualities(release), release: release, described: described,
             canon: described.voices.length ? canonVoice(described.voices[0]) : {key: '', label: described.title, subs: false}};
           if (!described.voices.length && releaseVoiceCache[magnetKey(magnet)]) applyReleaseVoices(row, releaseVoiceCache[magnetKey(magnet)]);
           add(row);
@@ -661,12 +674,12 @@
       ids.then(function () { if (live()) online(); }); notify();
     };
   }
+  // ── Grouping rows into voice cards ──
   function plural(n, forms) {
     var a = n % 10, b = n % 100;
     return n + ' ' + (a === 1 && b !== 11 ? forms[0] : a >= 2 && a <= 4 && (b < 12 || b > 14) ? forms[1] : forms[2]);
   }
   var SOURCES = ['источник', 'источника', 'источников'], VARIANTS = ['вариант', 'варианта', 'вариантов'];
-  function qualityName(value) { return value === 2160 ? '4K' : value ? value + 'p' : ''; }
   // Inside one voice: playable first, then the highest quality, a measured height over a declared one.
   function bestFirst(a, b) {
     var match = (a.unavailable ? 1 : 0) - (b.unavailable ? 1 : 0); if (match) return match;
@@ -694,6 +707,7 @@
     groups.forEach(function (group) { group.rows.sort(bestFirst); group.best = group.rows[0]; });
     return groups;
   }
+  // ── The «Общий» screen ──
   function Common(object) {
     var self = this, movie = movieCard(object.movie), tv = !!movie.name, saved = window.homelabContinue && window.homelabContinue.list().find(function (item) { return item.card === (tv ? 'tv_' : 'movie_') + movie.id; });
     var recovery = object.homelab_recovery, pref = preferences();
@@ -849,12 +863,12 @@
       } else if (row.unavailable) model.details += ' · Не отдаёт видео';
       else if (!best) model.details += row.native ? ' · Качество неизвестно · Открыть источник' : ' · Качество уточняется';
       if (row.unavailable) { model.quality = 'нет видео'; model.qcls = 'is-off'; model.cls += ' is-unavailable'; }
-      else if (best) { model.quality = qualityName(best); model.qcls = best >= 2160 ? 'is-uhd' : best >= 1080 ? 'is-hd' : 'is-sd'; }
+      else if (best) { model.quality = qualityLabel(best); model.qcls = best >= 2160 ? 'is-uhd' : best >= 1080 ? 'is-hd' : 'is-sd'; }
       else { model.quality = '—'; model.qcls = 'is-none'; }
       if (!row.unavailable && best && row.kind === 'online') {
         model.note = row.verified === 'play' ? 'по просмотру' : row.measured ? 'проверено' : row.doubtful ? 'заявлено, не проверено' : 'заявлено';
         // The source said more than its stream has.
-        if (row.measured && row.claimed > best) model.note += ' · заявлено ' + qualityName(row.claimed);
+        if (row.measured && row.claimed > best) model.note += ' · заявлено ' + qualityLabel(row.claimed);
       }
       model.measured = !!row.measured;
       model.pick = hero ? 'Рекомендуем' + (row.measured ? ' · проверено' : '') : '';
@@ -900,12 +914,12 @@
       if (row.unavailable) return 'Не отдаёт видео';
       if (row.native) return 'Открыть в источнике';
       if (!row.qualities.length) return 'Качество уточняется';
-      return row.qualities.map(qualityName).join(' / ') + (row.kind === 'online' ? (row.verified === 'play' ? ' · по просмотру' : row.measured ? ' · проверено' : ' · заявлено') + (row.measured && row.claimed > (row.qualities[0] || 0) ? ' (заявлено ' + qualityName(row.claimed) + ')' : '') : '');
+      return row.qualities.map(qualityLabel).join(' / ') + (row.kind === 'online' ? (row.verified === 'play' ? ' · по просмотру' : row.measured ? ' · проверено' : ' · заявлено') + (row.measured && row.claimed > (row.qualities[0] || 0) ? ' (заявлено ' + qualityLabel(row.claimed) + ')' : '') : '');
     }
     // Right / long press: every source behind the card, or every release of a torrent group.
     function releaseLine(entry) {
       var size = Number(entry.release.Size || entry.release.size), seeds = Number(entry.release.Seeders);
-      return [entry.qualities.length ? qualityName(entry.qualities[0]) : '', Number.isFinite(seeds) ? plural(seeds, ['сид', 'сида', 'сидов']) : '', size > 0 ? (size / 1073741824).toFixed(1).replace('.', ',') + ' ГБ' : '', entry.providerName].filter(Boolean).join(' · ');
+      return [entry.qualities.length ? qualityLabel(entry.qualities[0]) : '', Number.isFinite(seeds) ? plural(seeds, ['сид', 'сида', 'сидов']) : '', size > 0 ? (size / 1073741824).toFixed(1).replace('.', ',') + ' ГБ' : '', entry.providerName].filter(Boolean).join(' · ');
     }
     function sourceMenu(item) {
       var row = item.best, items = [];
@@ -932,7 +946,7 @@
       } else {
         placeholder = $('<div class="homelab-common-empty"></div>');
         placeholder.append($('<div class="homelab-common-empty-title"></div>').text(recovery ? 'Других подходящих источников нет' : 'Ничего не нашлось'));
-        placeholder.append($('<div class="homelab-common-empty-hint"></div>').text(q ? 'В качестве ' + qualityName(q) + ' вариантов нет — выберите «Все качества»' : kind !== 'all' ? 'Попробуйте «Все» или нажмите «Обновить»' : 'Нажмите «Обновить», чтобы поискать заново'));
+        placeholder.append($('<div class="homelab-common-empty-hint"></div>').text(q ? 'В качестве ' + qualityLabel(q) + ' вариантов нет — выберите «Все качества»' : kind !== 'all' ? 'Попробуйте «Все» или нажмите «Обновить»' : 'Нажмите «Обновить», чтобы поискать заново'));
       }
       body.append(placeholder);
     }
@@ -1018,7 +1032,7 @@
       var voices = rows.filter(function (row) { return row.kind === 'online' && !row.native; }), releases = rows.filter(function (row) { return row.kind === 'torrent'; }).length;
       var top = rows.reduce(function (max, row) { return Math.max(max, row.unavailable ? 0 : row.qualities[0] || 0); }, 0), counted = {};
       voices.forEach(function (row) { counted[row.canon && row.canon.key || row.identityVoice] = true; });
-      var summary = [Object.keys(counted).length ? plural(Object.keys(counted).length, ['озвучка', 'озвучки', 'озвучек']) : '', top ? 'до ' + qualityName(top) : '', releases ? plural(releases, ['раздача', 'раздачи', 'раздач']) : ''].filter(Boolean).join(' · ');
+      var summary = [Object.keys(counted).length ? plural(Object.keys(counted).length, ['озвучка', 'озвучки', 'озвучек']) : '', top ? 'до ' + qualityLabel(top) : '', releases ? plural(releases, ['раздача', 'раздачи', 'раздач']) : ''].filter(Boolean).join(' · ');
       var found = grouped ? summary || plural(items.length, VARIANTS) : plural(rows.length, VARIANTS), parts = [], providers = search.providers || {total: 0, done: 0};
       if (loading) {
         parts.push('Ищем варианты…');
@@ -1072,7 +1086,7 @@
     }
     this.create = function () {
       scroll.minus(root.find('.homelab-common-head')); selectors();
-      [0, 2160, 1080, 720].forEach(function (value) { tabs.append(button(value ? qualityName(value) : 'Все качества', 'homelab-common-tab' + (value === q ? ' selected' : ''), function () {
+      [0, 2160, 1080, 720].forEach(function (value) { tabs.append(button(value ? qualityLabel(value) : 'Все качества', 'homelab-common-tab' + (value === q ? ' selected' : ''), function () {
         q = value; pref = preferences({quality: value}); shown = 20; locked = false; order = []; scroll.reset(); tabs.find('.selected').removeClass('selected'); $(this).addClass('selected'); draw();
       })); });
     };
@@ -1091,6 +1105,7 @@
     var unsubscribe = sync.subscribe(function () { if (sync.scope() !== currentScope) { cancel(); if (active()) L.Activity.backward(); } });
     this.destroy = function () { dead = true; clearTimeout(voiceTimer); cancel(); unsubscribe(); scroll.destroy(); root.remove(); };
   }
+  // ── Entry points: the card button, Continue resume and playback recovery ──
   function addButton(movie, render, unsupported) {
     if (!movie || !render || render.find('.view--homelab-sources').length) return;
     var container = render.find('.buttons--container'); if (!container.length) return;
@@ -1129,7 +1144,7 @@
     var tracks = L.HomelabGstAudio && L.HomelabGstAudio.preferences ? L.HomelabGstAudio.preferences(work) : work.homelab_track_preferences;
     var voice = sourceVoice(source, work.card) || sourceVoice({voice: tracks && tracks.audio && tracks.audio.title}, work.card);
     var context = {scope: scope, season: work.card.name ? work.season : 0, episode: +work.episode || 1, voice: voice, excludeProvider: source && source.provider || '',
-      position: Number.isFinite(snapshot.position) ? Math.max(0, snapshot.position) : 0, duration: Number.isFinite(snapshot.duration) ? snapshot.duration : 0, quality: quality(Object.keys(work.quality || {}).length === 1 ? Object.keys(work.quality)[0] : '') || pref.quality};
+      position: Number.isFinite(snapshot.position) ? Math.max(0, snapshot.position) : 0, duration: Number.isFinite(snapshot.duration) ? snapshot.duration : 0, quality: qualityHeight(Object.keys(work.quality || {}).length === 1 ? Object.keys(work.quality)[0] : '') || pref.quality};
     var modal = L.Modal, torrentModal = modal && modal.opened && modal.opened() && modal.render && modal.render().find('.torrent-files').length ? modal.render()[0] : null;
     L.Player.close();
     if (torrentModal && sync.scope() === scope && !L.Player.opened() && L.Activity.active() === activity && modal.opened() && modal.render()[0] === torrentModal) modal.close();
@@ -1143,9 +1158,10 @@
     }, 0);
     return true;
   }
+  // ── Styles, registration and the public API ──
   $('head').append($('<style></style>').text('.homelab-common{background:#202324;height:100%;display:flex;flex-direction:column;padding:1.4em 2.2em 1em;box-sizing:border-box}.homelab-common-head{display:flex;align-items:baseline;margin-bottom:.9em}.homelab-common-heading{font-size:2.4em;font-weight:600;flex-shrink:0;margin-right:.6em}.homelab-common-movie{font-size:1.3em;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.6}.homelab-common-recovery{font-size:1em;margin:0 0 1em;line-height:1.4;padding:.7em 1em;border-radius:.6em;background:rgba(223,204,162,.12);color:#efe1bf}.homelab-common-controls,.homelab-common-tabs{display:flex;flex-wrap:wrap;align-items:center;margin-bottom:.5em}.homelab-common-controls>*,.homelab-common-tabs>*{margin:0 .6em .5em 0}.homelab-common-chip,.homelab-common-refresh{padding:.6em 1.15em;border-radius:1em;background:rgba(255,255,255,.07)}.homelab-common-static{opacity:.75}.homelab-common-refresh{margin-left:auto;margin-right:0;opacity:.75}.homelab-common-chip.selected{background:rgba(255,255,255,.22)}.homelab-common-tab{padding:.45em 1.2em;border-radius:1em;opacity:.7}.homelab-common-tab.selected{opacity:1;background:rgba(255,255,255,.12);box-shadow:inset 0 -.15em 0 #fff}.homelab-common-other-voices{align-self:flex-start;margin-bottom:1em;max-width:100%;box-sizing:border-box}.homelab-common-status{position:relative;display:flex;align-items:center;min-height:1.6em;padding:.2em 0 .5em;margin-bottom:.4em;font-size:1em;opacity:.75}.homelab-common-status.is-loading{opacity:1}.homelab-common-status.has-errors .homelab-common-status-text{color:#f0c27a}.homelab-common-status-text{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.homelab-common-spinner{display:none;width:1em;height:1em;margin-right:.6em;flex-shrink:0;border-radius:100%;border:.15em solid rgba(255,255,255,.2);border-top-color:#fff;-webkit-animation:homelab-common-spin .9s linear infinite;animation:homelab-common-spin .9s linear infinite}.homelab-common-status.is-loading .homelab-common-spinner{display:block}.homelab-common-bar{display:none;position:absolute;left:0;right:0;bottom:0;height:.2em;border-radius:.2em;background:rgba(255,255,255,.08);overflow:hidden}.homelab-common-status.is-loading .homelab-common-bar{display:block}.homelab-common-bar-fill{height:100%;background:#fff;opacity:.8;-webkit-transform-origin:0 50%;transform-origin:0 50%;-webkit-transform:scaleX(0);transform:scaleX(0);-webkit-transition:-webkit-transform .4s;transition:transform .4s}@-webkit-keyframes homelab-common-spin{to{-webkit-transform:rotate(360deg)}}@keyframes homelab-common-spin{to{transform:rotate(360deg)}}@-webkit-keyframes homelab-common-pulse{50%{opacity:.4}}@keyframes homelab-common-pulse{50%{opacity:.4}}.homelab-common>.scroll{flex:1;min-height:0}.homelab-common-list{padding:.3em}.homelab-common-result{position:relative;display:flex;align-items:center;padding:1em 1.3em;background:rgba(255,255,255,.05);border-radius:.8em;margin-bottom:.55em;box-sizing:border-box;min-height:5.3em}.homelab-common-result.is-torrent{background:rgba(120,170,255,.06)}.homelab-common-result.is-native{background:rgba(255,255,255,.03)}.homelab-common-result.is-unavailable{opacity:.45}.homelab-common-result.is-hero{padding:1.35em 1.5em;min-height:6.6em;background:rgba(255,255,255,.1);margin-bottom:.9em}.homelab-common .selector.focus{outline:.16em solid #fff;outline-offset:.12em;background:rgba(255,255,255,.16)}.homelab-common .homelab-common-result.focus{background:#fff;color:#000;outline:0;opacity:1}.homelab-common-play{width:2.2em;height:2.2em;margin-right:1.2em;padding:.35em;box-sizing:border-box;border-radius:100%;background:rgba(255,255,255,.12);flex-shrink:0}.homelab-common-result.is-hero .homelab-common-play{width:2.8em;height:2.8em;background:#fff;color:#000}.homelab-common-result.is-torrent .homelab-common-play{color:#9cc2ff}.homelab-common-result.focus .homelab-common-play{background:#000;color:#fff}.homelab-common-play svg{display:block;width:100%;height:100%}.homelab-common-text{min-width:0;flex:1}.homelab-common-pick{font-size:.8em;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#ffd66b;margin-bottom:.3em}.homelab-common-result.focus .homelab-common-pick{color:#8a5a00}.homelab-common-voice{font-size:1.3em;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.homelab-common-result.is-hero .homelab-common-voice{font-size:1.55em}.homelab-common-match{font-size:.85em;color:#dfcca2;margin-top:.3em}.homelab-common-result.focus .homelab-common-match{color:#6d5520}.homelab-common-details{font-size:.95em;opacity:.65;margin-top:.35em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.homelab-common-badges{margin-top:.45em;white-space:nowrap;overflow:hidden}.homelab-common-badge{display:inline-block;font-size:.8em;padding:.2em .6em;margin-right:.45em;border-radius:.4em;background:rgba(255,255,255,.1)}.homelab-common-badge.is-seeds{color:#8fe3a1}.homelab-common-badge.is-dead{color:#ff9b8f}.homelab-common-result.focus .homelab-common-badge{background:rgba(0,0,0,.1);color:#000}.homelab-common-quality{flex-shrink:0;margin-left:1em;text-align:right;max-width:30%}.homelab-common-q{display:inline-block;font-size:1.15em;font-weight:700;padding:.25em .65em;border-radius:.45em;border:.1em solid rgba(255,255,255,.5);white-space:nowrap}.homelab-common-q.is-uhd{border-color:#ffd66b;color:#ffd66b}.homelab-common-q.is-sd{opacity:.7}.homelab-common-q.is-none{border-color:transparent;opacity:.45}.homelab-common-q.is-off{border-color:transparent;font-size:.9em;color:#ff9b8f}.homelab-common-result.is-hero .homelab-common-q{font-size:1.4em}.homelab-common-result.focus .homelab-common-q{color:#000;border-color:#000}.homelab-common-result.focus .homelab-common-q.is-none,.homelab-common-result.focus .homelab-common-q.is-off{border-color:transparent}.homelab-common-q-note{font-size:.78em;opacity:.6;margin-top:.35em;white-space:nowrap}.homelab-common-q-note.is-measured{opacity:1;color:#8fe3a1}.homelab-common-result.focus .homelab-common-q-note.is-measured{color:#1d7a33}.homelab-common-check{display:inline-block;width:1.1em;height:1.1em;vertical-align:-.2em;margin-right:.2em}.homelab-common-check svg{display:block;width:100%;height:100%}.homelab-common-section{padding:.85em 1.3em;margin-bottom:.55em;border-radius:.8em;font-size:1.1em;background:rgba(120,170,255,.06)}.homelab-common .homelab-common-section.focus{background:#fff;color:#000;outline:0}.homelab-common-more{padding:1em;text-align:center;border-radius:.8em;background:rgba(255,255,255,.04)}.homelab-common-skeleton{height:5.3em;margin-bottom:.55em;border-radius:.8em;background:rgba(255,255,255,.06);-webkit-animation:homelab-common-pulse 1.4s ease-in-out infinite;animation:homelab-common-pulse 1.4s ease-in-out infinite}.homelab-common-skeleton:first-child{height:6.6em}.homelab-common-empty{padding:3em 1em;text-align:center}.homelab-common-empty-title{font-size:1.5em;font-weight:600;margin-bottom:.5em}.homelab-common-empty-hint{opacity:.6}.homelab-common-hint{font-size:.85em;opacity:.45;padding-top:.6em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.homelab-common .hide{display:none}@media(max-width:600px){.homelab-common{padding:1em}.homelab-common-result{padding:.9em}.homelab-common-play{margin-right:.7em;width:1.8em;height:1.8em}.homelab-common-q{font-size:1em}.homelab-common-movie{font-size:1em}.homelab-common-chip,.homelab-common-tab{padding:.55em .9em}.homelab-common-hint{display:none}}'));
   L.Component.add(COMPONENT, Common);
   L.Listener.follow('full', function (event) { if (event.type === 'complite') addButton(event.data.movie, event.object.activity.render()); });
   var active = L.Activity.active(); if (active && active.component === 'full' && active.activity) addButton(active.card, active.activity.render());
-  window.HomelabSources = {Search: Search, quality: quality, voiceMatch: voiceMatch, preferences: preferences, describeRelease: describeRelease, canonVoice: canonVoice, releaseVoices: releaseVoices, compareRows: compareRows, groupRows: groupRows, resume: resumeSource, recover: recover};
+  window.HomelabSources = {Search: Search, quality: qualityHeight, voiceMatch: voiceMatch, preferences: preferences, describeRelease: describeRelease, canonVoice: canonVoice, releaseVoices: releaseVoices, compareRows: compareRows, groupRows: groupRows, resume: resumeSource, recover: recover};
 })();

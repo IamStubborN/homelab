@@ -6,7 +6,7 @@ const card = {id: 7, name: 'Series', source: 'tmdb'};
 function play(h, extra = {}) {
   h.run('mods/HomelabSync/quality.js');
   Object.assign(h.video(), {videoWidth: 1280, videoHeight: 720, paused: false});
-  h.start({card, season: 1, episode: 2, homelab_online: {provider: 'phantom', voice: 'Anilibria', season_index: 0},
+  h.start({card, season: 1, episode: 2, homelab_online: {provider: 'phantom', voice: 'Anilibria', season_index: 0}, homelab_claimed: 2160,
     quality: {'2160p': '/stream/4k', '720p': '/stream/720'}, url: '/stream/4k', ...extra});
 }
 // Mock timers run one level of rescheduled timeouts per tick: advance in steps like real time.
@@ -36,10 +36,10 @@ test('native online rows show the known real quality instead of the claim', asyn
   const h = harness(t); h.run('mods/HomelabSync/quality.js');
   const row = h.window.$('<div class="online-prestige"></div>'), badge = h.window.$('<div class="online-prestige__quality"></div>');
   row.append(badge); badge.text('2160p');
-  h.window.HomelabQuality.decorate(card, 'phantom', {voice_name: 'Anilibria'}, {season: 1, episode: 2}, row);
+  h.window.HomelabQuality.decorate(card, 'phantom', {voice_name: 'Anilibria'}, {season: 1, episode: 2, maxquality: '2160p'}, row);
   const read = h.calls.find(call => /\/homelab-sync\/quality\?/.test(call.url));
   assert.match(read.url, /card=tv_7/);
-  read.finish({version: 1, rows: {'phantom|1|anilibria': {height: 720, claimed: 2160, source: 'play'}}, providers: {}}); await flush();
+  read.finish({version: 1, rows: {'phantom|1|anilibria|2160': {height: 720, claimed: 2160, source: 'play'}}, providers: {}}); await flush();
   assert.equal(badge.text(), '720p · заявлено 4K');
 });
 
@@ -54,4 +54,41 @@ test('a provider is doubted after inflating at least a third of three checked ro
 test('a url that matches no quality entry may be any quality and is not reported', t => {
   const h = harness(t); play(h, {url: '/proxy/unknown'}); advance(h, 200000);
   assert.equal(posts(h).length, 0);
+});
+
+test('two variants of one voice keep their own facts', async t => {
+  const h = harness(t); h.run('mods/HomelabSync/quality.js');
+  const badges = ['2160p', '1080p'].map(label => {
+    const row = h.window.$('<div class="online-prestige"></div>'), badge = h.window.$('<div class="online-prestige__quality"></div>');
+    row.append(badge); badge.text(label);
+    h.window.HomelabQuality.decorate(card, 'phantom', {voice_name: 'Anilibria'}, {season: 1, episode: 2, maxquality: label}, row);
+    return badge;
+  });
+  h.calls.find(call => /\/homelab-sync\/quality\?/.test(call.url))
+    .finish({version: 1, rows: {'phantom|1|anilibria|2160': {height: 720, claimed: 2160, source: 'play'}, 'phantom|1|anilibria|1080': {height: 1080, claimed: 1080, source: 'probe'}}, providers: {}});
+  await flush();
+  assert.deepEqual(badges.map(badge => badge.text()), ['720p · заявлено 4K', '1080p ✓']);
+});
+
+test('the play report is keyed by the quality the row listed', t => {
+  const h = harness(t); play(h, {homelab_claimed: 1080, quality: {'1080p': '/stream/4k'}}); advance(h, 95000);
+  assert.equal(posts(h)[0].claimed, 1080);
+});
+
+test('an adaptive stream counts only time on its top variant', t => {
+  const h = harness(t); let current = 480;
+  play(h, {homelab_levels: () => ({top: 1080, current})});
+  advance(h, 200000); assert.equal(posts(h).length, 0, 'a slow network says nothing about the source');
+  current = 1080; advance(h, 95000); assert.equal(posts(h).length, 1);
+});
+
+test('a row as the Lampa online screen hands it over is keyed by its quality map', async t => {
+  const h = harness(t); h.run('mods/HomelabSync/quality.js');
+  const row = h.window.$('<div class="online-prestige"></div>'), badge = h.window.$('<div class="online-prestige__quality"></div>');
+  row.append(badge); badge.text('2160p');
+  h.window.HomelabQuality.decorate(card, 'phantom', {voice_name: 'Anilibria'}, {season: 1, episode: 2, quality: '2160p', qualitys: {'2160p': '/a', '1080p': '/b'}}, row);
+  h.calls.find(call => /\/homelab-sync\/quality\?/.test(call.url))
+    .finish({version: 1, rows: {'phantom|1|anilibria|2160': {height: 720, claimed: 2160, source: 'play'}}, providers: {}});
+  await flush();
+  assert.equal(badge.text(), '720p · заявлено 4K');
 });

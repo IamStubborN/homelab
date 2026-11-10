@@ -15,6 +15,9 @@ const TARGETS = {
   'plugins/playlist-thumbnails.js': 'src/playlist-thumbnails.js',
   'mods/HomelabSync/continue.js': 'src/homelab-sync/continue',
   'mods/HomelabSync/history.js': 'src/homelab-sync/history.js',
+  'plugins/common-sources.js': 'src/common-sources',
+  'mods/HomelabSync/online.js': 'src/homelab-sync/online.js',
+  'mods/HomelabSync/quality.js': 'src/homelab-sync/quality.js',
 };
 const INCLUDE = /^([ \t]*)\/\/ @include (shared\/[a-z0-9-]+\.js)\s*$/;
 

@@ -1,3 +1,4 @@
+// Built by tools/build.cjs from src/homelab-sync/online.js: edit the sources there and rebuild.
 (function install() {
   'use strict';
   if (!window.appready) {
@@ -42,12 +43,31 @@
     return item.card.indexOf('movie_') !== 0 || !source.text || rowText(file) === source.text;
   }
   function cancel() { if (pending) { pending.cancelled = true; clearTimeout(pending.timer); pending = null; } }
-  // Same label to height mapping as the source picker ("4K" is 2160, not 4).
-  function height(label) {
+  // Quality labels and picture sizes, the same in every plugin.
+  // "4K", "UHD", "1080p", "720i", "WEB-DL 2160p" → 2160, 1080, 720, 2160; anything else → 0.
+  function qualityHeight(label) {
     var text = String(label || '');
     if (/\b(4k|uhd)\b/i.test(text)) return 2160;
     var match = /(?:^|\D)(2160|1440|1080|720|576|480|360)(?:p|i|\D|$)/i.exec(text);
     return match ? +match[1] : 0;
+  }
+  // A decoded or announced picture size → its quality. Width first: cinema crops (1920x800) still count as 1080p.
+  function pictureHeight(width, height) {
+    var steps = [[3800, 2160], [2500, 1440], [1800, 1080], [1200, 720], [1000, 576], [800, 480]];
+    for (var i = 0; i < steps.length; i++) if (width >= steps[i][0] || height >= steps[i][1] * 0.9) return steps[i][1];
+    return width || height ? 360 : 0;
+  }
+  // 2160 → "4K", 1080 → "1080p", 0 → "".
+  function qualityLabel(value) { return value === 2160 ? '4K' : value ? value + 'p' : ''; }
+  // Heights a provider page names for a file, best first: its quality map, a tag in its text, else maxquality.
+  // Lampa's online screen moves the map to "qualitys" and leaves the first label in "quality".
+  function listedQualities(file) {
+    var map = [file.quality, file.qualitys].filter(function (value) { return value && typeof value === 'object'; })[0] || {};
+    var found = Object.keys(map).map(qualityHeight).filter(Boolean);
+    var named = qualityHeight(file.text || file.Title || file.title) || qualityHeight(file.info && file.info.quality);
+    if (named) found.push(named);
+    if (!found.length && file.maxquality) { named = qualityHeight(file.maxquality); if (named) found.push(named); }
+    return found.filter(function (q, i) { return found.indexOf(q) === i; }).sort(function (a, b) { return b - a; });
   }
   // Any key, click or touch in the opened component hands control to the user.
   function interrupted() {
@@ -294,6 +314,8 @@
         if (position >= 0) identity.match = {index: position, count: drawn.length, text: movieText(file, movie).slice(0, 200), translate: clean(file.translate).slice(0, 200), voice_name: clean(file.voice_name).slice(0, 200)};
         if (movie && Number.isInteger(movie.id) && ['tmdb', 'cub'].indexOf(movie.source || 'tmdb') >= 0 && valid(identity)) {
           work.card = movie; work.homelab_online = identity;
+          // The quality the provider page names for this row: the quality log keys rows by it.
+          work.homelab_claimed = listedQualities(file)[0] || 0;
           if (specialSupport && movie.name && special(file) && specials && specials.files.indexOf(file) >= 0) {
             work.timeline = specialRoad(file); rememberSpecial(work, file, specials);
           }
@@ -326,7 +348,7 @@
         comp.setDefaultQuality = function (work) {
           defaultQuality.apply(comp, arguments);
           if (intent && intent.quality && work.quality) Object.keys(work.quality).some(function (key) {
-            if (height(key) !== intent.quality) return false;
+            if (qualityHeight(key) !== intent.quality) return false;
             work.url = work.quality[key];
             // Native Player.play applies the global default again for multi-quality maps.
             var chosen = {}; chosen[key] = work.quality[key]; work.quality = chosen; return true;

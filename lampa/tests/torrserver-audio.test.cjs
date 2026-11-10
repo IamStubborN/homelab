@@ -475,11 +475,10 @@ test('fatal HLS retries are bounded and preserve an explicit pause at zero', t =
   assert.equal(hls.sources.length, 1);
   hls.media.play();
   assert.equal(hls.media.paused, true, 'recovery must preserve the explicit pause at 0:00');
+  for (const delay of [4000, 6000, 8000]) { hls.trigger('error', { ...error }); h.fireTimer(delay); }
   hls.trigger('error', { ...error });
-  h.fireTimer(4000);
-  hls.trigger('error', { ...error });
-  assert.equal(errors.length, 1, 'third fatal failure reaches the application');
-  assert.equal(hls.sources.length, 2);
+  assert.equal(errors.length, 1, 'the fifth fatal manifest failure reaches the application: each reload starts a GST task');
+  assert.equal(hls.sources.length, 4);
   assert.equal(hls.stops, 1);
 });
 
@@ -2678,4 +2677,116 @@ test('a list the panel keeps after playback carries no menu items or hooks of th
   assert.deepEqual(Array.from(kept, item => item.label), ['надписи', 'English', 'Russian'], 'only the stream\'s own tracks stay');
   assert.ok(kept.every(item => item.onDraw === undefined && item.homelabItem === undefined));
   assert.ok(tracks.every(item => item.onDraw === undefined));
+});
+
+function onlineHls(h) {
+  h.setPlaydata({url: 'https://lampa.test/lite/phantom/video.m3u8?id=1'});
+  const hls = h.createHls(), errors = [];
+  hls.on('error', (name, error) => errors.push(error));
+  return {hls, errors};
+}
+const ONLINE_DELAYS = [2000, 4000, 6000, 8000, 10000, 12000, 14000, 15000, 15000, 15000, 15000, 15000];
+const fragError = (code, type = 'main') => ({type: 'networkError', details: 'fragLoadError', fatal: true, frag: {type, sn: 7}, response: {code}});
+
+test('an online stream through this Lampac waits out a server restart instead of failing at once', t => {
+  const h = harness(t), {hls, errors} = onlineHls(h);
+  hls.trigger('fragBuffered', {frag: {type: 'main', sn: 1}});
+  for (const delay of ONLINE_DELAYS) { hls.trigger('error', fragError(502)); h.fireTimer(delay); }
+  assert.equal(errors.length, 0, 'the retries stay quiet');
+  assert.equal(hls.stops, 0);
+  hls.trigger('error', fragError(502));
+  assert.equal(errors.length, 1, 'then the error reaches the player');
+});
+
+test('a source that never showed a picture fails after two attempts, so Lampa can try its reserve', t => {
+  const h = harness(t), {hls, errors} = onlineHls(h);
+  for (const delay of [2000, 4000]) { hls.trigger('error', fragError(502)); h.fireTimer(delay); }
+  hls.trigger('error', fragError(502));
+  assert.equal(errors.length, 1);
+});
+
+test('one wall-clock deadline ends an online outage whatever hls.js retries inside each attempt', t => {
+  const h = harness(t), {hls, errors} = onlineHls(h);
+  hls.trigger('fragBuffered', {frag: {type: 'main', sn: 1}});
+  hls.trigger('error', fragError(503)); h.fireTimer(2000);
+  h.fireTimer(150000);
+  assert.equal(errors.length, 1); assert.equal(errors[0].fatal, true); assert.equal(hls.stops, 1);
+  hls.trigger('error', fragError(503));
+  assert.equal(errors.length, 2, 'nothing is retried after the deadline');
+});
+
+test('a buffered fragment after a restart starts the count and the deadline again', t => {
+  const h = harness(t), {hls, errors} = onlineHls(h);
+  hls.trigger('fragBuffered', {frag: {type: 'main', sn: 1}});
+  for (const delay of [2000, 4000, 6000]) { hls.trigger('error', fragError(503)); h.fireTimer(delay); }
+  hls.trigger('fragBuffered', {frag: {type: 'main', sn: 8}});
+  assert.throws(() => h.fireTimer(150000), /timer 150000 is scheduled/);
+  hls.trigger('error', fragError(503)); h.fireTimer(2000);
+  assert.equal(errors.length, 0);
+});
+
+test('an audio rendition cut by the same outage is retried too', t => {
+  const h = harness(t), {hls, errors} = onlineHls(h);
+  hls.trigger('fragBuffered', {frag: {type: 'main', sn: 1}});
+  hls.trigger('error', fragError(502, 'audio')); h.fireTimer(2000);
+  assert.equal(errors.length, 0);
+});
+
+test('a 404 after the outage resolves the stream again: links kept in Lampac memory are gone', t => {
+  const h = harness(t), {hls, errors} = onlineHls(h);
+  hls.trigger('fragBuffered', {frag: {type: 'main', sn: 1}});
+  hls.trigger('error', fragError(0)); h.fireTimer(2000);
+  hls.trigger('error', fragError(404)); h.fireTimer(4000);
+  assert.equal(errors.length, 0);
+  assert.deepEqual(hls.sources, ['https://lampa.test/lite/phantom/video.m3u8?id=1']);
+  hls.trigger('fragBuffered', {frag: {type: 'main', sn: 8}});
+  hls.trigger('error', fragError(404));
+  assert.equal(errors.length, 1, 'with the stream back, a 404 is an expired link');
+});
+
+test('online streams outside this Lampac and refused links keep Lampa\'s own handling', t => {
+  const h = harness(t);
+  h.setPlaydata({url: 'https://cdn.example/video.m3u8'});
+  const foreign = h.createHls(), errors = [];
+  foreign.on('error', (name, error) => errors.push(error));
+  foreign.trigger('error', fragError(502));
+  assert.equal(errors.length, 1);
+  h.setPlaydata({url: 'https://lampa.test/proxy/abc/video.m3u8'});
+  const own = h.createHls();
+  own.on('error', (name, error) => errors.push(error));
+  own.trigger('fragBuffered', {frag: {type: 'main', sn: 1}});
+  own.trigger('error', fragError(403));
+  assert.equal(errors.length, 2);
+});
+
+test('fragment resumes do not use up the reloads a later 404 needs', t => {
+  const h = harness(t);
+  h.start(1, 'same-torrent', true);
+  const hls = h.createHls(), errors = [];
+  hls.on('error', (name, error) => errors.push(error));
+  for (const delay of [2000, 4000, 6000, 8000, 10000]) { hls.trigger('error', fragError(502)); h.fireTimer(delay); }
+  hls.trigger('error', fragError(404)); h.fireTimer(12000);
+  assert.equal(errors.length, 0);
+  assert.equal(hls.sources.length, 1, 'the 404 reloads the GST task');
+});
+
+test('a torrent stream resumes fragment loads for about two minutes before failing', t => {
+  const h = harness(t);
+  h.start(1, 'same-torrent', true);
+  const hls = h.createHls(), errors = [];
+  hls.on('error', (name, error) => errors.push(error));
+  const error = {type: 'networkError', details: 'fragLoadError', fatal: true, frag: {type: 'main', sn: 3}, response: {code: 502}};
+  for (const delay of [2000, 4000, 6000, 8000, 10000, 12000, 14000, 15000, 15000, 15000, 15000, 15000]) { hls.trigger('error', {...error}); h.fireTimer(delay); }
+  assert.equal(errors.length, 0);
+  assert.equal(hls.sources.length, 0, 'fragment errors resume loading without a new GST task');
+  hls.trigger('error', {...error});
+  assert.equal(errors.length, 1);
+});
+
+test('an online stream tells the quality log which variant it plays', t => {
+  const h = harness(t), work = {url: 'https://lampa.test/lite/phantom/video.m3u8?id=1'};
+  h.setPlaydata(work); const hls = h.createHls();
+  hls.levels = [{height: 480}, {height: 1080}, {height: 720}]; hls.currentLevel = 0;
+  assert.deepEqual({...work.homelab_levels()}, {top: 1080, current: 480});
+  assert.equal(Object.keys(work).includes('homelab_levels'), false, 'kept out of saved play data');
 });

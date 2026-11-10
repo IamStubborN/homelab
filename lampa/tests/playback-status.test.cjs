@@ -344,7 +344,7 @@ test('playback frozen after a seek with data buffered is nudged once, then shown
   video.currentTime = 153.03; video.fire('seeking'); video.fire('seeked');
   h.tick(2900); assert.equal(video.currentTime, 153.03);
   h.tick(100); assert.equal(video.currentTime, 153.53, 'nudged half a second ahead');
-  video.fire('seeked'); h.tick(3000);
+  video.fire('seeking'); video.fire('seeked'); h.tick(3000);
   assert.equal(video.currentTime, 153.53, 'nudged only once');
   h.tick(5000); assert.ok(shown(c.root)); assert.match(c.title.text(), /^Буферизация/);
   video.advance(1); assert.ok(!shown(c.root), 'progress hides the card');
@@ -365,4 +365,94 @@ test('a resume after a long pause that never moves the clock is nudged', t => {
   video.play(); video.data(); video.advance(2); video.pause(); h.tick(300000);
   const at = video.currentTime; video.paused = false; video.fire('play'); h.tick(3000);
   assert.equal(video.currentTime, at + .5);
+});
+
+test('a seek inside the buffer that never ends reopens the stream once, as Retry does', t => {
+  const h = harness(t), calls = [];
+  h.window.HomelabSources = {recover: (...args) => { calls.push(args); return true; }};
+  const video = realistic(h); h.run('plugins/playback-status.js');
+  h.start({card: {id: 7}, homelab_online: {provider: 'one', voice: 'A'}});
+  video.play(); video.data(); video.advance(2);
+  video.buffered = {length: 1, start: () => 0, end: () => 1250};
+  // After a long pause WebKit is left seeking with the target buffered; Play changes nothing.
+  video.paused = true; video.seeking = true; video.currentTime = 1159; video.fire('seeking');
+  h.tick(10000); assert.equal(calls.length, 0, 'never while paused');
+  video.paused = false; video.fire('play'); h.tick(3000);
+  assert.equal(calls.length, 1); assert.equal(calls[0][2], true, 'same source');
+  assert.equal(Math.round(calls[0][1].position), 1159);
+  assert.match(card(h).title.text(), /Перемотка не завершилась/);
+});
+
+test('a slow seek outside the buffer waits for the usual stall timer', t => {
+  const h = harness(t), calls = [];
+  h.window.HomelabSources = {recover: (...args) => { calls.push(args); return true; }};
+  const video = realistic(h); h.run('plugins/playback-status.js');
+  h.start({card: {id: 7}, homelab_online: {provider: 'one', voice: 'A'}});
+  video.play(); video.data(); video.advance(2);
+  video.buffered = {length: 1, start: () => 0, end: () => 60};
+  video.seek(900); h.tick(10000);
+  assert.equal(calls.length, 0);
+});
+
+test('the first Retry of an online stream reloads it in the player at the same point, the second looks it up again', t => {
+  const h = harness(t), calls = [], loads = [];
+  h.window.HomelabSources = {recover: (...args) => { calls.push(args); return true; }};
+  let video = realistic(h); h.run('plugins/playback-status.js');
+  h.L.PlayerVideo.destroy = savemeta => loads.push(['destroy', savemeta]);
+  h.L.PlayerVideo.url = (url, keep) => { loads.push(['url', url, keep]); video = realistic(h, h.replaceVideo()); };
+  h.start({card: {id: 7}, homelab_online: {provider: 'one', voice: 'A'}, url: 'https://lampa.example/lite/one/video.m3u8'});
+  video.play(); video.data(); video.advance(2);
+  video.buffered = {length: 1, start: () => 0, end: () => 1250};
+  video.seeking = true; video.currentTime = 1159; video.fire('seeking');
+  h.tick(9000); assert.equal(loads.length, 0, 'a slow seek is given ten seconds');
+  h.tick(1000);
+  assert.deepEqual(loads, [['destroy', true], ['url', 'https://lampa.example/lite/one/video.m3u8', true]]);
+  assert.equal(calls.length, 0, 'no lookup on the first Retry');
+  const fresh = h.L.PlayerVideo.video(); fresh.fire('loadedmetadata');
+  assert.equal(Math.round(fresh.currentTime), 1159, 'resumes at the same point');
+  fresh.paused = false; fresh.seeking = true; fresh.fire('seeking');
+  h.tick(30000); assert.ok(shown(card(h).retry), 'still stuck: Retry is offered again');
+  card(h).retry.trigger('hover:enter');
+  assert.equal(calls.length, 1, 'the second Retry looks the episode up again');
+});
+
+test('Play on a seek left hanging during a long pause reloads the stream at once', t => {
+  const h = harness(t), loads = [];
+  h.window.HomelabSources = {recover() { return true; }};
+  let video = realistic(h); h.run('plugins/playback-status.js');
+  h.L.PlayerVideo.destroy = () => loads.push('destroy');
+  h.L.PlayerVideo.url = url => { loads.push(url); video = realistic(h, h.replaceVideo()); };
+  h.start({card: {id: 7}, homelab_online: {provider: 'one', voice: 'A'}, url: 'https://lampa.example/lite/one/video.m3u8'});
+  video.play(); video.data(); video.advance(2); video.pause();
+  video.buffered = {length: 1, start: () => 1106, end: () => 1250};
+  video.seeking = true; video.currentTime = 1159; video.fire('seeking'); h.tick(3 * 3600000);
+  assert.equal(loads.length, 0, 'nothing while paused');
+  video.paused = false; video.fire('play');
+  assert.deepEqual(loads, ['destroy', 'https://lampa.example/lite/one/video.m3u8']);
+});
+
+test('Play right after a fresh seek waits for it as usual', t => {
+  const h = harness(t), loads = [];
+  h.window.HomelabSources = {recover() { return true; }};
+  const video = realistic(h); h.run('plugins/playback-status.js');
+  h.L.PlayerVideo.destroy = () => loads.push('destroy'); h.L.PlayerVideo.url = url => loads.push(url);
+  h.start({card: {id: 7}, homelab_online: {provider: 'one', voice: 'A'}, url: 'u'});
+  video.play(); video.data(); video.advance(2); video.pause();
+  video.buffered = {length: 1, start: () => 0, end: () => 300};
+  video.seeking = true; video.currentTime = 100; video.fire('seeking'); h.tick(1000);
+  video.paused = false; video.fire('play'); h.tick(2000);
+  assert.equal(loads.length, 0);
+});
+
+test('after a fallback to the reserve, Retry does not reload the primary that failed', t => {
+  const h = harness(t), loads = [], calls = [];
+  h.window.HomelabSources = {recover: (...args) => { calls.push(args); return true; }};
+  const video = realistic(h); h.run('plugins/playback-status.js');
+  h.L.PlayerVideo.destroy = () => loads.push('destroy'); h.L.PlayerVideo.url = url => loads.push(url);
+  h.start({card: {id: 7}, homelab_online: {provider: 'one', voice: 'A'}, url: 'https://lampa.example/lite/one/primary.m3u8'});
+  video.src = 'https://media.example/reserve.m3u8';
+  video.play(); video.data(); video.advance(2);
+  video.buffered = {length: 1, start: () => 0, end: () => 300};
+  video.seeking = true; video.currentTime = 100; video.fire('seeking'); h.tick(10000);
+  assert.equal(loads.length, 0); assert.equal(calls.length, 1, 'looked up again instead');
 });

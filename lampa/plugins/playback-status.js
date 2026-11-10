@@ -4,10 +4,10 @@
   if (!L || !$ || window.homelabPlaybackStatus || !L.Player || !L.Player.listener || !L.PlayerVideo || !L.PlayerVideo.listener || !L.PlayerPanel || !L.Noty) return;
   if (![L.Player.playdata, L.Player.listener.follow, L.PlayerVideo.video,
     L.PlayerVideo.listener.follow, L.PlayerPanel.render, L.Noty.show, L.Player.opened].every(function (fn) { return typeof fn === 'function'; })) return;
-  window.homelabPlaybackStatus = {version: 7};
+  window.homelabPlaybackStatus = {version: 9};
   // Buffering mid-play stays invisible for 5 s (Lampa's spinner too), other short blips for 0.7 s; Lampa's own loader covers a fast
   // start; a long start suggests another source.
-  var DEBOUNCE = 700, BUFFER_DELAY = 5000, FROZEN = 3000, START_DELAY = 2500, ESCALATE = 20000, STATS_EVERY = 2000, CTRL = 'homelab_playback_card';
+  var DEBOUNCE = 700, BUFFER_DELAY = 5000, FROZEN = 3000, HUNG = 10000, START_DELAY = 2500, ESCALATE = 20000, STATS_EVERY = 2000, CTRL = 'homelab_playback_card';
   var state = null, boundAudio = null, retryButton = null, sourceButton = null, card = null;
   function scope() { return window.HomelabSync ? window.HomelabSync.scope() : L.Timeline.filename(); }
   function valid(s) { return state === s && L.Player.opened() && L.Player.playdata() === s.work && scope() === s.scope; }
@@ -238,14 +238,43 @@
     if (!(exact > 10 && percent < 90)) return 0;
     return duration && exact > duration - 15 ? Math.max(0, duration - 15) : exact;
   }
+  // The same stream reloaded in the open player, as Lampa switches quality; an online m3u8 answers
+  // with fresh proxy links, so this also outlives expired ones.
+  function absolute(url) { try { return new URL(url, window.location.href).href; } catch (error) { return url; } }
+  function reload(s, at) {
+    var V = L.PlayerVideo, url = s.work.url, P = L.Platform, old = V.video();
+    if (typeof url !== 'string' || !url || typeof V.destroy !== 'function' || typeof V.url !== 'function') return false;
+    // TV players swap their own video objects; they keep the full lookup.
+    if (P && typeof P.is === 'function' && (P.is('webos') || P.is('tizen') || P.is('orsay'))) return false;
+    // After a fallback to url_reserve the work still names the primary that already failed.
+    var playing = old && String(old.currentSrc || old.src || '');
+    if (playing && playing.indexOf('blob:') !== 0 && absolute(playing) !== absolute(url)) return false;
+    // The point is restored here; Lampa's own continue would seek a second time.
+    if (s.work.timeline) s.work.timeline.continued = true;
+    try { V.destroy(true); V.url(url, true); } catch (error) { return false; }
+    var video = V.video(), done = false;
+    if (!video || typeof video.addEventListener !== 'function') return true;
+    function seek() {
+      if (done) return; done = true;
+      if (at > 0) try { video.currentTime = at; } catch (error) {}
+      if (typeof video.removeEventListener === 'function') video.removeEventListener('loadedmetadata', seek);
+    }
+    video.addEventListener('loadedmetadata', seek);
+    return true;
+  }
   function recover(same) {
     // Before a stall, only a slow start may offer another source.
     var s = state; if (!s || !valid(s) || !s.actionable && !(s.escalated && !same)) return;
     if (Date.now() - s.retryAt < 5000) { L.Noty.show('Перезапуск уже выполняется, подождите'); return; }
     s.retryAt = Date.now(); capture(s);
+    var at = s.observed ? s.position : resumeAt(s);
+    // First Retry of an online stream stays in the player; a second one looks the episode up again.
+    if (same && s.work.homelab_online && !s.reloaded && reload(s, at)) {
+      s.reloaded = true; s.attempts++; s.stuck = true; bind(s); set('preparing'); arm(s); return;
+    }
     if ((!same || s.work.homelab_online) && canChoose(s)) {
       if (same) s.attempts++;
-      if (!window.HomelabSources.recover(s.work, {position: s.observed ? s.position : resumeAt(s), duration: s.duration}, same)) { s.retryAt = -Infinity; L.Noty.show('Откройте источник заново'); }
+      if (!window.HomelabSources.recover(s.work, {position: at, duration: s.duration}, same)) { s.retryAt = -Infinity; L.Noty.show('Откройте источник заново'); }
       return;
     }
     var audio = L.HomelabGstAudio;
@@ -292,6 +321,17 @@
     function waiting() { if (currentVideo(s)) { if (!s.stuck) { s.stuck = true; s.stuckAt = video.currentTime; } set(s.phase === 'recovering' ? 'recovering' : 'buffering', s.actionable); arm(s); } }
     // WebKit can freeze after a seek or a resume with data buffered and no waiting event:
     // the clock stands still while the player shows playback. Nudge it once, then treat it as buffering.
+    function inBuffer(at) {
+      var ranges = video.buffered;
+      for (var i = 0; ranges && i < ranges.length; i++) if (ranges.start(i) <= at && at < ranges.end(i) - .5) return true;
+      return false;
+    }
+    function hungSeek(asked) {
+      waiting(); s.seekStuck = true;
+      set(s.phase === 'recovering' ? 'recovering' : 'buffering', true);
+      // Only the first, in-player reload of an online stream is automatic; later ones are the user's call.
+      if (s.work.homelab_online && (asked || !s.attempts) && retryShown(s) && Date.now() - s.retryAt >= 5000) recover(true);
+    }
     function watch(nudged) {
       if (s.video !== video) return;
       if (!nudged) s.nudging = false;
@@ -299,7 +339,16 @@
       var at = video.currentTime;
       s.frozen = setTimeout(function () {
         s.frozen = null;
-        if (!currentVideo(s) || s.video !== video || window.document && window.document.hidden || video.paused || video.seeking || video.ended || video.readyState < 3 || Math.abs(video.currentTime - at) > .2) return;
+        if (!currentVideo(s) || s.video !== video || window.document && window.document.hidden || video.paused || video.ended) return;
+        // A seek inside the buffer that never ends: WebKit does not recover by itself, even from
+        // another seek, so reopen the stream at this point as Retry does (once a minute at most).
+        if (video.seeking) {
+          if (!inBuffer(video.currentTime)) return;
+          var left = HUNG - (Date.now() - (s.seekSince || 0));
+          if (left > 0) { s.frozen = setTimeout(function () { s.frozen = null; if (currentVideo(s) && s.video === video && !video.paused && video.seeking) hungSeek(); }, left); return; }
+          return hungSeek();
+        }
+        if (video.readyState < 3 || Math.abs(video.currentTime - at) > .2) return;
         if (nudged) return waiting();
         s.nudging = true;
         try { video.currentTime = at + .5; } catch (error) { s.nudging = false; waiting(); }
@@ -308,9 +357,20 @@
     function ready(phase) { if (currentVideo(s)) { cancelStall(s); capture(s); if (phase === 'playing') s.playedOnce = true; set(phase); } }
     s.events = {waiting: waiting, stalled: waiting, playing: function () { ready('playing'); }, canplay: function () { ready('ready'); },
       pause: function () { if (!video.ended) s.userPaused = true; cancelStall(s); if (currentVideo(s)) render(); },
-      play: function () { s.userPaused = false; if (currentVideo(s)) { arm(s); render(); watch(false); } },
+      play: function () {
+        s.userPaused = false;
+        if (!currentVideo(s)) return;
+        // Play on a seek left hanging (typically after a long pause) reloads at once: it is the user's ask.
+        if (video.seeking && inBuffer(video.currentTime) && Date.now() - (s.seekSince || 0) >= HUNG) return hungSeek(true);
+        arm(s); render(); watch(false);
+      },
       // A seek into missing torrent pieces may never complete.
-      seeking: function () { if (currentVideo(s)) { cancelStall(s); capture(s); if (!video.paused) arm(s); } },
+      seeking: function () {
+        if (!currentVideo(s)) return;
+        s.seekSince = Date.now(); cancelStall(s); capture(s);
+        // The nudge's own seek keeps its mark, so a second freeze is buffering, not another nudge.
+        if (!video.paused) { arm(s); watch(s.nudging); }
+      },
       seeked: function () {
         if (!currentVideo(s)) return;
         var nudged = s.nudging; s.nudging = false; capture(s);

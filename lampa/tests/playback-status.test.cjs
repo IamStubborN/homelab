@@ -482,3 +482,23 @@ test('the panel stays while paused, under a menu, and after the player closed', 
   h.L.Controller.toggle('player_panel'); h.L.Player.listener.send('destroy'); h.L.Player.opened = () => false;
   h.tick(15000); assert.deepEqual(panel.log, [], 'closed');
 });
+
+test('the TV remote Play/Pause keys keep working while the player panel is open', t => {
+  const h = harness(t); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
+  const calls = [];
+  Object.assign(h.L.PlayerVideo, {playpause: () => calls.push('playpause'), play: () => calls.push('play'), pause: () => calls.push('pause'), rewind: forward => calls.push(forward ? 'ff' : 'rw')});
+  const panel = {toggle() {}, up() {}}, footer = {toggle() {}, playpause: () => calls.push('own')};
+  h.L.Controller.add('player_panel', panel); h.L.Controller.add('player_footer', footer); h.L.Controller.add('player_tv', {toggle() {}});
+  // Lampa's Controller.enabled() hands out the active controller object itself.
+  const enabled = h.L.Controller.enabled; h.L.Controller.enabled = () => { const active = enabled(); return {name: active.name, controller: h.L.Controller.controllers[active.name]}; };
+  const press = name => { h.L.Keypad.listener.send('keydown', {code: 0}); const c = h.L.Controller.enabled().controller; if (c && c[name]) c[name](); };
+  h.L.Controller.toggle('player_panel');
+  press('playpause'); press('play'); press('pause'); press('rewindForward'); press('rewindBack');
+  assert.deepEqual(calls, ['playpause', 'play', 'pause', 'ff', 'rw']);
+  h.L.Controller.toggle('player_footer'); press('playpause');
+  assert.equal(calls.at(-1), 'own', 'a controller with its own handler keeps it');
+  h.L.Controller.toggle('player_tv'); press('playpause');
+  assert.equal(h.L.Controller.controllers.player_tv.playpause, undefined, 'IPTV keeps its channel controls');
+  h.L.Controller.toggle('player_panel'); h.work().iptv = true; press('play');
+  assert.equal(calls.at(-1), 'own', 'an IPTV stream is left alone');
+});

@@ -4,7 +4,7 @@
   if (!L || !$ || window.homelabPlaybackStatus || !L.Player || !L.Player.listener || !L.PlayerVideo || !L.PlayerVideo.listener || !L.PlayerPanel || !L.Noty) return;
   if (![L.Player.playdata, L.Player.listener.follow, L.PlayerVideo.video,
     L.PlayerVideo.listener.follow, L.PlayerPanel.render, L.Noty.show, L.Player.opened].every(function (fn) { return typeof fn === 'function'; })) return;
-  window.homelabPlaybackStatus = {version: 10};
+  window.homelabPlaybackStatus = {version: 11};
   // Buffering mid-play stays invisible for 5 s (Lampa's spinner too), other short blips for 0.7 s; Lampa's own loader covers a fast
   // start; a long start suggests another source.
   var DEBOUNCE = 700, BUFFER_DELAY = 5000, FROZEN = 3000, HUNG = 10000, START_DELAY = 2500, ESCALATE = 20000, STATS_EVERY = 2000, CTRL = 'homelab_playback_card';
@@ -447,6 +447,24 @@
     L.PlayerPanel.toPlayer();
   }
   if (L.Keypad && L.Keypad.listener && typeof L.Keypad.listener.follow === 'function') L.Keypad.listener.follow('keydown', touched);
+  // Lampa gives the media keys (Play, Pause, Play/Pause, rewind) only to the bare 'player' controller:
+  // with the bottom panel, its rewind row, footer or skip button open a TV remote's Play did nothing.
+  // Keypad sends 'keydown' before it dispatches, so the active player controller borrows them in time.
+  function media(run) {
+    return function () { var work = L.Player.playdata(); if (L.Player.opened() && !(work && work.iptv)) run(); };
+  }
+  var MEDIA = {
+    playpause: media(function () { L.PlayerVideo.playpause(); }), play: media(function () { L.PlayerVideo.play(); }),
+    pause: media(function () { L.PlayerVideo.pause(); }),
+    rewindForward: media(function () { L.PlayerVideo.rewind(true); }), rewindBack: media(function () { L.PlayerVideo.rewind(false); })
+  };
+  function lendMediaKeys() {
+    var active = L.Controller && typeof L.Controller.enabled === 'function' && L.Controller.enabled(), target = active && active.controller, name = active && active.name || '';
+    if (!target || typeof target !== 'object' || !L.Player.opened() || name === 'player_tv' || !(/^player_/.test(name) || name === CTRL)) return;
+    if (!L.PlayerVideo || ['playpause', 'play', 'pause', 'rewind'].some(function (fn) { return typeof L.PlayerVideo[fn] !== 'function'; })) return;
+    Object.keys(MEDIA).forEach(function (key) { if (!target[key]) target[key] = MEDIA[key]; });
+  }
+  if (L.Keypad && L.Keypad.listener && typeof L.Keypad.listener.follow === 'function') L.Keypad.listener.follow('keydown', lendMediaKeys);
   if (typeof document !== 'undefined' && document && typeof document.addEventListener === 'function') ['mousedown', 'mousemove', 'touchstart', 'wheel'].forEach(function (name) { document.addEventListener(name, touched, true); });
   function watchIdle() { touched(); clearTimeout(idleTimer); idleTimer = setTimeout(idleCheck, 1000); }
   L.Player.listener.follow('start', watchIdle);

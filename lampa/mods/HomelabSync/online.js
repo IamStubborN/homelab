@@ -114,12 +114,12 @@
       // played or moved to). A list moves only to a different episode, so saves from a TV that is
       // still playing the same episode, or this TV's own progress after Back, never pull focus again.
       var seen = 0, place = '', seenScope = sync.scope(), unsubscribe = typeof sync.subscribe === 'function' ? sync.subscribe(refreshed) : null;
-      function newest() {
+      function newest(regular) {
         var movie = object.movie, key = movie && movie.name && Number.isInteger(movie.id) ? 'tv_' + movie.id : '', best = null;
         if (!key || typeof sync.rows !== 'function') return null;
         sync.rows().forEach(function (row) {
           var x = sync.extra(row);
-          if (row.deleted || x.card !== key || !Number.isInteger(x.season) || !(x.episode > 0)) return;
+          if (row.deleted || x.card !== key || !Number.isInteger(x.season) || !(x.episode > 0) || regular && x.season < 1) return;
           if (!best || row.watched_at > best.at) best = {season: x.season, episode: x.episode, at: row.watched_at || 0};
         });
         return best;
@@ -131,6 +131,38 @@
         if (view[last.season] === last.episode) return;
         view[last.season] = last.episode;
         comp.replaceChoice({episodes_view: view}, provider);
+      }
+      // Lampac picks the season by its position in the provider's season list, stored per device.
+      // Before it reads that choice, point it at the household's newest season. A Continue launch
+      // brings its own season, and a season picked in the filter loads its episodes directly.
+      // Lampac's own «s» attribute first, then the provider's season id, the title, the url.
+      function seasonOf(item) {
+        if (Number.isInteger(item.season)) return item.season;
+        if (Number.isInteger(item.id) && item.id >= 0 && item.id < 1000) return item.id;
+        var title = String(item.name || item.text || ''), match = /^\s*(\d+)\s*сезон/i.exec(title) || /(?:сезон|season)\s*(\d+)/i.exec(title) || /[?&]s=(\d+)(?:&|$)/.exec(String(item.url || ''));
+        return match ? +match[1] : null;
+      }
+      // Once per opened list: a later season list (a voice switch, a replay) keeps a season picked here.
+      var seasonPlaced = false;
+      function openSeason(str) {
+        if (seasonPlaced || intent && !intent.finished && !intent.cancelled || typeof comp.parseJsonDate !== 'function') return;
+        var items = comp.parseJsonDate(str, '.videos__item');
+        if (!Array.isArray(items) || items.length < 2 || items.some(function (item) { return !item || item.method !== 'link' || item.similar; })) return;
+        seasonPlaced = true;
+        var seasons = items.map(seasonOf), last = newest();
+        // A special the provider does not list: go by the newest regular episode.
+        if (last && seasons.indexOf(last.season) < 0 && last.season === 0) last = newest(true);
+        var index = last ? seasons.indexOf(last.season) : -1;
+        if (index < 0 || seasons.lastIndexOf(last.season) !== index) return;
+        var choice = comp.getChoice(provider) || {};
+        if (choice.season !== index) comp.replaceChoice({season: index}, provider);
+      }
+      if (typeof comp.parse === 'function') {
+        var parse = comp.parse;
+        comp.parse = function (str) {
+          if (!disposed) try { openSeason(str); } catch (_) {}
+          return parse.apply(this, arguments);
+        };
       }
       function refreshed() {
         if (disposed || L.Activity.active() !== object || L.Player.opened()) return;

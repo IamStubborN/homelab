@@ -4,7 +4,7 @@ const {harness, flush} = require('./ux-harness.cjs');
 
 function setup(t, options = {}) {
   const h = harness(t), registry = {}, choices = {}, starts = [];
-  let active = null, requests = [], draws = [];
+  let active = null, requests = [], draws = [], parsed = [];
   function Native(object) {
     this.getChoice = provider => choices[provider] || {};
     this.replaceChoice = (data, provider) => { choices[provider] = {...choices[provider], ...data}; };
@@ -20,6 +20,8 @@ function setup(t, options = {}) {
         choices.kinobase = {...choice, voice_name: name}; file.voice_name = name;
       } file.timeline = {hash: '123'}; file.mark = () => {}; params.onRender?.(file, options.html?.(file) || {}, {}); })); };
     this.destroy = () => {};
+    this.parseJsonDate = str => Array.isArray(str) ? str : [];
+    this.parse = function (str) { assert.equal(this, component); parsed.push(choices.kinobase?.season); };
     const root = h.window.$('<div></div>');
     this.render = () => root;
     this.noConnectToServer = function () { root.find('.online-empty__time').text('Поиск на (undefined) не дал результатов'); };
@@ -31,7 +33,8 @@ function setup(t, options = {}) {
   h.run('mods/HomelabSync/online.js');
   const item = {card: 'tv_42', season: 2, episode: 3, position: 71, online: {provider: 'kinobase', voice: 'Preferred', season_index: 1}};
   const movie = {id: 42, name: 'Series', source: 'tmdb', original_title: "Original's series", number_of_seasons: 2};
-  return {...h, item, movie, choices, starts, registry,
+  return {...h, item, movie, choices, starts, registry, parsed,
+    plain() { h.L.Activity.push({component: 'lampac', movie, balanser: 'kinobase'}); return component; },
     async open(value = item) { assert.equal(h.window.HomelabOnlineResume.resume(value, movie, () => starts.push('timeout')), true); await component.startSource(); return component; },
     component: () => component, render() { draws.shift()(); }, resolve() { requests.shift()(); },
     draw(items) { component.draw(items, {onEnter(file) { starts.push(file); component.getFileUrl(file, () => { h.L.Player.play(component.toPlayElement(file)); }); }}); },
@@ -518,4 +521,39 @@ test('the episode just played here is not focused again by its own progress', as
   h.L.Controller.toggle('content'); log.length = 0;
   h.syncRows([progress(3, 100), progress(5, 600)]); h.syncPublish();
   assert.deepEqual(log, []);
+});
+
+const seasons = (...list) => list.map(([id, name, url, season]) => ({method: 'link', id, name, url: url || 'season-url', ...(season === undefined ? {} : {season})}));
+const seasonAfter = (h, list) => { const c = h.plain(); c.parse(list); return h.parsed.at(-1); };
+
+test('the season list opens at the newest season of the household', async t => {
+  const h = setup(t);
+  h.syncRows([progress(9, 100, 1), progress(2, 300, 3), progress(5, 200, 2)]);
+  h.choices.kinobase = {season: 0, voice_name: 'Kept'};
+  assert.equal(seasonAfter(h, seasons([1], [2], [3])), 2, 'Lampac reads the choice after it was moved');
+  assert.equal(h.choices.kinobase.voice_name, 'Kept');
+  assert.equal(seasonAfter(h, seasons([undefined, 'Сезон 1'], [undefined, '3 сезон'])), 1, 'by the title');
+  assert.equal(seasonAfter(h, seasons([undefined, 'x', 'a?s=3&t=1'], [undefined, 'y', 'a?s=1'])), 0, 'by the url');
+  assert.equal(seasonAfter(h, seasons([5001, 'x', 'u', 3], [5002, 'y', 'u', 1])), 0, 'by the s attribute, not an opaque id');
+});
+
+test('a special the provider does not list goes by the newest regular season', async t => {
+  const h = setup(t);
+  h.syncRows([progress(2, 300, 2), progress(1, 400, 0)]);
+  assert.equal(seasonAfter(h, seasons([1], [2], [3])), 1);
+  assert.equal(seasonAfter(h, seasons([0], [1], [2])), 0, 'a listed special is opened');
+});
+
+test('the season is placed once per list and left alone when unsure, for episode lists and for a Continue launch', async t => {
+  const h = setup(t);
+  h.syncRows([progress(2, 300, 3)]);
+  h.choices.kinobase = {season: 1};
+  for (const list of [seasons([1], [2]), seasons([3], [3]), [{method: 'link', id: 3, similar: true}, {method: 'link', id: 1, similar: true}],
+    [{method: 'play', season: 3, episode: 1}, {method: 'play', season: 3, episode: 2}], seasons([3])]) seasonAfter(h, list);
+  assert.deepEqual(h.parsed, [1, 1, 1, 1, 1]);
+  const c = h.plain(); c.parse(seasons([1], [2], [3])); assert.equal(h.parsed.at(-1), 2);
+  h.choices.kinobase.season = 0; c.parse(seasons([1], [2], [3]));
+  assert.equal(h.parsed.at(-1), 0, 'a season picked in this list stays');
+  const resumed = await h.open(); h.choices.kinobase.season = 1; resumed.parse(seasons([1], [2], [3]));
+  assert.equal(h.parsed.at(-1), 1, 'Continue brings its own season');
 });

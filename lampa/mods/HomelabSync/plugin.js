@@ -146,6 +146,8 @@
     lastError = error ? error.message : '';
     if (!error || error.message !== 'profile') last = { key: pending.ctx.key, at: Date.now(), error: lastError };
     pending.callbacks.splice(0).forEach(function (callback) { callback(error); });
+    // A websocket notice that came while this request was already out needs one more pull.
+    if (repull && !request) { repull = false; last = null; setTimeout(function () { pull(); }, 0); }
     if (error && error.message !== 'profile') publish();
   }
   function schedule() {
@@ -153,6 +155,7 @@
     if (!enabled || document.hidden || L.Player.opened()) return;
     timer = setTimeout(function () { if (!L.Player.opened()) pull(); }, Math.max(300, 15000 - (Date.now() - lastPull)));
   }
+  var repull = false;
   window.HomelabSync = {
     pull: pull, rows: function () { current(); return rows.slice(); }, extra: extra,
     scope: function () { var ctx = current(); return ctx ? ctx.key : ''; },
@@ -160,6 +163,50 @@
     url: function (path) { var ctx = current(); return ctx ? ctx.url.replace('/timecode/dump?', path + '?') : null; },
     subscribe: function (fn) { listeners.push(fn); return function () { listeners = listeners.filter(function (value) { return value !== fn; }); }; }
   };
+  // Lampac's websocket announces another device's progress write ('timecode', never sent back to
+  // its author): pull it now instead of on the next minute tick, so open lists follow at once.
+  var pushTimer;
+  document.addEventListener('lwsEvent', function (event) {
+    var detail = event && event.detail;
+    if (!detail || detail.name !== 'timecode') return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(function () {
+      if (!enabled || document.hidden || L.Player.opened()) return;
+      if (request) { repull = true; return; }
+      last = null; pull();
+    }, 1000);
+  });
+  // Lampa saves playback progress every 2 minutes and on close only. A pause, a hidden app or a
+  // TV put to standby would leave other devices up to 2 minutes behind (or on the previous
+  // episode): save at those moments and every 30 s while the position moves.
+  var playing = null, savedTime = null, saveTimer = null, pauseTimer = null, SAVE = 30000;
+  function saveProgress() {
+    var road = playing && playing.timeline;
+    if (!road || typeof road.handler !== 'function' || road.stop_recording || road.waiting_for_user || !(road.duration > 0) || !isFinite(road.duration) || !(road.time > 0)) return;
+    if (savedTime !== null && Math.abs(road.time - savedTime) < 5) return;
+    savedTime = road.time;
+    road.handler(road.percent, road.time, road.duration);
+  }
+  function saveLoop() {
+    clearTimeout(saveTimer);
+    saveTimer = playing ? setTimeout(function () { saveProgress(); saveLoop(); }, SAVE) : null;
+  }
+  // Until playback restores the stored position the timeline still holds that stored copy: count
+  // it as saved, so nothing is written (with a fresh stamp) before the position really moves.
+  L.Player.listener.follow('start', function (work) { playing = work || null; savedTime = playing && playing.timeline ? playing.timeline.time : null; saveLoop(); });
+  L.Player.listener.follow('destroy', function () { playing = null; clearTimeout(pauseTimer); saveLoop(); });
+  if (L.PlayerVideo && L.PlayerVideo.listener && typeof L.PlayerVideo.listener.follow === 'function') {
+    // Seeks and the native resume also pause for a moment: save only a pause that lasts, once.
+    L.PlayerVideo.listener.follow('pause', function () {
+      var work = playing; clearTimeout(pauseTimer);
+      pauseTimer = setTimeout(function () {
+        var video = typeof L.PlayerVideo.video === 'function' ? L.PlayerVideo.video() : null;
+        if (playing === work && !(video && video.paused === false)) saveProgress();
+      }, 1000);
+    });
+  }
+  document.addEventListener('visibilitychange', function () { if (document.hidden) saveProgress(); });
+  window.addEventListener('pagehide', saveProgress);
   L.Timeline.listener.follow('read', scheduleRepair);
   L.Timeline.listener.follow('update', scheduleRepair);
   L.Storage.listener.follow('change', function (e) { if (['account', 'account_use', 'lampac_profile_id'].indexOf(e.name) !== -1) { current(); publish(); schedule(); } });

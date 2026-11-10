@@ -32,7 +32,7 @@ function harness({ screen = false, missingApi = false } = {}) {
     },
     Timeline: { filename: () => 'file_view_' + account.Permit.account.profile.id, listener: timelineEvents,
       read() { readCount++; timelineEvents.emit('read', {}); }, update() { assert.fail('received progress must not echo writes'); } },
-    Player: { opened: () => false, listener: bus() }, Listener: activityEvents,
+    Player: { opened: () => false, listener: bus() }, PlayerVideo: { listener: bus() }, Listener: activityEvents,
     Component: { add(name, value) { components[name] = value; } },
     Maker: { make() { comp = { use(hooks) { this.hooks = hooks; }, build(data) { built = data; }, empty() { built = { results: [] }; } }; return comp; } },
     Menu: { addButton(svg, name, action) { menu = action; return label(); } },
@@ -49,12 +49,12 @@ function harness({ screen = false, missingApi = false } = {}) {
   vm.runInNewContext(core, context);
   if (screen) vm.runInNewContext(ui, context);
   return {
-    L, storage, requests, sync: context.window.HomelabSync, timelineEvents, changes,
+    L, storage, requests, sync: context.window.HomelabSync, timelineEvents, changes, context, events: activityEvents,
     get reads() { return readCount; }, get refreshes() { return refreshCount; },
     pages(value) { totalPages = value; }, get selection() { return selection; }, get built() { return built; }, get historyCalls() { return historyCalls; },
     advance(n) { now += n; }, get cacheReads() { return cacheReads; },
     flush() { const pending = [...timers.values()]; timers.clear(); pending.forEach(fn => fn()); },
-    pull(done) { now += 10001; context.window.HomelabSync.pull(done); }, events(value) { events = value; }, cards(value) { cubCards = value; },
+    pull(done) { now += 10001; context.window.HomelabSync.pull(done); }, historyEvents(value) { events = value; }, cards(value) { cubCards = value; },
     start() { new components.homelab_history({}); comp.hooks.onCreate.call(comp); return comp; },
     open(card) { now += 10001; let hooks; comp.hooks.onInstance({ use(value) { hooks = value; } }, card); hooks.onEnter(); },
     resolve(rows, index = requests.length - 1, extra = {}) { requests[index].done({ rows, ...extra }); }
@@ -106,7 +106,7 @@ test('own history screen updates a still-open panel and refetches CUB rewatches 
   h.open(h.built.results[0]); h.resolve([row(20)]);
   assert.equal(h.selection.items[0].html.value, 'Серии: 1');
   const requests = h.requests.length, before = h.historyCalls;
-  h.events([{ season: 1, episode: 20, watched_at: 5000 }, { season: 1, episode: 20, watched_at: 4000 }]);
+  h.historyEvents([{ season: 1, episode: 20, watched_at: 5000 }, { season: 1, episode: 20, watched_at: 4000 }]);
   h.pull(); h.resolve([row(20)]);
   assert.equal(h.requests.length, requests + 1, 'panel repaint must not pull recursively');
   assert.ok(h.historyCalls > before, 'CUB event history is fetched again');
@@ -127,7 +127,7 @@ test('switching profiles immediately closes the old history panel', () => {
 test('CUB-only episodes contribute to the card and panel count without duplicating rewatches', () => {
   const h = harness({ screen: true });
   h.cards([{ id: 42, name: 'Test', original_name: 'Test', watch_history: { episodes: [{ season: 1, episode: 1 }] } }]);
-  h.events([{ season: 1, episode: 1, watched_at: 5000 }, { season: 1, episode: 1, watched_at: 4000 }]);
+  h.historyEvents([{ season: 1, episode: 1, watched_at: 5000 }, { season: 1, episode: 1, watched_at: 4000 }]);
   h.start(); h.resolve([]);
   assert.equal(h.built.results[0].homelab_summary, 'Серии: 1');
   h.open(h.built.results[0]); h.resolve([]);
@@ -250,7 +250,7 @@ test('history cards and panel events show the same progress wording as Continue,
   assert.equal(line.value, 'С1 · Е2 · осталось 12 мин');
   assert.equal(when.value, 'Серии: 2 · только что');
   assert.equal(bar.children[0].find('div').styles.width, '28%');
-  h.events([{ season: 1, episode: 2, watched_at: 99000 }, { season: 1, episode: 1, watched_at: 100000 - 86400000 }]);
+  h.historyEvents([{ season: 1, episode: 2, watched_at: 99000 }, { season: 1, episode: 1, watched_at: 100000 - 86400000 }]);
   h.open(card); h.resolve([row(1, { watched_at: 1000 }), row(2, { position: 280, duration: 1000, watched_at: 99000 })]);
   const items = h.selection.items;
   const separators = [...items].filter(entry => entry.separator).map(entry => entry.title);
@@ -259,4 +259,51 @@ test('history cards and panel events show the same progress wording as Continue,
   assert.equal(events[0].html.children[1].value, 'Осталось 12 мин');
   assert.equal(events[0].html.children[2].find('div').styles.width, '28%');
   assert.ok(events[1].html.classes.has('homelab-history-event--watched'));
+});
+
+test('playback progress is saved on a lasting pause, when hidden and every 30 s while it moves, never after close', () => {
+  const h = harness(), saves = [], video = { paused: true };
+  h.L.PlayerVideo.video = () => video;
+  const timeline = { time: 100, percent: 10, duration: 1000, handler: (percent, time, duration) => saves.push([percent, time, duration]) };
+  h.L.Player.listener.emit('start', { timeline });
+  h.L.PlayerVideo.listener.emit('pause'); h.flush();
+  assert.deepEqual(saves, [], 'the stored position is not written again before playback restores it');
+  timeline.time = 160; h.flush(); assert.deepEqual(saves, [[10, 160, 1000]], 'the 30 s tick');
+  h.flush(); assert.equal(saves.length, 1, 'a paused position is not written again');
+  timeline.time = 162; h.L.PlayerVideo.listener.emit('pause'); h.flush();
+  assert.equal(saves.length, 1, 'tiny moves are skipped');
+  timeline.time = 200; video.paused = false; h.L.PlayerVideo.listener.emit('pause'); h.L.PlayerVideo.listener.emit('pause');
+  video.paused = true; h.L.PlayerVideo.listener.emit('pause'); h.flush();
+  assert.deepEqual(saves.at(-1), [10, 200, 1000]); assert.equal(saves.length, 2, 'a burst of pauses (scrubbing) saves once');
+  timeline.time = 260; video.paused = false; h.L.PlayerVideo.listener.emit('pause'); h.flush();
+  timeline.time = 260; assert.equal(saves.length, 3, 'only the loop saved: a seek pause that resumed is not a pause');
+  timeline.time = 300; h.context.document.hidden = true; h.events.emit('visibilitychange'); h.context.document.hidden = false;
+  assert.deepEqual(saves.at(-1), [10, 300, 1000], 'saved as the app goes to the background');
+  timeline.time = 400; timeline.waiting_for_user = true; h.flush(); assert.equal(saves.length, 4, 'not while Lampa asks where to continue');
+  timeline.waiting_for_user = false; timeline.duration = Infinity; h.flush(); assert.equal(saves.length, 4, 'not a live stream');
+});
+
+test('a pause just before the next episode starts does not write the next one', () => {
+  const h = harness(), saves = [];
+  const first = { time: 100, percent: 10, duration: 1000, handler: () => saves.push('first') };
+  const next = { time: 500, percent: 50, duration: 1000, handler: () => saves.push('next') };
+  h.L.Player.listener.emit('start', { timeline: first });
+  first.time = 900; h.L.PlayerVideo.listener.emit('pause');
+  h.L.Player.listener.emit('destroy'); h.L.Player.listener.emit('start', { timeline: next }); next.time = 600;
+  h.flush(); assert.deepEqual(saves, ['next'], 'only the loop of the new episode, after it moved');
+  h.L.Player.listener.emit('destroy'); next.time = 700; h.L.PlayerVideo.listener.emit('pause'); h.events.emit('pagehide'); h.flush();
+  assert.deepEqual(saves, ['next'], 'the player saved itself on close');
+});
+
+test('a websocket timecode event from another device pulls at once, other events do not', () => {
+  const h = harness(); h.pull(); h.resolve([row(1)]);
+  const before = h.requests.length;
+  h.events.emit('lwsEvent', { detail: { name: 'bookmarks' } }); h.flush();
+  assert.equal(h.requests.length, before);
+  h.events.emit('lwsEvent', { detail: { name: 'timecode' } }); h.events.emit('lwsEvent', { detail: { name: 'timecode' } }); h.flush();
+  assert.equal(h.requests.length, before + 1, 'fresh results do not hold it back, a burst pulls once');
+  h.events.emit('lwsEvent', { detail: { name: 'timecode' } }); h.flush();
+  assert.equal(h.requests.length, before + 1, 'a request already out is not doubled');
+  h.resolve([row(1)]); h.flush();
+  assert.equal(h.requests.length, before + 2, 'but is followed by one more pull');
 });

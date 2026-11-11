@@ -210,8 +210,22 @@
     if (!audio || typeof audio.report !== 'function') return;
     try {
       var ranges = video && video.buffered, end = ranges && ranges.length ? ranges.end(ranges.length - 1) : 0;
-      audio.report('playback-stall', {kind: kind, seekStuck: !!s.seekStuck, played: !!s.playedOnce, rs: video ? video.readyState : -1, ns: video ? video.networkState : -1,
-        ahead: Math.round((end - (video ? video.currentTime : 0)) * 10) / 10, paused: !!(video && video.paused), seeking: !!(video && video.seeking), torrent: s.stats || '', hls: s.work && typeof s.work.homelab_hls_trail === 'function' ? s.work.homelab_hls_trail() : null}, s.work);
+      var fields = {kind: kind, seekStuck: !!s.seekStuck, played: !!s.playedOnce, rs: video ? video.readyState : -1, ns: video ? video.networkState : -1,
+        ahead: Math.round((end - (video ? video.currentTime : 0)) * 10) / 10, paused: !!(video && video.paused), seeking: !!(video && video.seeking), torrent: s.stats || ''};
+      // The log keeps flat short strings: the hls.js trail goes as up to five
+      // `ev1`… chunks of its newest events.
+      var trail = s.work && typeof s.work.homelab_hls_trail === 'function' ? s.work.homelab_hls_trail() : null;
+      if (trail) {
+        fields.hms = trail.ms; fields.herr = trail.err; fields.hstart = trail.start;
+        var chunks = [], line = '';
+        trail.events.forEach(function (event) {
+          if (line && (line + ' | ' + event).length > 150) { chunks.push(line); line = ''; }
+          line = line ? line + ' | ' + event : event;
+        });
+        if (line) chunks.push(line);
+        chunks.slice(-5).forEach(function (chunk, index) { fields['ev' + (index + 1)] = chunk; });
+      }
+      audio.report('playback-stall', fields, s.work);
     } catch (error) {}
   }
   function render() {

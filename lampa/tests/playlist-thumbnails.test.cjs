@@ -320,6 +320,9 @@ test('a single-item playlist hides the native playlist button; a series keeps it
   const movie = {url: 'movie', title: 'Fictional Movie', card: {id: 7, title: 'Fictional Movie', source: 'tmdb'}};
   box.removeClass('hide'); h.play({...movie, playlist: [movie]}); h.tick(0);
   assert.ok(box.hasClass('hide'), 'a movie has nothing to pick');
+  let menus = 0; h.L.PlayerPanel.listener.follow('playlist', () => menus++);
+  h.L.PlayerPanel.listener.send('playlist', {}); assert.equal(menus, 0, 'the Down key opens no one-row menu either');
   h.close(); box.removeClass('hide'); h.lampacStart();
   assert.ok(!box.hasClass('hide'), 'episodes keep the button');
+  h.L.PlayerPanel.listener.send('playlist', {}); assert.equal(menus, 1, 'episodes still open the playlist');
 });

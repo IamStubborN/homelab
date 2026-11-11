@@ -252,6 +252,12 @@
     var box = panel && panel.find('.player-panel__playlist-buttons');
     if (box && box.length && Array.isArray(playlist) && playlist.length < 2) box.addClass('hide');
   }
+  // The same one-row menu also opens from the panel's Down key; the request goes through PlayerPanel.listener.send.
+  var panelEvents = L.PlayerPanel && L.PlayerPanel.listener, panelSend = panelEvents && panelEvents.send;
+  if (typeof panelSend === 'function') panelEvents.send = function (name) {
+    if (name === 'playlist' && L.PlayerPlaylist.get().length < 2) return;
+    return panelSend.apply(this, arguments);
+  };
   L.PlayerPlaylist.listener.follow('set', function (event) {
     try { soloButton(event.playlist); } catch (_) {}
     if (locate(event)) return;

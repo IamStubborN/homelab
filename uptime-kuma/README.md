@@ -68,8 +68,8 @@ heartbeat's `localDateTime`/`timezone` (Europe/Sofia). Dynamic text is truncated
 before HTML escaping; missing heartbeat events use a generic notice, and zero
 latency is retained. The real installed provider passed five offline rendering
 cases with network disabled. A retired host must be removed from the desired
-catalog and status-page membership as well as the live monitor list; preserve a
-verified native data snapshot before deleting its history.
+catalog and status-page membership as well as the live monitor list. Delete
+its monitor through the native API; its history is not kept.
 
 ## Host collector
 

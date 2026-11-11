@@ -428,6 +428,35 @@
         return hls;
       }
 
+      // The last hls.js events of a torrent stream, for the stall report: a
+      // stream that stops after its first segment says nothing otherwise.
+      function traceHls(hls, work) {
+        var trail = [], start = Date.now(), E = BaseHls.Events;
+        function note(text) { trail.push(Math.round((Date.now() - start) / 100) / 10 + ' ' + text); if (trail.length > 30) trail.shift(); }
+        function frag(data) { var f = data && data.frag; return f ? (f.type === 'main' ? '' : f.type + ':') + f.sn : ''; }
+        var trace = {};
+        trace[E.MEDIA_ATTACHED] = function () { return 'attached'; };
+        trace[E.MANIFEST_PARSED] = function (data) { return 'manifest ' + (data.levels || []).map(function (level) { return (level.codecs || level.videoCodec || '?') + '@' + (level.height || 0); }).join(','); };
+        trace[E.LEVEL_LOADED] = function (data) { var d = data.details || {}; return 'level ' + (d.fragments || []).length + 'f ' + Math.round(d.totalduration || 0) + 's' + (d.live ? ' live' : ''); };
+        trace[E.BUFFER_CODECS] = function (data) { return 'codecs ' + Object.keys(data || {}).map(function (key) { return key + '=' + (data[key] && (data[key].codec || data[key].container) || ''); }).join(','); };
+        trace[E.FRAG_LOADING] = function (data) { return 'load ' + frag(data); };
+        trace[E.FRAG_LOADED] = function (data) { return 'loaded ' + frag(data); };
+        trace[E.FRAG_PARSED] = function (data) { return 'parsed ' + frag(data); };
+        trace[E.FRAG_BUFFERED] = function (data) { return 'buffered ' + frag(data); };
+        trace[E.BUFFER_APPENDED] = function (data) { var t = data && data.timeRanges, v = t && (t.video || t.audiovideo); return 'appended ' + (data && data.type || '') + (v && v.length ? ' ' + Math.round(v.start(0) * 10) / 10 + '-' + Math.round(v.end(v.length - 1) * 10) / 10 : ''); };
+        trace[E.ERROR] = function (data) { return 'error ' + data.details + (data.fatal ? ' fatal' : '') + (data.error && data.error.message ? ' ' + String(data.error.message).slice(0, 80) : ''); };
+        Object.keys(trace).forEach(function (event) {
+          if (!event || event === 'undefined') return;
+          hls.on(event, function (name, data) { try { note(trace[event](data || {})); } catch (error) {} });
+        });
+        try {
+          Object.defineProperty(work, 'homelab_hls_trail', {configurable: true, writable: true, enumerable: false, value: function () {
+            var media = hls.media;
+            return {events: trail.slice(), start: hls.startPosition, ms: media && window.MediaSource && media.src ? 'blob' : (media && media.src ? 'src' : 'none'), err: media && media.error ? media.error.code : 0};
+          }});
+        } catch (error) {}
+      }
+
       function HomelabHls(config) {
         var work = Lampa.Player.playdata();
         var source = masterUrl(work);
@@ -452,6 +481,7 @@
         var hls = new BaseHls(config);
         var listen = hls.on.bind(hls);
         var destroy = hls.destroy.bind(hls);
+        traceHls(hls, work);
         var retries = 0;
         var reloads = 0;
         var timer = null;

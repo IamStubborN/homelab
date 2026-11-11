@@ -45,8 +45,7 @@ test('resuming an advanced torrent item plays the next file of the same release 
   h.window.homelabContinue.resume(h.window.homelabContinue.list()[0]);
   h.L.sourceLookup.success({data: JSON.stringify({movie: {id: 42, name: 'Series', original_name: 'Series', number_of_seasons: 1}}), file_stats: [
     {id: 1, path: 'Series/S01E01.mkv'}, {id: 2, path: 'Series/S01E02.mkv'}, {id: 3, path: 'Series/S01E03.mkv'}]});
-  assert.equal(h.work(), null, 'the next file is offered, not started');
-  assert.equal(h.select().items.find(item => item.selected).subtitle, 'Следующая серия'); h.pick();
+  assert.equal(h.select(), null, 'the next file starts without a picker');
   assert.equal(h.work().id, 3); assert.equal(h.work().homelab_resume_at, undefined);
   assert.equal(h.video().currentTime, 0);
 });

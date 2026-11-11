@@ -108,7 +108,7 @@
         var adapter = window.HomelabOnlineResume, launched = false;
         // Once the native component is shown the user stays there: a failure
         // only explains what to choose instead of navigating away.
-        try { launched = adapter && adapter.resume(item, value || card(item), function (reason) { if (resumeIntent === onlineIntent) cancelResume(); onlineFailed(reason); }, {focus: true}); } catch (_) {}
+        try { launched = adapter && adapter.resume(item, value || card(item), function (reason) { if (resumeIntent === onlineIntent) cancelResume(); onlineFailed(reason); }); } catch (_) {}
         if (L.Activity && typeof L.Activity.active === 'function') owner = L.Activity.active();
         if (!launched) unavailable(value);
       };
@@ -150,18 +150,9 @@
         }
         offer(playlist, work);
       }
-      // The release's files with the saved one focused: the user starts it.
-      function offer(playlist, chosen) {
-        if (!L.Select || typeof L.Select.show !== 'function') { L.Player.play(chosen); L.Player.playlist(playlist); return; }
-        var previous = L.Controller.enabled().name;
-        L.Select.show({title: plain(item.title || 'Продолжить просмотр'), items: playlist.map(function (entry) {
-          return {title: entry.title, subtitle: entry !== chosen ? '' : item.advance ? 'Следующая серия' : remaining(item.position, item.duration), selected: entry === chosen, entry: entry};
-        }), onBack: function () { L.Controller.toggle(previous); }, onSelect: function (choice) {
-          if (!choice || !choice.entry || context() !== key) { L.Select.close(); return L.Controller.toggle(previous); }
-          if (L.Player.opened()) { L.Select.close(); L.Controller.toggle(previous); return L.Noty.show('Сначала закройте текущий просмотр'); }
-          L.Player.play(choice.entry); L.Player.playlist(playlist);
-        }});
-      }
+      // The saved file (or the next episode) is what the user means: play it,
+      // with the release's other files as the player playlist.
+      function offer(playlist, chosen) { L.Player.play(chosen); L.Player.playlist(playlist); }
       var stored = data.data;
       try { if (typeof stored === 'string') stored = JSON.parse(stored); } catch (_) { stored = null; }
       var value = fullCard(item, stored && stored.movie);

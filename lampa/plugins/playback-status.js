@@ -211,7 +211,7 @@
     try {
       var ranges = video && video.buffered, end = ranges && ranges.length ? ranges.end(ranges.length - 1) : 0;
       audio.report('playback-stall', {kind: kind, seekStuck: !!s.seekStuck, played: !!s.playedOnce, rs: video ? video.readyState : -1, ns: video ? video.networkState : -1,
-        ahead: Math.round((end - (video ? video.currentTime : 0)) * 10) / 10, paused: !!(video && video.paused), seeking: !!(video && video.seeking), torrent: s.stats || ''}, s.work);
+        ahead: Math.round((end - (video ? video.currentTime : 0)) * 10) / 10, paused: !!(video && video.paused), seeking: !!(video && video.seeking), torrent: s.stats || '', hls: s.work && typeof s.work.homelab_hls_trail === 'function' ? s.work.homelab_hls_trail() : null}, s.work);
     } catch (error) {}
   }
   function render() {

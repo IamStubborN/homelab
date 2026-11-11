@@ -2906,3 +2906,16 @@ test('drawn online subtitles follow a new video element after a quality switch',
   assert.equal(FakeAss.instances[1].options.video, h.video());
   assert.ok(FakeAss.instances[0].destroyed);
 });
+
+test('a torrent started before Lampa checked GST still plays through it', t => {
+  const storage = new Map([['torrserver_gts', 'true']]);
+  const h = harness(t, storage);
+  const work = h.playOnline({torrent_hash: 'abc', url: 'https://lampa.test/torrserver/stream/Show.mkv?link=abc&index=3&play'}, false);
+  const url = new URL(work.url);
+  assert.equal(url.pathname, '/gst/start.m3u8');
+  assert.equal(new URL(url.searchParams.get('link')).searchParams.get('index'), '3');
+  assert.equal(work.homelab_torrent_hash, 'abc');
+  const off = harness(t);
+  const plain = off.playOnline({torrent_hash: 'abc', url: 'https://lampa.test/torrserver/stream/Show.mkv?link=abc&index=3&play'}, false);
+  assert.equal(new URL(plain.url).pathname, '/torrserver/stream/Show.mkv', 'transcoding off keeps the stream');
+});

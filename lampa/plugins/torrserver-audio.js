@@ -885,7 +885,12 @@
       try {
         var url = new URL(source, window.location.href);
         return /\/gst\/[^/]+\/master\.m3u8$/.test(url.pathname) ||
-          (work.homelab_torrent_hash && url.pathname === '/gst/start.m3u8') ? url : null;
+          (work.homelab_torrent_hash && url.pathname === '/gst/start.m3u8') ||
+          // Lampa builds a /gst/ link only once its async /gst/echo check has
+          // answered; a play started before that (Continue right after launch)
+          // gets a /stream/ link that Safari cannot play, so take it too.
+          (work.torrent_hash && Lampa.Storage.field('torrserver_gts') && /\/stream\/[^/]*$/.test(url.pathname) &&
+            url.searchParams.get('link') === work.torrent_hash) ? url : null;
       } catch (error) { return null; }
     }
 

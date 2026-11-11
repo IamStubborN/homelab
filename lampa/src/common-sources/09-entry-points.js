@@ -7,6 +7,32 @@
       L.Activity.push({component: COMPONENT, title: 'Общий', movie: movie, season: context && context.season, page: 1});
     }); container.prepend(button);
   }
+  // ── Prefetch: a title card the user stays on starts its «Общий» search, so the screen opens with results ──
+  // Only while that card is the active screen: any other screen (Lampa's own torrents use the same parser)
+  // cancels it, and the «Общий» screen adopts it when the episode and lanes match.
+  var warm = null, warmOwner = null, warmTimer = 0, WARM_DELAY = 1500;
+  function cancelWarm() { clearTimeout(warmTimer); warmOwner = null; if (warm) { warm.search.cancel(); warm = null; } }
+  function adoptWarm(key) {
+    var found = warm && warm.search.key === key && warm.search.alive() ? warm.search : null;
+    if (found) { warm = null; warmOwner = null; clearTimeout(warmTimer); } else cancelWarm();
+    return found;
+  }
+  function prefetch(card, owner) {
+    cancelWarm();
+    if (!card || !Number.isInteger(card.id) || card.id <= 0 || !owner) return;
+    warmOwner = owner;
+    warmTimer = setTimeout(function () {
+      if (L.Activity.active() !== owner || L.Player.opened()) return;
+      var movie = movieCard(card), selection = initialSelection({}, movie), search = new Search(Object.assign({}, movie), selection, function () {}, {torrents: true});
+      warm = {search: search, owner: owner}; search.start();
+    }, WARM_DELAY);
+  }
+  // A trailer played from the card is not a screen change; it stops the prefetch as well.
+  if (L.Player && L.Player.listener) L.Player.listener.follow('start', cancelWarm);
+  L.Listener.follow('activity', function (event) {
+    if (!event || (event.type !== 'init' && event.type !== 'start') || event.component === COMPONENT) return;
+    if (event.object !== warmOwner) cancelWarm();
+  });
   // Movie rows carry the dub in match.translate/text; their voice_name is often a release tag (WEB-DL) that matches no row.
   function sourceVoice(source, card) {
     var match = source && source.match || {}, pick = function (value) { return typeof value === 'string' ? value.trim() : ''; };

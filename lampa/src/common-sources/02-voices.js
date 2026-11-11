@@ -99,10 +99,12 @@
   }
   function preferences(update) {
     var scope = L.Utils && typeof L.Utils.hash === 'function' ? sync.scope() : '', key = 'homelab_sources_preferences_' + (scope ? L.Utils.hash(scope) : '');
-    var stored = scope ? L.Storage.get(key, {}) : {}, value = {quality: 0};
+    var stored = scope ? L.Storage.get(key, {}) : {}, value = {quality: 0, subs: false};
     if (stored && [0, 2160, 1080, 720].indexOf(stored.quality) >= 0) value.quality = stored.quality;
+    if (stored && typeof stored.subs === 'boolean') value.subs = stored.subs;
     if (update) {
       if ([0, 2160, 1080, 720].indexOf(update.quality) >= 0) value.quality = update.quality;
+      if (typeof update.subs === 'boolean') value.subs = update.subs;
       if (scope) L.Storage.set(key, value);
     }
     return value;

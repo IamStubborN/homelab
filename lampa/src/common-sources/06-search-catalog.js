@@ -99,7 +99,7 @@
         var key = String(source.balanser || source.name && source.name.split(' ')[0] || '').toLowerCase();
         if (!/^[a-z0-9_.-]{1,80}$/i.test(key) || discovered[key] || source.show === false || !source.url) return;
         discovered[key] = true;
-        var value = {key: key, name: String(source.name || key)};
+        var value = {key: key, name: String(source.name || key).replace(/\s*~.*$/, '') || key};
         try { enqueue(value, address(source.url, true), {seasonIndex: 0, voice: ''}); } catch (_) { fallback(value); }
       });
     }

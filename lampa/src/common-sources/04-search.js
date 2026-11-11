@@ -1,5 +1,7 @@
   // ── Search: the catalog walk across providers (one closure, continued in 05 and 06) ──
   var UNNAMED = 'Без названия', SEARCH_TTL = 10 * 60000, searchCache = {keys: [], values: {}};
+  // One search per profile, title, episode and torrent lane: the cache and a prefetched search share it.
+  function searchKey(movie, selection, torrents) { return [sync.scope(), movie.name ? 'tv' : 'movie', movie.id, selection.season, selection.episode, torrents === false ? 0 : 1].join('|'); }
   function Search(movie, selection, changed, options) {
     movie = movieCard(movie); options = options || {};
     function titleLike(text) {
@@ -16,7 +18,11 @@
     this.rows = []; this.onlinePending = true; this.torrentPending = false; this.errors = []; this.interrupted = false; this.providers = {total: 0, done: 0};
     this.checking = function () { return alive ? probeQueue.length + probing : 0; };
     function live() { return alive && sync.scope() === scope; }
-    var cacheKey = [scope, movie.name ? 'tv' : 'movie', movie.id, selection.season, selection.episode, options.torrents === false ? 0 : 1].join('|');
+    var cacheKey = searchKey(movie, selection, options.torrents);
+    this.key = cacheKey;
+    this.alive = function () { return live(); };
+    // A search prefetched from the title card reports to the screen that adopts it.
+    this.follow = function (fn) { changed = fn; };
     // A finished, uninterrupted search is kept for ten minutes; reopening the picker shows it at once.
     function remember() {
       if (self.cachedAt || !started || self.onlinePending || self.torrentPending || self.interrupted || self.errors.length || !alive) return;

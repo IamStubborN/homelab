@@ -7,33 +7,6 @@
   }
   // TMDB image paths go into CSS url(): anything but a plain path is dropped.
   function imagePath(path) { return typeof path === 'string' && /^\/[A-Za-z0-9_.\-\/]{1,200}$/.test(path) ? path : ''; }
-  // The accent of the release art: the hue that carries most colour, lifted to a readable lightness.
-  // data is RGBA bytes; null when the art is close to grey.
-  function accentOf(data) {
-    var buckets = [], i, best = null;
-    for (i = 0; i < 12; i++) buckets.push({weight: 0, hue: 0});
-    for (i = 0; i + 3 < data.length; i += 4) {
-      var r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255, max = Math.max(r, g, b), min = Math.min(r, g, b), chroma = max - min, light = (max + min) / 2;
-      if (chroma < 0.15 || light < 0.1 || light > 0.92) continue;
-      var hue = max === r ? (g - b) / chroma % 6 : max === g ? (b - r) / chroma + 2 : (r - g) / chroma + 4;
-      hue = (hue * 60 + 360) % 360;
-      var bucket = buckets[Math.floor(hue / 30) % 12], weight = chroma * chroma;
-      bucket.weight += weight; bucket.hue += hue * weight;
-    }
-    // Neighbouring hues count half: a red split across 0° is still one red.
-    buckets.forEach(function (bucket, index) {
-      bucket.score = bucket.weight + (buckets[(index + 11) % 12].weight + buckets[(index + 1) % 12].weight) / 2;
-      if (bucket.weight && (!best || bucket.score > best.score)) best = bucket;
-    });
-    if (!best || best.score < data.length / 4 * 0.006) return null;
-    return hslColor(best.hue / best.weight, 0.72, 0.66);
-  }
-  function hslColor(hue, saturation, light) {
-    var chroma = (1 - Math.abs(2 * light - 1)) * saturation, part = hue / 60, x = chroma * (1 - Math.abs(part % 2 - 1)), m = light - chroma / 2;
-    var rgb = part < 1 ? [chroma, x, 0] : part < 2 ? [x, chroma, 0] : part < 3 ? [0, chroma, x] : part < 4 ? [0, x, chroma] : part < 5 ? [x, 0, chroma] : [chroma, 0, x];
-    return rgb.map(function (value) { return Math.round((value + m) * 255); });
-  }
-  var tintSequence = 0;
   function Common(object) {
     var self = this, movie = movieCard(object.movie), tv = !!movie.name;
     var recovery = object.homelab_recovery, pref = preferences();
@@ -62,31 +35,6 @@
     if (backdrop && L.Api && L.Api.img) art.css('background-image', 'url("' + L.Api.img(backdrop, 'w1280') + '")').addClass('has-image');
     if (cover && L.Api && L.Api.img) poster.css('background-image', 'url("' + L.Api.img(cover, 'w200') + '")').removeClass('hide');
     root.append(art).append(head);
-    tint(backdrop ? L.Api && L.Api.img && L.Api.img(backdrop, 'w300') : cover ? L.Api && L.Api.img && L.Api.img(cover, 'w200') : '');
-    // The screen takes its accent from the release art; without it (or a canvas) it stays neutral.
-    function tint(url) {
-      if (!url || typeof Image === 'undefined' || typeof document === 'undefined') return;
-      var image = new Image();
-      image.crossOrigin = 'anonymous';
-      image.onload = function () {
-        if (dead) return;
-        var color = null;
-        try {
-          var canvas = document.createElement('canvas'), context; canvas.width = 32; canvas.height = 18; context = canvas.getContext('2d');
-          context.drawImage(image, 0, 0, 32, 18); color = accentOf(context.getImageData(0, 0, 32, 18).data);
-        } catch (_) { return; }
-        if (!color) return;
-        var a = color.join(','), solid = 'rgb(' + a + ')', name = 'homelab-common-tint-' + (++tintSequence), at = '.' + name + ' ';
-        root.addClass(name).append($('<style></style>').text([
-          at + '.homelab-common-result.is-hero .homelab-common-pick{color:' + solid + '}',
-          at + '.homelab-common-progress-fill,' + at + '.homelab-common-ep-bar,' + at + '.homelab-common-bar-fill,' + at + '.homelab-common-filter.is-on:not(.focus):before{background:' + solid + '}',
-          at + '.homelab-common-result:not(.focus) .homelab-common-tag{color:' + solid + ';opacity:1}',
-          at + '.homelab-common-result.is-hero.focus{background:-webkit-linear-gradient(left,rgba(' + a + ',.24),rgba(' + a + ',.06) 70%),rgba(0,0,0,.45);background:linear-gradient(100deg,rgba(' + a + ',.24),rgba(' + a + ',.06) 70%),rgba(0,0,0,.45);box-shadow:inset 0 0 0 .14em ' + solid + ',0 .8em 2em rgba(0,0,0,.45)}',
-          at + '.homelab-common-result.is-hero.focus .homelab-common-play{background:' + solid + '}' + at + '.homelab-common-result.is-hero.focus .homelab-common-play:after{border-left-color:#14100c}'
-        ].join('')));
-      };
-      image.src = url;
-    }
     // Filters: quick chips, then the parameters (also →) on the right.
     var filters = $('<div class="homelab-common-filters"></div>'), chips = {};
     function chip(id, fn) { var tile = button('', 'homelab-common-filter', fn); chips[id] = tile; filters.append(tile); return tile; }

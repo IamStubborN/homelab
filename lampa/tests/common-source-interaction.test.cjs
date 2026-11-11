@@ -612,13 +612,6 @@ test('checked voices lead; unchecked ones follow in an open, foldable section', 
   h.fire(fold, 'hover:enter'); assert.ok(!h.rows().map(voice).includes('Studio D'), 'Enter folds them');
 });
 
-test('the accent comes from the most colourful hue of the art; grey art keeps the screen neutral', t => {
-  const h = setup(t), accent = h.window.HomelabSources.accent, pixels = list => Uint8ClampedArray.from(list.flatMap(rgb => [...rgb, 255]));
-  const red = accent(pixels([[200, 30, 40], [190, 20, 30], [40, 40, 40], [20, 120, 30]]));
-  assert.ok(red[0] > red[1] && red[0] > red[2], 'red wins over the lone green pixel');
-  assert.equal(accent(pixels([[40, 40, 40], [120, 120, 120], [250, 250, 250]])), null);
-});
-
 test('OK on an episode keeps focus on it while searching; season metadata keeps focus on the season button', t => {
   const h = setup(t), eps = () => h.component.render()[0].querySelectorAll('.homelab-common-ep');
   h.L.Controller.collectionFocus(eps()[2], h.component.render()); h.fire(eps()[2], 'hover:enter');

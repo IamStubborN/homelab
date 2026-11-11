@@ -2,3 +2,5 @@
 !Dockerfile
 !verify-sqlite-build.py
 !.dockerignore
+!patches
+!patches/*.patch

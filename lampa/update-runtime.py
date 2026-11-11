@@ -155,9 +155,11 @@ def fingerprint(model, container, mounts, root):
     digest = hashlib.sha256(json.dumps(deployment, sort_keys=True).encode())
     digest.update(container["Id"].encode())
     digest.update(container["Image"].encode())
-    for name in ("Dockerfile", ".dockerignore", "verify-sqlite-build.py"):
+    runtime = root / "lampa/runtime"
+    for name in ["Dockerfile", ".dockerignore", "verify-sqlite-build.py"] + sorted(
+            str(path.relative_to(runtime)) for path in (runtime / "patches").glob("*.patch")):
         digest.update(name.encode())
-        digest.update((root / "lampa/runtime" / name).read_bytes())
+        digest.update((runtime / name).read_bytes())
     for mount in mounts:
         if not mount["readonly"]:
             continue

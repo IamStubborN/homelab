@@ -55,6 +55,21 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.s
     && strip --strip-unneeded -o /out/libgstmatroska.so build/gst/matroska/libgstmatroska.so \
     && echo "${version}" > /out/version
 
+# Fixes to upstream Lampac modules, kept as patches so a changed upstream file fails the build here
+# instead of being overwritten silently (see patches/).
+FROM runtime-base AS module-patches
+
+USER root
+
+COPY patches /patches
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends patch \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir /out \
+    && cp /lampac/module/OnlineRUS/Aladin/AladinWsSession.cs /out/ \
+    && patch --batch --forward --fuzz=0 -d /out -p1 < /patches/aladin-ws-session.patch \
+    && grep -q 'IsAlive' /out/AladinWsSession.cs
+
 FROM runtime-base
 
 USER root
@@ -79,5 +94,6 @@ RUN sed -i 's/^Components: main$/Components: main non-free/' /etc/apt/sources.li
 ENV LIBVA_DRIVER_NAME=iHD
 
 COPY --from=sqlite-build --chown=lampac:lampac /build/libe_sqlite3.so /lampac/libe_sqlite3.so
+COPY --from=module-patches --chown=lampac:lampac /out/AladinWsSession.cs /lampac/module/OnlineRUS/Aladin/AladinWsSession.cs
 
 USER lampac

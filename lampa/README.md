@@ -1,11 +1,10 @@
 # Lampa
 
-Embedded torrent chapters and sparse seek thumbnails are implemented as a
-separate side service; see [previews/README.md](previews/README.md) for scope,
-resource limits, tests and the guarded deployment procedure. The locally prepared
-UX additions include playback status/retry. The chapter gallery with manual
-intro/credits skipping was retired on 2026-11-08; the bootstrap removes its
-client registration, and seek-previews keeps its own chapter list. Cross-device continuation and household history live
+The locally prepared UX additions include playback status/retry and
+`plugins/chapters.js`: embedded chapters of a torrent file (timeline ticks, the
+current chapter next to the time, a chapter list) plus ±N s step buttons outside
+TVs. Chapters come from the `lampa-media` header probe below, so they cost no
+extra torrent read. Cross-device continuation and household history live
 in the separate [HomelabSync module](mods/HomelabSync/README.md). These additions
 were installed on 2026-11-01 after explicit approval; a source checkout alone
 does not install them. Clients need one reload to load the new plugins.
@@ -117,10 +116,10 @@ to a single backend.
 ## External audio tracks
 
 Some torrents keep voice-overs in separate files, for example
-`Sound/<episode>.mka`. GStreamer reads one file, so the `lampa-extaudio`
-sidecar adds those files to browser playback without modifying Lampac:
+`Sound/<episode>.mka`. GStreamer reads one file, so the `lampa-media`
+sidecar (URL prefix `/homelab-media/`) adds those files to browser playback without modifying Lampac:
 
-- `/extaudio/<hash>/<video file id>/tracks` lists the video's audio files,
+- `/homelab-media/<hash>/<video file id>/tracks` lists the video's audio files,
   folder by folder, from the first rule that matches:
   1. named after the video: `<stem>.mka` in any folder, `<stem>.<label>.ac3`
      or `<stem> [Dub].mka`;
@@ -141,7 +140,7 @@ sidecar adds those files to browser playback without modifying Lampac:
   skip `OST`, `Music`, `Bonus`, `Extras`, `Specials`, `CD1` and `Scans`
   folders unless the video itself is in one. Lookups query only the torrent
   being played and probe at most six candidates, named files first.
-- `/extaudio/<hash>/<file id>/<stream>/aac/audio.m3u8?at=<seconds>`
+- `/homelab-media/<hash>/<file id>/<stream>/aac/audio.m3u8?at=<seconds>`
   serves the selected track from the playback position on demand, the way
   Jellyfin does. AAC-LC mono or stereo (most voice-overs) is copied as it is:
   ffmpeg copies it from just before the position with its absolute timestamps,
@@ -166,7 +165,7 @@ sidecar adds those files to browser playback without modifying Lampac:
   file disguised as a playlist cannot make it fetch other URLs. Track lookups
   run at most two at a time, and a probe that fails (other than a timeout) is
   not retried for 10 minutes.
-- Results live in the ignored `extaudio-cache/` directory, which is limited to
+- Results live in the ignored `media-cache/` directory, which is limited to
   2 GiB and 72 hours (`CACHE_MAX_MB`, `CACHE_TTL_HOURS`). Delete it at any time.
 - The plugin lists external tracks in the regular audio menu. When an external
   track is chosen, the video keeps using the same GST task. hls.js receives an
@@ -230,7 +229,7 @@ automatically and showing the button.
 
 When a seeded torrent card (3 or more seeds) in «Общий» names no voice in its
 title or parser data, dwelling on it for 1.2 s asks
-`GET /extaudio/voices?link=<magnet>&title=…`. The sidecar accepts only
+`GET /homelab-media/voices?link=<magnet>&title=…`. The sidecar accepts only
 `magnet:` links and the plugin's `X-Homelab-Voices: 1` header (a foreign page
 cannot send it without a CORS preflight), hands TorrServer a magnet rebuilt from
 the hash and its http/udp trackers only (no web seeds or exact sources), adds
@@ -256,7 +255,7 @@ units cannot be installed).
 On a slow torrent the next episode waits for its head before GST and the
 track probes can start. Once an episode has played 10 s within its last
 7 minutes and its second half (paused, seeking or scrubbing does not count),
-the plugin sends `POST /extaudio/<hash>/<file id>/warm` for the next playlist
+the plugin sends `POST /homelab-media/<hash>/<file id>/warm` for the next playlist
 item, only when that item is another file of the same torrent and the browser
 reports no data saver or cellular connection. The playing item is found by the
 URL Lampa listed for it (`homelab_source_url`), or by its torrent and file. It
@@ -297,22 +296,23 @@ embedded ASS into WebVTT, so styled signs lose their font and position.
 External `.ass`/`.ssa` files named after the video (for example
 `YakuSub Studio/<video stem>.ass`) are rendered properly instead:
 
-- `/extaudio/<hash>/<file id>/tracks` also lists those files as `subtitles`,
+- `/homelab-media/<hash>/<file id>/tracks` also lists those files as `subtitles`,
   each with the fonts the release ships next to or below it (else any `fonts`
   or `шрифты` folder below the video).
-- `/extaudio/<hash>/<file id>/raw` returns the bytes of a subtitle (up to
+- `/homelab-media/<hash>/<file id>/raw` returns the bytes of a subtitle (up to
   8 MiB) or font (up to 32 MiB) file of that torrent and caches them. Other
   files are refused.
 - The image bundles [JASSUB](https://github.com/ThaUnknown/jassub) (libass in
-  WebAssembly), pinned in `extaudio/jassub/package-lock.json`, and serves it at
-  `/extaudio/jassub/`. It needs Chrome 80 or Safari 17 or newer.
+  WebAssembly), pinned in `media/jassub/package-lock.json`, and serves it at
+  `/homelab-media/jassub/`. It needs Chrome 80 or Safari 17 or newer.
 - The plugin adds `<group>: полные/надписи (внешние)` items to the subtitle menu. Choosing one
   draws the file over the video with its own fonts; the choice is remembered
   per torrent. The encoding is detected from the BOM, then UTF-8, then
   Windows-1251.
 
-Embedded text subtitles are drawn the same way. `/extaudio/<hash>/<file
-id>/embedded` lists the text streams and font attachments; `sub/<n>` reads a
+Embedded text subtitles are drawn the same way. `/homelab-media/<hash>/<file
+id>/embedded` lists the text streams, font attachments, duration and chapters
+(the same cached header probe); `sub/<n>` reads a
 stream from the playback position as it plays. SRT is converted to ASS (GST's
 WebVTT of some SRT streams comes out empty); the plugin styles it from Lampa's
 subtitle size, stroke and backdrop settings. Lampa's subtitle delay applies to
@@ -329,9 +329,9 @@ menu choice, so the new track is remembered for the torrent, and a notice names
 it. Use it when a voice-over leaves parts untranslated.
 
 Fonts a release attaches or ships are also copied once, by content hash, into
-`extaudio-fonts/` (ignored; `FONT_LIBRARY_DIR`, capped by
+`media-fonts/` (ignored; `FONT_LIBRARY_DIR`, capped by
 `FONT_LIBRARY_MAX_MB`). A release that names a font without attaching it gets
-it from there (`/extaudio/fonts/index.json`), before a metric-compatible
+it from there (`/homelab-media/fonts/index.json`), before a metric-compatible
 stand-in. Fonts copied in by hand count too when named `<32 hex>.ttf|otf|ttc`.
 Create the directory as the Docker user before the first start, or Docker
 creates it owned by root.
@@ -484,16 +484,16 @@ Treat logs as private runtime data: upstream errors can contain source URLs
 and viewer identifiers. Do not commit or publish them.
 
 Lampac itself logs no requests. Traefik writes JSON access logs only for the
-`lampa`, `lampa-extaudio` and `lampa-gst-sessions` routers, without client
+`lampa`, `lampa-media` and `lampa-gst-sessions` routers, without client
 addresses or headers, so `docker logs traefik` shows which online stream or GST
 session a viewer played. They share Traefik's three 10 MiB console log files,
 which hold roughly days of playback, not a fixed period.
 
-The plugin also reports player events to `POST /extaudio/log`, and the
+The plugin also reports player events to `POST /homelab-media/log`, and the
 sidecar prints each as one `client {...}` JSON line with a UTC `ts`:
 
 ```bash
-docker logs lampa-extaudio 2>&1 | grep '^client '
+docker logs lampa-media 2>&1 | grep '^client '
 ```
 
 `e` names the event: `play-start`/`play-stop`, `audio-switch` and
@@ -507,7 +507,7 @@ track; `preference`, `drawn`, `new-video`; `replace`, `off`, `failed`,
 seconds; URLs keep only their path and full hashes their prefix. The plugin
 drops a repeat within 5 s and sends at most 30 events a minute; `dropped` on
 the next event counts both kinds. The sidecar takes bodies up to 4 KiB of
-JSON, 120 a minute in all. The `lampa-extaudio-log` router limits each address
+JSON, 120 a minute in all. The `lampa-media-log` router limits each address
 to 60 a minute (burst 30) and keeps these posts out of Traefik's access log.
 Logging failures never affect playback.
 
@@ -554,12 +554,12 @@ sudo systemctl enable --now lampac-logrotate.timer
 curl -fsS "https://lampa.${DOCKER_DOMAIN}/version?type=hash"
 curl -fsS "https://lampa.${DOCKER_DOMAIN}/torrserver/echo"
 curl -fsS "https://lampa.${DOCKER_DOMAIN}/online.js" | head
-curl -fsS "https://lampa.${DOCKER_DOMAIN}/extaudio/health"
+curl -fsS "https://lampa.${DOCKER_DOMAIN}/homelab-media/health"
 ```
 
 Tests:
 
 ```bash
 node --test lampa/tests/
-(cd lampa/extaudio && python3 -m unittest -q test_app)
+(cd lampa/media && python3 -m unittest -q test_app)
 ```

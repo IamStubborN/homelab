@@ -654,7 +654,7 @@ test('a seeded torrent without a named voice learns it from its audio tracks onc
   assert.equal(h.search.voices(row), true);
   assert.equal(row.voiceProbe, 'pending');
   assert.equal(h.search.voices(row), false, 'one lookup at a time');
-  const job = h.requests.find(r => r.url.pathname === '/extaudio/voices');
+  const job = h.requests.find(r => r.url.pathname === '/homelab-media/voices');
   assert.equal(job.url.searchParams.get('link'), 'magnet:?xt=urn:btih:' + hash);
   assert.equal(job.url.searchParams.get('token'), null, 'no Lampac identity goes to the sidecar');
   assert.equal(job.options.headers['X-Homelab-Voices'], '1');
@@ -665,7 +665,7 @@ test('a seeded torrent without a named voice learns it from its audio tracks onc
   const again = new h.window.HomelabSources.Search(h.movie, h.selection, () => {}, {fresh: true}); again.start(); await flush();
   h.parser.at(-1).done({Results: [{Title: 'Series S02 1080p', MagnetUri: 'magnet:?xt=urn:btih:' + hash, Seeders: 9}]});
   assert.equal(again.rows[0].voice, 'Studio Fictional / Studio Other', 'a later search reuses the answer');
-  assert.equal(h.requests.filter(r => r.url.pathname === '/extaudio/voices').length, 1);
+  assert.equal(h.requests.filter(r => r.url.pathname === '/homelab-media/voices').length, 1);
   again.cancel();
 });
 
@@ -674,10 +674,10 @@ test('a release still looking for peers is asked again on a later focus', async 
   h.parser[0].done({Results: [{Title: 'Series S02 1080p', MagnetUri: 'magnet:?xt=urn:btih:' + 'd'.repeat(40), Seeders: 9}]});
   const row = h.search.rows[0];
   h.search.voices(row);
-  h.requests.find(r => r.url.pathname === '/extaudio/voices').finish({__status: 503, error: 'preparing'}); await flush(); await flush();
+  h.requests.find(r => r.url.pathname === '/homelab-media/voices').finish({__status: 503, error: 'preparing'}); await flush(); await flush();
   assert.equal(row.voiceProbe, '');
   h.tick(15000); await flush();
-  assert.equal(h.requests.filter(r => r.url.pathname === '/extaudio/voices').length, 2, 'asked again by itself after 15 s');
+  assert.equal(h.requests.filter(r => r.url.pathname === '/homelab-media/voices').length, 2, 'asked again by itself after 15 s');
   assert.equal(row.voiceProbe, 'pending');
   h.search.cancel();
 });

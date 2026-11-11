@@ -115,7 +115,7 @@
     }
 
     function assItems(state, data) {
-      var base = '/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/';
+      var base = '/homelab-media/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/';
       var items = [];
       (data.subtitles || []).filter(function (sub) { return Number.isInteger(sub.file); }).forEach(function (sub, number) {
         var fonts = (sub.fonts || []).filter(Number.isInteger).map(function (id) {
@@ -296,7 +296,7 @@
 
     function embeddedSubtitles(state, work, revision) {
       if (!work.homelab_torrent_hash || !Number.isInteger(work.homelab_file_index) || !assSupported()) return;
-      var url = new URL('/extaudio/' + encodeURIComponent(work.homelab_torrent_hash) + '/' + work.homelab_file_index + '/embedded', window.location.href);
+      var url = new URL('/homelab-media/' + encodeURIComponent(work.homelab_torrent_hash) + '/' + work.homelab_file_index + '/embedded', window.location.href);
       var signal = state.abort.signal;
       function lookup(attempts) {
         return window.fetch(url.href, {signal: signal}).then(function (response) {

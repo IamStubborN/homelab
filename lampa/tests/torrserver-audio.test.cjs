@@ -192,7 +192,7 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
       localStorage: browserStorage,
       navigator: connection ? { connection } : {},
       fetch(url, options) {
-        if (new URL(url).pathname === '/extaudio/log') {
+        if (new URL(url).pathname === '/homelab-media/log') {
           logs.push({...JSON.parse(options.body), options});
           return Promise.resolve({ok: true, status: 204});
         }
@@ -203,35 +203,35 @@ function harness(t, storage = new Map(), { android = false, external = [], rendi
           return Promise.resolve({ok: status >= 200 && status < 300, status});
         }
         if (/\/(?:heartbeat|remove)(?:\?|$)/.test(url)) return Promise.resolve({ok: true});
-        if (/^\/extaudio\/[^/]+\/\d+\/tracks$/.test(new URL(url).pathname)) {
+        if (/^\/homelab-media\/[^/]+\/\d+\/tracks$/.test(new URL(url).pathname)) {
           return Promise.resolve({ok: true, json: async () => ({tracks: external, ...(ass || {})})});
         }
-        if (/^\/extaudio\/[^/]+\/\d+\/embedded$/.test(new URL(url).pathname)) {
+        if (/^\/homelab-media\/[^/]+\/\d+\/embedded$/.test(new URL(url).pathname)) {
           if (typeof embedded === 'function') return Promise.resolve(embedded());
           return Promise.resolve(embedded ? {ok: true, json: async () => embedded} : {ok: false, status: 404});
         }
-        if (/^\/extaudio\/[^/]+\/\d+\/sub\/\d+$/.test(new URL(url).pathname)) {
+        if (/^\/homelab-media\/[^/]+\/\d+\/sub\/\d+$/.test(new URL(url).pathname)) {
           const payload = events(new URL(url));
           return Promise.resolve(payload ? {ok: true, json: async () => payload} : {ok: false, status: 502});
         }
-        if (new URL(url).pathname === '/extaudio/online/subtitle') {
+        if (new URL(url).pathname === '/homelab-media/online/subtitle') {
           const bytes = online[new URL(url).searchParams.get('url')];
           return Promise.resolve({ok: Boolean(bytes), status: bytes ? 200 : 404, arrayBuffer: async () => bytes.buffer});
         }
-        if (new URL(url).pathname === '/extaudio/fonts/index.json') {
+        if (new URL(url).pathname === '/homelab-media/fonts/index.json') {
           return Promise.resolve(library ? {ok: true, json: async () => library} : {ok: false, status: 404});
         }
-        const fontMatch = /^\/extaudio\/[^/]+\/\d+\/attachment\/(\d+)$/.exec(new URL(url).pathname);
+        const fontMatch = /^\/homelab-media\/[^/]+\/\d+\/attachment\/(\d+)$/.exec(new URL(url).pathname);
         if (fontMatch) {
           const bytes = attachments[fontMatch[1]] || new Uint8Array([Number(fontMatch[1])]);
           return Promise.resolve({ok: true, arrayBuffer: async () => bytes.buffer});
         }
-        const rawMatch = /^\/extaudio\/[^/]+\/(\d+)\/raw$/.exec(new URL(url).pathname);
+        const rawMatch = /^\/homelab-media\/[^/]+\/(\d+)\/raw$/.exec(new URL(url).pathname);
         if (rawMatch) {
           const bytes = raw[rawMatch[1]];
           return Promise.resolve({ok: Boolean(bytes), status: bytes ? 200 : 502, arrayBuffer: async () => bytes.buffer});
         }
-        if (/^\/extaudio\/.+\/audio\.m3u8$/.test(new URL(url).pathname)) {
+        if (/^\/homelab-media\/.+\/audio\.m3u8$/.test(new URL(url).pathname)) {
           const status = rendition.length ? rendition.shift() : 200;
           return Promise.resolve({ok: status === 200, status});
         }
@@ -846,14 +846,14 @@ test('Android external player bypasses HLS ownership and track interception afte
 const japaneseAAC = { Type: 'audio', Index: 0, Title: 'Japanese', Language: 'ja', Channels: 2, IsAAC: true };
 const anilibria = { file: 1, stream: 0, title: 'AniLibria.tv', location: 'Sound', language: 'rus', codec: 'aac', channels: 2 };
 const externalLabel = 'AniLibria.tv (внешняя)';
-const externalAudio = { key: '1:0', url: '/extaudio/abc/1/0/aac/audio.m3u8?at=0', codecs: 'mp4a.40.2', name: 'AniLibria.tv', language: 'rus' };
+const externalAudio = { key: '1:0', url: '/homelab-media/abc/1/0/aac/audio.m3u8?at=0', codecs: 'mp4a.40.2', name: 'AniLibria.tv', language: 'rus' };
 
 test('external audio is offered with one embedded track and reuses the AAC task', async t => {
   const h = harness(t, new Map(), { external: [anilibria] });
   h.start(13, 'abc', true);
   await h.probe([japaneseAAC]);
   await h.task('301');
-  assert.ok(h.requests.some(r => new URL(r.url).pathname === '/extaudio/abc/13/tracks'));
+  assert.ok(h.requests.some(r => new URL(r.url).pathname === '/homelab-media/abc/13/tracks'));
   assert.deepEqual(h.audioMenu().map(item => item.label), [externalLabel, 'Japanese'], 'a Russian voice-over leads the menu');
   const before = h.work().url;
   h.chooseAudio(externalLabel);
@@ -906,7 +906,7 @@ test('a remembered external track is restored on the next episode', async t => {
   await h.probe([japaneseAAC]);
   await h.settle();
   assert.deepEqual({ ...h.work().homelab_external_audio }, externalAudio);
-  assert.ok(h.requests.some(r => new URL(r.url).pathname === '/extaudio/abc/14/tracks'));
+  assert.ok(h.requests.some(r => new URL(r.url).pathname === '/homelab-media/abc/14/tracks'));
 });
 
 test('an external audio file still downloading is asked for until the sidecar reads it', async t => {
@@ -1054,7 +1054,7 @@ test('external audio rewrites the master playlist and strips embedded audio from
   const manifest = load(hls.config.pLoader, { type: 'manifest' },
     '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.640033,mp4a.40.2",SUBTITLES="subs"\n/gst/1/video.m3u8?audio=0\n');
   assert.equal(manifest.data, '#EXTM3U\n' +
-    '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="homelab-external",NAME="AniLibria.tv",LANGUAGE="rus",DEFAULT=YES,AUTOSELECT=YES,URI="/extaudio/abc/1/0/aac/audio.m3u8?at=0"\n' +
+    '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="homelab-external",NAME="AniLibria.tv",LANGUAGE="rus",DEFAULT=YES,AUTOSELECT=YES,URI="/homelab-media/abc/1/0/aac/audio.m3u8?at=0"\n' +
     '#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.640033,mp4a.40.2",SUBTITLES="subs",AUDIO="homelab-external"\n/gst/1/video.m3u8?audio=0\n');
   const level = load(hls.config.pLoader, { type: 'level' }, '#EXTM3U\n');
   assert.equal(level.data, '#EXTM3U\n');
@@ -1112,9 +1112,9 @@ test('every external codec is encoded to AAC from the playback position', async 
   await h.probe([japaneseAAC]);
   await h.settle();
   assert.deepEqual(h.audioMenu().filter(item => item.external).map(item => [item.url, item.codecs]), [
-    ['/extaudio/abc/1/0/aac/audio.m3u8', 'mp4a.40.2'],
-    ['/extaudio/abc/2/0/aac/audio.m3u8', 'mp4a.40.2'],
-    ['/extaudio/abc/3/0/aac/audio.m3u8', 'mp4a.40.2'],
+    ['/homelab-media/abc/1/0/aac/audio.m3u8', 'mp4a.40.2'],
+    ['/homelab-media/abc/2/0/aac/audio.m3u8', 'mp4a.40.2'],
+    ['/homelab-media/abc/3/0/aac/audio.m3u8', 'mp4a.40.2'],
   ]);
 });
 
@@ -1127,8 +1127,8 @@ test('encoded external audio tells the sidecar where playback is', async t => {
   h.chooseAudio('DTS (внешняя)');
   await h.settle();
   const prepared = h.requests.filter(r => /audio\.m3u8/.test(r.url)).map(r => new URL(r.url).pathname + new URL(r.url).search);
-  assert.deepEqual(prepared, ['/extaudio/abc/1/0/aac/audio.m3u8?at=754']);
-  assert.equal(h.work().homelab_external_audio.url, '/extaudio/abc/1/0/aac/audio.m3u8?at=754');
+  assert.deepEqual(prepared, ['/homelab-media/abc/1/0/aac/audio.m3u8?at=754']);
+  assert.equal(h.work().homelab_external_audio.url, '/homelab-media/abc/1/0/aac/audio.m3u8?at=754');
 });
 
 test('an unsupported fragment layout falls back to the embedded track', async t => {
@@ -1200,7 +1200,7 @@ test('players without external audio keep default playlist loaders', async t => 
 });
 
 const yakusub = { file: 25, title: 'YakuSub Studio', location: 'YakuSub Studio', language: '', fonts: [37, 38] };
-const assLookup = { subtitles: [yakusub], renderer: '/extaudio/jassub/' };
+const assLookup = { subtitles: [yakusub], renderer: '/homelab-media/jassub/' };
 const assText = '[Script Info]\nTitle: Тест\n';
 
 test('external ASS subtitles join the menu and render through JASSUB', async t => {
@@ -1219,8 +1219,8 @@ test('external ASS subtitles join the menu and render through JASSUB', async t =
   assert.equal(options.subContent, assText);
   assert.equal(options.video, h.video());
   assert.deepEqual(Array.from(options.fonts.slice(0, 2), font => new TextDecoder().decode(font)), ['font37', 'font38'], 'fonts arrive as bytes');
-  assert.equal(options.fonts[2], 'https://lampa.test/extaudio/jassub/default.woff2', 'the fallback font loads up front');
-  assert.equal(options.workerUrl, 'https://lampa.test/extaudio/jassub/jassub-worker.js');
+  assert.equal(options.fonts[2], 'https://lampa.test/homelab-media/jassub/default.woff2', 'the fallback font loads up front');
+  assert.equal(options.workerUrl, 'https://lampa.test/homelab-media/jassub/jassub-worker.js');
   assert.equal(h.subtitleTitle(), 'YakuSub Studio: полные (внешние)');
   h.chooseSubtitle('English');
   await h.settle();
@@ -1397,7 +1397,7 @@ function fontNamed(family) {
 }
 
 const embeddedLookup = {
-  renderer: '/extaudio/jassub/', fonts: [7, 9],
+  renderer: '/homelab-media/jassub/', fonts: [7, 9],
   subtitles: [
     { stream: 0, codec: 'ass', title: 'Надписи', language: 'rus' },
     { stream: 2, codec: 'subrip', title: 'SRT', language: '' },
@@ -1653,11 +1653,11 @@ test('Windows fonts a release does not attach are drawn with metric-compatible s
   assert.match(ass.options.subContent, /Style: fon,Comic Relief,55,/);
   assert.match(ass.options.subContent, /Style: Default,Open Sans Semibold,50,/, 'attached fonts keep their names');
   assert.deepEqual(ass.events, ['Dialogue: 0,0:00:01.00,0:00:03.00,fon,,0,0,0,,{\\fnTinos\\b1}Имя{\\fnCarlito} Тип']);
-  assert.equal(ass.options.availableFonts['comic relief bold'], 'https://lampa.test/extaudio/jassub/comic-relief-bold.ttf');
-  assert.equal(ass.options.availableFonts['tinos'], 'https://lampa.test/extaudio/jassub/tinos-regular.ttf');
+  assert.equal(ass.options.availableFonts['comic relief bold'], 'https://lampa.test/homelab-media/jassub/comic-relief-bold.ttf');
+  assert.equal(ass.options.availableFonts['tinos'], 'https://lampa.test/homelab-media/jassub/tinos-regular.ttf');
   assert.deepEqual(Array.from(ass.options.fonts).filter(font => typeof font === 'string'), [
-    'https://lampa.test/extaudio/jassub/default.woff2',
-    'https://lampa.test/extaudio/jassub/comic-relief-regular.ttf', 'https://lampa.test/extaudio/jassub/comic-relief-bold.ttf',
+    'https://lampa.test/homelab-media/jassub/default.woff2',
+    'https://lampa.test/homelab-media/jassub/comic-relief-regular.ttf', 'https://lampa.test/homelab-media/jassub/comic-relief-bold.ttf',
   ], 'a stand-in the styles use loads up front; one only in \\fn tags waits until asked');
 });
 
@@ -1682,12 +1682,12 @@ test('fonts kept from other releases are drawn instead of stand-ins', async t =>
   const ass = FakeAss.instances[0];
   assert.match(ass.options.subContent, /Style: fon,Comic Sans MS,55,/, 'the real font beats a stand-in');
   assert.deepEqual(ass.events, ['Dialogue: 0,0:00:01.00,0:00:03.00,fon,,0,0,0,,{\\fnImpact}Нати{\\fnTinos} Тип']);
-  assert.equal(ass.options.availableFonts['tahoma bold'], 'https://lampa.test/extaudio/fonts/b.ttf');
-  assert.equal(ass.options.availableFonts['impact'], 'https://lampa.test/extaudio/fonts/c.ttf');
-  assert.deepEqual(ass.added, ['https://lampa.test/extaudio/fonts/c.ttf'], 'a font named in \\fn tags loads with its events');
+  assert.equal(ass.options.availableFonts['tahoma bold'], 'https://lampa.test/homelab-media/fonts/b.ttf');
+  assert.equal(ass.options.availableFonts['impact'], 'https://lampa.test/homelab-media/fonts/c.ttf');
+  assert.deepEqual(ass.added, ['https://lampa.test/homelab-media/fonts/c.ttf'], 'a font named in \\fn tags loads with its events');
   assert.deepEqual(Array.from(ass.options.fonts).filter(font => typeof font === 'string'), [
-    'https://lampa.test/extaudio/jassub/default.woff2', 'https://lampa.test/extaudio/fonts/d.ttf',
-    'https://lampa.test/extaudio/fonts/a.ttf', 'https://lampa.test/extaudio/fonts/b.ttf',
+    'https://lampa.test/homelab-media/jassub/default.woff2', 'https://lampa.test/homelab-media/fonts/d.ttf',
+    'https://lampa.test/homelab-media/fonts/a.ttf', 'https://lampa.test/homelab-media/fonts/b.ttf',
   ], 'fonts the styles use load up front');
   assert.equal(h.requests.filter(request => request.url.endsWith('/fonts/index.json')).length, 1);
 });
@@ -1710,7 +1710,7 @@ test('a Windows font the release attaches keeps its name instead of a stand-in',
   const ass = FakeAss.instances[0];
   assert.match(ass.options.subContent, /Style: fon,Comic Sans MS,55,/);
   assert.deepEqual(ass.events, ['Dialogue: 0,0:00:01.00,0:00:03.00,fon,,0,0,0,,{\\fnComic Sans MS\\b1}Нати{\\fnTinos} Тип'], 'only the missing family is replaced');
-  assert.deepEqual(Array.from(ass.options.fonts).filter(font => typeof font === 'string'), ['https://lampa.test/extaudio/jassub/default.woff2']);
+  assert.deepEqual(Array.from(ass.options.fonts).filter(font => typeof font === 'string'), ['https://lampa.test/homelab-media/jassub/default.woff2']);
 });
 
 test('a torrent card ffprobe does not relabel GST tracks', t => {
@@ -1862,8 +1862,8 @@ test('HLS errors are logged with the URL path only, and repeats and bursts are d
   hls.trigger('error', error);
   assert.equal(h.logs.filter(event => event.e === 'hls-error').length, 2, 'a repeat after 5 s is sent again');
   hls.trigger('error', { type: 'networkError', details: 'levelLoadError', fatal: false,
-    url: 'https://lampa.test/extaudio/' + 'ab12'.repeat(10) + '/1/tracks', reason: 'see ' + 'AB12'.repeat(10) });
-  assert.deepEqual([h.logs.at(-1).path, h.logs.at(-1).reason], ['/extaudio/ab12ab12/1/tracks', 'see AB12AB12'], 'full hashes shorten');
+    url: 'https://lampa.test/homelab-media/' + 'ab12'.repeat(10) + '/1/tracks', reason: 'see ' + 'AB12'.repeat(10) });
+  assert.deepEqual([h.logs.at(-1).path, h.logs.at(-1).reason], ['/homelab-media/ab12ab12/1/tracks', 'see AB12AB12'], 'full hashes shorten');
   now += 6000;
   for (let i = 0; i < 40; i++) hls.trigger('error', { ...error, frag: { ...error.frag, sn: i } });
   assert.equal(h.logs.length, 30, 'at most 30 events a minute');
@@ -1925,7 +1925,7 @@ test('a failing log request never breaks playback', async t => {
   const h = harness(t);
   const fetch = h.context.window.fetch;
   h.context.window.fetch = (url, options) => {
-    if (new URL(url).pathname === '/extaudio/log') throw new Error('offline');
+    if (new URL(url).pathname === '/homelab-media/log') throw new Error('offline');
     return fetch(url, options);
   };
   h.start(1, 'same-torrent', true);
@@ -2391,7 +2391,7 @@ test('the next episode is warmed once, after playback runs in its last seven min
   playThrough(h, 981, 990);
   assert.deepEqual(warms(h), [], 'ten seconds have to play first');
   playThrough(h, 991, 1000);
-  assert.deepEqual(warms(h), [['/extaudio/abc/14/warm', 'POST']]);
+  assert.deepEqual(warms(h), [['/homelab-media/abc/14/warm', 'POST']]);
   assert.ok(h.logs.some(event => event.e === 'warm-next' && event.next === 14));
   playThrough(h, 1001, 1300);
   assert.equal(warms(h).length, 1, 'once per episode');
@@ -2441,7 +2441,7 @@ test('from the second episode on, the playlist item being played warms the next 
   await h.probe(firstEpisode);
   assert.ok(!playlist[1].torrent_hash && /\/gst\/start\.m3u8$/.test(new URL(playlist[1].url).pathname), 'the item went through create');
   playThrough(h, 1225, 1300);
-  assert.deepEqual(warms(h), [['/extaudio/abc/14/warm', 'POST'], ['/extaudio/abc/15/warm', 'POST']]);
+  assert.deepEqual(warms(h), [['/homelab-media/abc/14/warm', 'POST'], ['/homelab-media/abc/15/warm', 'POST']]);
 });
 
 test('the first episode finds its playlist position by the URL Lampa listed', async t => {
@@ -2454,7 +2454,7 @@ test('the first episode finds its playlist position by the URL Lampa listed', as
   h.start(13, 'abc', true);
   await h.probe(firstEpisode);
   playThrough(h, 1225, 1300);
-  assert.deepEqual(warms(h), [['/extaudio/abc/15/warm', 'POST']]);
+  assert.deepEqual(warms(h), [['/homelab-media/abc/15/warm', 'POST']]);
 });
 
 test('the voice-over being played is named so the sidecar probes only its file', async t => {
@@ -2463,7 +2463,7 @@ test('the voice-over being played is named so the sidecar probes only its file',
   await h.probe(firstEpisode);
   h.work().homelab_external_audio = { key: '7:0' };
   playThrough(h, 1225, 1300);
-  assert.deepEqual(warms(h), [['/extaudio/abc/14/warm?voice=7', 'POST']]);
+  assert.deepEqual(warms(h), [['/homelab-media/abc/14/warm?voice=7', 'POST']]);
 });
 
 test('a short video, an unknown duration or another playdata warms nothing', async t => {
@@ -2502,7 +2502,7 @@ test('a growing EVENT playlist duration warms nothing until it stops changing', 
   playThrough(h, 1001, 1025);
   assert.deepEqual(warms(h), [], 'the final duration has to hold for 30 seconds first');
   playThrough(h, 1026, 1060);
-  assert.deepEqual(warms(h), [['/extaudio/abc/14/warm', 'POST']]);
+  assert.deepEqual(warms(h), [['/homelab-media/abc/14/warm', 'POST']]);
 });
 
 test('a busy sidecar is asked once more after 30 seconds, a failed warm is not remembered', async t => {
@@ -2844,7 +2844,7 @@ test('an online source keeps its subtitle files from Lampa and lists them as dra
   assert.equal(h.subtitleTitle(), null, 'nothing starts without a reason');
   h.chooseSubtitle('Русские: полные');
   await h.settle();
-  const request = h.requests.find(item => new URL(item.url).pathname === '/extaudio/online/subtitle');
+  const request = h.requests.find(item => new URL(item.url).pathname === '/homelab-media/online/subtitle');
   assert.equal(new URL(request.url).searchParams.get('url'), 'https://lampa.test/proxy/full.vtt');
   assert.equal(request.options.headers['X-Homelab-Subtitles'], '1');
   assert.equal(FakeAss.instances.length, 1);

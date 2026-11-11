@@ -5,7 +5,7 @@
 
     function externalTracks(state, work) {
       if (!work.homelab_torrent_hash || !Number.isInteger(work.homelab_file_index)) return Promise.resolve([]);
-      var base = '/extaudio/' + encodeURIComponent(work.homelab_torrent_hash) + '/';
+      var base = '/homelab-media/' + encodeURIComponent(work.homelab_torrent_hash) + '/';
       var signal = state.externalAbort.signal;
       function lookup(retry) {
         return window.fetch(new URL(base + work.homelab_file_index + '/tracks', window.location.href).href, {signal: signal})

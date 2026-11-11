@@ -97,9 +97,8 @@ lampa/config/lampainit.js
 lampa/config/passwd
 lampa/cache/
 lampa/database/
-lampa/extaudio-cache/
-lampa/preview-cache/
-lampa/extaudio-fonts/
+lampa/media-cache/
+lampa/media-fonts/
 plex/config/
 plex/media-preview-generator/
 media/release/
@@ -197,8 +196,8 @@ notes.txt
 package-lock.json
 package.json
 # Pinned build inputs for the Lampa ASS renderer are real sources.
-!lampa/extaudio/jassub/package.json
-!lampa/extaudio/jassub/package-lock.json
+!lampa/media/jassub/package.json
+!lampa/media/jassub/package-lock.json
 .claude/
 
 # Top-level service folders not included by root compose.yml

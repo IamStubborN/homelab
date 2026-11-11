@@ -176,7 +176,7 @@
     return {title: voices.length ? voices.slice(0, 2).join(' / ') + (voices.length > 2 ? ' +' + (voices.length - 2) : '') : languages ? 'Дорожки: ' + languages : 'Озвучка не указана', codec: codec, voices: voices, languages: languages,
       subtitles: releaseSubtitles(release, streams)};
   }
-  // Voices read from a release's audio tracks by the extaudio sidecar, by info hash, for this app run.
+  // Voices read from a release's audio tracks by the lampa-media sidecar, by info hash, for this app run.
   var releaseVoiceCache = {};
   function magnetKey(link) { var match = /[?&]xt=urn:btih:([0-9a-z]{32,40})/i.exec(String(link || '')); return match ? match[1].toLowerCase() : ''; }
   function applyReleaseVoices(row, value) {

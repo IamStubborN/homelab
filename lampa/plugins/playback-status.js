@@ -46,34 +46,33 @@
   }
 
   // ---- State card: one calm line about what is happening, actions when stuck.
+  // Lampa's own vocabulary: a modal__content panel (#262829, 1em radius, 1.5em
+  // padding), notice title and settings-description weights, a broadcast__scan
+  // bar and native simple-buttons; no colours or glows of its own.
   var CSS = '.homelab-playback-card{position:fixed;left:0;right:0;top:50%;-webkit-transform:translateY(-50%);transform:translateY(-50%);padding:0 1em;text-align:center;pointer-events:none}' +
-    // One centred column: a glowing badge, the line, the torrent's read-ahead, then the actions.
-    '.homelab-playback-card__box{display:inline-block;position:relative;width:30em;max-width:100%;box-sizing:border-box;padding:1.9em 2em 1.7em;text-align:center;background:-webkit-linear-gradient(top,rgba(36,40,48,.94),rgba(16,18,22,.94));background:linear-gradient(180deg,rgba(36,40,48,.94),rgba(16,18,22,.94));border-radius:1.6em;box-shadow:0 1.6em 4em rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.07),inset 0 1px 0 rgba(255,255,255,.08);pointer-events:auto;-webkit-animation:homelab-playback-in .3s ease-out;animation:homelab-playback-in .3s ease-out}' +
-    '.homelab-playback-card__icon{position:relative;width:3.8em;height:3.8em;margin:0 auto 1.1em;border-radius:50%;color:#cfe3ff;background:rgba(143,193,255,.12);box-shadow:0 0 0 .5em rgba(143,193,255,.05),0 0 2.6em rgba(120,170,255,.28);display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center;-webkit-box-pack:center;-webkit-justify-content:center;justify-content:center;-webkit-animation:homelab-playback-glow 2.4s ease-in-out infinite;animation:homelab-playback-glow 2.4s ease-in-out infinite}' +
-    '.homelab-playback-card__icon svg{display:block;width:2em;height:2em}' +
+    '.homelab-playback-card__box{display:-webkit-inline-box;display:-webkit-inline-flex;display:inline-flex;-webkit-box-align:start;-webkit-align-items:flex-start;align-items:flex-start;width:32em;max-width:100%;box-sizing:border-box;padding:1.5em;text-align:left;background-color:#262829;border-radius:1em;pointer-events:auto;-webkit-animation:homelab-playback-in .2s ease-out;animation:homelab-playback-in .2s ease-out}' +
+    '.homelab-playback-card__icon{-webkit-flex-shrink:0;flex-shrink:0;width:2.2em;height:2.2em;margin-right:1.2em}' +
+    '.homelab-playback-card__icon svg{display:block;width:100%;height:100%}' +
     '.homelab-playback-card__spin{-webkit-animation:homelab-playback-spin 1s linear infinite;animation:homelab-playback-spin 1s linear infinite}' +
-    '.homelab-playback-card--alert .homelab-playback-card__icon{color:#ffd37a;background:rgba(245,195,107,.14);box-shadow:0 0 0 .5em rgba(245,195,107,.05),0 0 2.6em rgba(245,180,80,.3);-webkit-animation:none;animation:none}' +
-    '.homelab-playback-card__title{font-size:1.45em;font-weight:700;line-height:1.3;letter-spacing:-.01em}' +
-    '.homelab-playback-card__detail,.homelab-playback-card__hint{font-size:1em;line-height:1.4;margin-top:.35em}' +
-    '.homelab-playback-card__detail{opacity:.55}.homelab-playback-card__hint{opacity:.85}' +
-    // Read-ahead of the torrent (polled only while the card is visible); a light runs along while it waits.
-    '.homelab-playback-card__bar{height:.38em;margin:1em .4em .2em;border-radius:.4em;background:rgba(255,255,255,.1);overflow:hidden}' +
-    '.homelab-playback-card__fill{height:100%;width:0;border-radius:.4em;background:-webkit-linear-gradient(left,#5f9dff,#cfe6ff,#5f9dff);background:linear-gradient(90deg,#5f9dff,#cfe6ff,#5f9dff);background-size:200% 100%;-webkit-transition:width .6s ease-out;transition:width .6s ease-out;-webkit-animation:homelab-playback-run 1.6s linear infinite;animation:homelab-playback-run 1.6s linear infinite}' +
-    '.homelab-playback-card--alert .homelab-playback-card__fill{background:#f5c36b;-webkit-animation:none;animation:none}' +
-    '.homelab-playback-card__actions{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-flex-wrap:wrap;flex-wrap:wrap;-webkit-box-pack:center;-webkit-justify-content:center;justify-content:center;margin-top:1.3em}' +
-    '.homelab-playback-card__actions .simple-button{margin:.2em .3em;padding:.6em 1.4em;white-space:nowrap;border-radius:2em;background-color:rgba(255,255,255,.1)}' +
-    '.homelab-playback-card__actions .simple-button.focus{background-color:#fff;color:#000;box-shadow:0 .5em 1.4em rgba(0,0,0,.4)}' +
-    '@-webkit-keyframes homelab-playback-glow{50%{box-shadow:0 0 0 .7em rgba(143,193,255,.03),0 0 3.4em rgba(120,170,255,.4)}}@keyframes homelab-playback-glow{50%{box-shadow:0 0 0 .7em rgba(143,193,255,.03),0 0 3.4em rgba(120,170,255,.4)}}' +
-    '@-webkit-keyframes homelab-playback-run{from{background-position:100% 0}to{background-position:-100% 0}}@keyframes homelab-playback-run{from{background-position:100% 0}to{background-position:-100% 0}}' +
+    '.homelab-playback-card--alert .homelab-playback-card__icon{color:#d8c39a}' +
+    '.homelab-playback-card__body{-webkit-box-flex:1;-webkit-flex-grow:1;flex-grow:1;min-width:0}' +
+    '.homelab-playback-card__title{font-size:1.5em;font-weight:400;line-height:1.3}' +
+    '.homelab-playback-card__detail,.homelab-playback-card__hint{font-size:1.1em;font-weight:300;line-height:1.4;margin-top:.5em}' +
+    '.homelab-playback-card__detail{opacity:.5}' +
+    '.homelab-playback-card__bar{position:relative;height:.2em;margin-top:1em;border-radius:5em;background-color:rgba(255,255,255,.1);overflow:hidden}' +
+    '.homelab-playback-card__fill{height:100%;width:0;border-radius:5em;background-color:#fff;-webkit-transition:width .6s ease-out;transition:width .6s ease-out}' +
+    '.homelab-playback-card--alert .homelab-playback-card__fill{background-color:#d8c39a}' +
+    '.homelab-playback-card__actions{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-flex-wrap:wrap;flex-wrap:wrap;margin:1.2em -.3em -.3em}' +
+    '.homelab-playback-card__actions .simple-button{margin:.3em;white-space:nowrap}' +
     // The card's own spinner is the one wait mark while it is shown.
     '.homelab-card-wait .player-video__loader{visibility:hidden!important}' +
     // Once playback has begun, Lampa's own spinner waits as long as the card.
     '.homelab-played .player-video.video--load .player-video__loader{-webkit-animation:homelab-loader-wait 5s step-end;animation:homelab-loader-wait 5s step-end}' +
     '@-webkit-keyframes homelab-loader-wait{from,to{visibility:hidden}}@keyframes homelab-loader-wait{from,to{visibility:hidden}}' +
     '@-webkit-keyframes homelab-playback-spin{to{-webkit-transform:rotate(360deg)}}@keyframes homelab-playback-spin{to{transform:rotate(360deg)}}' +
-    '@-webkit-keyframes homelab-playback-in{from{opacity:0;-webkit-transform:translateY(.5em)}to{opacity:1;-webkit-transform:none}}@keyframes homelab-playback-in{from{opacity:0;transform:translateY(.5em)}to{opacity:1;transform:none}}';
+    '@-webkit-keyframes homelab-playback-in{from{opacity:0}to{opacity:1}}@keyframes homelab-playback-in{from{opacity:0}to{opacity:1}}';
   var ICON = {
-    wait: '<svg class="homelab-playback-card__spin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-opacity=".25" stroke-width="2.5"/><path d="M12 3a9 9 0 0 1 9 9" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>',
+    wait: '<svg class="homelab-playback-card__spin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-opacity=".15" stroke-width="2"/><path d="M12 2a10 10 0 0 1 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
     alert: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1 5h2v7h-2zm0 9h2v2h-2z"/></svg>'
   };
   function buttons() { return card ? [card.retry, card.source].filter(function (b) { return !b.hasClass('hide'); }) : []; }
@@ -203,7 +202,7 @@
     return {title: title, detail: kind === 'stall' ? s.stats || 'Нет данных больше 30 с' : '',
       hint: retry && source ? 'Повторите или выберите другой источник' : retry ? 'Попробуйте повторить' : source ? 'Выберите другой источник' : 'Закройте и откройте видео заново'};
   }
-  // The player's state when an alert first shows, for `docker logs lampa-extaudio`: no URL, no title.
+  // The player's state when an alert first shows, for `docker logs lampa-media`: no URL, no title.
   function diagnose(s, kind) {
     var audio = L.HomelabGstAudio, video = s.video;
     if (!audio || typeof audio.report !== 'function') return;

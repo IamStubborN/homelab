@@ -38,7 +38,7 @@
         var title = label.replace(/форсированн[а-яё]*|форсован[а-яіїє]*/gi, 'надписи')
           .replace(/(^|[^0-9a-zа-яё])(рус|англ|укр|яп|eng|ukr|rus)\.?(?=$|[^0-9a-zа-яё])/gi, '$1').replace(/\s+/g, ' ').trim();
         var signs = signsTitle(title);
-        var url = new URL('/extaudio/online/subtitle', window.location.href);
+        var url = new URL('/homelab-media/online/subtitle', window.location.href);
         url.searchParams.set('url', new URL(sub.url, window.location.href).href);
         return defineMode(state, {
           index: 2000 + number, external: true, language: language,
@@ -71,7 +71,7 @@
       };
       var stored = Lampa.Storage.get(preferenceKey, {});
       state.preferences = state.preferenceKey && stored && stored[state.preferenceKey] || {};
-      state.assRenderer = '/extaudio/jassub/';
+      state.assRenderer = '/homelab-media/jassub/';
       state.assItems = onlineItems(state, work);
       if (!state.assItems.length) return onlineFallback(state, null);
       if (!state.preferences.subtitles && (subtitledVoice(work) || Lampa.Storage.field('subtitles_start'))) {

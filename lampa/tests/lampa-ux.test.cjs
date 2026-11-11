@@ -1,10 +1,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {harness, flush} = require('./ux-harness.cjs');
-const hash = 'a'.repeat(40), key = `/previews/${hash}/1/`;
-const data = {key, enabled: true, info: {duration: 120, step: 5, version: 1, chapters: [
-  {start: 0, end: 8, title: 'OP'}, {start: 8, end: 90, title: 'Opening Scene'}, {start: 90, end: 120, title: 'Ending'},
-]}};
+const hash = 'a'.repeat(40);
 
 test('playback phases never produce popups or raw error text and keep one manual retry', t => {
   const h = harness(t); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});

@@ -15,7 +15,7 @@
       phaseListeners.slice().forEach(function (fn) { try { fn({type: name, work: work}); } catch (_) {} });
     }
 
-    // Playback events for `docker logs lampa-extaudio`: a page session, the
+    // Playback events for `docker logs lampa-media`: a page session, the
     // torrent hash prefix, the file and the position, never a URL's query.
     // Repeats within a few seconds and bursts are counted, not sent, and a
     // failed report never reaches playback.
@@ -70,7 +70,7 @@
         if (video && isFinite(video.currentTime)) event.t = Math.round(video.currentTime * 10) / 10;
         event.s = logSession;
         if (logDropped) { event.dropped = logDropped; logDropped = 0; }
-        window.fetch(new URL('/extaudio/log', window.location.href).href, {
+        window.fetch(new URL('/homelab-media/log', window.location.href).href, {
           method: 'POST', body: JSON.stringify(event), keepalive: true, credentials: 'omit',
           headers: {'Content-Type': 'application/json'}
         }).catch(function () {});
@@ -1922,7 +1922,7 @@
         return !sub.title || label === title(sub.title) || /^Subtitle \d+$/.test(label);
       });
       if (!aligned) return originals;
-      var base = '/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + state.work.homelab_file_index + '/';
+      var base = '/homelab-media/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + state.work.homelab_file_index + '/';
       return originals.map(function (original, i) {
         var sub = data.subtitles[i];
         if (!TEXT_CODECS[sub.codec] || !Number.isInteger(sub.stream) || state.embeddedBroken[sub.stream]) return original;
@@ -2070,7 +2070,7 @@
     }
 
     function assItems(state, data) {
-      var base = '/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/';
+      var base = '/homelab-media/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/';
       var items = [];
       (data.subtitles || []).filter(function (sub) { return Number.isInteger(sub.file); }).forEach(function (sub, number) {
         var fonts = (sub.fonts || []).filter(Number.isInteger).map(function (id) {
@@ -2251,7 +2251,7 @@
 
     function embeddedSubtitles(state, work, revision) {
       if (!work.homelab_torrent_hash || !Number.isInteger(work.homelab_file_index) || !assSupported()) return;
-      var url = new URL('/extaudio/' + encodeURIComponent(work.homelab_torrent_hash) + '/' + work.homelab_file_index + '/embedded', window.location.href);
+      var url = new URL('/homelab-media/' + encodeURIComponent(work.homelab_torrent_hash) + '/' + work.homelab_file_index + '/embedded', window.location.href);
       var signal = state.abort.signal;
       function lookup(attempts) {
         return window.fetch(url.href, {signal: signal}).then(function (response) {
@@ -2309,7 +2309,7 @@
 
     function externalTracks(state, work) {
       if (!work.homelab_torrent_hash || !Number.isInteger(work.homelab_file_index)) return Promise.resolve([]);
-      var base = '/extaudio/' + encodeURIComponent(work.homelab_torrent_hash) + '/';
+      var base = '/homelab-media/' + encodeURIComponent(work.homelab_torrent_hash) + '/';
       var signal = state.externalAbort.signal;
       function lookup(retry) {
         return window.fetch(new URL(base + work.homelab_file_index + '/tracks', window.location.href).href, {signal: signal})
@@ -2537,7 +2537,7 @@
       if (!next || metered()) { state.warmed = true; return; }
       var key = next.hash + '/' + next.index;
       if (warmedFiles.indexOf(key) !== -1) { state.warmed = true; return; }
-      var url = new URL('/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + next.index + '/warm', window.location.href);
+      var url = new URL('/homelab-media/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + next.index + '/warm', window.location.href);
       // The sidecar probes external audio only for the voice-over being played.
       var external = state.work.homelab_external_audio;
       if (external && /^\d+:/.test(external.key)) url.searchParams.set('voice', external.key.split(':')[0]);
@@ -2601,7 +2601,7 @@
         var title = label.replace(/форсированн[а-яё]*|форсован[а-яіїє]*/gi, 'надписи')
           .replace(/(^|[^0-9a-zа-яё])(рус|англ|укр|яп|eng|ukr|rus)\.?(?=$|[^0-9a-zа-яё])/gi, '$1').replace(/\s+/g, ' ').trim();
         var signs = signsTitle(title);
-        var url = new URL('/extaudio/online/subtitle', window.location.href);
+        var url = new URL('/homelab-media/online/subtitle', window.location.href);
         url.searchParams.set('url', new URL(sub.url, window.location.href).href);
         return defineMode(state, {
           index: 2000 + number, external: true, language: language,
@@ -2634,7 +2634,7 @@
       };
       var stored = Lampa.Storage.get(preferenceKey, {});
       state.preferences = state.preferenceKey && stored && stored[state.preferenceKey] || {};
-      state.assRenderer = '/extaudio/jassub/';
+      state.assRenderer = '/homelab-media/jassub/';
       state.assItems = onlineItems(state, work);
       if (!state.assItems.length) return onlineFallback(state, null);
       if (!state.preferences.subtitles && (subtitledVoice(work) || Lampa.Storage.field('subtitles_start'))) {

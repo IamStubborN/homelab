@@ -79,7 +79,7 @@
       if (!next || metered()) { state.warmed = true; return; }
       var key = next.hash + '/' + next.index;
       if (warmedFiles.indexOf(key) !== -1) { state.warmed = true; return; }
-      var url = new URL('/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + next.index + '/warm', window.location.href);
+      var url = new URL('/homelab-media/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + next.index + '/warm', window.location.href);
       // The sidecar probes external audio only for the voice-over being played.
       var external = state.work.homelab_external_audio;
       if (external && /^\d+:/.test(external.key)) url.searchParams.set('voice', external.key.split(':')[0]);

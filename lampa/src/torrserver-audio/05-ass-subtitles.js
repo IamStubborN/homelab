@@ -523,7 +523,7 @@
         return !sub.title || label === title(sub.title) || /^Subtitle \d+$/.test(label);
       });
       if (!aligned) return originals;
-      var base = '/extaudio/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + state.work.homelab_file_index + '/';
+      var base = '/homelab-media/' + encodeURIComponent(state.work.homelab_torrent_hash) + '/' + state.work.homelab_file_index + '/';
       return originals.map(function (original, i) {
         var sub = data.subtitles[i];
         if (!TEXT_CODECS[sub.codec] || !Number.isInteger(sub.stream) || state.embeddedBroken[sub.stream]) return original;

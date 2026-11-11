@@ -154,14 +154,14 @@
       parserPending = false;
       self.onlinePending = false; self.torrentPending = false;
     };
-    // A focused torrent whose title and tracker name no voice: the extaudio sidecar adds the release
+    // A focused torrent whose title and tracker name no voice: the lampa-media sidecar adds the release
     // to TorrServer and reads its audio tracks. Only on request, one release at a time, seeded ones.
     var voiceBusy = false, lastVoiceRow = null;
     this.voices = function (row) {
       var release = row && row.release, link = release && release.MagnetUri, key = magnetKey(link);
       if (!live() || !release || !key || voiceBusy || row.voiceProbe || row.described && row.described.voices.length || (Number(release.Seeders) || 0) < MIN_SEEDS) return false;
       if (releaseVoiceCache[key]) { applyReleaseVoices(row, releaseVoiceCache[key]); notify(); return true; }
-      var abort = Abort(), timer = setTimeout(function () { abort.abort(); }, 90000), url = new URL('/extaudio/voices', window.location.href);
+      var abort = Abort(), timer = setTimeout(function () { abort.abort(); }, 90000), url = new URL('/homelab-media/voices', window.location.href);
       url.searchParams.set('link', link); url.searchParams.set('title', String(release.Title).slice(0, 150));
       voiceBusy = true; row.voiceProbe = 'pending'; lastVoiceRow = row; requests.push(abort); notify();
       function strings(list) { return Array.isArray(list) ? list.filter(function (item) { return typeof item === 'string' && item.trim(); }).slice(0, 12) : []; }

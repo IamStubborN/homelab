@@ -89,7 +89,7 @@ var lampainit_invc = {};
     if (!Lampa.Plugins || typeof Lampa.Plugins.get !== 'function') return;
 
     // YummyAnime (1.3 MB from GitHub on every start) is unused: removed by the user's decision.
-    var retired = [origin + '/plugins/homelab/chapter-gallery.js', 'https://yummyanime.github.io/yummy-lampa-plugin/stable/index.js'];
+    var retired = [origin + '/plugins/homelab/chapter-gallery.js', origin + '/plugins/homelab/seek-previews.js', 'https://yummyanime.github.io/yummy-lampa-plugin/stable/index.js'];
     // Copy first: remove() mutates the registry array that get() returns.
     Lampa.Plugins.get().slice().forEach(function (plugin) {
       if (typeof plugin.url !== 'string') return;
@@ -137,9 +137,9 @@ var lampainit_invc = {};
         author: 'Homelab'
       },
       {
-        url: origin + '/plugins/homelab/seek-previews.js',
+        url: origin + '/plugins/homelab/chapters.js',
         status: 1,
-        name: 'Главы и кадры перемотки',
+        name: 'Главы',
         author: 'Homelab'
       },
       {

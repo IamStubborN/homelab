@@ -959,6 +959,7 @@ class EmbeddedInfoTests(unittest.TestCase):
             ],
             "fonts": [4, 5],
             "duration": 1420.5,
+            "chapters": [],
         })
 
     def test_fonts_stop_at_the_total_limit(self):
@@ -1314,13 +1315,13 @@ class HttpTests(unittest.TestCase):
 
     def test_rejects_paths_outside_the_rendition(self):
         for path in (
-            f"/extaudio/{HASH}/1/0/aac/..%2F..%2Fetc%2Fpasswd",
-            f"/extaudio/{HASH}/1/0/copy/audio.m3u8",
-            f"/extaudio/{HASH}/1/0/aac/other.txt",
-            f"/extaudio/{HASH}/1/0/flac/audio.m3u8",
-            f"/extaudio/{HASH}/1/0/audio.m3u8",
-            "/extaudio/not-a-hash/1/tracks",
-            f"/extaudio/{HASH}/1/0/aac/../tracks",
+            f"/homelab-media/{HASH}/1/0/aac/..%2F..%2Fetc%2Fpasswd",
+            f"/homelab-media/{HASH}/1/0/copy/audio.m3u8",
+            f"/homelab-media/{HASH}/1/0/aac/other.txt",
+            f"/homelab-media/{HASH}/1/0/flac/audio.m3u8",
+            f"/homelab-media/{HASH}/1/0/audio.m3u8",
+            "/homelab-media/not-a-hash/1/tracks",
+            f"/homelab-media/{HASH}/1/0/aac/../tracks",
         ):
             with self.subTest(path=path):
                 self.assertEqual(self.get(path)[0], 404)
@@ -1335,13 +1336,13 @@ class HttpTests(unittest.TestCase):
         probe = patcher.start()
         self.addCleanup(patcher.stop)
         for path, status in (
-            (f"/extaudio/{HASH}/14/sub/0?at=10", 404),
-            (f"/extaudio/{HASH}/13/sub/1?at=10", 404),  # no such stream
-            (f"/extaudio/{HASH}/13/sub/0?at=-1", 400),
-            (f"/extaudio/{HASH}/13/sub/0?at=1&from=x", 400),
-            (f"/extaudio/{HASH}/13/attachment/4", 404),
-            (f"/extaudio/{HASH}/14/attachment/3", 404),
-            (f"/extaudio/{HASH}/13/attachment/..", 404),
+            (f"/homelab-media/{HASH}/14/sub/0?at=10", 404),
+            (f"/homelab-media/{HASH}/13/sub/1?at=10", 404),  # no such stream
+            (f"/homelab-media/{HASH}/13/sub/0?at=-1", 400),
+            (f"/homelab-media/{HASH}/13/sub/0?at=1&from=x", 400),
+            (f"/homelab-media/{HASH}/13/attachment/4", 404),
+            (f"/homelab-media/{HASH}/14/attachment/3", 404),
+            (f"/homelab-media/{HASH}/13/attachment/..", 404),
         ):
             with self.subTest(path=path):
                 self.assertEqual(self.get(path)[0], status)
@@ -1350,7 +1351,7 @@ class HttpTests(unittest.TestCase):
     def test_a_torrent_without_its_file_list_yet_is_asked_again(self):
         app._embedded_cache.clear()
         with mock.patch.object(app, "torrent_files", return_value=[]):
-            status, headers, _ = self.get(f"/extaudio/{HASH}/13/embedded")
+            status, headers, _ = self.get(f"/homelab-media/{HASH}/13/embedded")
         self.assertEqual(status, 503)
         self.assertEqual(headers["Retry-After"], "3")
 
@@ -1366,24 +1367,24 @@ class HttpTests(unittest.TestCase):
         with mock.patch.object(app, "torrent_files", return_value=FILES), \
                 mock.patch.object(app, "live_rendition", side_effect=create), \
                 mock.patch.object(app, "start_run") as start:
-            status, headers, body = self.get(f"/extaudio/{HASH.upper()}/1/0/aac/audio.m3u8?at=600")
+            status, headers, body = self.get(f"/homelab-media/{HASH.upper()}/1/0/aac/audio.m3u8?at=600")
         self.assertEqual((status, body), (200, b"#EXTM3U\n"))
         self.assertEqual(headers["Content-Type"], "application/vnd.apple.mpegurl")
         start.assert_called_once_with(rendition, 600 * app.SAMPLE_RATE // app.SEGMENT_SAMPLES)
 
     def test_encoded_segments_need_a_checked_playlist(self):
         with mock.patch.object(app, "live_rendition") as live:
-            self.assertEqual(self.get(f"/extaudio/{HASH}/1/0/aac/s3.m4s")[0], 404)
-            self.assertEqual(self.get(f"/extaudio/{HASH}/1/0/aac/init.mp4")[0], 404)
+            self.assertEqual(self.get(f"/homelab-media/{HASH}/1/0/aac/s3.m4s")[0], 404)
+            self.assertEqual(self.get(f"/homelab-media/{HASH}/1/0/aac/init.mp4")[0], 404)
         live.assert_not_called()
 
     def test_only_audio_files_of_a_known_torrent_are_remuxed(self):
         unknown = urllib.error.HTTPError("url", 404, "Not Found", {}, None)
         self.addCleanup(unknown.close)
         cases = (
-            (mock.Mock(return_value=FILES), f"/extaudio/{HASH}/13/0/aac/audio.m3u8"),
-            (mock.Mock(return_value=FILES), f"/extaudio/{HASH}/77/0/aac/audio.m3u8"),
-            (mock.Mock(side_effect=unknown), f"/extaudio/{HASH}/1/0/aac/audio.m3u8"),
+            (mock.Mock(return_value=FILES), f"/homelab-media/{HASH}/13/0/aac/audio.m3u8"),
+            (mock.Mock(return_value=FILES), f"/homelab-media/{HASH}/77/0/aac/audio.m3u8"),
+            (mock.Mock(side_effect=unknown), f"/homelab-media/{HASH}/1/0/aac/audio.m3u8"),
         )
         for files, path in cases:
             with self.subTest(path=path), mock.patch.object(app, "torrent_files", files), \
@@ -1397,15 +1398,15 @@ class HttpTests(unittest.TestCase):
                 mock.patch.object(app, "external_tracks", return_value=(tracks, True)), \
                 tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "RENDERER_DIR", directory):
             open(os.path.join(directory, "jassub.js"), "w").close()
-            status, _, body = self.get(f"/extaudio/{HASH}/13/tracks")
+            status, _, body = self.get(f"/homelab-media/{HASH}/13/tracks")
         payload = json.loads(body)
-        self.assertEqual((status, payload["tracks"], payload["pending"], payload["renderer"]), (200, tracks, True, "/extaudio/jassub/"))
+        self.assertEqual((status, payload["tracks"], payload["pending"], payload["renderer"]), (200, tracks, True, "/homelab-media/jassub/"))
         self.assertEqual([item["file"] for item in payload["subtitles"]], [27, 25])
 
     def test_tracks_endpoint_waits_for_the_file_list(self):
         with mock.patch.object(app, "torrent_files", return_value=[]), \
                 mock.patch.object(app, "external_tracks") as tracks:
-            status, _, body = self.get(f"/extaudio/{HASH}/13/tracks")
+            status, _, body = self.get(f"/homelab-media/{HASH}/13/tracks")
         self.assertEqual((status, json.loads(body)["pending"]), (200, True))
         tracks.assert_not_called()
 
@@ -1428,7 +1429,7 @@ class HttpTests(unittest.TestCase):
             # JASSUB requests every font at once and never retries.
             results = [None] * 12
             def fetch(slot, file_id):
-                results[slot] = self.get(f"/extaudio/{HASH}/{file_id}/raw")
+                results[slot] = self.get(f"/homelab-media/{HASH}/{file_id}/raw")
             threads = [threading.Thread(target=fetch, args=(slot, file_id))
                        for slot, file_id in enumerate([*range(50, 60), 40, 27])]
             for thread in threads:
@@ -1439,18 +1440,18 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(results[0][1]["Content-Type"], "application/octet-stream")
             self.assertEqual(len(results[0][2]), 1000)
             with mock.patch.object(app, "torrent_files", side_effect=AssertionError("cached files skip lookups")):
-                self.assertEqual(self.get(f"/extaudio/{HASH}/27/raw")[0], 200)
-            self.assertEqual(self.get(f"/extaudio/{HASH}/13/raw")[0], 404)
+                self.assertEqual(self.get(f"/homelab-media/{HASH}/27/raw")[0], 200)
+            self.assertEqual(self.get(f"/homelab-media/{HASH}/13/raw")[0], 404)
 
     def test_renderer_files_are_served_with_their_types(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "RENDERER_DIR", directory):
             for name in ("jassub.js", "jassub-worker.wasm"):
                 with open(os.path.join(directory, name), "wb") as target:
                     target.write(b"x")
-            self.assertEqual(self.get("/extaudio/jassub/jassub-worker.wasm")[1]["Content-Type"], "application/wasm")
-            self.assertEqual(self.get("/extaudio/jassub/jassub.js")[1]["Content-Type"], "text/javascript")
-            self.assertEqual(self.get("/extaudio/jassub/missing.js")[0], 404)
-            self.assertEqual(self.get("/extaudio/jassub/..%2Fapp.py")[0], 404)
+            self.assertEqual(self.get("/homelab-media/jassub/jassub-worker.wasm")[1]["Content-Type"], "application/wasm")
+            self.assertEqual(self.get("/homelab-media/jassub/jassub.js")[1]["Content-Type"], "text/javascript")
+            self.assertEqual(self.get("/homelab-media/jassub/missing.js")[0], 404)
+            self.assertEqual(self.get("/homelab-media/jassub/..%2Fapp.py")[0], 404)
 
     def test_library_fonts_and_their_index(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(app, "FONT_LIBRARY_DIR", directory):
@@ -1458,11 +1459,11 @@ class HttpTests(unittest.TestCase):
             name = "a" * 32 + ".ttf"
             with open(os.path.join(directory, name), "wb") as output:
                 output.write(font(["Trebuchet MS"]))
-            status, _, body = self.get("/extaudio/fonts/index.json")
+            status, _, body = self.get("/homelab-media/fonts/index.json")
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(body)["fonts"]["trebuchet ms"], name)
-            self.assertEqual(self.get("/extaudio/fonts/" + name)[2], font(["Trebuchet MS"]))
-            for path in ("/extaudio/fonts/" + "b" * 32 + ".ttf", "/extaudio/fonts/..%2Fapp.py", "/extaudio/fonts/x.ttf"):
+            self.assertEqual(self.get("/homelab-media/fonts/" + name)[2], font(["Trebuchet MS"]))
+            for path in ("/homelab-media/fonts/" + "b" * 32 + ".ttf", "/homelab-media/fonts/..%2Fapp.py", "/homelab-media/fonts/x.ttf"):
                 with self.subTest(path=path):
                     self.assertEqual(self.get(path)[0], 404)
 
@@ -1485,14 +1486,14 @@ class HttpTests(unittest.TestCase):
         with mock.patch.object(app, "torrent_active", return_value=True), \
                 mock.patch.object(app, "torrent_files", return_value=FILES), mock.patch.object(app, "warm", side_effect=warm) as run:
             host = urllib.parse.urlsplit(self.base).netloc
-            self.assertEqual(self.warm_post(f"/extaudio/{HASH.upper()}/14/warm?voice=1", {"Origin": f"http://{host}"}), (202, {"warm": "started"}))
+            self.assertEqual(self.warm_post(f"/homelab-media/{HASH.upper()}/14/warm?voice=1", {"Origin": f"http://{host}"}), (202, {"warm": "started"}))
             self.assertTrue(started.wait(5))
-            self.assertEqual(self.warm_post(f"/extaudio/{HASH}/14/warm"), (200, {"warm": "done"}))
-            for path in (f"/extaudio/{HASH}/1/warm", f"/extaudio/{HASH}/77/warm", f"/extaudio/{HASH}/14/tracks"):
+            self.assertEqual(self.warm_post(f"/homelab-media/{HASH}/14/warm"), (200, {"warm": "done"}))
+            for path in (f"/homelab-media/{HASH}/1/warm", f"/homelab-media/{HASH}/77/warm", f"/homelab-media/{HASH}/14/tracks"):
                 with self.subTest(path=path):
                     self.assertEqual(self.warm_post(path)[0], 404)
-            self.assertEqual(self.warm_post(f"/extaudio/{HASH}/13/warm?voice=x")[0], 400)
-            self.assertEqual(self.get(f"/extaudio/{HASH}/14/warm")[0], 404)
+            self.assertEqual(self.warm_post(f"/homelab-media/{HASH}/13/warm?voice=x")[0], 400)
+            self.assertEqual(self.get(f"/homelab-media/{HASH}/14/warm")[0], 404)
         run.assert_called_once_with(HASH, 14, 2, FILES)
 
     def test_warms_from_other_sites_idle_torrents_and_concurrent_warms_are_refused(self):
@@ -1503,16 +1504,16 @@ class HttpTests(unittest.TestCase):
         with mock.patch.object(app, "torrent_active", return_value=False) as active, \
                 mock.patch.object(app, "torrent_files", side_effect=AssertionError("`get` would start the torrent")), \
                 mock.patch.object(app, "warm") as run:
-            self.assertEqual(self.warm_post(f"/extaudio/{HASH}/14/warm", {"Origin": "https://evil.test"})[0], 403)
+            self.assertEqual(self.warm_post(f"/homelab-media/{HASH}/14/warm", {"Origin": "https://evil.test"})[0], 403)
             active.assert_not_called()
-            self.assertEqual(self.warm_post(f"/extaudio/{HASH}/14/warm")[0], 404)
+            self.assertEqual(self.warm_post(f"/homelab-media/{HASH}/14/warm")[0], 404)
             app._warms.acquire()
             try:
-                self.assertEqual(self.warm_post(f"/extaudio/{HASH}/14/warm")[0], 429)
+                self.assertEqual(self.warm_post(f"/homelab-media/{HASH}/14/warm")[0], 429)
             finally:
                 app._warms.release()
         with mock.patch.object(app, "torrent_active", side_effect=unknown), mock.patch.object(app, "warm") as run:
-            self.assertEqual(self.warm_post(f"/extaudio/{HASH}/14/warm")[0], 404)
+            self.assertEqual(self.warm_post(f"/homelab-media/{HASH}/14/warm")[0], 404)
         run.assert_not_called()
         self.assertTrue(app._warms.acquire(blocking=False), "refused warms free their slot")
         app._warms.release()
@@ -1523,7 +1524,7 @@ class HttpTests(unittest.TestCase):
         with mock.patch.object(app, "torrent_active", return_value=True), \
                 mock.patch.object(app, "torrent_files", return_value=FILES), \
                 mock.patch.object(app, "threading", mock.Mock(**{"Thread.return_value.start.side_effect": RuntimeError("can't start new thread")})):
-            self.assertEqual(self.warm_post(f"/extaudio/{HASH}/14/warm")[0], 503)
+            self.assertEqual(self.warm_post(f"/homelab-media/{HASH}/14/warm")[0], 503)
         self.assertEqual(app._warmed, {})
         self.assertTrue(app._warms.acquire(blocking=False))
         app._warms.release()
@@ -1532,7 +1533,7 @@ class HttpTests(unittest.TestCase):
         for _ in range(app.MAX_TRACK_LOOKUPS):
             app._track_lookups.acquire()
         try:
-            status, headers, _ = self.get(f"/extaudio/{HASH}/13/tracks")
+            status, headers, _ = self.get(f"/homelab-media/{HASH}/13/tracks")
         finally:
             for _ in range(app.MAX_TRACK_LOOKUPS):
                 app._track_lookups.release()
@@ -1557,7 +1558,7 @@ class HttpTests(unittest.TestCase):
         event = {"e": "hls-error", "s": "k3j2", "h": "bc7b45c4", "f": 13, "t": 61.3, "fatal": True,
                  "path": "/gst/501/seg7.m4s", "reason": "x" * 500, "ts": "forged", "nested": {"a": 1},
                  "bad key": 1, "big": 10 ** 30}
-        statuses, lines = self.logged(("/extaudio/log", json.dumps(event).encode()))
+        statuses, lines = self.logged(("/homelab-media/log", json.dumps(event).encode()))
         self.assertEqual(statuses, [204])
         self.assertEqual(len(lines), 1)
         self.assertTrue(lines[0].startswith("client {"))
@@ -1569,20 +1570,20 @@ class HttpTests(unittest.TestCase):
 
     def test_client_events_reject_other_bodies(self):
         statuses, lines = self.logged(
-            ("/extaudio/log", b'{"e": "x"}', "text/plain"),
-            ("/extaudio/log", b"not json"),
-            ("/extaudio/log", b"[1, 2]"),
-            ("/extaudio/log", b"[" * 3000),
-            ("/extaudio/log", json.dumps({"e": "x" * app.LOG_MAX_BYTES}).encode()),
-            ("/extaudio/other", b'{"e": "x"}'),
+            ("/homelab-media/log", b'{"e": "x"}', "text/plain"),
+            ("/homelab-media/log", b"not json"),
+            ("/homelab-media/log", b"[1, 2]"),
+            ("/homelab-media/log", b"[" * 3000),
+            ("/homelab-media/log", json.dumps({"e": "x" * app.LOG_MAX_BYTES}).encode()),
+            ("/homelab-media/other", b'{"e": "x"}'),
         )
         self.assertEqual(statuses, [415, 400, 400, 400, 413, 404])
         self.assertEqual(lines, [])
-        self.assertEqual(self.get("/extaudio/log")[0], 404)
+        self.assertEqual(self.get("/homelab-media/log")[0], 404)
 
     def test_client_event_text_cannot_split_the_line(self):
         event = {"e": "ass-failed", "reason": "one\ntwo\r\u2028three\u2029four\x00five", "ts\n": 1, "Ts": "forged"}
-        statuses, lines = self.logged(("/extaudio/log", json.dumps(event).encode()))
+        statuses, lines = self.logged(("/homelab-media/log", json.dumps(event).encode()))
         self.assertEqual(statuses, [204])
         self.assertEqual(len(lines), 1)
         self.assertNotIn("\u2028", lines[0])
@@ -1593,14 +1594,14 @@ class HttpTests(unittest.TestCase):
     def test_client_events_need_a_content_length(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
         self.addCleanup(connection.close)
-        connection.putrequest("POST", "/extaudio/log")
+        connection.putrequest("POST", "/homelab-media/log")
         connection.putheader("Content-Type", "application/json")
         connection.endheaders()
         self.assertEqual(connection.getresponse().status, 411)
 
     def test_client_events_are_rate_limited(self):
         with mock.patch.object(app, "LOG_PER_MINUTE", 2):
-            statuses, lines = self.logged(*[("/extaudio/log", b'{"e": "x"}')] * 3)
+            statuses, lines = self.logged(*[("/homelab-media/log", b'{"e": "x"}')] * 3)
         self.assertEqual(statuses, [204, 204, 429])
         self.assertEqual(len(lines), 2)
         self.assertTrue(app.log_allowed(time.monotonic() + 61), "a new minute starts afresh")
@@ -1757,7 +1758,7 @@ class OnlineSubtitleTests(unittest.TestCase):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-        base = f"http://127.0.0.1:{server.server_address[1]}/extaudio/online/subtitle?url="
+        base = f"http://127.0.0.1:{server.server_address[1]}/homelab-media/online/subtitle?url="
         def get(link, header=True):
             request = urllib.request.Request(base + urllib.parse.quote(link, safe=""), headers={"X-Homelab-Subtitles": "1"} if header else {})
             try:
@@ -1780,3 +1781,55 @@ class OnlineSubtitleTests(unittest.TestCase):
             self.assertEqual(get("/proxy/c.vtt")[0], 404)
         with mock.patch.object(app, "read_online_subtitle", side_effect=app.Rejected("url not allowed")):
             self.assertEqual(get("https://10.0.0.1/a.vtt")[0], 400)
+
+
+class ChapterListTest(unittest.TestCase):
+    def test_chapters_come_sorted_clipped_and_plain(self):
+        probe = {"format": {"duration": "100"}, "chapters": [
+            {"start_time": "50", "end_time": "120", "tags": {"title": "<b>Two</b>"}},
+            {"start_time": "0", "end_time": "50", "tags": {}},
+            {"start_time": "100", "end_time": "110"},
+            {"start_time": "x", "end_time": "1"},
+            {"start_time": "30", "end_time": "30"},
+        ]}
+        info = app.embedded_info(probe)
+        self.assertEqual([(c["start"], c["end"]) for c in info["chapters"]], [(0, 50), (50, 100)])
+        self.assertNotIn("<", info["chapters"][1]["title"])
+        self.assertEqual(info["chapters"][0]["title"], "")
+
+    def test_a_file_without_chapters_has_an_empty_list(self):
+        self.assertEqual(app.embedded_info({"format": {"duration": "10"}})["chapters"], [])
+
+
+class EmbeddedSlotTest(unittest.TestCase):
+    """Chapters and subtitles both ask for /embedded: only a new ffprobe takes a slot."""
+
+    def setUp(self):
+        self.key = (HASH, 13, "embedded")
+        app._embedded_cache.pop(self.key, None)
+        app._embedded_probing.pop(self.key, None)
+        self.addCleanup(app._embedded_cache.pop, self.key, None)
+        self.addCleanup(app._embedded_probing.pop, self.key, None)
+
+    def test_cached_and_joined_probes_need_no_slot(self):
+        full = threading.Semaphore(0)
+        app._embedded_cache[self.key] = {"chapters": []}
+        self.assertEqual(app.probe_embedded(HASH, 13, slot=full), {"chapters": []})
+        del app._embedded_cache[self.key]
+        running = app._embedded_probing[self.key] = threading.Event()
+
+        def finish():
+            app._embedded_cache[self.key] = {"chapters": [1]}
+            running.set()
+        threading.Timer(0.05, finish).start()
+        self.assertEqual(app.probe_embedded(HASH, 13, slot=full), {"chapters": [1]})
+
+    def test_a_new_probe_without_a_free_slot_is_busy_and_a_finished_one_frees_it(self):
+        with self.assertRaises(app.Busy):
+            app.probe_embedded(HASH, 13, slot=threading.Semaphore(0))
+        self.assertNotIn(self.key, app._embedded_probing)
+        slot = threading.Semaphore(1)
+        with mock.patch.object(app, "require_video_file"), \
+                mock.patch.object(app, "cached_probe", return_value={"chapters": []}):
+            app.probe_embedded(HASH, 13, slot=slot)
+        self.assertTrue(slot.acquire(blocking=False), "the slot is released after the probe")

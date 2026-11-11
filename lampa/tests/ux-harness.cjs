@@ -11,7 +11,7 @@ function bus() {
 
 function harness(t) {
   t.mock.timers.enable({apis: ['setTimeout', 'Date']});
-  const elements = [], calls = [], storage = new Map(), notices = [], rows = [], events = bus(), coreEvents = [], syncEvents = [], phaseEvents = [], revoked = [];
+  const elements = [], calls = [], storage = new Map(), notices = [], rows = [], events = bus(), syncEvents = [], phaseEvents = [], revoked = [];
   function element(html = '') {
     const classes = new Set((/class="([^"]*)"/.exec(html)?.[1] || '').split(/\s+/));
     const handlers = {}, children = [], found = new Map();
@@ -49,7 +49,7 @@ function harness(t) {
   function makeVideo(values = {}) { const videoEvents = bus(); return {currentTime: 0, duration: 120, paused: false, readyState: 4, volume: .7, muted: false, playbackRate: 1,
     addEventListener: videoEvents.follow, removeEventListener: videoEvents.remove, fire: videoEvents.send, ...values}; }
   let video = makeVideo();
-  let work = null, profile = 'profile-a', modal = null, select = null, controller = {name: 'player'}, selected, input, coreState = null, syncRows = [], scope = 'a', audioRetry = 0;
+  let work = null, profile = 'profile-a', modal = null, select = null, controller = {name: 'player'}, selected, input, syncRows = [], scope = 'a', audioRetry = 0;
   const modalEvents = bus(), selectEvents = bus(), playerEvents = bus(), pvEvents = bus(), storageEvents = bus();
   const panel = element('<div><div class="player-panel__subs"></div></div>'), root = element();
   const L = {
@@ -89,19 +89,17 @@ function harness(t) {
     Api: {img: path => '/image' + path, sources: {tmdb: {get(path, params, done) { done({id: +path.split('?')[0].split('/')[1], name: 'Series', original_name: 'Original series', number_of_seasons: 1, poster_path: '/poster.jpg'}); }}}},
     HomelabGstAudio: {subscribe: fn => phaseEvents.push(fn), retryCurrent() { audioRetry++; return true; }},
   };
-  const core = {version: 2, current: () => coreState, subscribe: fn => coreEvents.push(fn), retryMetadata() {}, setEnabled() {}};
   const sync = {scope: () => scope, url: path => 'https://lampa.test' + path + '?uid=test&profile_id=' + scope,
     rows: () => syncRows, extra: row => JSON.parse(row.extra || '{}'), pull: done => done(), subscribe: fn => syncEvents.push(fn)};
   function fetch(url, options = {}) { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); calls.push({url, options,
     finish(data, status = 200, headers = {}) { resolve({ok: status === 200, status, headers: {get: name => headers[name] ?? null}, json: async () => data, blob: async () => data}); }, fail() { reject(new Error('network')); }}); return promise; }
   const URLClass = class extends URL {};
   URLClass.createObjectURL = () => 'blob:' + Math.random(); URLClass.revokeObjectURL = value => revoked.push(value);
-  const window = {appready: true, Lampa: L, jQuery: $, $, HomelabSync: sync, homelabSeekPreviews: core, fetch, AbortController, location: {href: 'https://lampa.test/'}, addEventListener: events.follow, dispatchEvent: event => events.send(event.type, event)};
+  const window = {appready: true, Lampa: L, jQuery: $, $, HomelabSync: sync, fetch, AbortController, location: {href: 'https://lampa.test/'}, addEventListener: events.follow, dispatchEvent: event => events.send(event.type, event)};
   const context = {window, Lampa: L, $, fetch, URL: URLClass, AbortController, setTimeout, clearTimeout, Date, console};
-  return {L, core, sync, elements, calls, storage, notices, rows, window, revoked,
+  return {L, sync, elements, calls, storage, notices, rows, window, revoked,
     run(relative) { vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', relative), 'utf8'), context, {filename: relative}); },
     work: () => work, video: () => video, modal: () => modal, select: () => select, input: () => input, selected: () => selected, retryCount: () => audioRetry,
-    coreState(value) { coreState = value; coreEvents.forEach(fn => fn()); },
     start(data) { work = data; playerEvents.send('start', data); playerEvents.send('ready', data); },
     destroy() { work = null; playerEvents.send('destroy'); }, videoEvent: pvEvents.send,
     replaceVideo() { const old = video; video = makeVideo({currentTime: 0, readyState: 0}); return old; },

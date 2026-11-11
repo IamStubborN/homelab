@@ -154,6 +154,7 @@ test('retired homelab plugins are removed from the client registry', () => {
     { url: 'https://other.example/stunnorm/x.js', status: 1 },
     { url: 'https://yummyanime.github.io/yummy-lampa-plugin/stable/index.js', status: 1 },
     { url: 'https://lampa.test/plugins/homelab/seek-previews.js', status: 1 },
+    { url: 'https://lampa.test/plugins/homelab/chapters.js', status: 1 },
   ];
   h.Lampa.Plugins = {
     get: () => loaded, add: plugin => loaded.push(plugin), push() {}, save() {},
@@ -162,6 +163,6 @@ test('retired homelab plugins are removed from the client registry', () => {
   h.Lampa.Utils = { putScriptAsync() {} };
   h.hooks.appready();
   const urls = loaded.map(plugin => plugin.url);
-  assert.ok(!urls.some(url => /chapter-gallery|stunnorm|yummyanime/.test(url)), urls.join(', '));
-  assert.ok(urls.includes('https://lampa.test/plugins/homelab/seek-previews.js'));
+  assert.ok(!urls.some(url => /chapter-gallery|seek-previews|stunnorm|yummyanime/.test(url)), urls.join(', '));
+  assert.ok(urls.includes('https://lampa.test/plugins/homelab/chapters.js'));
 });

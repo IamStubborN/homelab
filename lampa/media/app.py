@@ -106,7 +106,7 @@ FONT_LIBRARY_MAX_BYTES = int(os.environ.get("FONT_LIBRARY_MAX_MB", "2048")) * 10
 # a full stand-in in every other release.
 MIN_LIBRARY_GLYPHS = 200
 LIBRARY_NAME_RE = re.compile(r"^[0-9a-f]{32}\.(?:ttf|otf|ttc)$")
-FONTS_RE = re.compile(r"^/extaudio/fonts/(?:(index\.json)|([0-9a-f]{32}\.(?:ttf|otf|ttc)))$")
+FONTS_RE = re.compile(r"^/homelab-media/fonts/(?:(index\.json)|([0-9a-f]{32}\.(?:ttf|otf|ttc)))$")
 # JASSUB's names for CSS weights 100-1000; it looks fonts up as "family weight".
 WEIGHT_NAMES = ["thin", "extralight", "light", "regular", "medium", "semibold", "bold", "extrabold", "black", "ultrablack"]
 # Text subtitles are converted for JASSUB; ffmpeg names their style Default
@@ -153,10 +153,10 @@ MAX_FAILURES = 3
 FAILURE_RESET_SECONDS = 60
 SEGMENT_RE = re.compile(r"^s(\d+)\.m4s$")
 FILE_RE = re.compile(r"^(?:audio\.m3u8|init\.mp4|s\d{1,6}\.m4s)$")
-WARM_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/warm$")
-ROUTE_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(tracks|raw)|(\d{1,2})/(aac)/([^/]+))$")
-EMBEDDED_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/(?:(embedded)|sub/(\d{1,2})|attachment/(\d{1,3}))$")
-RENDERER_RE = re.compile(r"^/extaudio/jassub/([a-z0-9-]+\.(?:js|wasm|woff2|ttf|txt))$")
+WARM_RE = re.compile(r"^/homelab-media/([0-9a-fA-F]{40})/(\d{1,6})/warm$")
+ROUTE_RE = re.compile(r"^/homelab-media/([0-9a-fA-F]{40})/(\d{1,6})/(?:(tracks|raw)|(\d{1,2})/(aac)/([^/]+))$")
+EMBEDDED_RE = re.compile(r"^/homelab-media/([0-9a-fA-F]{40})/(\d{1,6})/(?:(embedded)|sub/(\d{1,2})|attachment/(\d{1,3}))$")
+RENDERER_RE = re.compile(r"^/homelab-media/jassub/([a-z0-9-]+\.(?:js|wasm|woff2|ttf|txt))$")
 # Player events, one JSON line each in the container log (`client {...}`).
 LOG_MAX_BYTES = 4096
 LOG_PER_MINUTE = 120  # all viewers together; the plugin sends at most 30
@@ -186,7 +186,7 @@ _warms = threading.BoundedSemaphore(1)
 # warmed episode must keep the viewed mark the warm would otherwise remove.
 _touched = {}
 _touched_lock = threading.Lock()
-TOUCH_RE = re.compile(r"^/extaudio/([0-9a-fA-F]{40})/(\d{1,6})/")
+TOUCH_RE = re.compile(r"^/homelab-media/([0-9a-fA-F]{40})/(\d{1,6})/")
 
 
 def touch(torrent_hash, file_id, now=None):
@@ -256,6 +256,10 @@ class NotReady(Exception):
 
 class ProbeFailed(Exception):
     """A recent probe of this file failed; it is not retried yet."""
+
+
+class Busy(Exception):
+    """Every probe slot is taken; the client asks again."""
 
 
 def torrent_files(torrent_hash):
@@ -979,16 +983,41 @@ def embedded_info(probe):
                 fonts.append(item["index"])
                 total += size
     duration = float((probe.get("format") or {}).get("duration") or 0)
-    return {"subtitles": subtitles, "fonts": fonts, "duration": duration}
+    return {"subtitles": subtitles, "fonts": fonts, "duration": duration, "chapters": chapter_list(probe, duration)}
 
 
-def probe_embedded(torrent_hash, file_id, remember_failure=True):
+def chapter_list(probe, duration):
+    """Embedded chapters from the same header probe, sorted, clipped to the file."""
+    chapters = []
+    for item in (probe.get("chapters") or [])[:1000]:
+        try:
+            start, end = float(item.get("start_time")), float(item.get("end_time"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if not (math.isfinite(start) and math.isfinite(end) and 0 <= start < end):
+            continue
+        if duration > 0:
+            if start >= duration:
+                continue
+            end = min(end, duration)
+        chapters.append({"start": start, "end": end, "title": plain(str((item.get("tags") or {}).get("title") or "").strip())[:200]})
+    chapters.sort(key=lambda item: item["start"])
+    return chapters
+
+
+def probe_embedded(torrent_hash, file_id, remember_failure=True, slot=None):
+    """The header probe of a file. With a slot (a semaphore), only a call that
+    starts ffprobe takes it: cached answers and waits on a running probe are free."""
     key = (torrent_hash, file_id, "embedded")
-    mine = None
+    mine = taken = None
     with _probe_lock:
         known = key in _embedded_cache
         running = None if known else _embedded_probing.get(key)
         if not known and running is None:
+            if slot is not None:
+                if not slot.acquire(blocking=False):
+                    raise Busy()
+                taken = slot
             mine = _embedded_probing[key] = threading.Event()
     if running is not None:
         # A warm-up or another lookup is reading this header already; one
@@ -1003,7 +1032,7 @@ def probe_embedded(torrent_hash, file_id, remember_failure=True):
         command = [
             "ffprobe", "-v", "error", *INPUT_OPTIONS,
             "-show_entries", "stream=index,codec_type,codec_name,extradata_size:stream_tags=title,language,filename,mimetype"
-            ":format=duration",
+            ":format=duration", "-show_chapters",
             "-of", "json", stream_url(torrent_hash, file_id),
         ]
         # A video that just started may need a while to fetch its header.
@@ -1014,6 +1043,8 @@ def probe_embedded(torrent_hash, file_id, remember_failure=True):
             with _probe_lock:
                 _embedded_probing.pop(key, None)
             mine.set()
+        if taken is not None:
+            taken.release()
 
 
 def probed_embedded(torrent_hash, file_id):
@@ -2102,7 +2133,7 @@ def evict_safely():
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "lampa-extaudio"
+    server_version = "lampa-media"
 
     def log_message(self, *args):
         pass
@@ -2130,7 +2161,7 @@ class Handler(BaseHTTPRequestHandler):
         warm_match = WARM_RE.match(split.path)
         if warm_match:
             return self.serve_warm(warm_match.group(1).lower(), int(warm_match.group(2)), urllib.parse.parse_qs(split.query))
-        if split.path != "/extaudio/log":
+        if split.path != "/homelab-media/log":
             return self.send_json(404, {"error": "not found"})
         try:
             length = int(self.headers.get("Content-Length", ""))
@@ -2202,36 +2233,33 @@ class Handler(BaseHTTPRequestHandler):
 
     def serve_embedded(self, torrent_hash, file_id, match, query):
         if match.group(3):
-            if not _track_lookups.acquire(blocking=False):
-                return self.send_json(429, {"error": "busy"}, {"Retry-After": "5"})
             try:
-                info = probe_embedded(torrent_hash, file_id)
+                info = probe_embedded(torrent_hash, file_id, slot=_track_lookups)
+            except Busy:
+                return self.send_json(429, {"error": "busy"}, {"Retry-After": "5"})
             except NotReady:
                 return self.send_json(503, {"error": "preparing"}, {"Retry-After": "3"})
             except Rejected:
                 return self.send_json(404, {"error": "not found"})
             except Exception:
                 return self.send_json(502, {"error": "probe failed"})
-            finally:
-                _track_lookups.release()
             return self.send_json(200, {
                 "subtitles": info["subtitles"], "fonts": info["fonts"],
-                "renderer": "/extaudio/jassub/" if os.path.isfile(os.path.join(RENDERER_DIR, "jassub.js")) else None,
+                "duration": info["duration"], "chapters": info.get("chapters", []),
+                "renderer": "/homelab-media/jassub/" if os.path.isfile(os.path.join(RENDERER_DIR, "jassub.js")) else None,
             })
         if not probed_embedded(torrent_hash, file_id):
             # A restart or a full cache forgot the probe of a playing file.
-            if not _track_lookups.acquire(blocking=False):
-                return self.send_json(429, {"error": "busy"}, {"Retry-After": "5"})
             try:
-                probe_embedded(torrent_hash, file_id)
+                probe_embedded(torrent_hash, file_id, slot=_track_lookups)
+            except Busy:
+                return self.send_json(429, {"error": "busy"}, {"Retry-After": "5"})
             except NotReady:
                 return self.send_json(503, {"error": "preparing"}, {"Retry-After": "3"})
             except Rejected:
                 return self.send_json(404, {"error": "not found"})
             except Exception:
                 return self.send_json(502, {"error": "probe failed"})
-            finally:
-                _track_lookups.release()
         if match.group(4):
             position = query.get("at", [""])[0]
             offset = query.get("from", ["0"])[0]
@@ -2320,7 +2348,7 @@ class Handler(BaseHTTPRequestHandler):
         touched = TOUCH_RE.match(path)
         if touched:
             touch(touched.group(1), int(touched.group(2)))
-        if path == "/extaudio/health":
+        if path == "/homelab-media/health":
             return self.send_json(200, {"ok": True})
         renderer = RENDERER_RE.match(path)
         if renderer:
@@ -2333,9 +2361,9 @@ class Handler(BaseHTTPRequestHandler):
             if not FONT_LIBRARY_DIR or not os.path.isfile(path):
                 return self.send_json(404, {"error": "not found"})
             return self.send_cached(path)
-        if path == "/extaudio/voices":
+        if path == "/homelab-media/voices":
             return self.serve_voices(query)
-        if path == "/extaudio/online/subtitle":
+        if path == "/homelab-media/online/subtitle":
             return self.serve_online_subtitle(query)
         embedded = EMBEDDED_RE.match(path)
         if embedded:
@@ -2360,7 +2388,7 @@ class Handler(BaseHTTPRequestHandler):
                     # The player asks again for the files not read yet.
                     "pending": pending,
                     "subtitles": external_subtitles(files, file_id),
-                    "renderer": "/extaudio/jassub/" if os.path.isfile(os.path.join(RENDERER_DIR, "jassub.js")) else None,
+                    "renderer": "/homelab-media/jassub/" if os.path.isfile(os.path.join(RENDERER_DIR, "jassub.js")) else None,
                 })
             except urllib.error.HTTPError as error:
                 error.close()

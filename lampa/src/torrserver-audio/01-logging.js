@@ -14,7 +14,7 @@
       phaseListeners.slice().forEach(function (fn) { try { fn({type: name, work: work}); } catch (_) {} });
     }
 
-    // Playback events for `docker logs lampa-extaudio`: a page session, the
+    // Playback events for `docker logs lampa-media`: a page session, the
     // torrent hash prefix, the file and the position, never a URL's query.
     // Repeats within a few seconds and bursts are counted, not sent, and a
     // failed report never reaches playback.
@@ -69,7 +69,7 @@
         if (video && isFinite(video.currentTime)) event.t = Math.round(video.currentTime * 10) / 10;
         event.s = logSession;
         if (logDropped) { event.dropped = logDropped; logDropped = 0; }
-        window.fetch(new URL('/extaudio/log', window.location.href).href, {
+        window.fetch(new URL('/homelab-media/log', window.location.href).href, {
           method: 'POST', body: JSON.stringify(event), keepalive: true, credentials: 'omit',
           headers: {'Content-Type': 'application/json'}
         }).catch(function () {});

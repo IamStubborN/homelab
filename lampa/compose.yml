@@ -1,54 +1,4 @@
 services:
-  lampa-previews:
-    build: ./previews
-    image: homelab/lampa-previews:latest
-    container_name: lampa-previews
-    restart: unless-stopped
-    init: true
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cpus: 1.0
-    cpu_shares: 256
-    mem_limit: 768m
-    pids_limit: 64
-    tmpfs:
-      - /tmp:size=16m,mode=1777
-    devices:
-      - /dev/dri/renderD128:/dev/dri/renderD128
-    group_add:
-      - "${LAMPA_PREVIEW_RENDER_GID:-65534}"
-    environment:
-      TORRSERVER_BASE: http://gluetun-torrserver:8090
-      CACHE_DIR: /cache
-      CACHE_MAX_MB: "2048"
-      BATCH_READ_RATE: "${LAMPA_PREVIEW_READ_RATE:-8}"
-      # Set both ignored deployment variables to enable Intel decoding.
-      VAAPI_DEVICE: "${LAMPA_PREVIEW_VAAPI_DEVICE:-}"
-    volumes:
-      - ./preview-cache:/cache
-    networks:
-      - proxy
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=proxy"
-      - "traefik.http.routers.lampa-previews.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/previews/`)"
-      - "traefik.http.routers.lampa-previews.entrypoints=http,https"
-      - "traefik.http.routers.lampa-previews.tls=true"
-      - "traefik.http.routers.lampa-previews.priority=100"
-      - "traefik.http.routers.lampa-previews.middlewares=lampa-previews-ratelimit"
-      - "traefik.http.routers.lampa-previews.observability.accessLogs=false"
-      - "traefik.http.middlewares.lampa-previews-ratelimit.ratelimit.average=4"
-      - "traefik.http.middlewares.lampa-previews-ratelimit.ratelimit.burst=8"
-      - "traefik.http.services.lampa-previews.loadbalancer.server.port=8080"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/previews/health', timeout=3).close()"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
   lampa-ai-adapter:
     build: ./ai-adapter
     container_name: lampa-ai-adapter
@@ -103,10 +53,10 @@ services:
       retries: 3
       start_period: 5s
 
-  lampa-extaudio:
-    build: ./extaudio
-    image: homelab/lampa-extaudio:latest
-    container_name: lampa-extaudio
+  lampa-media:
+    build: ./media
+    image: homelab/lampa-media:latest
+    container_name: lampa-media
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -129,39 +79,39 @@ services:
       CACHE_TTL_HOURS: "72"
       FONT_LIBRARY_DIR: /fonts
     volumes:
-      - ./extaudio-cache:/cache
+      - ./media-cache:/cache
       # Fonts collected from releases; licensed fonts never enter git.
-      - ./extaudio-fonts:/fonts
+      - ./media-fonts:/fonts
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
-      - "traefik.http.routers.lampa-extaudio.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/extaudio/`)"
-      - "traefik.http.routers.lampa-extaudio.entrypoints=http,https"
-      - "traefik.http.routers.lampa-extaudio.tls=true"
-      - "traefik.http.routers.lampa-extaudio.priority=100"
-      - "traefik.http.routers.lampa-extaudio.observability.accessLogs=true"
+      - "traefik.http.routers.lampa-media.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/homelab-media/`)"
+      - "traefik.http.routers.lampa-media.entrypoints=http,https"
+      - "traefik.http.routers.lampa-media.tls=true"
+      - "traefik.http.routers.lampa-media.priority=100"
+      - "traefik.http.routers.lampa-media.observability.accessLogs=true"
       # Player event reports: the sidecar prints them, Traefik need not.
-      - "traefik.http.routers.lampa-extaudio-log.rule=Host(`lampa.${DOCKER_DOMAIN}`) && Path(`/extaudio/log`)"
-      - "traefik.http.routers.lampa-extaudio-log.entrypoints=http,https"
-      - "traefik.http.routers.lampa-extaudio-log.tls=true"
-      - "traefik.http.routers.lampa-extaudio-log.priority=110"
-      - "traefik.http.routers.lampa-extaudio-log.observability.accessLogs=false"
-      - "traefik.http.routers.lampa-extaudio-log.middlewares=lampa-extaudio-log-ratelimit"
-      - "traefik.http.routers.lampa-extaudio-log.service=lampa-extaudio"
-      - "traefik.http.middlewares.lampa-extaudio-log-ratelimit.ratelimit.average=60"
-      - "traefik.http.middlewares.lampa-extaudio-log-ratelimit.ratelimit.period=1m"
-      - "traefik.http.middlewares.lampa-extaudio-log-ratelimit.ratelimit.burst=30"
-      - "traefik.http.routers.lampa-extaudio.service=lampa-extaudio"
-      - "traefik.http.services.lampa-extaudio.loadbalancer.server.port=8080"
+      - "traefik.http.routers.lampa-media-log.rule=Host(`lampa.${DOCKER_DOMAIN}`) && Path(`/homelab-media/log`)"
+      - "traefik.http.routers.lampa-media-log.entrypoints=http,https"
+      - "traefik.http.routers.lampa-media-log.tls=true"
+      - "traefik.http.routers.lampa-media-log.priority=110"
+      - "traefik.http.routers.lampa-media-log.observability.accessLogs=false"
+      - "traefik.http.routers.lampa-media-log.middlewares=lampa-media-log-ratelimit"
+      - "traefik.http.routers.lampa-media-log.service=lampa-media"
+      - "traefik.http.middlewares.lampa-media-log-ratelimit.ratelimit.average=60"
+      - "traefik.http.middlewares.lampa-media-log-ratelimit.ratelimit.period=1m"
+      - "traefik.http.middlewares.lampa-media-log-ratelimit.ratelimit.burst=30"
+      - "traefik.http.routers.lampa-media.service=lampa-media"
+      - "traefik.http.services.lampa-media.loadbalancer.server.port=8080"
     networks:
       - proxy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:8080/extaudio/health"]
+      test: ["CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:8080/homelab-media/health"]
       interval: 60s
       timeout: 5s
       retries: 3
       # Traefik routes only to a healthy container: check every 2 s after a
-      # start instead of leaving /extaudio unrouted for the first minute.
+      # start instead of leaving /homelab-media unrouted for the first minute.
       start_period: 30s
       start_interval: 2s
 

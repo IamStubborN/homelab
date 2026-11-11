@@ -200,22 +200,29 @@ test('a refused online handoff keeps the search running; leaving mid-search show
   assert.doesNotMatch(h.status(), /Ищем/);
 });
 
-test('remote navigation ignores scrolled-out tiles, walks the list in order and Left at the edge opens the menu', async t => {
-  const h = setup(t);
-  h.parser[0].done({Results: [0, 1, 2].map(i => ({Title: 'Series S01 720p ' + i, Link: 'magnet:' + i, Tracker: 'T', info: {voices: ['Voice ' + i]}}))}); h.tick(150);
+test('remote navigation: the hero and the list are one column, chips walk sideways, Left at the edge opens the menu', async t => {
+  const h = setup(t), c = h.L.Controller.controllers, all = () => h.component.render()[0].querySelectorAll('.selector');
+  h.parser[0].done({Results: [0, 1, 2, 3].map(i => ({Title: 'Series S01 720p ' + i, Link: 'magnet:' + i, Tracker: 'T', info: {voices: ['Voice ' + i]}}))}); h.tick(150);
   const rect = (top, left = 0, width = 100, height = 20) => ({top, left, width, height, bottom: top + height, right: left + width});
   const view = h.component.render()[0].querySelectorAll('.scroll')[0]; view.rect = rect(100, 0, 400, 300);
-  for (const node of h.component.render()[0].querySelectorAll('.selector')) node.rect = rect(-1000, 0);
-  const summary = h.component.render()[0].querySelectorAll('.homelab-common-summary')[0];
-  summary.rect = rect(60, 0);
-  const [first, second, third] = h.rows();
-  first.rect = rect(40, 200); second.rect = rect(110, 200); third.rect = rect(140, 200); // first is scrolled out above the viewport
+  for (const node of all()) node.rect = rect(-1000, 0);
+  const summary = all().find(node => node.classes.has('homelab-common-summary')), chipAll = chipOf(h, 'Всё'), chipOnline = chipOf(h, 'Онлайн');
+  summary.rect = rect(60, 600); chipAll.rect = rect(60, 0); chipOnline.rect = rect(60, 120);
+  const [hero, hidden, second, third] = h.rows();
+  hero.rect = rect(80, 200); hidden.rect = rect(30, 200); second.rect = rect(110, 200); third.rect = rect(140, 200); // hidden is scrolled out above the viewport
+  h.L.Controller.collectionFocus(chipAll, h.component.render());
+  c.content.right(); assert.equal(h.focused(), chipOnline, 'Right walks the chips');
+  c.content.down(); assert.equal(h.focused(), hero, 'down from the chips reaches the hero, not a scrolled-out row');
+  c.content.down(); assert.equal(h.focused(), hidden, 'below the hero the list follows its order');
+  c.content.up(); assert.equal(h.focused(), hero);
+  c.content.up(); assert.equal(h.focused(), chipOnline, 'up from the hero returns to the chips');
+  const ep = h.component.render()[0].querySelectorAll('.homelab-common-ep')[0]; ep.rect = rect(20, 220);
+  h.L.Controller.collectionFocus(hero, h.component.render()); c.content.up();
+  assert.equal(h.focused(), chipOnline, 'the chips row is nearer than an episode right above the hero');
   h.L.Controller.collectionFocus(summary, h.component.render());
-  h.L.Controller.controllers.content.up(); assert.equal(h.L.Controller.enabled().name, 'head', 'a hidden tile behind the header is not a target');
-  h.L.Controller.toggle('content'); h.L.Controller.collectionFocus(summary, h.component.render());
-  h.L.Controller.controllers.content.down(); assert.equal(h.focused(), second, 'down enters the first visible tile');
-  h.L.Controller.controllers.content.up(); assert.equal(h.focused(), first, 'inside the list Up follows list order');
-  h.L.Controller.controllers.content.left(); assert.equal(h.L.Controller.enabled().name, 'menu');
+  c.content.right(); assert.equal(h.L.Controller.enabled().name, 'homelab_common_settings', 'Right on the parameters chip opens them');
+  c.homelab_common_settings.back(); h.L.Controller.collectionFocus(second, h.component.render());
+  c.content.left(); assert.equal(h.L.Controller.enabled().name, 'menu');
 });
 
 test('opening a torrent redraws the status so it is not left as searching', async t => {
@@ -260,6 +267,7 @@ async function grouped(t, options) {
   return h;
 }
 const voice = row => row.find('.homelab-common-voice').text();
+function chipOf(h, name) { return h.component.render()[0].querySelectorAll('.homelab-common-filter').find(node => node.children[0] && node.children[0].text() === name); }
 
 test('the voice being watched leads, from the source it played from', async t => {
   const h = await grouped(t, {watching: {card: 'tv_42', kind: 'online', online: {provider: 'one', voice: 'Studio B'}}}), picked = [];
@@ -369,7 +377,7 @@ test('after an episode change focus follows the new recommendation, not the head
 test('the subtitles filter hides sources without subtitles; Left at the first value closes the panel', async t => {
   const h = await grouped(t), c = h.L.Controller.controllers;
   c.content.right(); h.toSetting('Субтитры'); c.homelab_common_settings.right();
-  assert.equal(h.rows().length, 0); assert.match(h.summary(), /с субтитрами/);
+  assert.equal(h.rows().length, 0); assert.ok(chipOf(h, 'Субтитры').classes.has('is-on'));
   assert.match(h.component.render()[0].querySelectorAll('.homelab-common-empty-hint')[0].text(), /субтитр/);
   c.homelab_common_settings.left(); assert.equal(h.rows().length, 2);
   c.homelab_common_settings.left(); assert.equal(h.L.Controller.enabled().name, 'content');
@@ -509,4 +517,94 @@ test('a source that named 4K but was measured at 720p shows the measured quality
   const row = h.rows()[0];
   assert.equal(row.find('.homelab-common-q').text(), '720p');
   assert.match(row.find('.homelab-common-q-note').children.map(node => node.text()).join(''), /проверено · заявлено 4K/);
+});
+
+test('the hero plays the top voice and says which episode it resumes; the list goes on below it', async t => {
+  const h = await grouped(t, {watching: {card: 'tv_42', kind: 'online', online: {provider: 'three', voice: 'Studio B'}, season: 1, episode: 1, position: 700, duration: 1400}});
+  const hero = h.component.render()[0].querySelectorAll('.homelab-common-herobox')[0].children[0];
+  assert.equal(hero, h.rows()[0]); assert.equal(voice(hero), 'Studio B'); assert.equal(h.focused(), hero);
+  assert.equal(hero.find('.homelab-common-pick').text(), 'Ваша озвучка · продолжить');
+  assert.equal(hero.find('.homelab-common-what').text(), 'Серия 1 · с ' + h.L.Utils.secondsToTime(700));
+  assert.equal(hero.find('.homelab-common-progress-fill').attrs['style:width'], '50%');
+  assert.ok(!h.component.render()[0].querySelectorAll('.homelab-common-list')[0].contains(hero), 'the hero is not repeated in the list');
+  assert.equal(voice(h.rows()[1]), 'Studio A');
+});
+
+test('chips filter by kind, 4K and subtitles and count what each would show', async t => {
+  const h = await grouped(t);
+  assert.equal(chipOf(h, 'Онлайн').children[1].text(), '2'); assert.ok(chipOf(h, 'Всё').classes.has('is-on'));
+  h.fire(chipOf(h, 'Торренты'), 'hover:enter'); assert.equal(h.rows().length, 0); assert.ok(chipOf(h, 'Торренты').classes.has('is-on'));
+  h.fire(chipOf(h, 'Всё'), 'hover:enter'); assert.equal(h.rows().length, 2);
+  h.fire(chipOf(h, 'Субтитры'), 'hover:enter'); assert.equal(h.rows().length, 0); assert.ok(chipOf(h, 'Субтитры').classes.has('is-on'));
+  h.fire(chipOf(h, 'Субтитры'), 'hover:enter'); h.fire(chipOf(h, '4K'), 'hover:enter');
+  assert.ok(chipOf(h, '4K').classes.has('is-on')); assert.equal(h.rows().filter(row => row.find('.homelab-common-q').text() === '1080p').length, 0);
+});
+
+test('the episode strip marks watched episodes, searches the chosen one and slides at its edges', async t => {
+  const h = setup(t, {movie: {seasons: [{season_number: 1, episode_count: 10}]}, watching: {card: 'tv_42', kind: 'online', online: {provider: 'one', voice: 'X'}, season: 1, episode: 3, position: 600, duration: 1200}});
+  const eps = () => h.component.render()[0].querySelectorAll('.homelab-common-ep');
+  assert.deepEqual(eps().map(node => node.text()), ['1', '2', '3', '4', '5', '6', '7']);
+  assert.ok(eps()[0].classes.has('is-watched') && eps()[1].classes.has('is-watched') && !eps()[2].classes.has('is-watched'));
+  assert.ok(eps()[2].classes.has('is-current')); assert.equal(eps()[2].find('.homelab-common-ep-bar').attrs['style:width'], '50%');
+  assert.equal(h.metadata.length, 0, 'known seasons are not asked');
+  const searches = h.parser.length;
+  h.fire(eps()[4], 'hover:enter');
+  assert.match(h.summary(), /^С1 · Е5/); assert.equal(h.parser.length, searches + 1, 'OK on an episode searches it');
+  assert.deepEqual(eps().map(node => node.text()), ['2', '3', '4', '5', '6', '7', '8']);
+  h.L.Controller.collectionFocus(eps()[6], h.component.render()); h.tick(1);
+  assert.deepEqual(eps().map(node => node.text()), ['4', '5', '6', '7', '8', '9', '10'], 'the window slides at its edge');
+  assert.equal(h.focused().text(), '8', 'focus stays on the episode');
+});
+
+test('without season metadata the strip asks it once and fills in the count', t => {
+  const h = setup(t), eps = () => h.component.render()[0].querySelectorAll('.homelab-common-ep');
+  assert.equal(h.metadata.length, 1); assert.equal(h.metadata[0].url, 'tv/42');
+  assert.deepEqual(eps().map(node => node.text()), ['1', '2', '3', '4', '5', '6', '7']);
+  h.metadata[0].done({id: 42, seasons: [{season_number: 1, episode_count: 4}]});
+  assert.deepEqual(eps().map(node => node.text()), ['1', '2', '3', '4']);
+  h.L.Controller.controllers.content.right(); assert.equal(h.metadata.length, 1, 'the parameters do not ask again');
+});
+
+test('checked voices lead; unchecked ones fold under them', async t => {
+  const rows = {'one|1|studio a': {height: 1080, source: 'probe'}, 'two|1|studio b': {height: 1080, source: 'probe'}, 'three|1|studio c': {height: 720, source: 'probe'}};
+  const facts = {load: () => Promise.resolve({version: 1, providers: {}, rows}), fact: (data, provider, season, name) => data.rows[[provider, season, name.toLowerCase()].join('|')] || null, doubtful: () => false, report() {}};
+  const h = setup(t, {facts});
+  h.parser[0].done({Results: []});
+  await h.finish('/lite/events', [...twoProviders, {balanser: 'four', name: 'Four', show: true, url: '/lite/four'}]);
+  ['a', 'b', 'c', 'd'].forEach(id => h.pages.set(id, episodePage('Studio ' + id.toUpperCase(), {method: 'play', quality: {'720p': '/media'}})));
+  await h.finish('/lite/one', 'a'); await h.finish('/lite/two', 'b'); await h.finish('/lite/three', 'c'); await h.finish('/lite/four', 'd'); h.tick(1100);
+  const shown = h.rows().map(voice);
+  assert.equal(shown.length, 3); assert.ok(!shown.includes('Studio D'), 'the unchecked voice is folded');
+  const label = h.component.render()[0].querySelectorAll('.homelab-common-label')[0];
+  assert.equal(label.text(), 'Проверенные · 2 озвучки');
+  const fold = h.component.render()[0].querySelectorAll('.homelab-common-section').find(node => /качество не проверено/.test(node.text()));
+  assert.equal(fold.text(), '▸ Ещё 1 озвучка · качество не проверено');
+  h.fire(fold, 'hover:enter'); assert.ok(h.rows().map(voice).includes('Studio D'));
+});
+
+test('the accent comes from the most colourful hue of the art; grey art keeps the screen neutral', t => {
+  const h = setup(t), accent = h.window.HomelabSources.accent, pixels = list => Uint8ClampedArray.from(list.flatMap(rgb => [...rgb, 255]));
+  const red = accent(pixels([[200, 30, 40], [190, 20, 30], [40, 40, 40], [20, 120, 30]]));
+  assert.ok(red[0] > red[1] && red[0] > red[2], 'red wins over the lone green pixel');
+  assert.equal(accent(pixels([[40, 40, 40], [120, 120, 120], [250, 250, 250]])), null);
+});
+
+test('OK on an episode keeps focus on it while searching; season metadata keeps focus on the season button', t => {
+  const h = setup(t), eps = () => h.component.render()[0].querySelectorAll('.homelab-common-ep');
+  h.L.Controller.collectionFocus(eps()[2], h.component.render()); h.fire(eps()[2], 'hover:enter');
+  assert.match(h.summary(), /^С1 · Е3/); assert.equal(h.focused().text(), '3', 'focus stays on the chosen episode');
+  h.parser.at(-1).done({Results: [{Title: 'Series S01 720p', Link: 'magnet:a', Tracker: 'T'}]}); h.tick(150);
+  assert.equal(h.focused(), h.rows()[0], 'its results bring the focus to the hero');
+  const season = () => h.component.render()[0].querySelectorAll('.homelab-common-season')[0];
+  h.L.Controller.collectionFocus(season(), h.component.render()); h.fire(season(), 'hover:hover');
+  h.metadata[0].done({id: 42, seasons: [{season_number: 1, episode_count: 12}]});
+  assert.equal(h.focused(), season(), 'the redrawn season button takes the focus');
+  h.parser.at(-1).done({Results: [{Title: 'Series S01 1080p', Link: 'magnet:b', Tracker: 'T'}]}); h.tick(150);
+  assert.equal(h.focused(), season(), 'once the user moved, results do not pull focus away');
+});
+
+test('the 4K chip turned off returns to the quality chosen in the parameters', async t => {
+  const h = await grouped(t, {quality: 1080});
+  h.fire(chipOf(h, '4K'), 'hover:enter'); h.fire(chipOf(h, '4K'), 'hover:enter');
+  assert.match(h.summary(), /1080p/);
 });

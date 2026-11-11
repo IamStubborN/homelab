@@ -7,6 +7,33 @@
   }
   // TMDB image paths go into CSS url(): anything but a plain path is dropped.
   function imagePath(path) { return typeof path === 'string' && /^\/[A-Za-z0-9_.\-\/]{1,200}$/.test(path) ? path : ''; }
+  // The accent of the release art: the hue that carries most colour, lifted to a readable lightness.
+  // data is RGBA bytes; null when the art is close to grey.
+  function accentOf(data) {
+    var buckets = [], i, best = null;
+    for (i = 0; i < 12; i++) buckets.push({weight: 0, hue: 0});
+    for (i = 0; i + 3 < data.length; i += 4) {
+      var r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255, max = Math.max(r, g, b), min = Math.min(r, g, b), chroma = max - min, light = (max + min) / 2;
+      if (chroma < 0.15 || light < 0.1 || light > 0.92) continue;
+      var hue = max === r ? (g - b) / chroma % 6 : max === g ? (b - r) / chroma + 2 : (r - g) / chroma + 4;
+      hue = (hue * 60 + 360) % 360;
+      var bucket = buckets[Math.floor(hue / 30) % 12], weight = chroma * chroma;
+      bucket.weight += weight; bucket.hue += hue * weight;
+    }
+    // Neighbouring hues count half: a red split across 0° is still one red.
+    buckets.forEach(function (bucket, index) {
+      bucket.score = bucket.weight + (buckets[(index + 11) % 12].weight + buckets[(index + 1) % 12].weight) / 2;
+      if (bucket.weight && (!best || bucket.score > best.score)) best = bucket;
+    });
+    if (!best || best.score < data.length / 4 * 0.006) return null;
+    return hslColor(best.hue / best.weight, 0.72, 0.66);
+  }
+  function hslColor(hue, saturation, light) {
+    var chroma = (1 - Math.abs(2 * light - 1)) * saturation, part = hue / 60, x = chroma * (1 - Math.abs(part % 2 - 1)), m = light - chroma / 2;
+    var rgb = part < 1 ? [chroma, x, 0] : part < 2 ? [x, chroma, 0] : part < 3 ? [0, chroma, x] : part < 4 ? [0, x, chroma] : part < 5 ? [x, 0, chroma] : [chroma, 0, x];
+    return rgb.map(function (value) { return Math.round((value + m) * 255); });
+  }
+  var tintSequence = 0;
   function Common(object) {
     var self = this, movie = movieCard(object.movie), tv = !!movie.name;
     var recovery = object.homelab_recovery, pref = preferences();
@@ -16,42 +43,81 @@
     var status = $('<div class="homelab-common-status" aria-live="polite"></div>'), statusText = $('<div class="homelab-common-status-text"></div>'), bar = $('<div class="homelab-common-bar"></div>'), barFill = $('<div class="homelab-common-bar-fill"></div>');
     var main = $('<div class="homelab-common-main"></div>'), body = $('<div class="homelab-common-list"></div>'), scroll = new L.Scroll({mask: true, over: true}), hint = $('<div class="homelab-common-hint hide"></div>');
     var detail = $('<div class="homelab-common-detail hide"></div>'), detailSig = '', detailKey = '';
-    var search, last = null, kind = recovery ? 'online' : 'all', q = recovery ? 0 : pref.quality, subsOnly = !recovery && pref.subs, tiles = {}, models = {}, shown = 20, visibleItems = [], order = [], locked = false, restoringFocus = false, more = null, torrentsOpen = null, toggled = false, rerank = null, fresh = 0, sequence = '', reorderAt = 0, dead = false, voiceTimer = 0, started = false, refresh, uiIntent = 0, currentScope = sync.scope();
+    var search, last = null, kind = recovery ? 'online' : 'all', q = recovery ? 0 : pref.quality, subsOnly = !recovery && pref.subs, tiles = {}, models = {}, shown = 20, visibleItems = [], order = [], locked = false, restoringFocus = false, more = null, torrentsOpen = null, toggled = false, rerank = null, fresh = 0, freshKeys = {}, sequence = '', sequenceKeys = [], qBefore = 0, reorderAt = 0, dead = false, voiceTimer = 0, started = false, refresh, uiIntent = 0, currentScope = sync.scope();
     // Grouped by voice, recovery too: its providers mostly carry the same voice, so one card leads to all of them.
     // untouched: until the first key press, focus follows the top (recommended) card so one OK plays it.
     var grouped = true, untouched = true, placeholder = null, placeholderState = '';
-    // Header: poster, title, the episode and live search progress; the summary opens the parameters (also →).
+    // Header: poster, title and facts, live search progress, and the episode strip under them.
     var poster = $('<div class="homelab-common-poster hide"></div>'), info = $('<div class="homelab-common-info"></div>'), facts = $('<div class="homelab-common-facts"></div>');
-    var title = $('<div class="homelab-common-heading"></div>').text(movie.title || movie.name || 'Общий'), kicker = $('<div class="homelab-common-kicker"></div>').text(recovery ? 'Выбор источника' : 'Общий поиск');
-    var episodeLabel = $('<div class="homelab-common-episode' + (tv && !recovery ? '' : ' hide') + '"></div>'), year = String(movie.release_date || movie.first_air_date || '').slice(0, 4), rating = Number(movie.vote_average);
-    var summary = button('', 'homelab-common-summary', function () { openSettings(); }), summaryText = $('<span class="homelab-common-summary-text"></span>');
-    summary.append(summaryText).append($('<span class="homelab-common-key"></span>').text('→'));
+    var title = $('<div class="homelab-common-heading"></div>').text(movie.title || movie.name || 'Общий'), titleRow = $('<div class="homelab-common-title-row"></div>'), titleBlock = $('<div class="homelab-common-title"></div>');
+    var year = String(movie.release_date || movie.first_air_date || '').slice(0, 4), rating = Number(movie.vote_average);
+    var genres = Array.isArray(movie.genres) ? movie.genres.map(function (genre) { return genre && typeof genre.name === 'string' ? genre.name.toLowerCase() : ''; }).filter(Boolean).slice(0, 2).join(' · ') : '';
+    var strip = $('<div class="homelab-common-eps hide"></div>'), stripCenter = 0, stripTimer = 0;
     status.append($('<div class="homelab-common-spinner"></div>')).append(statusText).append(bar.append(barFill));
-    facts.append(episodeLabel);
-    if (/^\d{4}$/.test(year) || rating > 0) facts.append($('<div class="homelab-common-year"></div>').text([/^\d{4}$/.test(year) ? year : '', rating > 0 ? '★ ' + rating.toFixed(1) : ''].filter(Boolean).join(' · ')));
-    facts.append(status);
-    info.append(kicker).append(title).append(facts);
-    head.append(poster).append(info).append(summary);
+    [/^\d{4}$/.test(year) ? year : '', rating > 0 ? '★ ' + rating.toFixed(1) : '', genres].forEach(function (fact) { if (fact) facts.append($('<div class="homelab-common-year"></div>').text(fact)); });
+    titleRow.append(titleBlock.append(title).append(facts)).append(status);
+    info.append(titleRow).append(strip);
+    head.append(poster).append(info);
     var backdrop = imagePath(movie.backdrop_path), cover = imagePath(movie.poster_path);
     if (backdrop && L.Api && L.Api.img) art.css('background-image', 'url("' + L.Api.img(backdrop, 'w1280') + '")').addClass('has-image');
     if (cover && L.Api && L.Api.img) poster.css('background-image', 'url("' + L.Api.img(cover, 'w200') + '")').removeClass('hide');
     root.append(art).append(head);
-    var otherButton = button('', 'homelab-common-chip homelab-common-other-voices hide', otherVoices); root.append(otherButton);
+    tint(backdrop ? L.Api && L.Api.img && L.Api.img(backdrop, 'w300') : cover ? L.Api && L.Api.img && L.Api.img(cover, 'w200') : '');
+    // The screen takes its accent from the release art; without it (or a canvas) it stays neutral.
+    function tint(url) {
+      if (!url || typeof Image === 'undefined' || typeof document === 'undefined') return;
+      var image = new Image();
+      image.crossOrigin = 'anonymous';
+      image.onload = function () {
+        if (dead) return;
+        var color = null;
+        try {
+          var canvas = document.createElement('canvas'), context; canvas.width = 32; canvas.height = 18; context = canvas.getContext('2d');
+          context.drawImage(image, 0, 0, 32, 18); color = accentOf(context.getImageData(0, 0, 32, 18).data);
+        } catch (_) { return; }
+        if (!color) return;
+        var a = color.join(','), solid = 'rgb(' + a + ')', name = 'homelab-common-tint-' + (++tintSequence), at = '.' + name + ' ';
+        root.addClass(name).append($('<style></style>').text([
+          at + '.homelab-common-result.is-hero .homelab-common-pick{color:' + solid + '}',
+          at + '.homelab-common-progress-fill,' + at + '.homelab-common-ep-bar,' + at + '.homelab-common-bar-fill,' + at + '.homelab-common-filter.is-on:not(.focus):before{background:' + solid + '}',
+          at + '.homelab-common-result:not(.focus) .homelab-common-tag{color:' + solid + ';opacity:1}',
+          at + '.homelab-common-result.is-hero.focus{background:-webkit-linear-gradient(left,rgba(' + a + ',.24),rgba(' + a + ',.06) 70%),rgba(0,0,0,.45);background:linear-gradient(100deg,rgba(' + a + ',.24),rgba(' + a + ',.06) 70%),rgba(0,0,0,.45);box-shadow:inset 0 0 0 .14em ' + solid + ',0 .8em 2em rgba(0,0,0,.45)}',
+          at + '.homelab-common-result.is-hero.focus .homelab-common-play{background:' + solid + '}' + at + '.homelab-common-result.is-hero.focus .homelab-common-play:after{border-left-color:#14100c}'
+        ].join('')));
+      };
+      image.src = url;
+    }
+    // Filters: quick chips, then the parameters (also →) on the right.
+    var filters = $('<div class="homelab-common-filters"></div>'), chips = {};
+    function chip(id, fn) { var tile = button('', 'homelab-common-filter', fn); chips[id] = tile; filters.append(tile); return tile; }
+    function applyFilter() { reorder(); updateSummary(); draw(); }
+    if (!recovery) {
+      chip('all', function () { kind = 'all'; applyFilter(); });
+      chip('online', function () { kind = 'online'; applyFilter(); });
+      chip('torrent', function () { kind = 'torrent'; applyFilter(); });
+    }
+    chip('uhd', function () { if (q === 2160) q = qBefore === 2160 ? 0 : qBefore; else { qBefore = q; q = 2160; } if (!recovery) pref = preferences({quality: q}); applyFilter(); });
+    chip('subs', function () { subsOnly = !subsOnly; if (!recovery) pref = preferences({subs: subsOnly}); applyFilter(); });
+    var otherButton = button('', 'homelab-common-filter homelab-common-other-voices hide', otherVoices); filters.append(otherButton);
+    var summary = button('', 'homelab-common-summary', function () { openSettings(); }), summaryText = $('<span class="homelab-common-summary-text"></span>');
+    summary.append(summaryText).append($('<span class="homelab-common-key"></span>').text('→'));
+    filters.append(summary); root.append(filters);
+    // The hero: the top recommendation, played by one OK; the list continues under it.
+    var heroBox = $('<div class="homelab-common-herobox hide"></div>'); root.append(heroBox);
     body.appendTo(scroll.body()); main.append(scroll.render()).append(detail); root.append(main); root.append(hint);
     var recoveryLabel = recovery ? $('<div class="homelab-common-recovery"></div>') : null;
-    // Recovery banner: what resumes where, the kept voice, and the one caveat.
+    // Recovery banner: the kept voice and the one caveat; the hero says what resumes where.
     function recoveryText() {
       if (!recoveryLabel) return;
-      var at = L.Utils.secondsToTime(recovery.position), what = tv ? 'Серия ' + recovery.episode + ' · с ' + at : 'Продолжить с ' + at;
-      recoveryLabel.empty().append($('<span class="homelab-common-recovery-play"></span>').text('▶')).append($('<span class="homelab-common-recovery-what"></span>').text(what));
-      recoveryLabel.append($('<span class="homelab-common-recovery-voice' + (recovery.voice ? '' : ' is-none') + '"></span>').text(recovery.voice ? 'Озвучка: ' + recovery.voice : 'Выберите озвучку'));
+      recoveryLabel.empty().append($('<span class="homelab-common-recovery-voice' + (recovery.voice ? '' : ' is-none') + '"></span>').text(recovery.voice ? 'Озвучка: ' + recovery.voice : 'Выберите озвучку'));
       recoveryLabel.append($('<span class="homelab-common-recovery-note"></span>').text('тайминги версий могут отличаться'));
     }
     if (recoveryLabel) { head.after(recoveryLabel); recoveryText(); }
     function active() { return !dead && L.Activity.active() === object; }
     // The list owns focus only while the parameters panel is closed.
     function ownList() { return L.Controller.own(self) && !settingsOpen; }
-    function focus(background) { restoringFocus = !!background; L.Controller.collectionSet(root, false, true); L.Controller.collectionFocus(last && root[0].contains(last) ? last : false, root, true); restoringFocus = false; }
+    // With nothing focused yet: the top of the list, else the parameters (never the episode strip by accident).
+    function focus(background) { restoringFocus = !!background; L.Controller.collectionSet(root, false, true); L.Controller.collectionFocus(last && root[0].contains(last) ? last : listNodes()[0] || summary[0], root, true); restoringFocus = false; }
     function touch() { untouched = false; }
     function button(text, cls, fn) {
       return $('<div class="selector ' + cls + '"></div>').text(text).on('hover:focus', function () { last = this; if (!restoringFocus && body[0].contains(this)) scroll.update(this, true); })
@@ -68,7 +134,7 @@
     }
     function resetList() {
       Object.keys(tiles).forEach(function (key) { tiles[key].remove(); }); tiles = {}; models = {};
-      locked = false; order = []; shown = 20; last = null; fresh = 0; sequence = ''; detailSig = ''; detailKey = ''; scroll.reset();
+      locked = false; order = []; shown = 20; last = null; fresh = 0; freshKeys = {}; sequence = ''; sequenceKeys = []; detailSig = ''; detailKey = ''; scroll.reset();
     }
     // Torrents fold into one row under the online voices; with no online voice they open by themselves.
     function section(count, open) {
@@ -88,6 +154,14 @@
       return tile;
     }
     var voicesShown = false;
+    // Voices whose quality nobody checked fold below the checked ones.
+    var checkedKeys = {}, uncheckedOpen = false, uncheckedShown = false;
+    function uncheckedSection(count, open) {
+      var tile = tiles['section:unchecked'];
+      if (!tile) tile = tiles['section:unchecked'] = button('', 'homelab-common-section', function () { uncheckedOpen = !uncheckedShown; locked = true; draw(); });
+      tile.text((open ? '▾ Ещё ' : '▸ Ещё ') + plural(count, ['озвучка', 'озвучки', 'озвучек']) + ' · качество не проверено');
+      return tile;
+    }
     function sourceMode() { return grouped && !!(recovery && recovery.voice); }
     // The voice this title is being watched in (Continue): its card leads, from the source that played it.
     function watchedVoice() {
@@ -95,7 +169,13 @@
       var card = (movie.name ? 'tv_' : 'movie_') + movie.id, item = null;
       try { item = window.homelabContinue.list().find(function (entry) { return entry && entry.card === card && entry.kind === 'online' && entry.online && entry.online.voice; }); } catch (_) {}
       var canon = item ? canonVoice(item.online.voice) : null;
-      return canon && canon.key ? {key: 'voice:' + canon.key, provider: item.online.provider, label: canon.label, season: item.season || 0, episode: item.episode || 0, position: Number(item.position) || 0} : null;
+      return canon && canon.key ? {key: 'voice:' + canon.key, provider: item.online.provider, label: canon.label, season: item.season || 0, episode: item.episode || 0, position: Number(item.position) || 0, duration: Number(item.duration) || 0} : null;
+    }
+    // Where this title stands in Continue, whatever played it: the episode strip marks it.
+    function continued() {
+      if (!window.homelabContinue || typeof window.homelabContinue.list !== 'function') return null;
+      var card = (tv ? 'tv_' : 'movie_') + movie.id;
+      try { return window.homelabContinue.list().find(function (entry) { return entry && entry.card === card; }) || null; } catch (_) { return null; }
     }
     var mine = watchedVoice();
     function otherVoices() {
@@ -107,15 +187,71 @@
       tile.find('.homelab-common-match').toggleClass('hide', !recovery || !recovery.voice || voiceMatch(recovery.voice, row.identityVoice) !== 1);
     }
     function seasonTitle(value) { return value === 0 ? 'Спецвыпуски' : 'Сезон ' + value; }
+    // The chips show what to search and 4K/subtitles; the parameters chip names the rest.
     function updateSummary() {
       var parts = [];
       if (tv) parts.push((selection.season === 0 ? 'Спецвыпуски' : 'С' + selection.season) + ' · Е' + selection.episode);
-      parts.push(kind === 'online' ? 'Онлайн' : kind === 'torrent' ? 'Торренты' : 'Всё');
-      parts.push(q ? qualityLabel(q) : 'любое качество');
+      if (q && q !== 2160) parts.push(qualityLabel(q));
       if (!grouped) parts.push('все источники');
-      if (subsOnly) parts.push('с субтитрами');
-      summaryText.text(parts.join(' · '));
-      episodeLabel.text(seasonTitle(selection.season) + ' · Серия ' + selection.episode);
+      summaryText.text(parts.length ? parts.join(' · ') : 'Параметры');
+      if (chips.all) chips.all.toggleClass('is-on', kind === 'all');
+      if (chips.online) chips.online.toggleClass('is-on', kind === 'online');
+      if (chips.torrent) chips.torrent.toggleClass('is-on', kind === 'torrent');
+      chips.uhd.toggleClass('is-on', q === 2160); chips.subs.toggleClass('is-on', !!subsOnly);
+    }
+    function chipText(id, name, count) {
+      var tile = chips[id]; if (!tile) return;
+      var sig = name + '|' + (count === undefined ? '' : count);
+      if (tile.data('sig') === sig) return;
+      tile.data('sig', sig).empty().append($('<span></span>').text(name));
+      if (count !== undefined) tile.append($('<span class="homelab-common-filter-count"></span>').text(String(count)));
+    }
+    // ── Episode strip: a window of the season's episodes; OK searches one, the edges slide the window ──
+    function seasonEntry(season) { return Array.isArray(movie.seasons) ? movie.seasons.find(function (entry) { return entry && entry.season_number === season; }) : null; }
+    function askSeasons() {
+      if (!tv || recovery || seasonsAsked || Array.isArray(movie.seasons) && movie.seasons.length) return;
+      seasonsAsked = true;
+      L.Api.sources.tmdb.get('tv/' + movie.id, {}, function (data) {
+        if (dead || !data || +data.id !== movie.id || !Array.isArray(data.seasons)) return;
+        movie.seasons = data.seasons; drawStrip();
+        if (settingsOpen && active()) { renderSettings(); focusSetting(); }
+      }, function () {});
+    }
+    // keep: the strip node to refocus after a restart (an episode number, or -1 for the season button).
+    function drawStrip(keep) {
+      if (!tv || recovery) return;
+      var entry = seasonEntry(selection.season), count = entry && Number.isInteger(entry.episode_count) ? Math.min(entry.episode_count, 999) : 0;
+      var total = count ? Math.max(count, selection.episode) : 0, center = stripCenter || selection.episode;
+      var from = Math.max(1, total ? Math.min(center - 3, total - 6) : center - 3), to = total ? Math.min(total, from + 6) : from + 6;
+      var focused = keep || (last && strip[0].contains(last) ? last.homelabEpisode : 0), target = null, seen = continued();
+      strip.empty().removeClass('hide');
+      var seasonButton = button(seasonTitle(selection.season), 'homelab-common-season', function () { seasonMenu(); });
+      seasonButton[0].homelabEpisode = -1; strip.append(seasonButton);
+      strip.append($('<span class="homelab-common-eps-arrow"></span>').text(from > 1 ? '‹' : ''));
+      for (var ep = from; ep <= to; ep++) strip.append(episodeTile(ep, from, to, total, seen));
+      strip.append($('<span class="homelab-common-eps-arrow"></span>').text(!total || to < total ? '›' : ''));
+      if (count) strip.append($('<span class="homelab-common-eps-total"></span>').text('из ' + count));
+      Array.prototype.forEach.call(strip[0].querySelectorAll('.selector'), function (node) { if (focused && node.homelabEpisode === focused) target = node; });
+      if (focused && ownList()) { last = target || strip[0].querySelectorAll('.selector')[0]; focus(true); }
+    }
+    function episodeTile(ep, from, to, total, seen) {
+      var cls = 'homelab-common-ep' + (ep === selection.episode ? ' is-current' : ''), started = 0;
+      if (seen && seen.season === selection.season) {
+        if (ep < seen.episode) cls += ' is-watched';
+        else if (ep === seen.episode && Number(seen.duration) > 0) started = Math.min(1, Math.max(0, Number(seen.position) / Number(seen.duration)));
+      }
+      var tile = button(String(ep), cls, function () {
+        if (ep === selection.episode || !active()) return;
+        selection.episode = ep; stripCenter = ep; untouched = true; restart();
+      });
+      tile[0].homelabEpisode = ep;
+      if (started > 0) tile.append($('<span class="homelab-common-ep-bar"></span>').css('width', Math.round(started * 100) + '%'));
+      // Reaching an edge slides the window so the next episodes come into view.
+      tile.on('hover:focus', function () {
+        if (!(ep === from && from > 1 || ep === to && (!total || to < total))) return;
+        clearTimeout(stripTimer); stripTimer = setTimeout(function () { if (!dead && last && last.homelabEpisode === ep) { stripCenter = ep; drawStrip(); } }, 0);
+      });
+      return tile;
     }
     function seasonMenu(preferred) {
       var token = ++uiIntent, marked = Number.isInteger(preferred) ? preferred : selection.season;
@@ -170,7 +306,7 @@
       list.push({label: 'Что искать', values: [['all', 'Всё'], ['online', 'Онлайн'], ['torrent', 'Торренты']].filter(function (value) { return !recovery || value[0] !== 'torrent'; }).map(function (value) { return {value: value[0], title: value[1]}; }),
         current: kind, set: function (value) { kind = value; reorder(); }});
       list.push({label: 'Качество', values: [0, 2160, 1080, 720].map(function (value) { return {value: value, title: value ? qualityLabel(value) : 'Любое'}; }),
-        current: q, set: function (value) { q = value; if (!recovery) pref = preferences({quality: value}); reorder(); }});
+        current: q, set: function (value) { q = value; qBefore = 0; if (!recovery) pref = preferences({quality: value}); reorder(); }});
       list.push({label: 'Показывать', values: [{value: true, title: 'По озвучкам'}, {value: false, title: 'Все источники'}], current: grouped,
         set: function (value) { grouped = value; resetList(); }});
       list.push({label: 'Субтитры', values: [{value: false, title: 'Неважно'}, {value: true, title: 'Только с субтитрами'}], current: subsOnly,
@@ -223,14 +359,7 @@
       panel.removeClass('hide'); root.addClass('is-settings'); renderSettings();
       L.Controller.toggle(SETTINGS);
       // Seasons and their episode counts come from the title's metadata, asked once.
-      if (tv && !recovery && !seasonsAsked && !(Array.isArray(movie.seasons) && movie.seasons.length)) {
-        seasonsAsked = true; var token = ++uiIntent;
-        L.Api.sources.tmdb.get('tv/' + movie.id, {}, function (data) {
-          if (!data || +data.id !== movie.id || !Array.isArray(data.seasons)) return;
-          movie.seasons = data.seasons;
-          if (settingsOpen && token === uiIntent && active()) { renderSettings(); focusSetting(); }
-        }, function () {});
-      }
+      askSeasons();
     }
     // Closing applies a changed episode; discard drops it (a full season or episode list replaces it).
     // quiet: apply the episode but leave the search to the caller.
@@ -242,7 +371,7 @@
         if (!quiet) restart();
       }
       // A filter change may have removed the focused card: return to the top of the list, not the header.
-      if (!last || !body[0].contains(last) || !visibleNode(last)) last = Array.prototype.filter.call(body[0].querySelectorAll('.selector'), visibleNode)[0] || last;
+      if (!last || !inList(last) || !visibleNode(last)) last = listNodes()[0] || last;
       if (active()) L.Controller.toggle('content');
     }
     function directIdentity(row) {
@@ -311,7 +440,8 @@
         sourceModel.measured = !!row.measured;
         sourceModel.pick = hero ? 'Лучший источник' + (row.measured ? ' · проверено' : '') : '';
         if (hero) sourceModel.cls += ' is-hero';
-        sourceModel.sig = ['src', sourceModel.voice, sourceModel.details, sourceModel.quality, sourceModel.qcls, sourceModel.note, sourceModel.measured, sourceModel.pick, sourceModel.cls, sourceModel.badges.join(',')].join('|');
+        heroLine(sourceModel, hero, false);
+        sourceModel.sig = ['src', sourceModel.voice, sourceModel.details, sourceModel.quality, sourceModel.qcls, sourceModel.note, sourceModel.measured, sourceModel.pick, sourceModel.cls, sourceModel.badges.join(','), sourceModel.what, sourceModel.progress].join('|');
         return sourceModel;
       }
       var voice = !grouped ? row.voice : row.kind === 'torrent' ? (row.canon && row.canon.label || row.voice) : row.canon && row.canon.label || row.identityVoice || row.voice;
@@ -343,11 +473,22 @@
       }
       model.measured = !!row.measured;
       var stopped = item.mine && mine.position > 30 && (!tv || mine.season === selection.season && mine.episode === selection.episode);
-      model.pick = item.mine ? 'Ваша озвучка · ' + (stopped ? 'остановились на ' + L.Utils.secondsToTime(mine.position) : 'вы смотрите в ней') : hero ? 'Лучший выбор' + (row.measured ? ' · проверено' : '') : '';
+      // The hero's episode line already says where it resumes.
+      model.pick = item.mine ? 'Ваша озвучка · ' + (hero ? (stopped ? 'продолжить' : 'смотреть') : stopped ? 'остановились на ' + L.Utils.secondsToTime(mine.position) : 'вы смотрите в ней') : hero ? 'Лучший выбор' + (row.measured ? ' · проверено' : '') : '';
       if (item.mine) model.cls += ' is-mine';
       if (hero) model.cls += ' is-hero';
-      model.sig = [model.voice, model.details, model.quality, model.qcls, model.note, model.measured, model.pick, model.cls, model.badges.join(',')].join('|');
+      heroLine(model, hero, stopped);
+      model.sig = [model.voice, model.details, model.quality, model.qcls, model.note, model.measured, model.pick, model.cls, model.badges.join(','), model.what, model.progress].join('|');
       return model;
+    }
+    // The hero names what one OK plays: the episode, and where it resumes.
+    function heroLine(model, hero, stopped) {
+      model.what = ''; model.progress = 0;
+      if (!hero) return;
+      var at = recovery ? Number(recovery.position) || 0 : stopped ? mine.position : 0, duration = recovery ? Number(recovery.duration) || 0 : stopped ? mine.duration : 0;
+      var from = at > 0 ? L.Utils.secondsToTime(at) : '';
+      model.what = tv ? (selection.season === 0 ? 'Спецвыпуск ' : 'Серия ') + selection.episode + (from ? ' · с ' + from : '') : from ? 'Продолжить с ' + from : '';
+      if (at > 0 && duration > 0) model.progress = Math.round(Math.min(1, at / duration) * 100);
     }
     function fill(tile, model) {
       if (tile.data('sig') === model.sig) return;
@@ -355,6 +496,8 @@
       // Swap only the modifier classes so Lampa's own focus class survives.
       tile.removeClass(tile.data('cls') || '').addClass(model.cls).data('cls', model.cls);
       tile.find('.homelab-common-pick').text(model.pick).toggleClass('hide', !model.pick);
+      tile.find('.homelab-common-what').text(model.what || '').toggleClass('hide', !model.what);
+      tile.find('.homelab-common-progress').toggleClass('hide', !model.progress).find('.homelab-common-progress-fill').css('width', (model.progress || 0) + '%');
       tile.find('.homelab-common-voice').text(model.voice);
       tile.find('.homelab-common-details').text(model.details);
       var badges = tile.find('.homelab-common-badges').empty().toggleClass('hide', !model.badges.length);
@@ -366,13 +509,16 @@
     }
     function card(key) {
       var tile = $('<div class="selector homelab-common-result"></div>'), text = $('<div class="homelab-common-text"></div>'), side = $('<div class="homelab-common-quality"></div>');
-      text.append($('<div class="homelab-common-pick hide"></div>')).append($('<div class="homelab-common-voice"></div>'))
+      // One line in the list; as the hero the same tile grows a play mark, the episode line and progress.
+      text.append($('<div class="homelab-common-pick hide"></div>')).append($('<div class="homelab-common-what hide"></div>'))
+        .append($('<div class="homelab-common-name"></div>').append($('<span class="homelab-common-voice"></span>')).append($('<span class="homelab-common-tag">ваша</span>')))
         .append($('<div class="homelab-common-match hide"></div>').text('Та же студия · название отличается, проверьте версию'))
         .append($('<div class="homelab-common-line"></div>').append($('<span class="homelab-common-details"></span>')).append($('<span class="homelab-common-badges hide"></span>')));
       side.append($('<div class="homelab-common-q"></div>')).append($('<div class="homelab-common-q-note hide"></div>'));
-      tile.append(text).append(side);
+      tile.append($('<div class="homelab-common-play"></div>')).append(text).append(side)
+        .append($('<div class="homelab-common-progress hide"></div>').append($('<div class="homelab-common-progress-fill"></div>')));
       tile.on('hover:focus', function () {
-        last = this; if (!restoringFocus) { locked = true; scroll.update(this, true); }
+        last = this; if (!restoringFocus) { locked = true; if (body[0].contains(this)) scroll.update(this, true); else scroll.reset(); }
         showDetail(key);
         // Dwelling on a torrent without a named voice asks its audio tracks.
         var focused = this; clearTimeout(voiceTimer);
@@ -491,7 +637,7 @@
       // hands focus to the row now in its place, never to the filters above.
       var focusedKey = '', focusedIndex = -1;
       Object.keys(tiles).forEach(function (key) { if (tiles[key][0] === last) focusedKey = key; });
-      if (focusedKey) focusedIndex = sequence.split('\n').indexOf(focusedKey);
+      if (focusedKey) focusedIndex = sequenceKeys.indexOf(focusedKey);
       var candidates = search.rows.filter(function (row) { return (kind === 'all' || row.kind === kind) && (!q || row.kind === 'online' && !row.qualities.length || row.qualities.indexOf(q) >= 0) && (!subsOnly || hasSubtitles(row)) && (!recovery || !row.native && row.kind === 'online' && row.provider !== recovery.excludeProvider); });
       var exact = recovery && recovery.voice ? candidates.filter(function (row) { return voiceMatch(recovery.voice, row.identityVoice) === 2; }).length : 0;
       function rank(a, b, tie) {
@@ -522,24 +668,35 @@
       var byKey = {}; groups.forEach(function (item) { byKey[item.key] = item; });
       var loading = search.onlinePending || search.torrentPending, now = Date.now();
       // Untouched lists re-rank at most once a second while results stream in; once the user moved, rows keep their places.
-      if (!locked && (!loading || !order.length || now - reorderAt >= 1000)) { order = groups.map(function (item) { return item.key; }); reorderAt = now; fresh = 0; }
+      if (!locked && (!loading || !order.length || now - reorderAt >= 1000)) { order = groups.map(function (item) { return item.key; }); reorderAt = now; freshKeys = {}; }
       else {
         if (!locked) { clearTimeout(rerank); rerank = setTimeout(function () { rerank = null; draw(); }, reorderAt + 1000 - now); }
         order = order.filter(function (key) { return !!byKey[key]; });
-        groups.forEach(function (item) { if (order.indexOf(item.key) < 0) { order.push(item.key); if (locked) fresh++; } });
+        groups.forEach(function (item) { if (order.indexOf(item.key) < 0) { order.push(item.key); if (locked) freshKeys[item.key] = true; } });
       }
       var items = order.map(function (key) { return byKey[key]; }), torrents = [];
-      if (grouped && kind === 'all') {
-        torrents = items.filter(function (item) { return item.best.kind === 'torrent'; });
-        var online = items.filter(function (item) { return item.best.kind !== 'torrent' && !item.best.native; }).length;
-        sectionOpen = torrentsOpen === null ? !online : torrentsOpen;
-        if (!online && !toggled) sectionOpen = true;
-        if (locked && torrentsOpen === null) torrentsOpen = sectionOpen; // once the user moved, the section no longer folds by itself
-        if (torrents.length && (online || toggled)) {
-          var at = items.indexOf(torrents[0]), rest = items.filter(function (item) { return item.best.kind !== 'torrent'; });
-          var before = rest.filter(function (item) { return items.indexOf(item) < at; });
-          items = before.concat([{key: 'section:torrents', section: true, rows: torrents}], sectionOpen ? torrents : [], rest.slice(before.length));
+      // The hero is the top playable item; it sits above the list, which goes on from the next one.
+      var heroItem = items[0] && !items[0].other && !items[0].best.native && !items[0].best.unavailable ? items[0] : null;
+      if (grouped && !sourceMode()) {
+        var rest = items.filter(function (item) { return item !== heroItem; });
+        torrents = rest.filter(function (item) { return item.best.kind === 'torrent'; });
+        var online = rest.filter(function (item) { return item.best.kind !== 'torrent' && !item.best.native; }), natives = rest.filter(function (item) { return item.best.native; });
+        // Checked voices lead; the rest fold away once there are enough checked ones. Membership holds once the user moved.
+        if (!locked) { checkedKeys = {}; online.forEach(function (item) { if (isChecked(item)) checkedKeys[item.key] = true; }); }
+        var checked = online.filter(function (item) { return checkedKeys[item.key]; }), unchecked = online.filter(function (item) { return !checkedKeys[item.key]; }), list = online;
+        if (checked.length >= 2 && unchecked.length) {
+          uncheckedShown = !!uncheckedOpen;
+          list = [{key: 'label:checked', label: 'Проверенные · ' + plural(checked.length, ['озвучка', 'озвучки', 'озвучек'])}].concat(checked, [{key: 'section:unchecked', section: true, rows: unchecked}], uncheckedShown ? unchecked : []);
         }
+        var onlineCount = online.length + (heroItem && heroItem.best.kind !== 'torrent' ? 1 : 0);
+        if (kind === 'all') {
+          sectionOpen = torrentsOpen === null ? !onlineCount : torrentsOpen;
+          if (!onlineCount && !toggled) sectionOpen = true;
+          if (locked && torrentsOpen === null) torrentsOpen = sectionOpen; // once the user moved, the section no longer folds by itself
+          if (torrents.length && (onlineCount || toggled)) list = list.concat([{key: 'section:torrents', section: true, rows: torrents}], sectionOpen ? torrents : []);
+          else list = list.concat(torrents);
+        } else list = list.concat(torrents);
+        items = (heroItem ? [heroItem] : []).concat(list, natives);
       }
       if (sourceMode()) {
         var others = items.filter(function (item) { return item.other; });
@@ -548,25 +705,34 @@
         if (others.length) items = items.concat([{key: 'section:voices', section: true, rows: others}], voicesShown ? others : []);
       }
       visibleItems = items; models = byKey;
+      // New rows the user can see: not those folded away.
+      fresh = items.filter(function (item) { return freshKeys[item.key]; }).length;
+      var real = function (item) { return !item.section && !item.label; };
       showPlaceholder(items.length ? '' : loading ? 'loading' : 'empty:' + q + ':' + kind + ':' + subsOnly, loading);
       var wanted = {}, page = items.slice(0, shown), keys = [];
-      search.probe(page.filter(function (item) { return !item.section; }).map(function (item) { return item.best; }));
-      var heroKey = page[0] && !page[0].section && !page[0].other ? page[0].key : '';
+      search.probe(page.filter(real).map(function (item) { return item.best; }));
+      var heroKey = heroItem && page[0] === heroItem ? heroItem.key : '';
       page.forEach(function (item) {
         wanted[item.key] = true; keys.push(item.key);
+        if (item.label) { (tiles[item.key] || (tiles[item.key] = $('<div class="homelab-common-label"></div>'))).text(item.label); return; }
         if (item.key === 'section:voices') { voicesSection(item.rows.length, voicesShown); return; }
+        if (item.key === 'section:unchecked') { uncheckedSection(item.rows.length, uncheckedShown); return; }
         if (item.section) { section(torrents.length, sectionOpen); return; }
         var tile = tiles[item.key] || (tiles[item.key] = card(item.key));
-        fill(tile, view(item, item.key === heroKey && !item.best.native && !item.best.unavailable));
+        fill(tile, view(item, item.key === heroKey));
         matchLabel(tile, item.best);
       });
       Object.keys(tiles).forEach(function (key) { if (!wanted[key]) { tiles[key].remove(); delete tiles[key]; } });
+      heroBox.toggleClass('hide', !heroKey);
       // Re-append only when the sequence changed: moving a focused node replays Lampa's focus animation.
-      var seq = keys.join('\n'), moved = seq !== sequence;
-      if (moved) { sequence = seq; keys.forEach(function (key) { body.append(tiles[key]); }); }
+      var seq = heroKey + '#' + keys.join('\n'), moved = seq !== sequence;
+      if (moved) { sequence = seq; sequenceKeys = keys; keys.forEach(function (key) { (key === heroKey ? heroBox : body).append(tiles[key]); }); }
       var heirChanged = false;
       if (focusedKey && !tiles[focusedKey]) {
-        var heir = page[Math.max(0, Math.min(focusedIndex, page.length - 1))];
+        // The row now in its place, never a heading.
+        var at = Math.max(0, Math.min(focusedIndex, page.length - 1)), heir = null;
+        for (var i = at; i < page.length && !heir; i++) if (real(page[i]) || page[i].section) heir = page[i];
+        for (var j = at - 1; j >= 0 && !heir; j--) if (real(page[j]) || page[j].section) heir = page[j];
         last = heir && tiles[heir.key] ? tiles[heir.key][0] : null; heirChanged = true;
       }
       if (items.length > shown) {
@@ -577,9 +743,10 @@
         more.text('Показать ещё · ' + (items.length - shown));
         if (moved || !body[0].contains(more[0]) || body.children().last()[0] !== more[0]) { body.append(more); moved = true; }
       } else if (more) { more.remove(); more = null; moved = true; }
-      drawStatus(loading, items.filter(function (item) { return !item.section; }), available, exact);
+      drawStatus(loading, items.filter(real), available, exact);
+      drawChips();
       hint.toggleClass('hide', !items.length).text(recovery ? keysText(null) : grouped ? 'ОК — смотреть  ·  удержание ОК — все источники  ·  → параметры' : 'ОК — смотреть  ·  удержание ОК — подробности  ·  → параметры');
-      var firstCard = keys.filter(function (key) { return key.indexOf('section:') !== 0; })[0], top = firstCard && tiles[firstCard] ? tiles[firstCard][0] : null;
+      var firstCard = keys.filter(function (key) { return key.indexOf('section:') !== 0 && key.indexOf('label:') !== 0; })[0], top = firstCard && tiles[firstCard] ? tiles[firstCard][0] : null;
       if (ownList()) {
         var before = last;
         if (untouched && top) last = top;
@@ -592,6 +759,15 @@
       if (!shownKey && models[detailKey]) shownKey = detailKey;
       if (shownKey) showDetail(shownKey);
       else if (!items.length) { detail.addClass('hide'); detailSig = ''; detailKey = ''; }
+    }
+    function isChecked(item) { return !item.best.unavailable && (!!item.best.measured || item.best.verified === 'play'); }
+    // Chip counts ignore the kind filter: they say what each choice would show.
+    function drawChips() {
+      var rows = search.rows.filter(function (row) { return (!q || row.kind === 'online' && !row.qualities.length || row.qualities.indexOf(q) >= 0) && (!subsOnly || hasSubtitles(row)) && (!recovery || !row.native && row.kind === 'online' && row.provider !== recovery.excludeProvider); });
+      var voices = {}, releases = 0;
+      rows.forEach(function (row) { if (row.kind === 'torrent') releases++; else if (!row.native) voices[row.canon && row.canon.key || row.identityVoice] = true; });
+      chipText('all', 'Всё'); chipText('online', 'Онлайн', Object.keys(voices).length); chipText('torrent', 'Торренты', releases);
+      chipText('uhd', '4K'); chipText('subs', 'Субтитры');
     }
     function drawStatus(loading, items, rows, exact) {
       var voices = rows.filter(function (row) { return row.kind === 'online' && !row.native; }), releases = rows.filter(function (row) { return row.kind === 'torrent'; }).length;
@@ -621,17 +797,22 @@
     function changed() { if (!refresh) refresh = setTimeout(function () { refresh = null; draw(); }, 150); }
     function cancel() { uiIntent++; clearTimeout(refresh); refresh = null; clearTimeout(rerank); rerank = null; if (search) search.cancel(); }
     function restart(fresh) {
+      // OK on the strip keeps focus there until the new results bring the hero.
+      var keep = last && strip[0].contains(last) ? last.homelabEpisode : 0;
       cancel(); currentScope = sync.scope(); resetList();
-      body.empty(); more = null; placeholder = null; placeholderState = ''; detail.addClass('hide'); updateSummary();
+      body.empty(); heroBox.empty().addClass('hide'); more = null; placeholder = null; placeholderState = ''; detail.addClass('hide'); updateSummary(); stripCenter = 0; drawStrip(keep);
       var options = {torrents: !recovery, fresh: fresh === true}, warmed = fresh === true ? null : adoptWarm(searchKey(movie, selection, options.torrents));
       if (warmed) { search = warmed; search.follow(changed); }
       else { search = new Search(Object.assign({}, movie), selection, changed, options); search.start(); }
       draw();
     }
     function visibleNode(node) { return node.offsetParent !== null; }
+    // The hero and the list are one column: Up/Down walk it in order.
+    function listNodes() { return Array.prototype.filter.call(heroBox[0].querySelectorAll('.selector'), visibleNode).concat(Array.prototype.filter.call(body[0].querySelectorAll('.selector'), visibleNode)); }
+    function inList(node) { return heroBox[0].contains(node) || body[0].contains(node); }
     function move(dx, dy) {
       touch();
-      var all = Array.prototype.filter.call(root[0].querySelectorAll('.selector'), visibleNode), list = Array.prototype.filter.call(body[0].querySelectorAll('.selector'), visibleNode);
+      var all = Array.prototype.filter.call(root[0].querySelectorAll('.selector'), visibleNode), list = listNodes();
       var from = last && root[0].contains(last) && visibleNode(last) ? last : all[0]; if (!from) return;
       var index = list.indexOf(from);
       // Inside the single-column list, Up/Down follow list order (the tile's focus handler scrolls it into view).
@@ -643,14 +824,18 @@
       all.forEach(function (node) {
         if (node === from) return; var b = node.getBoundingClientRect(), px = b.left + b.width / 2, py = b.top + b.height / 2;
         // List entries are reachable from outside only while visible; scrolled-out tiles may sit behind the header.
-        if (list.indexOf(node) >= 0 && (index >= 0 || !(py >= view.top && py <= view.bottom))) return;
+        if (list.indexOf(node) >= 0 && (index >= 0 || body[0].contains(node) && !(py >= view.top && py <= view.bottom))) return;
         if (dx && (px - x) * dx <= 1 || dy && (py - y) * dy <= 1) return;
-        var along = dx ? Math.abs(px - x) : Math.abs(py - y), across = dx ? Math.abs(py - y) : Math.abs(px - x), score = along + across * 4;
+        // Left and Right stay in their row (the episode strip, the chips).
+        if (dx && Math.abs(py - y) > Math.max(a.height, b.height) / 2) return;
+        // Up/Down take the nearest row first (the chips before the strip), then the closest node in it.
+        var along = dx ? Math.abs(px - x) : Math.abs(py - y), across = dx ? Math.abs(py - y) : Math.abs(px - x), score = dx ? along + across * 4 : along * 10 + across;
         if (score < distance) { distance = score; best = node; }
       });
-      if (best) L.Controller.collectionFocus(best, root, true);
-      else if (dy < 0) L.Controller.toggle('head');
+      if (best) { L.Controller.collectionFocus(best, root, true); return true; }
+      if (dy < 0) L.Controller.toggle('head');
       else if (dx < 0) L.Controller.toggle('menu');
+      return false;
     }
     this.create = function () { scroll.minus(root.find('.homelab-common-head')); updateSummary(); };
     this.render = function (js) { return js ? root[0] : root; };
@@ -659,15 +844,16 @@
       if (sync.scope() !== currentScope) { cancel(); return L.Activity.backward(); }
       if (settingsOpen) { settingsOpen = false; pending = null; panel.addClass('hide'); root.removeClass('is-settings'); }
       L.Controller.add('content', {link: self, invisible: true, toggle: function () { focus(false); }, up: function () { move(0, -1); }, down: function () { move(0, 1); }, left: function () { move(-1, 0); },
-        right: function () { openSettings(); }, back: function () { cancel(); L.Activity.backward(); }});
+        // → walks the strip and the chips; past their end, and from anywhere else, it opens the parameters.
+        right: function () { if (!(last && last !== summary[0] && (strip[0].contains(last) || filters[0].contains(last)) && move(1, 0))) openSettings(); }, back: function () { cancel(); L.Activity.backward(); }});
       L.Controller.add(SETTINGS, {link: self, invisible: true, toggle: focusSetting, up: function () { if (settingIndex > 0) { settingIndex--; focusSetting(); } },
         down: function () { if (settingIndex < settingRows.length - 1) { settingIndex++; focusSetting(); } }, left: function () { stepSetting(-1, true); }, right: function () { stepSetting(1); }, back: function () { closeSettings(); }});
       L.Controller.toggle('content');
-      if (!started) { started = true; restart(); }
+      if (!started) { started = true; askSeasons(); restart(); }
       else draw();
     };
     this.pause = cancel;
     this.stop = function () {};
     var unsubscribe = sync.subscribe(function () { if (sync.scope() !== currentScope) { cancel(); if (active()) L.Activity.backward(); } });
-    this.destroy = function () { dead = true; clearTimeout(voiceTimer); cancel(); unsubscribe(); scroll.destroy(); root.remove(); };
+    this.destroy = function () { dead = true; clearTimeout(voiceTimer); clearTimeout(stripTimer); cancel(); unsubscribe(); scroll.destroy(); root.remove(); };
   }

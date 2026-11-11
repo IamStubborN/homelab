@@ -364,7 +364,7 @@
     var video = L.PlayerVideo.video(); if (!video || s.video === video) return;
     unbind(s); s.video = video;
     // A replacement's initial zero is not a playback observation from the old video.
-    s.started = false; s.userPaused = false; s.playedOnce = false; s.reserve = !!s.work.url_reserve; s.buffer = -1;
+    s.started = false; s.userPaused = false; s.playedOnce = false; s.reserve = !!s.work.url_reserve; s.buffer = -1; s.seekSince = 0;
     function waiting() { if (currentVideo(s)) { if (!s.stuck) { s.stuck = true; s.stuckAt = video.currentTime; } set(s.phase === 'recovering' ? 'recovering' : 'buffering', s.actionable); arm(s); } }
     // WebKit can freeze after a seek or a resume with data buffered and no waiting event:
     // the clock stands still while the player shows playback. Nudge it once, then treat it as buffering.
@@ -391,7 +391,8 @@
         // another seek, so reopen the stream at this point as Retry does (once a minute at most).
         if (video.seeking) {
           if (!inBuffer(video.currentTime)) return;
-          var left = HUNG - (Date.now() - (s.seekSince || 0));
+          if (!s.seekSince) s.seekSince = Date.now();
+          var left = HUNG - (Date.now() - s.seekSince);
           if (left > 0) { s.frozen = setTimeout(function () { s.frozen = null; if (currentVideo(s) && s.video === video && !video.paused && video.seeking) hungSeek(); }, left); return; }
           return hungSeek();
         }
@@ -408,7 +409,9 @@
         s.userPaused = false;
         if (!currentVideo(s)) return;
         // Play on a seek left hanging (typically after a long pause) reloads at once: it is the user's ask.
-        if (video.seeking && inBuffer(video.currentTime) && Date.now() - (s.seekSince || 0) >= HUNG) return hungSeek(true);
+        // seeking is queued after a script seek, so a play right behind currentTime= sees seeking before its event:
+        // only a seek whose own event started the clock counts.
+        if (video.seeking && s.seekSince && inBuffer(video.currentTime) && Date.now() - s.seekSince >= HUNG) return hungSeek(true);
         arm(s); render(); watch(false);
       },
       // A seek into missing torrent pieces may never complete.
@@ -420,7 +423,7 @@
       },
       seeked: function () {
         if (!currentVideo(s)) return;
-        var nudged = s.nudging; s.nudging = false; capture(s);
+        var nudged = s.nudging; s.nudging = false; s.seekSince = 0; capture(s);
         if (!video.paused && video.readyState < 3) waiting(); else if (!video.paused) watch(nudged);
       },
       timeupdate: function () {

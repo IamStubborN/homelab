@@ -49,12 +49,12 @@
       var step = Math.max(5, Number(L.Storage.field('player_rewind')) || 20);
       seekButtons.forEach(function (entry) {
         entry.button.find('text').text(step);
-        entry.button.attr('aria-label', (entry.forward ? 'Вперёд' : 'Назад') + ' примерно на ' + step + ' с');
+        entry.button.attr('aria-label', (entry.forward ? 'Вперёд' : 'Назад') + ' на ' + step + ' с');
       });
     }
     function seekControls() {
       // Platform.screen('tv') also includes desktop browsers; tv() identifies actual TVs.
-      if (!L.Platform || typeof L.Platform.tv !== 'function' || L.Platform.tv() || typeof L.PlayerVideo.rewind !== 'function') return;
+      if (!L.Platform || typeof L.Platform.tv !== 'function' || L.Platform.tv() || typeof L.PlayerVideo.video !== 'function') return;
       var panel = L.PlayerPanel.render();
       if (!panel || !panel.length || panel[0] === seekPanel || panel.find('.player-panel__rprev,.player-panel__rnext').length) return;
       var center = panel.find('.player-panel__center'), play = center.find('.player-panel__playpause');
@@ -66,7 +66,13 @@
         step.on('hover:enter', function () {
           var data = L.Player.playdata(), video = L.PlayerVideo.video();
           if (!data || data.iptv || panel.hasClass('panel--norewind') || !video || !isFinite(video.duration) || video.duration <= 0) return;
-          L.PlayerVideo.rewind(forward);
+          // Native rewind is the TV scrub: pause, a second to collect presses, seek, play. A tap seeks at once and keeps
+          // playing; during a pending seek currentTime is already its target, so quick taps add up.
+          var step = Math.max(5, Number(L.Storage.field('player_rewind')) || 20), from = video.currentTime;
+          var to = forward ? Math.max(from, Math.min(video.duration - 1, from + step)) : Math.max(0, from - step);
+          try { video.currentTime = to; } catch (error) { return; }
+          // The panel keeps itself shown on its own rewind event.
+          if (L.PlayerVideo.listener && typeof L.PlayerVideo.listener.send === 'function') L.PlayerVideo.listener.send('rewind', {});
         });
         if (forward) play.after(step); else play.before(step);
         seekButtons.push({button: step, forward: forward});

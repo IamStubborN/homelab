@@ -446,6 +446,24 @@ test('Play right after a fresh seek waits for it as usual', t => {
   assert.equal(loads.length, 0);
 });
 
+test('Lampa rewind (currentTime then play, seeking event still queued) does not reload the stream', t => {
+  const h = harness(t), loads = [];
+  h.window.HomelabSources = {recover() { return true; }};
+  const video = realistic(h); h.run('plugins/playback-status.js');
+  h.L.PlayerVideo.destroy = () => loads.push('destroy'); h.L.PlayerVideo.url = url => loads.push(url);
+  h.start({card: {id: 7}, homelab_online: {provider: 'one', voice: 'A'}, url: 'u'});
+  video.play(); video.data(); video.advance(2);
+  video.buffered = {length: 1, start: () => 0, end: () => 300};
+  // An earlier seek, long finished.
+  video.seeking = true; video.currentTime = 40; video.fire('seeking'); video.seeking = false; video.fire('seeked'); h.tick(60000);
+  // Native rewind: pause, a second later currentTime= and play(); play's event runs before seeking's.
+  video.pause(); h.tick(1000);
+  video.seeking = true; video.currentTime = 60; video.paused = false; video.fire('play');
+  assert.equal(loads.length, 0, 'the old seek does not make this one look hung');
+  video.fire('seeking'); h.tick(2000); video.seeking = false; video.fire('seeked'); video.data(); h.tick(30000);
+  assert.equal(loads.length, 0);
+});
+
 test('after a fallback to the reserve, Retry does not reload the primary that failed', t => {
   const h = harness(t), loads = [], calls = [];
   h.window.HomelabSources = {recover: (...args) => { calls.push(args); return true; }};

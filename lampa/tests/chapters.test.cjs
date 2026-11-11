@@ -70,7 +70,7 @@ function withSeekControls(L) {
   L.Platform = {tv: () => false};
   L.Storage.listener = {follow(name, fn) { L.changeSetting = fn; }};
   L.rewinds = [];
-  L.PlayerVideo.rewind = forward => L.rewinds.push({forward, step: L.Storage.field('player_rewind')});
+  L.PlayerVideo.rewind = forward => L.rewinds.push(forward);
 }
 
 test('chapters come from the subtitle header probe of the playing file, not from a frame worker', async t => {
@@ -133,16 +133,23 @@ test('a late answer for a previous file is ignored', async t => {
   assert.notEqual(h.ticks().htmlValue, EMPTY_TICKS);
 });
 
-test('step buttons delegate to native rewind with the configured step and stay off TVs', t => {
+test('step buttons seek at once by the configured step without pausing, add up while a seek is pending and stay off TVs', t => {
   const h = harness(t, withSeekControls);
   h.storage.set('player_rewind', 20); h.online();
   const play = h.panel.find('.player-panel__center').find('.player-panel__playpause');
   const back = play.beforeValue, forward = play.afterValue;
-  assert.equal(back.attrs['aria-label'], 'Назад примерно на 20 с');
-  back.events['hover:enter'](); forward.events['hover:enter']();
-  assert.deepEqual(h.L.rewinds, [{forward: false, step: 20}, {forward: true, step: 20}]);
+  assert.equal(back.attrs['aria-label'], 'Назад на 20 с');
+  h.video.currentTime = 50; h.video.seeking = false;
+  forward.events['hover:enter'](); assert.equal(h.video.currentTime, 70);
+  h.video.seeking = true;
+  forward.events['hover:enter'](); assert.equal(h.video.currentTime, 90, 'a pending seek counts from its target');
+  h.video.seeking = false; back.events['hover:enter'](); assert.equal(h.video.currentTime, 70);
+  h.video.currentTime = 110; forward.events['hover:enter'](); assert.equal(h.video.currentTime, 119, 'stays before the end');
+  h.video.currentTime = 119.5; forward.events['hover:enter'](); assert.equal(h.video.currentTime, 119.5, 'forward never moves back');
+  h.video.currentTime = 5; back.events['hover:enter'](); assert.equal(h.video.currentTime, 0);
+  assert.deepEqual(h.L.rewinds, [], 'the TV scrub with its pause is not used');
   h.storage.set('player_rewind', 30); h.L.changeSetting({name: 'player_rewind'});
-  assert.equal(forward.attrs['aria-label'], 'Вперёд примерно на 30 с');
+  assert.equal(forward.attrs['aria-label'], 'Вперёд на 30 с');
   h.online(); assert.equal(play.beforeValue, back, 'controls are added once');
   const tv = harness(t, L => { withSeekControls(L); L.Platform.tv = () => true; }); tv.online();
   assert.equal(tv.panel.find('.player-panel__center').find('.player-panel__playpause').beforeValue, undefined);

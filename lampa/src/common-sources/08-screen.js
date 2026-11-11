@@ -12,9 +12,9 @@
     var recovery = object.homelab_recovery, pref = preferences();
     if (recovery && recovery.scope !== sync.scope()) recovery = null;
     var selection = recovery ? {season: recovery.season, episode: recovery.episode} : initialSelection(object, movie);
-    var root = $('<div class="homelab-common"></div>'), art = $('<div class="homelab-common-art"></div>'), head = $('<div class="homelab-common-head"></div>');
+    var root = $('<div class="homelab-common layer--wheight"></div>'), art = $('<div class="homelab-common-art"></div>'), head = $('<div class="homelab-common-head"></div>');
     var status = $('<div class="homelab-common-status" aria-live="polite"></div>'), statusText = $('<div class="homelab-common-status-text"></div>'), bar = $('<div class="homelab-common-bar"></div>'), barFill = $('<div class="homelab-common-bar-fill"></div>');
-    var main = $('<div class="homelab-common-main"></div>'), body = $('<div class="homelab-common-list"></div>'), scroll = new L.Scroll({mask: true, over: true}), hint = $('<div class="homelab-common-hint hide"></div>');
+    var main = $('<div class="homelab-common-main"></div>'), body = $('<div class="homelab-common-list"></div>'), scroll = new L.Scroll({over: true}), hint = $('<div class="homelab-common-hint hide"></div>');
     var detail = $('<div class="homelab-common-detail hide"></div>'), detailSig = '', detailKey = '', picking = null, PICK = 'homelab_common_pick';
     var search, last = null, kind = recovery ? 'online' : 'all', q = recovery ? 0 : pref.quality, subsOnly = !recovery && pref.subs, tiles = {}, models = {}, shown = 20, visibleItems = [], order = [], locked = false, restoringFocus = false, more = null, torrentsOpen = null, toggled = false, rerank = null, fresh = 0, freshKeys = {}, sequence = '', sequenceKeys = [], qBefore = 0, reorderAt = 0, dead = false, voiceTimer = 0, started = false, refresh, uiIntent = 0, currentScope = sync.scope();
     // Grouped by voice, recovery too: its providers mostly carry the same voice, so one card leads to all of them.

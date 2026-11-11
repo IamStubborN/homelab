@@ -53,6 +53,9 @@
     '.homelab-common-main{flex:1;min-height:0;display:flex;-webkit-transition:opacity .25s;transition:opacity .25s}',
     '.homelab-common.is-settings .homelab-common-main,.homelab-common.is-settings .homelab-common-head,.homelab-common.is-settings .homelab-common-filters,.homelab-common.is-settings .homelab-common-herobox{opacity:.35}',
     '.homelab-common-main>.scroll{flex:1 1 0;min-width:0;height:100%}',
+    // The screen takes Lampa's layer height (window minus head and the phone's bottom bar); the list fills what the
+    // head leaves instead of its own window-based height, so its end stays above the bottom bar and it scrolls.
+    '.homelab-common-main>.scroll{height:100%!important}',
     '.homelab-common-main>.scroll>.scroll__content{padding-top:.4em}',
     '.homelab-common-list{padding:.4em .7em .4em .4em}',
     // List rows: Lampa torrent-item tiles, one line each.

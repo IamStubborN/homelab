@@ -372,12 +372,18 @@ test('leaving the title card for another screen cancels the prefetched search', 
   h.openScreen(); assert.equal(h.parser.length, 2, 'the screen starts its own search');
 });
 
-test('recovery lists every provider by default', async t => {
+test('recovery groups one voice from every provider into one card', async t => {
   const h = setup(t, {recovery: {voice: 'Studio A'}});
   await h.finish('/lite/events', twoProviders.slice(0, 2));
   h.pages.set('one', episodePage('Studio A')); h.pages.set('two', episodePage('Studio A'));
   await h.finish('/lite/one', 'one'); await h.finish('/lite/two', 'two'); h.tick(150);
-  assert.equal(h.rows().length, 2);
+  assert.equal(h.rows().length, 1);
+  assert.doesNotMatch(h.summary(), /все источники/);
+});
+
+test('the focused summary paints over the generic selector focus', () => {
+  const css = require('fs').readFileSync(require('path').join(__dirname, '..', 'plugins', 'common-sources.js'), 'utf8');
+  assert.match(css, /\.homelab-common \.homelab-common-summary\.selector\.focus\{outline:0;background:#fff;color:#000\}/);
 });
 
 test('a finished empty search explains itself instead of a blank list', async t => {

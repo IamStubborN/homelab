@@ -27,7 +27,7 @@
     '.homelab-common-summary{flex-shrink:0;max-width:40%;display:flex;align-items:center;margin-left:1em;padding:.5em .55em .5em 1.1em;border-radius:2em;background:rgba(255,255,255,.07);border:.08em solid rgba(255,255,255,.12);font-size:.92em;box-sizing:border-box}',
     '.homelab-common-summary-text{min-width:0;opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.homelab-common-key{flex-shrink:0;margin-left:.7em;padding:.1em .7em;border-radius:2em;background:#fff;color:#000;font-weight:700}',
-    '.homelab-common .homelab-common-summary.focus{outline:0;background:#fff;color:#000}.homelab-common-summary.focus .homelab-common-summary-text{opacity:1}.homelab-common-summary.focus .homelab-common-key{background:#000;color:#fff}',
+    '.homelab-common .homelab-common-summary.selector.focus{outline:0;background:#fff;color:#000}.homelab-common-summary.focus .homelab-common-summary-text{opacity:1}.homelab-common-summary.focus .homelab-common-key{background:#000;color:#fff}',
     '.homelab-common-recovery{font-size:1em;margin:0 0 1em;line-height:1.4;padding:.7em 1em;border-radius:.6em;background:rgba(223,204,162,.12);color:#efe1bf}',
     '.homelab-common-chip{padding:.6em 1.15em;border-radius:1em;background:rgba(255,255,255,.07)}',
     '.homelab-common-other-voices{align-self:flex-start;margin-bottom:1em;max-width:100%;box-sizing:border-box}',

@@ -17,9 +17,9 @@
     var main = $('<div class="homelab-common-main"></div>'), body = $('<div class="homelab-common-list"></div>'), scroll = new L.Scroll({mask: true, over: true}), hint = $('<div class="homelab-common-hint hide"></div>');
     var detail = $('<div class="homelab-common-detail hide"></div>'), detailSig = '', detailKey = '';
     var search, last = null, kind = recovery ? 'online' : 'all', q = recovery ? 0 : pref.quality, subsOnly = !recovery && pref.subs, tiles = {}, models = {}, shown = 20, visibleItems = [], order = [], locked = false, restoringFocus = false, more = null, torrentsOpen = null, toggled = false, rerank = null, fresh = 0, sequence = '', reorderAt = 0, dead = false, voiceTimer = 0, started = false, refresh, uiIntent = 0, currentScope = sync.scope();
-    // Grouped by voice by default; recovery lists every provider, since the point there is to pick another one.
+    // Grouped by voice, recovery too: its providers mostly carry the same voice, so one card leads to all of them.
     // untouched: until the first key press, focus follows the top (recommended) card so one OK plays it.
-    var grouped = !recovery, untouched = true, placeholder = null, placeholderState = '';
+    var grouped = true, untouched = true, placeholder = null, placeholderState = '';
     // Header: poster, title, the episode and live search progress; the summary opens the parameters (also →).
     var poster = $('<div class="homelab-common-poster hide"></div>'), info = $('<div class="homelab-common-info"></div>'), facts = $('<div class="homelab-common-facts"></div>');
     var title = $('<div class="homelab-common-heading"></div>').text(movie.title || movie.name || 'Общий'), kicker = $('<div class="homelab-common-kicker"></div>').text(recovery ? 'Выбор источника' : 'Общий поиск');

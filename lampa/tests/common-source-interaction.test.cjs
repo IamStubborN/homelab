@@ -443,7 +443,7 @@ test('recovery lists the kept voice by source and folds other voices below', asy
 
 test('the focused summary paints over the generic selector focus', () => {
   const css = require('fs').readFileSync(require('path').join(__dirname, '..', 'plugins', 'common-sources.js'), 'utf8');
-  assert.match(css, /\.homelab-common \.homelab-common-summary\.selector\.focus\{outline:0;background:#fff;color:#000\}/);
+  assert.match(css, /\.homelab-common \.homelab-common-summary\.selector\.focus\{outline:0;background:#fff;color:#000[;}]/);
 });
 
 test('a finished empty search explains itself instead of a blank list', async t => {
@@ -485,6 +485,16 @@ test('torrents sit open in their section under online voices and fold on Enter',
   h.fire(section(), 'hover:enter');
   assert.deepEqual(h.rows().map(voice), ['Studio A']);
   assert.match(section().text(), /▸ Торренты · 1 раздача — показать/);
+});
+
+test('online rows above a torrents header get a heading of their own', async t => {
+  const h = setup(t);
+  h.parser[0].done({Results: [{Title: 'Series S01 1080p', Link: 'magnet:a', Tracker: 'T', Seeders: 20, info: {voices: ['Torrent Voice']}}]});
+  await h.finish('/lite/events', twoProviders.slice(0, 2));
+  h.pages.set('a', episodePage('Studio A')); h.pages.set('b', episodePage('Studio B'));
+  await h.finish('/lite/one', 'a'); await h.finish('/lite/two', 'b'); h.tick(150);
+  const labels = h.component.render()[0].querySelectorAll('.homelab-common-label').map(node => node.text());
+  assert.match(labels[0] || '', /^Онлайн · 1 озвучка$/);
 });
 
 test('sources that keep their voices get one row each under a heading; Enter opens that source', async t => {

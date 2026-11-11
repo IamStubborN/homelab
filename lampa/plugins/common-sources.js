@@ -875,7 +875,7 @@
     chip('subs', function () { subsOnly = !subsOnly; if (!recovery) pref = preferences({subs: subsOnly}); applyFilter(); });
     var otherButton = button('', 'homelab-common-filter homelab-common-other-voices hide', otherVoices); filters.append(otherButton);
     var summary = button('', 'homelab-common-summary', function () { openSettings(); }), summaryText = $('<span class="homelab-common-summary-text"></span>');
-    summary.append(summaryText).append($('<span class="homelab-common-key"></span>').text('→'));
+    summary.append($('<span class="homelab-common-summary-icon"></span>')).append(summaryText).append($('<span class="homelab-common-summary-go"></span>').text('›'));
     filters.append(summary); root.append(filters);
     // The hero: the top recommendation, played by one OK; the list continues under it.
     var heroBox = $('<div class="homelab-common-herobox hide"></div>'); root.append(heroBox);
@@ -1477,6 +1477,8 @@
           if (torrents.length && (onlineCount || toggled)) list = list.concat([{key: 'section:torrents', section: true, rows: torrents}], sectionOpen ? torrents : []);
           else list = list.concat(torrents);
         } else list = list.concat(torrents);
+        // Under a torrents header the online rows get one too, so no row hangs outside a group.
+        if (online.length && list[0] === online[0] && list.some(function (item) { return item.key === 'section:torrents'; })) list.unshift({key: 'label:online', label: 'Онлайн · ' + plural(online.length, ['озвучка', 'озвучки', 'озвучек'])});
         // Sources that keep their voices to themselves: one row each, opened in the source.
         var direct = [], named = {};
         natives.forEach(function (item) { item.rows.forEach(function (row) {
@@ -1768,10 +1770,11 @@
     '.homelab-common-filter.is-on:before{content:"";display:inline-block;width:.42em;height:.42em;border-radius:50%;background:#fff;margin-right:.45em;vertical-align:.12em}',
     '.homelab-common .homelab-common-filter.focus{outline:0;background:#fff;color:#000}.homelab-common-filter.focus.is-on:before{background:#000}',
     '.homelab-common-other-voices{flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis}',
-    '.homelab-common-summary{flex-shrink:1;min-width:0;max-width:40%;display:flex;align-items:center;margin-left:auto;padding:.4em .45em .4em 1em;border-radius:2em;background:rgba(255,255,255,.07);font-size:.9em;box-sizing:border-box}',
+    '.homelab-common-summary{flex-shrink:1;min-width:0;max-width:40%;display:flex;align-items:center;margin-left:auto;padding:.45em .8em .45em .85em;border-radius:2em;background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 .08em rgba(255,255,255,.12);font-size:.9em;box-sizing:border-box}',
+    '.homelab-common-summary-icon{flex-shrink:0;width:1.1em;height:1.1em;margin-right:.5em;opacity:.75;background:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27 fill=%27none%27 stroke=%27%23fff%27 stroke-width=%272%27 stroke-linecap=%27round%27%3E%3Cpath d=%27M4 7h9M19 7h1M4 17h3M13 17h7%27/%3E%3Ccircle cx=%2716%27 cy=%277%27 r=%272.4%27/%3E%3Ccircle cx=%2710%27 cy=%2717%27 r=%272.4%27/%3E%3C/svg%3E") center/contain no-repeat}',
     '.homelab-common-summary-text{min-width:0;opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-    '.homelab-common-key{flex-shrink:0;margin-left:.6em;padding:.05em .6em;border-radius:2em;background:#fff;color:#000;font-weight:700}',
-    '.homelab-common .homelab-common-summary.selector.focus{outline:0;background:#fff;color:#000}.homelab-common-summary.focus .homelab-common-summary-text{opacity:1}.homelab-common-summary.focus .homelab-common-key{background:#000;color:#fff}',
+    '.homelab-common-summary-go{flex-shrink:0;margin-left:.45em;font-size:1.35em;line-height:.7;opacity:.45}',
+    '.homelab-common .homelab-common-summary.selector.focus{outline:0;background:#fff;color:#000;box-shadow:none}.homelab-common-summary.focus .homelab-common-summary-text,.homelab-common-summary.focus .homelab-common-summary-icon{opacity:1}.homelab-common-summary.focus .homelab-common-summary-go{opacity:.7}.homelab-common-summary.focus .homelab-common-summary-icon{background-image:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27 fill=%27none%27 stroke=%27%23000%27 stroke-width=%272%27 stroke-linecap=%27round%27%3E%3Cpath d=%27M4 7h9M19 7h1M4 17h3M13 17h7%27/%3E%3Ccircle cx=%2716%27 cy=%277%27 r=%272.4%27/%3E%3Ccircle cx=%2710%27 cy=%2717%27 r=%272.4%27/%3E%3C/svg%3E")}',
     '.homelab-common-recovery{display:flex;align-items:center;flex-wrap:wrap;margin:.7em 0 0;line-height:1.3;font-size:.9em;color:#efe1bf}',
     '.homelab-common-recovery-voice{padding:.25em .8em;border-radius:1em;background:rgba(255,255,255,.12);color:#fff;font-weight:600;margin-right:1em}.homelab-common-recovery-voice.is-none{background:transparent;color:#efe1bf;padding-left:0}',
     '.homelab-common-recovery-note{font-size:.9em;opacity:.65}',
@@ -1813,10 +1816,10 @@
     '.homelab-common-result.focus:not(.is-hero) .homelab-common-q.is-uhd{color:#7a5200;background:rgba(245,185,58,.2);box-shadow:inset 0 0 0 .08em rgba(180,130,20,.45)}',
     '.homelab-common-result.focus:not(.is-hero) .homelab-common-q.is-hd{color:#1d4f8f;background:rgba(121,174,245,.2);box-shadow:inset 0 0 0 .08em rgba(40,86,168,.4)}',
     '.homelab-common-result.focus:not(.is-hero) .homelab-common-q.is-sd{color:#333;background:rgba(0,0,0,.06);box-shadow:inset 0 0 0 .08em rgba(0,0,0,.2)}',
-    '.homelab-common-result.is-hero .homelab-common-q{font-size:1em;font-weight:800;padding:.3em .7em;color:#111;background:#d5dade;box-shadow:none}',
-    '.homelab-common-result.is-hero .homelab-common-q.is-none{background:none;color:inherit}.homelab-common-result.is-hero .homelab-common-q.is-off{background:none;color:#ff8f84}',
-    '.homelab-common-result.is-hero .homelab-common-q.is-uhd{background:-webkit-linear-gradient(top left,#ffe8a3,#f5b93a);background:linear-gradient(135deg,#ffe8a3,#f5b93a);box-shadow:0 0 1.1em rgba(255,200,80,.22)}',
-    '.homelab-common-result.is-hero .homelab-common-q.is-hd{background:-webkit-linear-gradient(top left,#d4e7ff,#79aef5);background:linear-gradient(135deg,#d4e7ff,#79aef5)}',
+    '.homelab-common-result.is-hero .homelab-common-q{font-size:1.05em;font-weight:800;letter-spacing:.03em;padding:.32em .75em;border-radius:.5em;color:#e4e8eb;background:rgba(213,218,222,.1);box-shadow:inset 0 0 0 .1em rgba(213,218,222,.35)}',
+    '.homelab-common-result.is-hero .homelab-common-q.is-uhd{color:#ffdd80;background:-webkit-linear-gradient(top,rgba(255,214,107,.22),rgba(255,214,107,.08));background:linear-gradient(180deg,rgba(255,214,107,.22),rgba(255,214,107,.08));box-shadow:inset 0 0 0 .1em rgba(255,214,107,.6),0 0 1.2em rgba(255,200,80,.18)}',
+    '.homelab-common-result.is-hero .homelab-common-q.is-hd{color:#bcd9ff;background:-webkit-linear-gradient(top,rgba(143,193,255,.22),rgba(143,193,255,.08));background:linear-gradient(180deg,rgba(143,193,255,.22),rgba(143,193,255,.08));box-shadow:inset 0 0 0 .1em rgba(143,193,255,.6),0 0 1.2em rgba(120,170,255,.15)}',
+    '.homelab-common-result.is-hero .homelab-common-q.is-none{background:none;box-shadow:none;color:inherit}.homelab-common-result.is-hero .homelab-common-q.is-off{background:none;color:#ff8f84}',
     '.homelab-common-q-note{width:1.2em;margin-left:.5em;font-size:.8em;white-space:nowrap;overflow:hidden}',
     '.homelab-common-q-note>span:not(.homelab-common-check){display:none}',
     '.homelab-common-q-note.is-measured{color:#7fe0a0}.homelab-common-result.focus:not(.is-hero) .homelab-common-q-note.is-measured{color:#178a3e}',

@@ -100,7 +100,7 @@
     chip('subs', function () { subsOnly = !subsOnly; if (!recovery) pref = preferences({subs: subsOnly}); applyFilter(); });
     var otherButton = button('', 'homelab-common-filter homelab-common-other-voices hide', otherVoices); filters.append(otherButton);
     var summary = button('', 'homelab-common-summary', function () { openSettings(); }), summaryText = $('<span class="homelab-common-summary-text"></span>');
-    summary.append(summaryText).append($('<span class="homelab-common-key"></span>').text('→'));
+    summary.append($('<span class="homelab-common-summary-icon"></span>')).append(summaryText).append($('<span class="homelab-common-summary-go"></span>').text('›'));
     filters.append(summary); root.append(filters);
     // The hero: the top recommendation, played by one OK; the list continues under it.
     var heroBox = $('<div class="homelab-common-herobox hide"></div>'); root.append(heroBox);
@@ -702,6 +702,8 @@
           if (torrents.length && (onlineCount || toggled)) list = list.concat([{key: 'section:torrents', section: true, rows: torrents}], sectionOpen ? torrents : []);
           else list = list.concat(torrents);
         } else list = list.concat(torrents);
+        // Under a torrents header the online rows get one too, so no row hangs outside a group.
+        if (online.length && list[0] === online[0] && list.some(function (item) { return item.key === 'section:torrents'; })) list.unshift({key: 'label:online', label: 'Онлайн · ' + plural(online.length, ['озвучка', 'озвучки', 'озвучек'])});
         // Sources that keep their voices to themselves: one row each, opened in the source.
         var direct = [], named = {};
         natives.forEach(function (item) { item.rows.forEach(function (row) {

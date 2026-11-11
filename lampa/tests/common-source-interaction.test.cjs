@@ -104,8 +104,8 @@ test('unknown-quality native sources remain reachable under a saved quality and 
   await h.finish('/lite/events', [{balanser: 'one', name: 'One', show: true, url: '/lite/one'}]);
   await h.finish('/lite/one', {rch: true});
   assert.equal(h.rows().length, 1);
-  assert.equal(h.rows()[0].find('.homelab-common-voice').text(), 'Открыть в источниках');
-  assert.match(h.rows()[0].find('.homelab-common-details').text(), /One · выбор внутри источника/);
+  assert.equal(h.rows()[0].find('.homelab-common-voice').text(), 'One');
+  assert.match(h.rows()[0].find('.homelab-common-details').text(), /список озвучек источника/);
 });
 
 for (const event of ['hover:hover', 'hover:touch']) test(`${event} freezes existing result order without scrolling or changing focus`, async t => {
@@ -474,30 +474,39 @@ test('voice cards probe only their leader; alternates are asked when their sourc
   assert.equal(probes(), 2, 'opening the source list probes the alternate');
 });
 
-test('torrents fold into one section under online voices and open on Enter', async t => {
+test('torrents sit open in their section under online voices and fold on Enter', async t => {
   const h = setup(t);
   h.parser[0].done({Results: [{Title: 'Series S01 1080p', Link: 'magnet:a', Tracker: 'T', Seeders: 20, info: {voices: ['Torrent Voice']}}]});
   await h.finish('/lite/events', [{balanser: 'one', name: 'One', show: true, url: '/lite/one'}]);
   h.pages.set('a', episodePage('Studio A')); await h.finish('/lite/one', 'a'); h.tick(150);
   const section = () => h.component.render()[0].querySelectorAll('.homelab-common-section')[0];
-  assert.deepEqual(h.rows().map(voice), ['Studio A'], 'with an online voice the torrents are folded');
-  assert.match(section().text(), /Торренты · 1 раздача — показать/);
+  assert.deepEqual(h.rows().map(voice), ['Studio A', 'Torrent Voice'], 'torrents are shown, not folded');
+  assert.match(section().text(), /▾ Торренты · 1 раздача/);
   h.fire(section(), 'hover:enter');
-  assert.deepEqual(h.rows().map(voice), ['Studio A', 'Torrent Voice']);
-  assert.match(section().text(), /▾ Торренты/);
+  assert.deepEqual(h.rows().map(voice), ['Studio A']);
+  assert.match(section().text(), /▸ Торренты · 1 раздача — показать/);
 });
 
-test('native fallbacks share one row whose Enter lists the sources', async t => {
+test('sources that keep their voices get one row each under a heading; Enter opens that source', async t => {
   const h = setup(t), pushes = [];
   const push = h.L.Activity.push; h.L.Activity.push = value => { pushes.push(value); push(value); };
   h.parser[0].done({Results: []});
   await h.finish('/lite/events', twoProviders.slice(0, 2));
   await h.finish('/lite/one', {rch: true}); await h.finish('/lite/two', {rch: true}); h.tick(150);
-  assert.equal(h.rows().length, 1); assert.equal(voice(h.rows()[0]), 'Открыть в источниках');
-  h.fire(h.rows()[0], 'hover:enter');
-  assert.deepEqual(JSON.parse(JSON.stringify(h.select().items.map(item => item.title))), ['One', 'Two']);
-  h.select().onSelect(h.select().items[1]);
+  assert.deepEqual(h.rows().map(voice), ['One', 'Two']);
+  assert.equal(h.component.render()[0].querySelectorAll('.homelab-common-label')[0].text(), 'Выбор озвучки внутри источника');
+  h.fire(h.rows()[1], 'hover:enter');
   assert.equal(pushes.at(-1).lampac_custom_select, 'two');
+});
+
+test('a long press on a per-source row is titled with that source', async t => {
+  const h = setup(t);
+  h.parser[0].done({Results: []});
+  await h.finish('/lite/events', twoProviders.slice(0, 2));
+  await h.finish('/lite/one', {rch: true}); await h.finish('/lite/two', {rch: true}); h.tick(150);
+  h.fire(h.rows()[1], 'hover:long');
+  const menu = h.select(); assert.equal(menu.title, 'Two');
+  assert.deepEqual(JSON.parse(JSON.stringify(menu.items.map(item => item.title))), ['Two']);
 });
 
 test('with torrents only there is no section header: the first card is the recommended release', async t => {
@@ -565,7 +574,7 @@ test('without season metadata the strip asks it once and fills in the count', t 
   h.L.Controller.controllers.content.right(); assert.equal(h.metadata.length, 1, 'the parameters do not ask again');
 });
 
-test('checked voices lead; unchecked ones fold under them', async t => {
+test('checked voices lead; unchecked ones follow in an open, foldable section', async t => {
   const rows = {'one|1|studio a': {height: 1080, source: 'probe'}, 'two|1|studio b': {height: 1080, source: 'probe'}, 'three|1|studio c': {height: 720, source: 'probe'}};
   const facts = {load: () => Promise.resolve({version: 1, providers: {}, rows}), fact: (data, provider, season, name) => data.rows[[provider, season, name.toLowerCase()].join('|')] || null, doubtful: () => false, report() {}};
   const h = setup(t, {facts});
@@ -573,13 +582,12 @@ test('checked voices lead; unchecked ones fold under them', async t => {
   await h.finish('/lite/events', [...twoProviders, {balanser: 'four', name: 'Four', show: true, url: '/lite/four'}]);
   ['a', 'b', 'c', 'd'].forEach(id => h.pages.set(id, episodePage('Studio ' + id.toUpperCase(), {method: 'play', quality: {'720p': '/media'}})));
   await h.finish('/lite/one', 'a'); await h.finish('/lite/two', 'b'); await h.finish('/lite/three', 'c'); await h.finish('/lite/four', 'd'); h.tick(1100);
-  const shown = h.rows().map(voice);
-  assert.equal(shown.length, 3); assert.ok(!shown.includes('Studio D'), 'the unchecked voice is folded');
+  assert.ok(h.rows().map(voice).includes('Studio D'), 'unchecked voices are shown');
   const label = h.component.render()[0].querySelectorAll('.homelab-common-label')[0];
   assert.equal(label.text(), 'Проверенные · 2 озвучки');
   const fold = h.component.render()[0].querySelectorAll('.homelab-common-section').find(node => /качество не проверено/.test(node.text()));
-  assert.equal(fold.text(), '▸ Ещё 1 озвучка · качество не проверено');
-  h.fire(fold, 'hover:enter'); assert.ok(h.rows().map(voice).includes('Studio D'));
+  assert.equal(fold.text(), '▾ Ещё 1 озвучка · качество не проверено');
+  h.fire(fold, 'hover:enter'); assert.ok(!h.rows().map(voice).includes('Studio D'), 'Enter folds them');
 });
 
 test('the accent comes from the most colourful hue of the art; grey art keeps the screen neutral', t => {
@@ -607,4 +615,21 @@ test('the 4K chip turned off returns to the quality chosen in the parameters', a
   const h = await grouped(t, {quality: 1080});
   h.fire(chipOf(h, '4K'), 'hover:enter'); h.fire(chipOf(h, '4K'), 'hover:enter');
   assert.match(h.summary(), /1080p/);
+});
+
+test('a click outside the parameters closes them; inside it does not', t => {
+  const h = setup(t), c = h.L.Controller.controllers, root = h.component.render()[0];
+  c.content.right(); assert.equal(h.L.Controller.enabled().name, 'homelab_common_settings');
+  const panel = root.querySelectorAll('.homelab-common-settings')[0];
+  h.fire(Object.assign(root, {}), 'click'); // target is the screen itself
+  assert.equal(h.L.Controller.enabled().name, 'content');
+  c.content.right(); for (const callback of root.events.click) callback.call(root, {target: panel});
+  assert.equal(h.L.Controller.enabled().name, 'homelab_common_settings');
+});
+
+test('the click on the parameters chip that opens the panel does not close it again', t => {
+  const h = setup(t), root = h.component.render()[0];
+  const chip = root.querySelectorAll('.homelab-common-summary')[0];
+  h.fire(chip, 'hover:enter'); for (const callback of root.events.click) callback.call(root, {target: chip});
+  assert.equal(h.L.Controller.enabled().name, 'homelab_common_settings');
 });

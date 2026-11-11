@@ -911,7 +911,7 @@
       Object.keys(tiles).forEach(function (key) { tiles[key].remove(); }); tiles = {}; models = {};
       locked = false; order = []; shown = 20; last = null; fresh = 0; freshKeys = {}; sequence = ''; sequenceKeys = []; detailSig = ''; detailKey = ''; scroll.reset();
     }
-    // Torrents fold into one row under the online voices; with no online voice they open by themselves.
+    // Torrents sit in their own section under the online voices, open by default; OK on the header folds it.
     function section(count, open) {
       var tile = tiles['section:torrents'];
       if (!tile) tile = tiles['section:torrents'] = button('', 'homelab-common-section', function () {
@@ -930,7 +930,7 @@
     }
     var voicesShown = false;
     // Voices whose quality nobody checked fold below the checked ones.
-    var checkedKeys = {}, uncheckedOpen = false, uncheckedShown = false;
+    var checkedKeys = {}, uncheckedOpen = true, uncheckedShown = true;
     function uncheckedSection(count, open) {
       var tile = tiles['section:unchecked'];
       if (!tile) tile = tiles['section:unchecked'] = button('', 'homelab-common-section', function () { uncheckedOpen = !uncheckedShown; locked = true; draw(); });
@@ -1057,6 +1057,8 @@
     panel.append($('<div class="homelab-common-settings-title"></div>').text('Параметры')).append(panelList)
       .append($('<div class="homelab-common-settings-hint"></div>').text('↑↓ выбор · ←→ значение · ОК — список · Назад — закрыть'));
     root.append(panel);
+    // A click (mouse, touch) outside the panel closes it, as Back does; the click that opened it (on the chip) bubbles here too.
+    root.on('click', function (event) { if (settingsOpen && event && event.target && !panel[0].contains(event.target) && !summary[0].contains(event.target)) closeSettings(); });
     function seasonList() {
       var known = Array.isArray(movie.seasons) ? movie.seasons.map(function (entry) { return entry && entry.season_number; }).filter(function (value) { return Number.isInteger(value) && value >= 0 && value <= 999; }) : [];
       if (!known.length && Number.isInteger(movie.number_of_seasons) && movie.number_of_seasons > 0) for (var i = 1; i <= Math.min(movie.number_of_seasons, 999); i++) known.push(i);
@@ -1202,6 +1204,11 @@
         nativeModel.sig = [nativeModel.voice, nativeModel.details].join('|');
         return nativeModel;
       }
+      if (item.nativeOne) {
+        var oneModel = {voice: row.providerName, details: 'откроется список озвучек источника', badges: [], cls: 'is-native', note: '', quality: '', qcls: 'is-none', pick: '', what: '', progress: 0};
+        oneModel.sig = ['one', oneModel.voice].join('|');
+        return oneModel;
+      }
       if (item.source) {
         var sourceModel = {voice: sourceName(row), badges: [], cls: 'is-online is-source', note: ''};
         sourceModel.details = [row.canon && row.canon.label || row.identityVoice, row.unavailable ? 'Не отдаёт видео' : !best ? 'Качество уточняется' : ''].filter(Boolean).join(' · ');
@@ -1324,7 +1331,7 @@
     // ── Detail panel: the focused card's sources and how far their quality can be trusted ──
     function verdict(item) {
       var row = item.best, best = row.unavailable ? 0 : row.qualities[0] || 0;
-      if (item.key === 'native') return ['', 'Качество неизвестно · выбор внутри источника'];
+      if (item.key === 'native' || row.native) return ['', 'Этот источник не отдаёт список озвучек сюда: ОК откроет его, озвучку и качество выберете там'];
       if (row.unavailable) return ['is-bad', 'Источник не отдаёт видео'];
       if (row.release) { var seeds = Number(row.release.Seeders); return Number.isFinite(seeds) ? [seeds >= MIN_SEEDS ? 'is-ok' : 'is-bad', seeds >= MIN_SEEDS ? plural(seeds, ['сид', 'сида', 'сидов']) + ' · раздача живая' : 'Мало сидов: запуск может не начаться'] : ['', 'Раздача']; }
       if (row.measured && row.claimed > best) return ['is-warn', 'Заявлено ' + qualityLabel(row.claimed) + ', поток ' + qualityLabel(best)];
@@ -1356,7 +1363,7 @@
       var top = $('<div class="homelab-common-detail-top"></div>'), named = $('<div class="homelab-common-detail-name"></div>');
       top.append($('<div class="homelab-common-ring ' + model.qcls + '"></div>').text(model.quality || '—'));
       named.append($('<div class="homelab-common-detail-voice"></div>').text(model.voice));
-      named.append($('<div class="homelab-common-detail-kind"></div>').text(item.source ? (row.canon && row.canon.label || row.identityVoice) : item.key === 'native' ? 'Открыть в источнике' : row.release ? 'Торрент' + (row.described && row.described.codec ? ' · ' + row.described.codec : '') : 'Онлайн · ' + plural(item.rows.length, SOURCES)));
+      named.append($('<div class="homelab-common-detail-kind"></div>').text(item.source ? (row.canon && row.canon.label || row.identityVoice) : item.key === 'native' || row.native ? 'Выбор внутри источника' : row.release ? 'Торрент' + (row.described && row.described.codec ? ' · ' + row.described.codec : '') : 'Онлайн · ' + plural(item.rows.length, SOURCES)));
       detail.append(top.append(named));
       var said = verdict(item);
       detail.append($('<div class="homelab-common-verdict ' + said[0] + '"></div>').text(said[1]));
@@ -1379,13 +1386,13 @@
     function sourceMenu(item) {
       var row = item.best, items = [];
       if (search) search.probe(item.rows, true);
-      if (item.key === 'native') item.rows.forEach(function (entry) { items.push({title: entry.providerName, subtitle: entry.voice, open: entry}); });
+      if (item.key === 'native' || row.native) item.rows.forEach(function (entry) { items.push({title: entry.providerName, subtitle: entry.voice, open: entry}); });
       else if (row.release && item.rows.length > 1) item.rows.forEach(function (entry) { items.push({title: String(entry.release.Title).slice(0, 160), subtitle: releaseLine(entry) + (entry === row ? ' · лучшая' : ''), open: entry, selected: entry === row}); });
       else if (row.release) items.push({title: row.release.Title, subtitle: releaseLine(row), noenter: true}, {title: 'Смотреть', open: row});
       else item.rows.forEach(function (entry) {
         items.push({title: sourceName(entry) + (entry === row && item.rows.length > 1 ? ' · лучший' : ''), subtitle: rowLine(entry), open: entry, selected: entry === row});
       });
-      var heading = item.key === 'native' ? 'Открыть в источнике' : row.release ? (item.rows.length > 1 ? plural(item.rows.length, ['раздача', 'раздачи', 'раздач']) : 'Раздача') : (item.rows.length > 1 ? plural(item.rows.length, SOURCES) + ' · ' : '') + (row.canon && row.canon.label || row.identityVoice);
+      var heading = item.key === 'native' || row.native ? row.providerName || 'Открыть в источнике' : row.release ? (item.rows.length > 1 ? plural(item.rows.length, ['раздача', 'раздачи', 'раздач']) : 'Раздача') : (item.rows.length > 1 ? plural(item.rows.length, SOURCES) + ' · ' : '') + (row.canon && row.canon.label || row.identityVoice);
       choose(heading, items, function (value) {
         if (value.open) open(value.open);
       });
@@ -1465,13 +1472,19 @@
         }
         var onlineCount = online.length + (heroItem && heroItem.best.kind !== 'torrent' ? 1 : 0);
         if (kind === 'all') {
-          sectionOpen = torrentsOpen === null ? !onlineCount : torrentsOpen;
-          if (!onlineCount && !toggled) sectionOpen = true;
-          if (locked && torrentsOpen === null) torrentsOpen = sectionOpen; // once the user moved, the section no longer folds by itself
+          // Open unless the user folded them.
+          sectionOpen = torrentsOpen === null ? true : torrentsOpen;
           if (torrents.length && (onlineCount || toggled)) list = list.concat([{key: 'section:torrents', section: true, rows: torrents}], sectionOpen ? torrents : []);
           else list = list.concat(torrents);
         } else list = list.concat(torrents);
-        items = (heroItem ? [heroItem] : []).concat(list, natives);
+        // Sources that keep their voices to themselves: one row each, opened in the source.
+        var direct = [], named = {};
+        natives.forEach(function (item) { item.rows.forEach(function (row) {
+          if (named[row.provider]) return; named[row.provider] = true;
+          var one = {key: 'native:' + row.provider, rows: [row], best: row, nativeOne: true}; byKey[one.key] = one; direct.push(one);
+        }); });
+        if (direct.length) direct.unshift({key: 'label:native', label: 'Выбор озвучки внутри источника'});
+        items = (heroItem ? [heroItem] : []).concat(list, direct);
       }
       if (sourceMode()) {
         var others = items.filter(function (item) { return item.other; });
@@ -1778,7 +1791,7 @@
     '.homelab-common-pick,.homelab-common-what,.homelab-common-match{-webkit-flex-basis:100%;flex-basis:100%}',
     '.homelab-common-pick{display:none;font-size:.68em;font-weight:800;letter-spacing:.15em;text-transform:uppercase;color:rgba(255,255,255,.65);margin-bottom:.25em}',
     '.homelab-common-what{display:none;font-size:1.45em;font-weight:700;letter-spacing:-.01em;margin-bottom:.1em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-    '.homelab-common-name{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.homelab-common-name{flex:1 1 0;min-width:38%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.homelab-common-voice{font-size:1.1em;font-weight:600;letter-spacing:-.01em}',
     '.homelab-common-tag{display:none;margin-left:.6em;font-size:.62em;font-weight:800;letter-spacing:.1em;text-transform:uppercase;opacity:.7;vertical-align:.2em}',
     '.homelab-common-result.is-mine .homelab-common-tag{display:inline}',
@@ -1791,11 +1804,19 @@
     '.homelab-common-badge.is-subs:before{content:"CC";display:inline-block;font-size:.72em;font-weight:800;line-height:1.2;border:.14em solid currentColor;border-radius:.25em;padding:0 .25em;margin-right:.35em;vertical-align:.1em}',
     '.homelab-common-result.focus:not(.is-hero) .homelab-common-details{opacity:.6}.homelab-common-result.focus:not(.is-hero) .homelab-common-badge{opacity:.75}.homelab-common-result.focus:not(.is-hero) .homelab-common-badge.is-seeds{color:#178a3e;opacity:1}.homelab-common-result.focus:not(.is-hero) .homelab-common-badge.is-dead{color:#b3261e;opacity:1}.homelab-common-result.focus:not(.is-hero) .homelab-common-badge.is-subs{color:#2856a8;opacity:1}',
     '.homelab-common-quality{flex-shrink:0;display:flex;align-items:center;margin-left:1em}',
-    '.homelab-common-q{display:inline-block;font-size:.85em;font-weight:800;padding:.22em .6em;border-radius:.45em;min-width:3.3em;text-align:center;white-space:nowrap;color:#111;background:#d5dade;box-sizing:border-box}',
-    '.homelab-common-q.is-uhd{background:-webkit-linear-gradient(top left,#ffe8a3,#f5b93a);background:linear-gradient(135deg,#ffe8a3,#f5b93a);box-shadow:0 0 1.1em rgba(255,200,80,.22)}',
-    '.homelab-common-q.is-hd{background:-webkit-linear-gradient(top left,#d4e7ff,#79aef5);background:linear-gradient(135deg,#d4e7ff,#79aef5)}',
-    '.homelab-common-q.is-sd{background:-webkit-linear-gradient(top left,#eceff2,#aab2bb);background:linear-gradient(135deg,#eceff2,#aab2bb)}',
-    '.homelab-common-q.is-none{background:none;color:inherit;opacity:.4}.homelab-common-q.is-off{background:none;color:#ff8f84;font-size:.78em}',
+    // Quality: a tinted tag in rows (gold 4K, blue HD, grey SD); the hero keeps the solid badge.
+    '.homelab-common-q{display:inline-block;font-size:.8em;font-weight:700;letter-spacing:.02em;padding:.22em .6em;border-radius:.4em;min-width:3em;text-align:center;white-space:nowrap;box-sizing:border-box;color:rgba(255,255,255,.85);background:rgba(255,255,255,.08);box-shadow:inset 0 0 0 .08em rgba(255,255,255,.18)}',
+    '.homelab-common-q.is-uhd{color:#ffd66b;background:rgba(255,214,107,.12);box-shadow:inset 0 0 0 .08em rgba(255,214,107,.42)}',
+    '.homelab-common-q.is-hd{color:#a9cdff;background:rgba(143,193,255,.12);box-shadow:inset 0 0 0 .08em rgba(143,193,255,.4)}',
+    '.homelab-common-q.is-sd{color:#d5dade;background:rgba(213,218,222,.08);box-shadow:inset 0 0 0 .08em rgba(213,218,222,.25)}',
+    '.homelab-common-q.is-none{background:none;box-shadow:none;color:inherit;opacity:.4}.homelab-common-q.is-off{background:none;box-shadow:none;color:#ff8f84;font-size:.74em}',
+    '.homelab-common-result.focus:not(.is-hero) .homelab-common-q.is-uhd{color:#7a5200;background:rgba(245,185,58,.2);box-shadow:inset 0 0 0 .08em rgba(180,130,20,.45)}',
+    '.homelab-common-result.focus:not(.is-hero) .homelab-common-q.is-hd{color:#1d4f8f;background:rgba(121,174,245,.2);box-shadow:inset 0 0 0 .08em rgba(40,86,168,.4)}',
+    '.homelab-common-result.focus:not(.is-hero) .homelab-common-q.is-sd{color:#333;background:rgba(0,0,0,.06);box-shadow:inset 0 0 0 .08em rgba(0,0,0,.2)}',
+    '.homelab-common-result.is-hero .homelab-common-q{font-size:1em;font-weight:800;padding:.3em .7em;color:#111;background:#d5dade;box-shadow:none}',
+    '.homelab-common-result.is-hero .homelab-common-q.is-none{background:none;color:inherit}.homelab-common-result.is-hero .homelab-common-q.is-off{background:none;color:#ff8f84}',
+    '.homelab-common-result.is-hero .homelab-common-q.is-uhd{background:-webkit-linear-gradient(top left,#ffe8a3,#f5b93a);background:linear-gradient(135deg,#ffe8a3,#f5b93a);box-shadow:0 0 1.1em rgba(255,200,80,.22)}',
+    '.homelab-common-result.is-hero .homelab-common-q.is-hd{background:-webkit-linear-gradient(top left,#d4e7ff,#79aef5);background:linear-gradient(135deg,#d4e7ff,#79aef5)}',
     '.homelab-common-q-note{width:1.2em;margin-left:.5em;font-size:.8em;white-space:nowrap;overflow:hidden}',
     '.homelab-common-q-note>span:not(.homelab-common-check){display:none}',
     '.homelab-common-q-note.is-measured{color:#7fe0a0}.homelab-common-result.focus:not(.is-hero) .homelab-common-q-note.is-measured{color:#178a3e}',
@@ -1814,7 +1835,6 @@
     '.homelab-common-result.is-hero .homelab-common-tag{display:none}',
     '.homelab-common-result.is-hero .homelab-common-line{-webkit-flex-basis:100%;flex-basis:100%;max-width:none;margin:.15em 0 0;text-align:left}',
     '.homelab-common-result.is-hero .homelab-common-quality{-webkit-flex-direction:column;flex-direction:column;align-items:flex-end}',
-    '.homelab-common-result.is-hero .homelab-common-q{font-size:1em}',
     '.homelab-common-result.is-hero .homelab-common-q-note{width:auto;margin:.45em 0 0;font-size:.75em;opacity:.6}.homelab-common-result.is-hero .homelab-common-q-note.is-measured{opacity:1}',
     '.homelab-common-result.is-hero .homelab-common-q-note>span:not(.homelab-common-check){display:inline}',
     '.homelab-common-result.is-hero .homelab-common-progress{display:block;position:absolute;left:0;right:0;bottom:0;height:.2em;background:rgba(255,255,255,.12)}.homelab-common-result.is-hero .homelab-common-progress.hide{display:none}',
@@ -1831,7 +1851,7 @@
     '.homelab-common-empty{padding:3em 1em;text-align:center}.homelab-common-empty-title{font-size:1.5em;font-weight:600;margin-bottom:.5em}.homelab-common-empty-hint{opacity:.6}',
     '.homelab-common-detail{flex:0 0 30%;min-width:0;margin-left:1.6em;align-self:flex-start;max-height:100%;box-sizing:border-box;display:flex;flex-direction:column;padding:1.1em 1.2em;border-radius:1.1em;background:rgba(255,255,255,.06);border:.08em solid rgba(255,255,255,.1);box-shadow:0 1.5em 3em rgba(0,0,0,.3);overflow:hidden}',
     '.homelab-common-detail-top{display:flex;align-items:center;margin-bottom:1em}',
-    '.homelab-common-ring{width:3.2em;height:3.2em;flex-shrink:0;margin-right:1em;border-radius:100%;border:.22em solid rgba(255,255,255,.25);box-sizing:border-box;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:1.05em;white-space:nowrap}',
+    '.homelab-common-ring{min-width:3.4em;height:2.1em;padding:0 .7em;flex-shrink:0;margin-right:.9em;border-radius:.6em;border:.14em solid rgba(255,255,255,.25);box-sizing:border-box;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.95em;white-space:nowrap}',
     '.homelab-common-ring.is-uhd{border-color:#ffd66b;color:#ffd66b;box-shadow:0 0 1.4em rgba(255,214,107,.25)}.homelab-common-ring.is-hd{border-color:#8fc1ff;color:#8fc1ff}.homelab-common-ring.is-sd{border-color:#c9ced3;color:#c9ced3}.homelab-common-ring.is-off{border-color:#ff8f84;color:#ff8f84;font-size:.6em}',
     '.homelab-common-detail-name{min-width:0}',
     '.homelab-common-detail-voice{font-size:1.3em;font-weight:700;letter-spacing:-.01em;line-height:1.2;max-height:2.4em;overflow:hidden}',

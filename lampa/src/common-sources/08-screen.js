@@ -136,7 +136,7 @@
       Object.keys(tiles).forEach(function (key) { tiles[key].remove(); }); tiles = {}; models = {};
       locked = false; order = []; shown = 20; last = null; fresh = 0; freshKeys = {}; sequence = ''; sequenceKeys = []; detailSig = ''; detailKey = ''; scroll.reset();
     }
-    // Torrents fold into one row under the online voices; with no online voice they open by themselves.
+    // Torrents sit in their own section under the online voices, open by default; OK on the header folds it.
     function section(count, open) {
       var tile = tiles['section:torrents'];
       if (!tile) tile = tiles['section:torrents'] = button('', 'homelab-common-section', function () {
@@ -155,7 +155,7 @@
     }
     var voicesShown = false;
     // Voices whose quality nobody checked fold below the checked ones.
-    var checkedKeys = {}, uncheckedOpen = false, uncheckedShown = false;
+    var checkedKeys = {}, uncheckedOpen = true, uncheckedShown = true;
     function uncheckedSection(count, open) {
       var tile = tiles['section:unchecked'];
       if (!tile) tile = tiles['section:unchecked'] = button('', 'homelab-common-section', function () { uncheckedOpen = !uncheckedShown; locked = true; draw(); });
@@ -282,6 +282,8 @@
     panel.append($('<div class="homelab-common-settings-title"></div>').text('Параметры')).append(panelList)
       .append($('<div class="homelab-common-settings-hint"></div>').text('↑↓ выбор · ←→ значение · ОК — список · Назад — закрыть'));
     root.append(panel);
+    // A click (mouse, touch) outside the panel closes it, as Back does; the click that opened it (on the chip) bubbles here too.
+    root.on('click', function (event) { if (settingsOpen && event && event.target && !panel[0].contains(event.target) && !summary[0].contains(event.target)) closeSettings(); });
     function seasonList() {
       var known = Array.isArray(movie.seasons) ? movie.seasons.map(function (entry) { return entry && entry.season_number; }).filter(function (value) { return Number.isInteger(value) && value >= 0 && value <= 999; }) : [];
       if (!known.length && Number.isInteger(movie.number_of_seasons) && movie.number_of_seasons > 0) for (var i = 1; i <= Math.min(movie.number_of_seasons, 999); i++) known.push(i);
@@ -427,6 +429,11 @@
         nativeModel.sig = [nativeModel.voice, nativeModel.details].join('|');
         return nativeModel;
       }
+      if (item.nativeOne) {
+        var oneModel = {voice: row.providerName, details: 'откроется список озвучек источника', badges: [], cls: 'is-native', note: '', quality: '', qcls: 'is-none', pick: '', what: '', progress: 0};
+        oneModel.sig = ['one', oneModel.voice].join('|');
+        return oneModel;
+      }
       if (item.source) {
         var sourceModel = {voice: sourceName(row), badges: [], cls: 'is-online is-source', note: ''};
         sourceModel.details = [row.canon && row.canon.label || row.identityVoice, row.unavailable ? 'Не отдаёт видео' : !best ? 'Качество уточняется' : ''].filter(Boolean).join(' · ');
@@ -549,7 +556,7 @@
     // ── Detail panel: the focused card's sources and how far their quality can be trusted ──
     function verdict(item) {
       var row = item.best, best = row.unavailable ? 0 : row.qualities[0] || 0;
-      if (item.key === 'native') return ['', 'Качество неизвестно · выбор внутри источника'];
+      if (item.key === 'native' || row.native) return ['', 'Этот источник не отдаёт список озвучек сюда: ОК откроет его, озвучку и качество выберете там'];
       if (row.unavailable) return ['is-bad', 'Источник не отдаёт видео'];
       if (row.release) { var seeds = Number(row.release.Seeders); return Number.isFinite(seeds) ? [seeds >= MIN_SEEDS ? 'is-ok' : 'is-bad', seeds >= MIN_SEEDS ? plural(seeds, ['сид', 'сида', 'сидов']) + ' · раздача живая' : 'Мало сидов: запуск может не начаться'] : ['', 'Раздача']; }
       if (row.measured && row.claimed > best) return ['is-warn', 'Заявлено ' + qualityLabel(row.claimed) + ', поток ' + qualityLabel(best)];
@@ -581,7 +588,7 @@
       var top = $('<div class="homelab-common-detail-top"></div>'), named = $('<div class="homelab-common-detail-name"></div>');
       top.append($('<div class="homelab-common-ring ' + model.qcls + '"></div>').text(model.quality || '—'));
       named.append($('<div class="homelab-common-detail-voice"></div>').text(model.voice));
-      named.append($('<div class="homelab-common-detail-kind"></div>').text(item.source ? (row.canon && row.canon.label || row.identityVoice) : item.key === 'native' ? 'Открыть в источнике' : row.release ? 'Торрент' + (row.described && row.described.codec ? ' · ' + row.described.codec : '') : 'Онлайн · ' + plural(item.rows.length, SOURCES)));
+      named.append($('<div class="homelab-common-detail-kind"></div>').text(item.source ? (row.canon && row.canon.label || row.identityVoice) : item.key === 'native' || row.native ? 'Выбор внутри источника' : row.release ? 'Торрент' + (row.described && row.described.codec ? ' · ' + row.described.codec : '') : 'Онлайн · ' + plural(item.rows.length, SOURCES)));
       detail.append(top.append(named));
       var said = verdict(item);
       detail.append($('<div class="homelab-common-verdict ' + said[0] + '"></div>').text(said[1]));
@@ -604,13 +611,13 @@
     function sourceMenu(item) {
       var row = item.best, items = [];
       if (search) search.probe(item.rows, true);
-      if (item.key === 'native') item.rows.forEach(function (entry) { items.push({title: entry.providerName, subtitle: entry.voice, open: entry}); });
+      if (item.key === 'native' || row.native) item.rows.forEach(function (entry) { items.push({title: entry.providerName, subtitle: entry.voice, open: entry}); });
       else if (row.release && item.rows.length > 1) item.rows.forEach(function (entry) { items.push({title: String(entry.release.Title).slice(0, 160), subtitle: releaseLine(entry) + (entry === row ? ' · лучшая' : ''), open: entry, selected: entry === row}); });
       else if (row.release) items.push({title: row.release.Title, subtitle: releaseLine(row), noenter: true}, {title: 'Смотреть', open: row});
       else item.rows.forEach(function (entry) {
         items.push({title: sourceName(entry) + (entry === row && item.rows.length > 1 ? ' · лучший' : ''), subtitle: rowLine(entry), open: entry, selected: entry === row});
       });
-      var heading = item.key === 'native' ? 'Открыть в источнике' : row.release ? (item.rows.length > 1 ? plural(item.rows.length, ['раздача', 'раздачи', 'раздач']) : 'Раздача') : (item.rows.length > 1 ? plural(item.rows.length, SOURCES) + ' · ' : '') + (row.canon && row.canon.label || row.identityVoice);
+      var heading = item.key === 'native' || row.native ? row.providerName || 'Открыть в источнике' : row.release ? (item.rows.length > 1 ? plural(item.rows.length, ['раздача', 'раздачи', 'раздач']) : 'Раздача') : (item.rows.length > 1 ? plural(item.rows.length, SOURCES) + ' · ' : '') + (row.canon && row.canon.label || row.identityVoice);
       choose(heading, items, function (value) {
         if (value.open) open(value.open);
       });
@@ -690,13 +697,19 @@
         }
         var onlineCount = online.length + (heroItem && heroItem.best.kind !== 'torrent' ? 1 : 0);
         if (kind === 'all') {
-          sectionOpen = torrentsOpen === null ? !onlineCount : torrentsOpen;
-          if (!onlineCount && !toggled) sectionOpen = true;
-          if (locked && torrentsOpen === null) torrentsOpen = sectionOpen; // once the user moved, the section no longer folds by itself
+          // Open unless the user folded them.
+          sectionOpen = torrentsOpen === null ? true : torrentsOpen;
           if (torrents.length && (onlineCount || toggled)) list = list.concat([{key: 'section:torrents', section: true, rows: torrents}], sectionOpen ? torrents : []);
           else list = list.concat(torrents);
         } else list = list.concat(torrents);
-        items = (heroItem ? [heroItem] : []).concat(list, natives);
+        // Sources that keep their voices to themselves: one row each, opened in the source.
+        var direct = [], named = {};
+        natives.forEach(function (item) { item.rows.forEach(function (row) {
+          if (named[row.provider]) return; named[row.provider] = true;
+          var one = {key: 'native:' + row.provider, rows: [row], best: row, nativeOne: true}; byKey[one.key] = one; direct.push(one);
+        }); });
+        if (direct.length) direct.unshift({key: 'label:native', label: 'Выбор озвучки внутри источника'});
+        items = (heroItem ? [heroItem] : []).concat(list, direct);
       }
       if (sourceMode()) {
         var others = items.filter(function (item) { return item.other; });

@@ -205,6 +205,16 @@ services:
       - "traefik.http.routers.lampa-plugins.service=lampa"
       - "traefik.http.routers.lampa-plugins.middlewares=lampa-forwarded,lampa-revalidate"
       - "traefik.http.middlewares.lampa-revalidate.headers.customResponseHeaders.Cache-Control=no-cache"
+      # CUB images (profile icons, reactions, backgrounds) bypass Lampac's CUB proxy: Cloudflare answers
+      # the proxy's image requests with a challenge page, while clients load cub.best images directly.
+      - "traefik.http.routers.lampa-cubimg.rule=Host(`lampa.${DOCKER_DOMAIN}`) && PathPrefix(`/cub/red/img/`)"
+      - "traefik.http.routers.lampa-cubimg.entrypoints=http,https"
+      - "traefik.http.routers.lampa-cubimg.tls=true"
+      - "traefik.http.routers.lampa-cubimg.priority=105"
+      - "traefik.http.routers.lampa-cubimg.service=lampa"
+      - "traefik.http.routers.lampa-cubimg.middlewares=lampa-cubimg-redirect"
+      - "traefik.http.middlewares.lampa-cubimg-redirect.redirectregex.regex=^https?://[^/]+/cub/red/img/(.*)"
+      - "traefik.http.middlewares.lampa-cubimg-redirect.redirectregex.replacement=https://cub.best/img/$${1}"
     volumes:
       - ./config/init.conf:/lampac/init.conf:ro
       - ./config/passwd:/lampac/passwd:ro

@@ -2727,7 +2727,7 @@
       return typeof window.fetch === 'function' && typeof AbortController !== 'undefined';
     }
 
-    Lampa.HomelabGstAudio = {installCurrent: installCurrent, toggleSigns: toggleSigns,
+    Lampa.HomelabGstAudio = {installCurrent: installCurrent, toggleSigns: toggleSigns, report: report,
       preferences: function (work) {
         var state = active, url = masterUrl(work);
         if (!state || state.work !== work || !url) return work && work.homelab_track_preferences || {};

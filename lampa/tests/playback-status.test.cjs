@@ -509,6 +509,7 @@ test('a torrent read-ahead fills the bar but does not hold back the stall: TorrS
   const h = harness(t), asked = [];
   h.L.Torserver.url = () => 'https://lampa.test/torrserver';
   h.L.Torserver.cache = (value, ok) => asked.push(ok);
+  const reports = []; h.L.HomelabGstAudio = Object.assign(h.L.HomelabGstAudio || {}, {report: (name, fields) => reports.push({name, fields})});
   realistic(h); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
   const answer = done => { const pieces = {}; for (let i = 0; i < done; i++) pieces[100 + i] = {Completed: true};
     asked.at(-1)({Torrent: {active_peers: 50, download_speed: 20 * 1048576}, Readers: [{Reader: 100, End: 200}], Pieces: pieces}); };
@@ -517,5 +518,8 @@ test('a torrent read-ahead fills the bar but does not hold back the stall: TorrS
   assert.ok(!card(h).bar.hasClass('hide')); assert.equal(card(h).fill.attrs['style:width'], '24%');
   for (let i = 0; i < 4; i++) { h.tick(2000); answer(30 + i * 5); }
   assert.ok(shown(card(h).retry), 'no frame for 30 s: Retry is offered even while the read-ahead grows');
+  const stall = reports.find(entry => entry.name === 'playback-stall');
+  assert.ok(stall, 'the alert reports the player state once'); assert.equal(reports.filter(entry => entry.name === 'playback-stall').length, 1);
+  assert.equal(stall.fields.kind, 'stall'); assert.match(stall.fields.torrent, /^Торрент: 50 пиров/);
   assert.ok(h.L.Player.render().hasClass('homelab-card-wait'), "the alert also hides Lampa's spinner");
 });

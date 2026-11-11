@@ -204,6 +204,16 @@
     return {title: title, detail: kind === 'stall' ? s.stats || 'Нет данных больше 30 с' : '',
       hint: retry && source ? 'Повторите или выберите другой источник' : retry ? 'Попробуйте повторить' : source ? 'Выберите другой источник' : 'Закройте и откройте видео заново'};
   }
+  // The player's state when an alert first shows, for `docker logs lampa-extaudio`: no URL, no title.
+  function diagnose(s, kind) {
+    var audio = L.HomelabGstAudio, video = s.video;
+    if (!audio || typeof audio.report !== 'function') return;
+    try {
+      var ranges = video && video.buffered, end = ranges && ranges.length ? ranges.end(ranges.length - 1) : 0;
+      audio.report('playback-stall', {kind: kind, seekStuck: !!s.seekStuck, played: !!s.playedOnce, rs: video ? video.readyState : -1, ns: video ? video.networkState : -1,
+        ahead: Math.round((end - (video ? video.currentTime : 0)) * 10) / 10, paused: !!(video && video.paused), seeking: !!(video && video.seeking), torrent: s.stats || ''}, s.work);
+    } catch (error) {}
+  }
   function render() {
     var s = state, c = card;
     if (!c) return;
@@ -227,7 +237,10 @@
     var ahead = kind !== 'failed' && s.buffer >= 0 ? s.buffer : -1;
     c.bar.toggleClass('hide', ahead < 0); if (ahead >= 0) c.fill.css('width', ahead + '%');
     if (changed) {
-      if (c.layout.split(':')[0] !== layout.split(':')[0]) { c.icon.html(waiting ? ICON.wait : ICON.alert); c.root.toggleClass('homelab-playback-card--alert', !waiting); }
+      if (c.layout.split(':')[0] !== layout.split(':')[0]) {
+        c.icon.html(waiting ? ICON.wait : ICON.alert); c.root.toggleClass('homelab-playback-card--alert', !waiting);
+        if (!waiting) diagnose(s, kind);
+      }
       c.retry.toggleClass('hide', !retry); c.source.toggleClass('hide', !source); c.actions.toggleClass('hide', !retry && !source);
       c.layout = layout;
     }

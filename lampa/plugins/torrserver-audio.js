@@ -2200,7 +2200,8 @@
       var target = current && toggleTarget(state, current);
       button.toggleClass('hide', !target);
       // Lampa's mobile "more" menu takes each button's icon from its svg.
-      if (target) button.html(SIGNS_ICON + (subtitleSigns(current) ? 'Надп.' : 'Полн.') + '<div class="tooltip">Надписи / полные (S)</div>');
+      // Only the icon on the panel; the tooltip names the track on screen.
+      if (target) button.html(SIGNS_ICON + '<div class="tooltip">' + (subtitleSigns(current) ? 'Сейчас надписи' : 'Сейчас полные') + ' · переключить (S)</div>');
     }
 
     function adoptSubtitles(state) {

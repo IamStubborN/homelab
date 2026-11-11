@@ -583,6 +583,18 @@ test('voice names from different providers fold into one canonical voice', t => 
   assert.equal(canon('Субтитры').subs, true);
 });
 
+test('spellings of one studio across scripts fold together; short codes and other studios stay apart', t => {
+  const canon = setup(t).window.HomelabSources.canonVoice, key = value => canon(value).key;
+  const anilibria = key('AniLibria');
+  for (const name of ['AniLibria.TV', 'Anilibria', 'АниЛибриа', 'Анилибрия', 'AniLiberty', 'Анилиберти']) assert.equal(key(name), anilibria, name);
+  assert.equal(canon('АниЛибриа').label, 'AniLibria');
+  assert.equal(key('ЛостФильм'), key('LostFilm')); assert.equal(key('АлексФильм'), key('AlexFilm')); assert.equal(key('Ультрадокс'), key('Ultradox'));
+  assert.equal(key('Колдфильм'), key('ColdFilm'));
+  assert.notEqual(key('AniDub'), anilibria); assert.notEqual(key('LostFilm'), key('AlexFilm'));
+  assert.notEqual(key('ЭсДиАй'), key('SDI Media'), 'a skeleton shorter than four letters never matches');
+  assert.notEqual(key('ЛостФильм (UKR)'), key('LostFilm'), 'another language still stays apart');
+});
+
 test('a finished search is reused for ten minutes unless refreshed', async t => {
   const h = setup(t); await h.start();
   h.parser[0].done({Results: []});

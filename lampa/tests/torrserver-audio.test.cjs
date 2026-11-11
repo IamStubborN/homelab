@@ -1947,7 +1947,7 @@ test('one press switches an external ASS between signs and full and remembers th
   h.chooseSubtitle('YakuSub Studio: надписи (внешние)');
   await h.settle();
   assert.ok(!button.hasClass('hide'));
-  assert.match(button.content, /<\/svg>Надп\./);
+  assert.match(button.content, /<\/svg><div class="tooltip">Сейчас надписи/, 'no label beside the icon');
   button.trigger('hover:enter');
   await h.settle();
   assert.equal(h.subtitleTitle(), 'YakuSub Studio: полные (внешние)');
@@ -1956,7 +1956,7 @@ test('one press switches an external ASS between signs and full and remembers th
   assert.ok(FakeAss.instances[0].destroyed && !FakeAss.instances[1].destroyed);
   const logged = h.logs.filter(event => event.e === 'subtitle-switch').at(-1);
   assert.deepEqual([logged.track, logged.via], ['YakuSub Studio: полные (внешние)', 'toggle']);
-  assert.match(button.content, /^<svg[^>]*>.*<\/svg>Полн\./, 'an icon for the mobile menu, then the label');
+  assert.match(button.content, /^<svg[^>]*>.*<\/svg><div class="tooltip">Сейчас полные/, 'only the icon, the state in the tooltip');
   h.start(14, 'abc', true);
   await h.probe([japaneseAAC]);
   await h.settle();

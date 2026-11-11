@@ -42,7 +42,8 @@
     lostfilm: ['LostFilm', 'lostfilm', 'lost film', 'lostfilm tv'],
     alexfilm: ['AlexFilm', 'alexfilm', 'alex film'], newstudio: ['NewStudio', 'newstudio', 'new studio'],
     ultradox: ['Ultradox', 'ultradox', 'ультрадокс'], leproduction: ['LE-Production', 'le production', 'leproduction'],
-    anilibria: ['AniLibria', 'anilibria', 'anilibria tv', 'анилибрия'],
+    // AniLibria renamed itself AniLiberty in 2025; providers use both names.
+    anilibria: ['AniLibria', 'anilibria', 'anilibria tv', 'анилибрия', 'анилибриа', 'aniliberty', 'aniliberty tv', 'анилиберти'],
     jaskier: ['Jaskier', 'jaskier', 'ясkier', 'яскер'], tvshows: ['TVShows', 'tvshows', 'tv shows'],
     pifagor: ['Пифагор', 'пифагор', 'pifagor'], kravec: ['Кравец', 'кравец', 'kravec', 'кравец records'],
     coldfilm: ['ColdFilm', 'coldfilm', 'cold film'], baibako: ['BaibaKo', 'baibako'], amedia: ['Amedia', 'amedia'],
@@ -60,8 +61,23 @@
       .replace(/(?:^|\s|[\[(])(?:0|6|12|16|18)\+([\])]|(?=\s|$))/g, ' ')
       .replace(/[^a-zа-я0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
   }
+  // Spellings fold to one Latin skeleton: "ЛостФильм", "Lost Film" and "lostfilm" meet, so do "АлексФильм" and "AlexFilm".
+  var TRANSLIT = {а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't',
+    у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya'};
+  function fold(text) {
+    return String(text).replace(/[а-яё]/g, function (letter) { return TRANSLIT[letter]; }).replace(/x/g, 'ks').replace(/c/g, 'k').replace(/[^a-z0-9]/g, '').replace(/(.)\1+/g, '$1');
+  }
+  var FOLDED = null;
   function studioOf(text) {
-    return Object.keys(STUDIOS).find(function (key) { return STUDIOS[key].indexOf(text, 1) >= 1; }) || '';
+    var exact = Object.keys(STUDIOS).find(function (key) { return STUDIOS[key].indexOf(text, 1) >= 1; });
+    if (exact || !text) return exact || '';
+    if (!FOLDED) {
+      FOLDED = {};
+      Object.keys(STUDIOS).forEach(function (key) { STUDIOS[key].forEach(function (alias) { var folded = fold(normalized(alias)); if (folded.length >= 4 && !FOLDED[folded]) FOLDED[folded] = key; }); });
+    }
+    // Only skeletons of four letters and more: short codes (SDI, RHS) match exactly or not at all.
+    var folded = fold(text);
+    return folded.length >= 4 && FOLDED[folded] || '';
   }
   function voiceStudio(value) {
     var text = normalized(value)

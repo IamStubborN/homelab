@@ -246,7 +246,7 @@
     var retry = retryShown(s), source = sourceShown(s), text = content(s, kind, elapsed, retry, source);
     var layout = (waiting ? 'wait' : 'alert') + (retry ? ':retry' : '') + (source ? ':source' : ''), changed = c.layout !== layout;
     line(c.title, 'title', text.title); line(c.detail, 'detail', text.detail || ''); line(c.hint, 'hint', text.hint);
-    var ahead = kind !== 'failed' && s.buffer >= 0 ? s.buffer : -1;
+    var ahead = kind !== 'failed' && s.buffer > 0 ? s.buffer : -1; // an empty track reads as a stray line
     c.bar.toggleClass('hide', ahead < 0); if (ahead >= 0) c.fill.css('width', ahead + '%');
     if (changed) {
       if (c.layout.split(':')[0] !== layout.split(':')[0]) {

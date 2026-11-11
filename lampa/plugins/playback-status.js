@@ -47,21 +47,24 @@
 
   // ---- State card: one calm line about what is happening, actions when stuck.
   var CSS = '.homelab-playback-card{position:fixed;left:0;right:0;top:50%;-webkit-transform:translateY(-50%);transform:translateY(-50%);padding:0 1em;text-align:center;pointer-events:none}' +
-    '.homelab-playback-card__box{display:inline-block;position:relative;max-width:34em;min-width:20em;padding:1.25em 1.6em 1.3em 4.9em;text-align:left;background:rgba(18,20,24,.9);border-radius:1.2em;box-shadow:0 1.2em 3em rgba(0,0,0,.55),inset 0 0 0 1px rgba(255,255,255,.08);pointer-events:auto;-webkit-animation:homelab-playback-in .25s ease-out;animation:homelab-playback-in .25s ease-out}' +
-    '.homelab-playback-card__icon{position:absolute;left:1.3em;top:1.2em;width:2.5em;height:2.5em;border-radius:50%;background:rgba(255,255,255,.08);color:#fff;display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center;-webkit-box-pack:center;-webkit-justify-content:center;justify-content:center}' +
-    '.homelab-playback-card__icon svg{display:block;width:1.5em;height:1.5em}' +
+    // One centred column: a glowing badge, the line, the torrent's read-ahead, then the actions.
+    '.homelab-playback-card__box{display:inline-block;position:relative;width:30em;max-width:100%;box-sizing:border-box;padding:1.9em 2em 1.7em;text-align:center;background:-webkit-linear-gradient(top,rgba(36,40,48,.94),rgba(16,18,22,.94));background:linear-gradient(180deg,rgba(36,40,48,.94),rgba(16,18,22,.94));border-radius:1.6em;box-shadow:0 1.6em 4em rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.07),inset 0 1px 0 rgba(255,255,255,.08);pointer-events:auto;-webkit-animation:homelab-playback-in .3s ease-out;animation:homelab-playback-in .3s ease-out}' +
+    '.homelab-playback-card__icon{position:relative;width:3.8em;height:3.8em;margin:0 auto 1.1em;border-radius:50%;color:#cfe3ff;background:rgba(143,193,255,.12);box-shadow:0 0 0 .5em rgba(143,193,255,.05),0 0 2.6em rgba(120,170,255,.28);display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center;-webkit-box-pack:center;-webkit-justify-content:center;justify-content:center;-webkit-animation:homelab-playback-glow 2.4s ease-in-out infinite;animation:homelab-playback-glow 2.4s ease-in-out infinite}' +
+    '.homelab-playback-card__icon svg{display:block;width:2em;height:2em}' +
     '.homelab-playback-card__spin{-webkit-animation:homelab-playback-spin 1s linear infinite;animation:homelab-playback-spin 1s linear infinite}' +
-    '.homelab-playback-card--alert .homelab-playback-card__icon{color:#f5c36b;background:rgba(245,195,107,.15)}' +
-    '.homelab-playback-card__title{font-size:1.4em;font-weight:700;line-height:1.3;letter-spacing:-.01em}' +
-    '.homelab-playback-card__detail,.homelab-playback-card__hint{font-size:1.05em;line-height:1.4;margin-top:.3em}' +
-    '.homelab-playback-card__detail{opacity:.6}.homelab-playback-card__hint{opacity:.9}' +
-    // Read-ahead of the torrent (polled only while the card is visible): how close the player is to its first frames.
-    '.homelab-playback-card__bar{height:.3em;margin-top:.8em;border-radius:.3em;background:rgba(255,255,255,.12);overflow:hidden}' +
-    '.homelab-playback-card__fill{height:100%;width:0;border-radius:.3em;background:#fff;-webkit-transition:width .5s;transition:width .5s}' +
-    '.homelab-playback-card--alert .homelab-playback-card__fill{background:#f5c36b}' +
-    '.homelab-playback-card__actions{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-flex-wrap:wrap;flex-wrap:wrap;margin-top:1.1em}' +
-    '.homelab-playback-card__actions .simple-button{margin:0 .7em 0 0;padding:.6em 1.5em;border-radius:2em;background-color:rgba(255,255,255,.1)}' +
-    '.homelab-playback-card__actions .simple-button.focus{background-color:#fff;color:#000}' +
+    '.homelab-playback-card--alert .homelab-playback-card__icon{color:#ffd37a;background:rgba(245,195,107,.14);box-shadow:0 0 0 .5em rgba(245,195,107,.05),0 0 2.6em rgba(245,180,80,.3);-webkit-animation:none;animation:none}' +
+    '.homelab-playback-card__title{font-size:1.45em;font-weight:700;line-height:1.3;letter-spacing:-.01em}' +
+    '.homelab-playback-card__detail,.homelab-playback-card__hint{font-size:1em;line-height:1.4;margin-top:.35em}' +
+    '.homelab-playback-card__detail{opacity:.55}.homelab-playback-card__hint{opacity:.85}' +
+    // Read-ahead of the torrent (polled only while the card is visible); a light runs along while it waits.
+    '.homelab-playback-card__bar{height:.38em;margin:1em .4em .2em;border-radius:.4em;background:rgba(255,255,255,.1);overflow:hidden}' +
+    '.homelab-playback-card__fill{height:100%;width:0;border-radius:.4em;background:-webkit-linear-gradient(left,#5f9dff,#cfe6ff,#5f9dff);background:linear-gradient(90deg,#5f9dff,#cfe6ff,#5f9dff);background-size:200% 100%;-webkit-transition:width .6s ease-out;transition:width .6s ease-out;-webkit-animation:homelab-playback-run 1.6s linear infinite;animation:homelab-playback-run 1.6s linear infinite}' +
+    '.homelab-playback-card--alert .homelab-playback-card__fill{background:#f5c36b;-webkit-animation:none;animation:none}' +
+    '.homelab-playback-card__actions{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-flex-wrap:wrap;flex-wrap:wrap;-webkit-box-pack:center;-webkit-justify-content:center;justify-content:center;margin-top:1.3em}' +
+    '.homelab-playback-card__actions .simple-button{margin:.2em .3em;padding:.6em 1.4em;white-space:nowrap;border-radius:2em;background-color:rgba(255,255,255,.1)}' +
+    '.homelab-playback-card__actions .simple-button.focus{background-color:#fff;color:#000;box-shadow:0 .5em 1.4em rgba(0,0,0,.4)}' +
+    '@-webkit-keyframes homelab-playback-glow{50%{box-shadow:0 0 0 .7em rgba(143,193,255,.03),0 0 3.4em rgba(120,170,255,.4)}}@keyframes homelab-playback-glow{50%{box-shadow:0 0 0 .7em rgba(143,193,255,.03),0 0 3.4em rgba(120,170,255,.4)}}' +
+    '@-webkit-keyframes homelab-playback-run{from{background-position:100% 0}to{background-position:-100% 0}}@keyframes homelab-playback-run{from{background-position:100% 0}to{background-position:-100% 0}}' +
     // The card's own spinner is the one wait mark while it is shown.
     '.homelab-card-wait .player-video__loader{visibility:hidden!important}' +
     // Once playback has begun, Lampa's own spinner waits as long as the card.
@@ -160,11 +163,8 @@
     while (at < end && pieces[at] && pieces[at].Completed) at++;
     return Math.round((at - from) * 100 / (end - from));
   }
-  // A growing read-ahead means the torrent is still on its way: no stall while it grows.
-  function noteBuffer(s, ahead) {
-    if (ahead >= 0 && s.buffer >= 0 && ahead > s.buffer) s.bufferGrew = Date.now();
-    s.buffer = ahead;
-  }
+  // TorrServer reads ahead on its own, whether or not the player consumes: the bar shows it, the stall check ignores it.
+  function noteBuffer(s, ahead) { s.buffer = ahead; }
   // Lampa's own TorrServer cache request; only while a card is on screen.
   function pollStats(s) {
     var ts = L.Torserver;
@@ -301,13 +301,13 @@
     }
     var audio = L.HomelabGstAudio;
     if (!audio || !audio.retryCurrent || !audio.retryCurrent()) { s.retryAt = -Infinity; L.Noty.show('Повторный запуск недоступен. Откройте видео заново'); }
-    else { s.attempts++; s.stuck = true; s.buffer = -1; s.bufferGrew = 0; s.deferFrom = 0; bind(s); set('preparing'); arm(s); }
+    else { s.attempts++; s.stuck = true; s.buffer = -1; bind(s); set('preparing'); arm(s); }
   }
   function set(phase, stalled) {
     var s = state; if (!s || !valid(s)) return;
     s.phase = phase; s.actionable = phase === 'failed' || !!stalled;
     if (s.actionable) s.mark = s.video ? s.video.currentTime : 0;
-    if (phase === 'playing' || phase === 'ready') { s.stuck = false; s.seekStuck = false; s.deferFrom = 0; }
+    if (phase === 'playing' || phase === 'ready') { s.stuck = false; s.seekStuck = false; }
     actions(s, s.actionable);
     render();
   }
@@ -322,9 +322,6 @@
       // Players without pause events (Tizen AVPlay) report a user pause only
       // through paused after playback has started.
       if (window.document && window.document.hidden || video.paused && (s.started || video.readyState >= 3) || Math.abs(video.currentTime - at) > .5) return arm(s);
-      // A growing read-ahead postpones the alert, for at most 90 s: a hung decoder can keep the reader moving.
-      var now = Date.now();
-      if (s.bufferGrew && now - s.bufferGrew < 10000 && (!s.deferFrom || now - s.deferFrom < 90000)) { if (!s.deferFrom) s.deferFrom = now; return arm(s); }
       s.seekStuck = !!video.seeking;
       set(s.phase === 'recovering' ? 'recovering' : 'buffering', true);
     }, 30000);
@@ -342,7 +339,7 @@
     var video = L.PlayerVideo.video(); if (!video || s.video === video) return;
     unbind(s); s.video = video;
     // A replacement's initial zero is not a playback observation from the old video.
-    s.started = false; s.userPaused = false; s.playedOnce = false; s.reserve = !!s.work.url_reserve; s.buffer = -1; s.bufferGrew = 0; s.deferFrom = 0;
+    s.started = false; s.userPaused = false; s.playedOnce = false; s.reserve = !!s.work.url_reserve; s.buffer = -1;
     function waiting() { if (currentVideo(s)) { if (!s.stuck) { s.stuck = true; s.stuckAt = video.currentTime; } set(s.phase === 'recovering' ? 'recovering' : 'buffering', s.actionable); arm(s); } }
     // WebKit can freeze after a seek or a resume with data buffered and no waiting event:
     // the clock stands still while the player shows playback. Nudge it once, then treat it as buffering.

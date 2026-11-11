@@ -505,7 +505,7 @@ test('the TV remote Play/Pause keys keep working while the player panel is open'
   assert.equal(calls.at(-1), 'own', 'an IPTV stream is left alone');
 });
 
-test('a torrent whose read-ahead keeps growing is not called stuck; a frozen one is', t => {
+test('a torrent read-ahead fills the bar but does not hold back the stall: TorrServer reads ahead without the player', t => {
   const h = harness(t), asked = [];
   h.L.Torserver.url = () => 'https://lampa.test/torrserver';
   h.L.Torserver.cache = (value, ok) => asked.push(ok);
@@ -513,25 +513,9 @@ test('a torrent whose read-ahead keeps growing is not called stuck; a frozen one
   const answer = done => { const pieces = {}; for (let i = 0; i < done; i++) pieces[100 + i] = {Completed: true};
     asked.at(-1)({Torrent: {active_peers: 50, download_speed: 20 * 1048576}, Readers: [{Reader: 100, End: 200}], Pieces: pieces}); };
   h.tick(2500); answer(1);
-  for (let i = 2; i <= 25; i++) { h.tick(2000); answer(i); }
-  assert.ok(!shown(card(h).retry), 'still downloading in order: no stall after 50 s');
-  assert.match(card(h).title.text(), /^Подготовка видео/);
-  assert.ok(!card(h).bar.hasClass('hide')); assert.equal(card(h).fill.attrs['style:width'], '25%');
-  for (let i = 0; i < 25; i++) { h.tick(2000); answer(25); }
-  assert.ok(shown(card(h).retry), 'the read-ahead froze: Retry is offered');
+  for (let i = 2; i <= 12; i++) { h.tick(2000); answer(i * 2); }
+  assert.ok(!card(h).bar.hasClass('hide')); assert.equal(card(h).fill.attrs['style:width'], '24%');
+  for (let i = 0; i < 4; i++) { h.tick(2000); answer(30 + i * 5); }
+  assert.ok(shown(card(h).retry), 'no frame for 30 s: Retry is offered even while the read-ahead grows');
   assert.ok(h.L.Player.render().hasClass('homelab-card-wait'), "the alert also hides Lampa's spinner");
-});
-
-test('a read-ahead that keeps growing postpones the alert for at most ninety seconds', t => {
-  const h = harness(t), asked = [];
-  h.L.Torserver.url = () => 'https://lampa.test/torrserver';
-  h.L.Torserver.cache = (value, ok) => asked.push(ok);
-  realistic(h); h.run('plugins/playback-status.js'); h.start({homelab_torrent_hash: hash});
-  let done = 0; const answer = () => { done++; const pieces = {}; for (let i = 0; i < done % 100; i++) pieces[100 + i] = {Completed: true};
-    asked.at(-1)({Torrent: {active_peers: 5, download_speed: 1048576}, Readers: [{Reader: 100, End: 200}], Pieces: pieces}); };
-  h.tick(2500); answer();
-  for (let i = 0; i < 45; i++) { h.tick(2000); answer(); }
-  assert.ok(!shown(card(h).retry), 'growth still postpones at 90 s');
-  for (let i = 0; i < 30; i++) { h.tick(2000); answer(); }
-  assert.ok(shown(card(h).retry), 'no frame for two and a half minutes: Retry is offered despite growth');
 });

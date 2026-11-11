@@ -350,6 +350,18 @@ test('a long press lists every source of a voice; there is no favourite voice', 
   assert.ok(!h.elements.some(node => node.classes.has('homelab-common-favorite')));
 });
 
+test('sources of one card are told apart by what their own voice name adds', async t => {
+  const h = setup(t);
+  h.parser[0].done({Results: []});
+  await h.finish('/lite/events', twoProviders.slice(0, 2));
+  h.pages.set('one', episodePage('Дублированный HDrezka', {method: 'play', quality: {'1080p': '/media'}}));
+  h.pages.set('two', episodePage('Профессиональный многоголосый HDRezka', {method: 'play', quality: {'1080p': '/media'}}));
+  await h.finish('/lite/one', 'one'); await h.finish('/lite/two', 'two'); h.tick(150);
+  h.fire(h.focused(), 'hover:long');
+  const titles = JSON.parse(JSON.stringify(h.select().items.map(item => item.title.replace(' · лучший', '')))).sort();
+  assert.deepEqual(titles, ['One · Дублированный', 'Two · Профессиональный многоголосый']);
+});
+
 test('the view setting switches between voice cards and every source', async t => {
   const h = await grouped(t), c = h.L.Controller.controllers;
   c.content.right(); h.toSetting('Показывать'); c.homelab_common_settings.right();

@@ -539,7 +539,9 @@
     // One source of a card, as the detail panel and the source menu name it.
     function sourceName(entry) {
       if (entry.release || entry.native) return entry.providerName;
-      var extra = entry.voice.indexOf(entry.identityVoice) === 0 ? entry.voice.slice(entry.identityVoice.length).replace(/^\s*·\s*/, '') : '';
+      // What sets this source's track apart within the card: «Дублированный HDrezka» under HDRezka reads «Дублированный».
+      var voice = String(entry.voice || ''), identity = String(entry.canon && entry.canon.label || entry.identityVoice || ''), at = identity ? voice.toLowerCase().indexOf(identity.toLowerCase()) : -1;
+      var extra = at >= 0 ? (voice.slice(0, at) + ' ' + voice.slice(at + identity.length)).replace(/[\s·,|()\-–]+/g, ' ').replace(/^\s+|\s+$/g, '') : voice !== identity ? voice : '';
       return entry.providerName + (extra ? ' · ' + extra : '');
     }
     function rowLine(row) {

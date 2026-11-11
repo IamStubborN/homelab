@@ -1314,7 +1314,9 @@
     // One source of a card, as the detail panel and the source menu name it.
     function sourceName(entry) {
       if (entry.release || entry.native) return entry.providerName;
-      var extra = entry.voice.indexOf(entry.identityVoice) === 0 ? entry.voice.slice(entry.identityVoice.length).replace(/^\s*·\s*/, '') : '';
+      // What sets this source's track apart within the card: «Дублированный HDrezka» under HDRezka reads «Дублированный».
+      var voice = String(entry.voice || ''), identity = String(entry.canon && entry.canon.label || entry.identityVoice || ''), at = identity ? voice.toLowerCase().indexOf(identity.toLowerCase()) : -1;
+      var extra = at >= 0 ? (voice.slice(0, at) + ' ' + voice.slice(at + identity.length)).replace(/[\s·,|()\-–]+/g, ' ').replace(/^\s+|\s+$/g, '') : voice !== identity ? voice : '';
       return entry.providerName + (extra ? ' · ' + extra : '');
     }
     function rowLine(row) {
@@ -1845,9 +1847,9 @@
     '.homelab-common .homelab-common-result.is-hero.focus{background:-webkit-linear-gradient(left,rgba(255,255,255,.16),rgba(255,255,255,.05) 70%),rgba(0,0,0,.45);background:linear-gradient(100deg,rgba(255,255,255,.16),rgba(255,255,255,.05) 70%),rgba(0,0,0,.45);color:#fff;box-shadow:inset 0 0 0 .14em rgba(255,255,255,.9),0 .8em 2em rgba(0,0,0,.45);-webkit-transform:scale(1.012);transform:scale(1.012)}',
     '.homelab-common-result.is-hero.focus .homelab-common-play{background:#fff}.homelab-common-result.is-hero.focus .homelab-common-play:after{border-left-color:#000}',
     // Headings and folds.
-    '.homelab-common-label{margin:.7em 0 .3em;padding:0 1.3em;font-size:.68em;font-weight:700;letter-spacing:.14em;text-transform:uppercase;opacity:.45}',
+    '.homelab-common-label{margin:.7em 0 .3em;padding:0 1.3em;font-size:.68em;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.75)}',
     '.homelab-common-label:first-child{margin-top:.2em}',
-    '.homelab-common-section{margin:.5em 0 .3em;padding:.55em 1.3em;border-radius:.7em;font-size:.72em;font-weight:700;letter-spacing:.14em;text-transform:uppercase;opacity:.55}',
+    '.homelab-common-section{margin:.5em 0 .3em;padding:.55em 1.3em;border-radius:.7em;font-size:.72em;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.75)}',
     '.homelab-common .homelab-common-section.focus{outline:0;opacity:1;background:#fff;color:#000}',
     '.homelab-common-more{padding:.7em;text-align:center;border-radius:.7em;background:rgba(255,255,255,.04)}',
     '.homelab-common-skeleton{height:2.6em;margin-bottom:.3em;border-radius:.7em;background:rgba(255,255,255,.05);-webkit-animation:homelab-common-pulse 1.4s ease-in-out infinite;animation:homelab-common-pulse 1.4s ease-in-out infinite}',

@@ -239,7 +239,14 @@
       if (plain !== text) node.text(plain);
     }
   }
+  // Lampa shows the playlist button for any non-empty list; a movie is a list of one, so the button only repeats it.
+  function soloButton(playlist) {
+    var panel = L.PlayerPanel && typeof L.PlayerPanel.render === 'function' ? L.PlayerPanel.render() : null;
+    var box = panel && panel.find('.player-panel__playlist-buttons');
+    if (box && box.length && Array.isArray(playlist) && playlist.length < 2) box.addClass('hide');
+  }
   L.PlayerPlaylist.listener.follow('set', function (event) {
+    try { soloButton(event.playlist); } catch (_) {}
     if (locate(event)) return;
     try { plainNext(); } catch (_) {}
     decorate(event);

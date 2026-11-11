@@ -312,3 +312,14 @@ test('the first opening sizes the playlist window before Lampa scrolls to the pl
   h.L.Select.listener.send('fullshow', {active: {items: [{title: 'x'}]}, html});
   assert.equal(sized.length, 1, 'other selects are left alone');
 });
+
+test('a single-item playlist hides the native playlist button; a series keeps it', t => {
+  const h = lampa(t);
+  const box = h.L.PlayerPanel.render().find('.player-panel__playlist-buttons');
+  h.L.PlayerPlaylist.listener.follow('set', () => {});
+  const movie = {url: 'movie', title: 'Fictional Movie', card: {id: 7, title: 'Fictional Movie', source: 'tmdb'}};
+  box.removeClass('hide'); h.play({...movie, playlist: [movie]}); h.tick(0);
+  assert.ok(box.hasClass('hide'), 'a movie has nothing to pick');
+  h.close(); box.removeClass('hide'); h.lampacStart();
+  assert.ok(!box.hasClass('hide'), 'episodes keep the button');
+});

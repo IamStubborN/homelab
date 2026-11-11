@@ -827,6 +827,8 @@
     filters.append(summary); root.append(filters);
     // The hero: the top recommendation, played by one OK; the list continues under it.
     var heroBox = $('<div class="homelab-common-herobox hide"></div>'); root.append(heroBox);
+    // A finger scroll started between rows fixes the order like a touch on a row.
+    scroll.render().on('touchmove', function () { locked = true; });
     body.appendTo(scroll.body()); main.append(scroll.render()).append(detail); root.append(main); root.append(hint);
     var recoveryLabel = recovery ? $('<div class="homelab-common-recovery"></div>') : null;
     // Recovery banner: the kept voice and the one caveat; the hero says what resumes where.
@@ -950,12 +952,16 @@
       strip.empty().removeClass('hide');
       var seasonButton = button(seasonTitle(selection.season), 'homelab-common-season', function () { seasonMenu(); });
       seasonButton[0].homelabEpisode = -1; strip.append(seasonButton);
-      strip.append($('<span class="homelab-common-eps-arrow"></span>').text(from > 1 ? '‹' : ''));
+      // A tap gives no hover:focus, so on phones the arrows slide the window themselves.
+      strip.append(stripArrow(from > 1 ? '‹' : '', from));
       for (var ep = from; ep <= to; ep++) strip.append(episodeTile(ep, from, to, total, seen));
-      strip.append($('<span class="homelab-common-eps-arrow"></span>').text(!total || to < total ? '›' : ''));
+      strip.append(stripArrow(!total || to < total ? '›' : '', to));
       if (count) strip.append($('<span class="homelab-common-eps-total"></span>').text('из ' + count));
       Array.prototype.forEach.call(strip[0].querySelectorAll('.selector'), function (node) { if (focused && node.homelabEpisode === focused) target = node; });
       if (focused && ownList()) { last = target || strip[0].querySelectorAll('.selector')[0]; focus(true); }
+    }
+    function stripArrow(text, center) {
+      return $('<span class="homelab-common-eps-arrow"></span>').text(text).on('click', function () { if (text && !dead) { stripCenter = center; drawStrip(); } });
     }
     function episodeTile(ep, from, to, total, seen) {
       var cls = 'homelab-common-ep' + (ep === selection.episode ? ' is-current' : ''), started = 0;
@@ -1049,7 +1055,12 @@
         else {
           var values = $('<div class="homelab-common-setting-values"></div>'), at = currentIndex(entry), from = entry.values.length > 5 ? Math.max(0, Math.min(at - 2, entry.values.length - 5)) : 0;
           entry.values.slice(from, from + 5).forEach(function (value, offset) {
-            values.append($('<span class="homelab-common-setting-value' + (from + offset === at ? ' selected' : '') + '"></span>').text(value.title));
+            // A tap on a value picks it; the row's own OK still steps or opens the full list.
+            values.append($('<span class="homelab-common-setting-value' + (from + offset === at ? ' selected' : '') + '"></span>').text(value.title).on('click', function (event) {
+              event.stopPropagation(); settingIndex = index;
+              if (value.value === entry.current) return;
+              entry.set(value.value); updateSummary(); draw(); renderSettings(); focusSetting();
+            }));
           });
           if (from + 5 < entry.values.length) values.append($('<span class="homelab-common-setting-more"></span>').text('…'));
           row.append($('<div class="homelab-common-setting-label"></div>').text(entry.label)).append(values);
@@ -1621,7 +1632,7 @@
       else if (dx < 0) L.Controller.toggle('menu');
       return false;
     }
-    this.create = function () { scroll.minus(root.find('.homelab-common-head')); updateSummary(); };
+    this.create = function () { updateSummary(); };
     this.render = function (js) { return js ? root[0] : root; };
     this.start = function () {
       if (!active()) return;
@@ -1781,7 +1792,6 @@
     '.homelab-common-main>.scroll{flex:1 1 0;min-width:0;height:100%}',
     // The screen takes Lampa's layer height (window minus head and the phone's bottom bar); the list fills what the
     // head leaves instead of its own window-based height, so its end stays above the bottom bar and it scrolls.
-    '.homelab-common-main>.scroll{height:100%!important}',
     '.homelab-common-main>.scroll>.scroll__content{padding-top:.4em}',
     '.homelab-common-list{padding:.4em .7em .4em .4em}',
     // List rows: Lampa torrent-item tiles, one line each.
@@ -1870,6 +1880,11 @@
     '.homelab-common-settings{position:absolute;top:0;right:0;bottom:0;width:26em;max-width:92%;z-index:5;box-sizing:border-box;display:flex;flex-direction:column;padding:2em 1.6em 1.4em;background:rgba(16,19,22,.98);border-left:.08em solid rgba(255,255,255,.08);box-shadow:-2em 0 4em rgba(0,0,0,.5)}',
     '.homelab-common-settings-title{font-size:1.5em;font-weight:700;margin-bottom:1em}',
     '.homelab-common-settings-list{flex:1;min-height:0;overflow:hidden}',
+    // Phones scroll natively and have no remote: the parameters list scrolls, values are tapped, the side panel
+    // (its list is picked with →) and the key hints are left out.
+    'body.true--mobile .homelab-common-settings-list{overflow-y:auto;-webkit-overflow-scrolling:touch}',
+    'body.true--mobile .homelab-common-detail,body.true--mobile .homelab-common-hint,body.true--mobile .homelab-common-keys,body.true--mobile .homelab-common-settings-hint{display:none!important}',
+    'body.true--mobile .homelab-common-eps-arrow{padding:.4em .7em;cursor:pointer}',
     '.homelab-common-setting{padding:.65em .8em .4em;border-radius:.9em;margin-bottom:.4em;border:.12em solid transparent}',
     '.homelab-common-setting-label{font-size:.7em;font-weight:600;letter-spacing:.14em;text-transform:uppercase;opacity:.5;margin-bottom:.45em}',
     '.homelab-common-setting-values{display:flex;flex-wrap:wrap}',

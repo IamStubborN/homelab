@@ -55,7 +55,6 @@
     '.homelab-common-main>.scroll{flex:1 1 0;min-width:0;height:100%}',
     // The screen takes Lampa's layer height (window minus head and the phone's bottom bar); the list fills what the
     // head leaves instead of its own window-based height, so its end stays above the bottom bar and it scrolls.
-    '.homelab-common-main>.scroll{height:100%!important}',
     '.homelab-common-main>.scroll>.scroll__content{padding-top:.4em}',
     '.homelab-common-list{padding:.4em .7em .4em .4em}',
     // List rows: Lampa torrent-item tiles, one line each.
@@ -144,6 +143,11 @@
     '.homelab-common-settings{position:absolute;top:0;right:0;bottom:0;width:26em;max-width:92%;z-index:5;box-sizing:border-box;display:flex;flex-direction:column;padding:2em 1.6em 1.4em;background:rgba(16,19,22,.98);border-left:.08em solid rgba(255,255,255,.08);box-shadow:-2em 0 4em rgba(0,0,0,.5)}',
     '.homelab-common-settings-title{font-size:1.5em;font-weight:700;margin-bottom:1em}',
     '.homelab-common-settings-list{flex:1;min-height:0;overflow:hidden}',
+    // Phones scroll natively and have no remote: the parameters list scrolls, values are tapped, the side panel
+    // (its list is picked with →) and the key hints are left out.
+    'body.true--mobile .homelab-common-settings-list{overflow-y:auto;-webkit-overflow-scrolling:touch}',
+    'body.true--mobile .homelab-common-detail,body.true--mobile .homelab-common-hint,body.true--mobile .homelab-common-keys,body.true--mobile .homelab-common-settings-hint{display:none!important}',
+    'body.true--mobile .homelab-common-eps-arrow{padding:.4em .7em;cursor:pointer}',
     '.homelab-common-setting{padding:.65em .8em .4em;border-radius:.9em;margin-bottom:.4em;border:.12em solid transparent}',
     '.homelab-common-setting-label{font-size:.7em;font-weight:600;letter-spacing:.14em;text-transform:uppercase;opacity:.5;margin-bottom:.45em}',
     '.homelab-common-setting-values{display:flex;flex-wrap:wrap}',

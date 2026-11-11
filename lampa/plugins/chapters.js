@@ -32,9 +32,14 @@
       'body.true--mobile .homelab-seek-controls .player-panel__center{flex:0 0 168px}',
       'body.true--mobile .homelab-seek-controls .homelab-seek-back{margin-right:8px}body.true--mobile .homelab-seek-controls .homelab-seek-forward{margin-left:8px}',
       'body.true--mobile .homelab-seek-controls .player-panel__left,body.true--mobile .homelab-seek-controls .player-panel__right{flex:1;width:auto}',
-      // One row like the native panel; narrow phones get tighter steps instead of a second row with a lone button.
-      'body.true--mobile .homelab-seek-controls .player-panel__left{min-width:0}',
-      '@media(max-width:400px){body.true--mobile .homelab-seek-controls .player-panel__center{flex-basis:148px}body.true--mobile .homelab-seek-controls .homelab-seek-back{margin-right:4px}body.true--mobile .homelab-seek-controls .homelab-seek-forward{margin-left:4px}body.true--mobile .player-panel .homelab-seek-step{min-width:40px;min-height:40px}}',
+      // Phones: the more menu is laid out as buttons. Wide screens keep one row; narrow ones put play and the steps
+      // on their own row and spread every other button over the row below.
+      'body.true--mobile .homelab-seek-controls .player-panel__mobile-more{display:none!important}',
+      'body.true--mobile .homelab-seek-controls .player-panel__tv-visible{display:flex!important;flex:1;width:auto;justify-content:flex-end;align-items:center}body.true--mobile .homelab-seek-controls .player-panel__tv-visible .player-panel__box-buttons{display:contents}',
+      'body.true--mobile .homelab-seek-controls .player-panel__tv-visible .player-panel__volume,body.true--mobile .homelab-seek-controls .player-panel__tv-visible .player-panel__fullscreen,body.true--mobile .homelab-seek-controls .player-panel__tv-visible .button.hide{display:none!important}',
+      'body.true--mobile .homelab-seek-controls .player-panel__tv-visible .button{min-width:44px;min-height:44px;margin-left:8px;border-radius:100%;background:rgba(255,255,255,.1)}body.true--mobile .homelab-seek-controls .player-panel__tv-visible .player-panel__quality{width:auto;padding:0 .9em;border-radius:2em;font-size:.9em}',
+      'body.true--mobile .homelab-seek-controls .player-panel__mobile-visible{flex:0 0 auto;width:auto}',
+      '@media(max-width:600px){body.true--mobile .homelab-seek-controls .player-panel__line-two{flex-wrap:wrap;justify-content:space-between}body.true--mobile .homelab-seek-controls .player-panel__center{order:-1;flex:0 0 100%;justify-content:center;margin-bottom:14px}body.true--mobile .homelab-seek-controls .player-panel__left,body.true--mobile .homelab-seek-controls .player-panel__tv-visible{display:contents!important}body.true--mobile .homelab-seek-controls .player-panel__tv-visible .button,body.true--mobile .homelab-seek-controls .homelab-chapter-controls{margin:0!important}}',
       // Chapter ticks: own layer above Lampa segments, which Lampa empties on redraw.
       '.homelab-chapter-ticks{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:1}',
       '.homelab-chapter-tick{position:absolute;top:0;width:2px;height:100%;margin-left:-1px;background:rgba(0,0,0,.5)}',

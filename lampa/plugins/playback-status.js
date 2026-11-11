@@ -91,12 +91,11 @@
     if (next) L.Controller.collectionFocus(next[0], card.actions); else toPanel();
   }
   function release() { if (controller() === CTRL && L.Player.opened()) L.Controller.toggle('player'); }
+  // Back on the card is the player's Back: it leaves the player.
   function dismiss() {
-    var auto = state && state.autoFocus;
     if (state) { state.dismissed = true; state.autoFocus = false; }
     hideCard(); if (controller() === CTRL) L.Controller.toggle('player');
-    // The user never asked for the card's focus: Back still means the player's Back.
-    if (auto && controller() === 'player' && typeof L.Controller.back === 'function') L.Controller.back();
+    if (controller() === 'player' && typeof L.Controller.back === 'function') L.Controller.back();
   }
   function menuOpen() { return !!(L.Select && typeof L.Select.opened === 'function' && L.Select.opened()); }
   function cardView() {

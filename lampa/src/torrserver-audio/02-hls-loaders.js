@@ -395,6 +395,10 @@
         // A torrent at the edge of its bitrate can take longer than 30 s to
         // fetch the pieces of one segment; waiting beats asking again.
         config.fragLoadPolicy = policy(60000, 180000, 3);
+        // The Safari Web App («Add to Dock») loads the first segment and the
+        // hls.js worker never answers: no parse, no error. GST segments are
+        // fMP4, which hls.js only passes through, so the main thread is enough.
+        config.enableWorker = false;
         if (work.homelab_external_audio) {
           externalAudioLoaders(config, config.loader || BaseHls.DefaultConfig.loader, work.homelab_external_audio);
         }

@@ -222,7 +222,7 @@ test('playback starting after an escalated preparation removes the suggestion an
   assert.ok(!shown(card(h).root) && !shown(buttons(h).source)); assert.equal(controllerName(h), 'player');
 });
 
-test('the failure card focuses Retry first, Other source after a retry that failed, and Back only hides the card', t => {
+test('the failure card focuses Retry first, Other source after a retry that failed, and Back leaves the player', t => {
   const h = harness(t); h.window.HomelabSources = {recover: () => true};
   realistic(h); h.run('plugins/playback-status.js'); const log = focusLog(h);
   h.start({card: {id: 7}, homelab_torrent_hash: hash});
@@ -241,7 +241,7 @@ test('the failure card focuses Retry first, Other source after a retry that fail
   h.L.Controller.toggle('homelab_playback_card');
   let backs = 0; h.L.Controller.back = () => { backs++; };
   h.L.Controller.controllers.homelab_playback_card.back();
-  assert.ok(!shown(c.root)); assert.equal(controllerName(h), 'player'); assert.equal(backs, 0, 'once the user moved focus, Back only hides the card');
+  assert.ok(!shown(c.root)); assert.equal(controllerName(h), 'player'); assert.equal(backs, 1, 'Back on the card is the player\'s Back');
   assert.ok(shown(buttons(h).retry) && shown(buttons(h).source), 'the panel keeps the actions');
   assert.equal(h.notices.length, 0);
 });

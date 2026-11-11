@@ -95,6 +95,43 @@ test('an external player starts at the continuation point while the inner player
   assert.equal(data.timeline.time, 0); assert.equal(data.timeline.percent, 0, 'no native ask-to-continue prompt');
 });
 
+test('a resumed start that fails before its seek puts the position back on the episode list', t => {
+  const h = harness(t), updates = [];
+  h.L.Timeline.update = road => updates.push({...road});
+  h.run('mods/HomelabSync/continue.js');
+  const road = {hash: '1', time: 0, percent: 0, duration: 120};
+  h.L.PlayerVideo.video().duration = NaN; // the stream fails before any metadata
+  h.L.Player.play({timeline: road, homelab_resume_at: 60});
+  assert.equal(road.time, 0);
+  h.L.Player.listener.send('destroy');
+  assert.equal(road.time, 60); assert.equal(road.percent, 50);
+  assert.deepEqual(updates.map(entry => entry.time), [60], 'the drawn line is refreshed');
+});
+
+test('a failed resume measures its percent against the resumed version, never marking the episode watched', t => {
+  const h = harness(t); h.L.Timeline.update = () => {};
+  h.run('mods/HomelabSync/continue.js');
+  const road = {hash: '1', time: 0, percent: 0, duration: 2350}, data = {timeline: road, homelab_resume_at: 2400, homelab_resume_from_duration: 2700};
+  h.L.PlayerVideo.video().duration = NaN;
+  h.L.Player.play(data); h.L.Player.listener.send('destroy');
+  assert.equal(road.time, 2400); assert.equal(Math.round(road.percent), 89); assert.equal(road.duration, 2350);
+  assert.equal(data.homelab_resume_at, undefined, 'a later playlist step back is a native continue');
+});
+
+test('a resumed start that reached its seek keeps the player position on close', t => {
+  const h = harness(t), updates = [];
+  h.L.Timeline.update = road => updates.push(road);
+  h.run('mods/HomelabSync/continue.js');
+  const road = {hash: '1', time: 0, percent: 0, duration: 120};
+  const video = h.L.PlayerVideo.video(); video.duration = NaN;
+  h.L.Player.play({timeline: road, homelab_resume_at: 60});
+  video.duration = 120; video.fire('canplay');
+  assert.equal(road.time, 60);
+  road.time = 75;
+  h.L.Player.listener.send('destroy');
+  assert.equal(road.time, 75); assert.equal(updates.length, 0);
+});
+
 test('cards from non-TMDB catalogues are not captured under a TMDB key', t => {
   const h = harness(t); h.run('mods/HomelabSync/continue.js');
   h.start({card: {id: 42, name: 'Series', source: 'kp'}, season: 1, episode: 2, timeline: {hash: '1'}, homelab_torrent_hash: hash, homelab_file_index: 1});

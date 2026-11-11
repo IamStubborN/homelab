@@ -54,6 +54,7 @@
       if (selected) {
         road.percent = 0; road.time = 0;
         work.homelab_resume_at = item.position; work.homelab_track_preferences = item.tracks || {};
+        if (item.duration > 0) work.homelab_resume_from_duration = item.duration;
       }
       return work;
     });
@@ -142,7 +143,7 @@
           road.percent = 0; road.time = 0;
           work = {card: value, season: item.season, episode: item.episode, title: plain(file.path.split('/').pop()),
             torrent_hash: item.torrent, homelab_file_index: item.index, timeline: road,
-            url: L.Torserver.stream(file.path, item.torrent, item.index), homelab_resume_at: item.position,
+            url: L.Torserver.stream(file.path, item.torrent, item.index), homelab_resume_at: item.position, homelab_resume_from_duration: item.duration > 0 ? item.duration : undefined,
             homelab_track_preferences: item.tracks || {}, launch_player: 'inner'};
           playlist = [work];
           L.Noty.show('Не удалось восстановить список серий. Доступна выбранная серия');

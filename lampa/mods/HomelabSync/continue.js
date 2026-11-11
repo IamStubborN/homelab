@@ -315,6 +315,7 @@
       if (selected) {
         road.percent = 0; road.time = 0;
         work.homelab_resume_at = item.position; work.homelab_track_preferences = item.tracks || {};
+        if (item.duration > 0) work.homelab_resume_from_duration = item.duration;
       }
       return work;
     });
@@ -403,7 +404,7 @@
           road.percent = 0; road.time = 0;
           work = {card: value, season: item.season, episode: item.episode, title: plain(file.path.split('/').pop()),
             torrent_hash: item.torrent, homelab_file_index: item.index, timeline: road,
-            url: L.Torserver.stream(file.path, item.torrent, item.index), homelab_resume_at: item.position,
+            url: L.Torserver.stream(file.path, item.torrent, item.index), homelab_resume_at: item.position, homelab_resume_from_duration: item.duration > 0 ? item.duration : undefined,
             homelab_track_preferences: item.tracks || {}, launch_player: 'inner'};
           playlist = [work];
           L.Noty.show('Не удалось восстановить список серий. Доступна выбранная серия');
@@ -605,6 +606,21 @@
     }
     restore = {video: video, apply: apply}; video.addEventListener('loadedmetadata', apply); video.addEventListener('canplay', apply); apply();
   }
+  // A resumed start zeroes the episode's shared timeline so Lampa does not seek on its own (bindResume does).
+  // When the player fails or closes before that seek, the zero would stay on the episode list and send the
+  // next start from the beginning: put the requested position back and redraw it.
+  function unresume(state) {
+    var data = state && state.data, road = data && data.timeline;
+    if (!road || state.applied || state.external || data.homelab_resume_at == null) return;
+    // The position was measured against the resumed version's duration; the episode's road may hold another version's.
+    var at = data.homelab_resume_at, duration = data.homelab_resume_from_duration > 0 ? data.homelab_resume_from_duration : road.duration;
+    // Done with this start either way: a later playlist step back to it is an ordinary native continue.
+    delete data.homelab_resume_at; delete data.homelab_resume_from_duration;
+    if (!(at > 0) || (road.time || 0) > 0) return;
+    road.time = at; road.percent = duration > 0 ? Math.min(99, at / duration * 100) : 0;
+    if (!(road.duration > 0) && duration > 0) road.duration = duration;
+    if (typeof L.Timeline.update === 'function') { try { L.Timeline.update(road); } catch (_) {} }
+  }
   // External players (Android, webOS, Apple TV) read the start position from
   // the timeline before 'external'; the inner player gets it from bindResume.
   L.Player.listener.follow('create', function (event) {
@@ -637,7 +653,7 @@
   L.Player.listener.follow('ready', function (data) {
     if (resumeIntent) { clearTimeout(resumeIntent.timer); resumeIntent = null; }
     external = null;
-    if (playing) queue(playing);
+    if (playing) { if (playing.data !== data) unresume(playing); queue(playing); }
     // Playlist steps (the next episode, also automatic ones) carry continue_play; a start by hand does not.
     playing = {data: data, scope: context(), url: sync.url('/homelab-sync/resume'), saved: -Infinity, launch: !!data && !data.continue_play && data.homelab_resume_at == null};
     bindResume(playing);
@@ -650,7 +666,7 @@
     clearTimeout(state.pause); state.pause = setTimeout(function () { snapshot(state, true); }, 500);
   });
   L.Player.listener.follow('destroy', function () {
-    if (playing) { clearTimeout(playing.pause); queue(playing); }
+    if (playing) { clearTimeout(playing.pause); unresume(playing); queue(playing); }
     playing = null; detachRestore(); publish();
   });
   sync.subscribe(function () { context(); if (!L.Player.opened()) load(); });

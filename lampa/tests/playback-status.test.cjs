@@ -541,3 +541,15 @@ test('a torrent read-ahead fills the bar but does not hold back the stall: TorrS
   assert.equal(stall.fields.kind, 'stall'); assert.match(stall.fields.torrent, /^Торрент: 50 пиров/);
   assert.ok(h.L.Player.render().hasClass('homelab-card-wait'), "the alert also hides Lampa's spinner");
 });
+
+test('Retry of an expired proxied CDN link looks the episode up again at once instead of reloading it', t => {
+  const h = harness(t), calls = [], loads = [];
+  h.window.HomelabSources = {recover: (...args) => { calls.push(args); return true; }};
+  const video = realistic(h); h.run('plugins/playback-status.js');
+  h.L.PlayerVideo.destroy = () => loads.push('destroy'); h.L.PlayerVideo.url = url => loads.push(url);
+  h.start({card: {id: 7}, homelab_online: {provider: 'aladin', voice: 'A'}, url: 'https://lampa.example/proxy/abc.m3u8'});
+  video.play(); video.data(); video.advance(2); video.fire('error');
+  card(h).retry.trigger('hover:enter');
+  assert.deepEqual(loads, [], 'the dead link is not opened again');
+  assert.equal(calls.length, 1); assert.equal(calls[0][2], true, 'the same provider is asked for a new link');
+});

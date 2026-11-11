@@ -287,11 +287,13 @@
     return duration && exact > duration - 15 ? Math.max(0, duration - 15) : exact;
   }
   // The same stream reloaded in the open player, as Lampa switches quality; an online m3u8 answers
-  // with fresh proxy links, so this also outlives expired ones.
+  // with fresh proxy links, so this also outlives expired ones. A /proxy/ link is the CDN link itself
+  // (Aladin, for one): once the CDN expires it, only a new lookup brings a working one.
   function absolute(url) { try { return new URL(url, window.location.href).href; } catch (error) { return url; } }
   function reload(s, at) {
     var V = L.PlayerVideo, url = s.work.url, P = L.Platform, old = V.video();
     if (typeof url !== 'string' || !url || typeof V.destroy !== 'function' || typeof V.url !== 'function') return false;
+    if (/^https?:\/\/[^\/]+\/proxy\//.test(absolute(url))) return false;
     // TV players swap their own video objects; they keep the full lookup.
     if (P && typeof P.is === 'function' && (P.is('webos') || P.is('tizen') || P.is('orsay'))) return false;
     // After a fallback to url_reserve the work still names the primary that already failed.

@@ -35,11 +35,13 @@
       '@media(max-width:580px){body.true--mobile .homelab-seek-controls .player-panel__line-two{flex-wrap:wrap}body.true--mobile .homelab-seek-controls .player-panel__center{order:-1;flex-basis:100%;margin-bottom:8px}}',
       // Chapter ticks: own layer above Lampa segments, which Lampa empties on redraw.
       '.homelab-chapter-ticks{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:1}',
-      '.homelab-chapter-tick{position:absolute;top:0;width:.18em;height:100%;margin-left:-.09em;background:rgba(0,0,0,.7)}',
+      '.homelab-chapter-tick{position:absolute;top:0;width:2px;height:100%;margin-left:-1px;background:rgba(0,0,0,.5)}',
+      // A phone's short, thick track turns many chapters into a dashed line: the label and the list are enough there.
+      'body.true--mobile .homelab-chapter-ticks{display:none}',
       '.homelab-chapter-now{margin-left:.8em;min-width:0;-webkit-flex-shrink:1;flex-shrink:1;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.homelab-chapter-now:empty{display:none}',
       '.player-panel .homelab-chapters{width:auto;padding:.65em .9em;border-radius:2em}.homelab-chapters>span{margin-left:.4em;font-size:.75em;white-space:nowrap}',
       'body.true--mobile .homelab-chapters>span{display:none}body.true--mobile .homelab-chapters{min-width:44px;min-height:44px}',
-      'body.true--mobile .player-panel__left .homelab-chapter-controls{margin-left:2px}',
+      'body.true--mobile .player-panel__left .homelab-chapter-controls{margin-left:12px}',
       '.homelab-chapter-badge{display:inline-block;margin-left:.5em;padding:0 .45em;border-radius:.3em;background:#fff;color:#000;font-size:.85em;line-height:1.5;vertical-align:middle}'
     ].join('') + '</style>').appendTo('head');
 

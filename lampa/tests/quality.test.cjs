@@ -92,3 +92,10 @@ test('a row as the Lampa online screen hands it over is keyed by its quality map
   await flush();
   assert.equal(badge.text(), '720p · заявлено 4K');
 });
+
+test('every plugin file names Lampa. so the extension list reports it as working', () => {
+  const dir = require('node:path').join(__dirname, '../plugins');
+  for (const name of require('node:fs').readdirSync(dir).filter(name => name.endsWith('.js'))) {
+    assert.match(require('node:fs').readFileSync(require('node:path').join(dir, name), 'utf8'), /Lampa\./, name);
+  }
+});

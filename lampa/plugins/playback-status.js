@@ -1,3 +1,4 @@
+// Lampa.Player status card for homelab playback. Lampa's extension list marks a file without the text "Lampa." as not a plugin.
 (function () {
   'use strict';
   var L = window.Lampa, $ = window.jQuery;

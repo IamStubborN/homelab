@@ -166,3 +166,14 @@ test('retired homelab plugins are removed from the client registry', () => {
   assert.ok(!urls.some(url => /chapter-gallery|seek-previews|stunnorm|yummyanime/.test(url)), urls.join(', '));
   assert.ok(urls.includes('https://lampa.test/plugins/homelab/chapters.js'));
 });
+
+test('retired plugins leave the stored list on the first hook, before Lampa loads that list', () => {
+  const chapters = { url: 'https://lampa.test/plugins/homelab/chapters.js', status: 1 };
+  const h = harness(false, { plugins: ['https://lampa.test/plugins/homelab/seek-previews.js', chapters,
+    { url: 'https://lampa.test/plugins/homelab/chapter-gallery.js', status: 0 }] });
+  h.hooks.appload();
+  assert.deepEqual(h.storage.get('plugins'), [chapters]);
+  const writes = h.writes.length; h.hooks.appload();
+  assert.equal(h.writes.filter(item => item.name === 'plugins').length, 1, 'a clean list is not rewritten');
+  assert.ok(h.writes.length >= writes);
+});

@@ -82,20 +82,36 @@ var lampainit_invc = {};
     });
   }
 
+  // Retired homelab plugins, the known obsolete third-party plugin host (the old malformed marker `la,padocker` never
+  // matched a URL) and YummyAnime (1.3 MB from GitHub on every start, removed by the user's decision).
+  function retired(plugin) {
+    var url = plugin && plugin.url;
+    if (typeof url !== 'string') return false;
+    var origin = window.location.origin;
+    return url.indexOf('stunnorm') !== -1 || [origin + '/plugins/homelab/chapter-gallery.js', origin + '/plugins/homelab/seek-previews.js',
+      'https://yummyanime.github.io/yummy-lampa-plugin/stable/index.js'].indexOf(url) !== -1;
+  }
+
+  // Lampa reads its stored plugin list to load it before the registry is ready, so a retired entry left there by an
+  // older client or a restored backup fails to load once (and says so) before installPlugins can remove it. Drop such
+  // entries from storage on the first hook, ahead of that read.
+  function dropRetiredFromStorage() {
+    if (!Lampa.Storage || typeof Lampa.Storage.get !== 'function') return;
+    var stored = Lampa.Storage.get('plugins', '[]');
+    if (!Array.isArray(stored)) return;
+    var kept = stored.filter(function (plugin) { return !retired(typeof plugin === 'string' ? {url: plugin} : plugin); });
+    if (kept.length !== stored.length) Lampa.Storage.set('plugins', kept);
+  }
+
   function installPlugins() {
     var origin = window.location.origin;
 
     // The plugin registry is ready only after Lampa opens its IndexedDB.
     if (!Lampa.Plugins || typeof Lampa.Plugins.get !== 'function') return;
 
-    // YummyAnime (1.3 MB from GitHub on every start) is unused: removed by the user's decision.
-    var retired = [origin + '/plugins/homelab/chapter-gallery.js', origin + '/plugins/homelab/seek-previews.js', 'https://yummyanime.github.io/yummy-lampa-plugin/stable/index.js'];
     // Copy first: remove() mutates the registry array that get() returns.
     Lampa.Plugins.get().slice().forEach(function (plugin) {
-      if (typeof plugin.url !== 'string') return;
-      // Remove the known obsolete third-party plugin host (the old malformed
-      // marker `la,padocker` never matched a URL) and retired homelab plugins.
-      if (plugin.url.indexOf('stunnorm') === -1 && retired.indexOf(plugin.url) === -1) return;
+      if (!retired(plugin)) return;
       if (typeof Lampa.Plugins.remove === 'function') Lampa.Plugins.remove(plugin);
     });
 
@@ -173,6 +189,7 @@ var lampainit_invc = {};
   }
 
   lampainit_invc.appload = function appload() {
+    dropRetiredFromStorage();
     applyRuntimeSettings();
 
     // The first hook runs before Lampa opens its IndexedDB. Defer all plugin

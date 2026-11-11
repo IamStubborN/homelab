@@ -32,7 +32,9 @@
       'body.true--mobile .homelab-seek-controls .player-panel__center{flex:0 0 168px}',
       'body.true--mobile .homelab-seek-controls .homelab-seek-back{margin-right:8px}body.true--mobile .homelab-seek-controls .homelab-seek-forward{margin-left:8px}',
       'body.true--mobile .homelab-seek-controls .player-panel__left,body.true--mobile .homelab-seek-controls .player-panel__right{flex:1;width:auto}',
-      '@media(max-width:580px){body.true--mobile .homelab-seek-controls .player-panel__line-two{flex-wrap:wrap}body.true--mobile .homelab-seek-controls .player-panel__center{order:-1;flex-basis:100%;margin-bottom:8px}}',
+      // One row like the native panel; narrow phones get tighter steps instead of a second row with a lone button.
+      'body.true--mobile .homelab-seek-controls .player-panel__left{min-width:0}',
+      '@media(max-width:400px){body.true--mobile .homelab-seek-controls .player-panel__center{flex-basis:148px}body.true--mobile .homelab-seek-controls .homelab-seek-back{margin-right:4px}body.true--mobile .homelab-seek-controls .homelab-seek-forward{margin-left:4px}body.true--mobile .player-panel .homelab-seek-step{min-width:40px;min-height:40px}}',
       // Chapter ticks: own layer above Lampa segments, which Lampa empties on redraw.
       '.homelab-chapter-ticks{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:1}',
       '.homelab-chapter-tick{position:absolute;top:0;width:2px;height:100%;margin-left:-1px;background:rgba(0,0,0,.5)}',
@@ -41,7 +43,7 @@
       '.homelab-chapter-now{margin-left:.8em;min-width:0;-webkit-flex-shrink:1;flex-shrink:1;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.homelab-chapter-now:empty{display:none}',
       '.player-panel .homelab-chapters{width:auto;padding:.65em .9em;border-radius:2em}.homelab-chapters>span{margin-left:.4em;font-size:.75em;white-space:nowrap}',
       'body.true--mobile .homelab-chapters>span{display:none}body.true--mobile .homelab-chapters{min-width:44px;min-height:44px}',
-      'body.true--mobile .player-panel__left .homelab-chapter-controls{margin-left:12px}',
+      'body.true--mobile .player-panel__left .homelab-chapter-controls{margin-left:12px}body.true--mobile .player-panel__playlist-buttons.hide+.homelab-chapter-controls{margin-left:0}',
       '.homelab-chapter-badge{display:inline-block;margin-left:.5em;padding:0 .45em;border-radius:.3em;background:#fff;color:#000;font-size:.85em;line-height:1.5;vertical-align:middle}'
     ].join('') + '</style>').appendTo('head');
 

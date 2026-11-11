@@ -16,6 +16,8 @@
   function groupKey(row) {
     if (row.native) return 'native';
     if (row.kind === 'torrent') return row.canon && row.canon.key ? 'torrent:' + row.canon.key + ':' + (row.qualities[0] || 0) : 'row:' + row.key;
+    // Unnamed files of one provider (VK uploads) share a card instead of a card each.
+    if (row.identityVoice === UNNAMED) return 'unnamed:' + row.provider;
     var canon = row.canon || (row.identityVoice ? canonVoice(row.identityVoice) : null);
     return canon && canon.key ? 'voice:' + canon.key : 'row:' + row.key;
   }

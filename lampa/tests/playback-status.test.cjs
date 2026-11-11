@@ -200,7 +200,9 @@ test('preparation shows a live timer and after twenty seconds suggests another s
   h.start({card: {id: 7}, homelab_torrent_hash: hash});
   const c = card(h), panelButtons = buttons(h);
   h.tick(2400); assert.ok(!shown(c.root), "Lampa's loader covers a fast start");
+  assert.ok(!h.L.Player.render().hasClass('homelab-card-wait'), "Lampa's loader is the wait mark until the card shows");
   h.tick(100); assert.ok(shown(c.root)); assert.equal(c.title.text(), 'Подготовка видео… 2 с');
+  assert.ok(h.L.Player.render().hasClass('homelab-card-wait'), 'one spinner: the card hides Lampa\'s loader');
   h.tick(5500); assert.equal(c.title.text(), 'Подготовка видео… 8 с');
   assert.equal(c.detail.text(), 'Подключаемся к раздаче'); assert.ok(!shown(c.hint) && !shown(c.source));
   assert.equal(controllerName(h), 'player', 'nothing to focus yet');

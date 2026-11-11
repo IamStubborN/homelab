@@ -1,4 +1,5 @@
   // ── Voice labels: studios, types, languages; torrent release voices ──
+  var BLOCKED = /заблокирован|правообладател|недоступно в (?:вашем|данном) регионе|blocked by|copyright/i;
   var ITEM_TAG = /^(?:web[\s-]?dl|webrip|hdrip|bdrip|blu[\s-]?ray|hdtv|camrip|ts|4k|uhd|hdr|sdr|\d{3,4}[pi])$/i;
   function voiceKey(value) { return String(value || '').toLowerCase().replace(/[\s._-]+/g, ' ').trim(); }
   // Whole-label studio aliases (normalized: lower case, ё→е, punctuation to spaces) and a display name.
@@ -16,11 +17,12 @@
     coldfilm: ['ColdFilm', 'coldfilm', 'cold film'], baibako: ['BaibaKo', 'baibako'], amedia: ['Amedia', 'amedia'],
     ideafilm: ['IdeaFilm', 'ideafilm', 'idea film'], novamedia: ['NovaMedia', 'novamedia', 'nova media'],
     kurazh: ['Кураж-Бамбей', 'кураж бамбей', 'kurazh bambey'], viruseproject: ['ViruseProject', 'viruseproject'],
-    anidub: ['AniDub', 'anidub'], animevost: ['AnimeVost', 'animevost'], dreamcast: ['DreamCast', 'dreamcast'],
-    sovetromantica: ['SovetRomantica', 'sovetromantica'], studioband: ['Studio Band', 'studio band', 'studioband'],
+    anidub: ['AniDub', 'anidub', 'anidub online'], animevost: ['AnimeVost', 'animevost'], dreamcast: ['DreamCast', 'dreamcast'],
+    sovetromantica: ['SovetRomantica', 'sovetromantica'], studioband: ['Studio Band', 'studio band', 'studioband', 'студийная банда'],
     flarrow: ['Flarrow Films', 'flarrow films', 'flarrow'], ledoyen: ['LeDoyen', 'ledoyen', 'le doyen'],
     gaevsky: ['Гаевский', 'гаевский', 'gaevsky'], gavrilov: ['Гаврилов', 'гаврилов', 'gavrilov'],
     volodarsky: ['Володарский', 'володарский', 'volodarsky'], sdi: ['SDI Media', 'sdi media', 'sdi'],
+    goblin: ['Гоблин', 'гоблин', 'goblin', 'дмитрий goblin пучков', 'дмитрий гоблин пучков', 'дмитрий пучков', 'пучков'],
     netflix: ['Netflix', 'netflix'], pazl: ['Pazl Voice', 'pazl voice', 'pazl'], tvin: ['TVIN', 'tvin']
   };
   function normalized(value) {
@@ -56,7 +58,7 @@
   }
   var LANGUAGES = [['RU', /^(?:рус(?:ский|ская|ское)?|ru|rus|russian)$/], ['UK', /^(?:укр(?:аинский|аинская)?|uk|ua|ukr|ukrainian)$/],
     ['EN', /^(?:англ(?:ийский|ийская)?|en|eng|english)$/], ['KZ', /^(?:каз(?:ахский)?|kz|kaz)$/], ['JA', /^(?:японский|ja|jp|jpn|japanese)$/]];
-  var TYPES = [['Дубляж', /^(?:дублированный|дублированная|дубляж|dub|лицензия|license)$/], ['Многоголосый', /^(?:многоголосый|многоголосая|mvo)$/],
+  var TYPES = [['Дубляж', /^(?:дублированный|дублированная|дубляж|дубл|dub|dubbed|лицензия|license)$/], ['Многоголосый', /^(?:многоголосый|многоголосая|mvo)$/],
     ['Двухголосый', /^(?:двухголосый|двухголосая|dvo)$/], ['Любительский', /^(?:любительский|любительская)$/],
     ['Авторский', /^(?:авторский|авторская|одноголосый|одноголосая|avo)$/], ['Оригинал', /^(?:оригинал|оригинальный|оригинальная|original|orig)$/]];
   // Tracker shorthand, only inside release names.
@@ -65,6 +67,8 @@
   function canonVoice(value) {
     var raw = String(value || '').trim(), text = normalized(raw), result = {studio: '', type: '', lang: '', subs: false, key: '', label: raw};
     if (!text) { result.key = ''; return result; }
+    // Placeholders name no voice: each stays its provider's own card.
+    if (/^(?:неизвестно|неизвестная|по умолчанию|unknown|default|delete|deleted|null|undefined|none)$/.test(text)) { result.label = 'Озвучка не указана'; return result; }
     var studio = studioOf(text), words = text.split(' '), rest = [];
     if (!studio) {
       words.forEach(function (word) {
@@ -72,9 +76,14 @@
         if (/^(?:субтитры|subs?|subtitles)$/.test(word)) result.subs = true;
         else if (lang) result.lang = result.lang || lang[0];
         else if (type) result.type = result.type || type[0];
-        else if (!/^(?:профессиональный|любительский|озвучка|перевод|голос|закадровый|закадровая|studio|studios|студия|tv|records|version|версия)$/.test(word)) rest.push(word);
+        // Release tags and initials ("Дубляж [4K, SDR, Ukr, LeDoyen]", "Ю. Сербин") say nothing about the studio.
+        else if (/^(?:\d{3,4}p|2160|1440|1080|720|576|480|360|4k|4к|uhd|hdr|sdr|hdr10|dv|bd|web|webrip|webdl|bdrip|hdrip|remux|av1|hevc)$/.test(word)) return;
+        else if (!/^(?:профессиональный|любительский|озвучка|перевод|голос|закадровый|закадровая|studio|studios|st|студия|tv|records|version|версия)$/.test(word)) rest.push(word);
       });
+      // Cyrillic initials go when a name stays and no studio needs them: "Ю. Сербин" is Сербин,
+      // "Кубик в Кубе (Дубляж)" keeps its "в"; "Studio A" and "Voice 2" keep theirs.
       var leftover = rest.join(' ');
+      if (!studioOf(leftover) && rest.some(function (word) { return word.length > 1; })) leftover = rest.filter(function (word) { return !/^[а-я]$/.test(word); }).join(' ');
       // A language next to a studio stays part of its identity: "HDRezka Studio (Украинский)".
       result.studio = studioOf(leftover) || (leftover ? 'text:' + leftover : '');
     } else result.studio = studio;

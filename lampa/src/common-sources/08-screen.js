@@ -23,7 +23,7 @@
     // Header: poster, title, the episode and live search progress; the summary opens the parameters (also →).
     var poster = $('<div class="homelab-common-poster hide"></div>'), info = $('<div class="homelab-common-info"></div>'), facts = $('<div class="homelab-common-facts"></div>');
     var title = $('<div class="homelab-common-heading"></div>').text(movie.title || movie.name || 'Общий'), kicker = $('<div class="homelab-common-kicker"></div>').text(recovery ? 'Выбор источника' : 'Общий поиск');
-    var episodeLabel = $('<div class="homelab-common-episode' + (tv ? '' : ' hide') + '"></div>'), year = String(movie.release_date || movie.first_air_date || '').slice(0, 4), rating = Number(movie.vote_average);
+    var episodeLabel = $('<div class="homelab-common-episode' + (tv && !recovery ? '' : ' hide') + '"></div>'), year = String(movie.release_date || movie.first_air_date || '').slice(0, 4), rating = Number(movie.vote_average);
     var summary = button('', 'homelab-common-summary', function () { openSettings(); }), summaryText = $('<span class="homelab-common-summary-text"></span>');
     summary.append(summaryText).append($('<span class="homelab-common-key"></span>').text('→'));
     status.append($('<div class="homelab-common-spinner"></div>')).append(statusText).append(bar.append(barFill));
@@ -39,7 +39,14 @@
     var otherButton = button('', 'homelab-common-chip homelab-common-other-voices hide', otherVoices); root.append(otherButton);
     body.appendTo(scroll.body()); main.append(scroll.render()).append(detail); root.append(main); root.append(hint);
     var recoveryLabel = recovery ? $('<div class="homelab-common-recovery"></div>') : null;
-    function recoveryText() { if (recoveryLabel) recoveryLabel.text('Продолжить с ' + L.Utils.secondsToTime(recovery.position) + (recovery.voice ? ' · ' + recovery.voice : ' · Выберите озвучку') + '. Тайминги разных версий могут отличаться'); }
+    // Recovery banner: what resumes where, the kept voice, and the one caveat.
+    function recoveryText() {
+      if (!recoveryLabel) return;
+      var at = L.Utils.secondsToTime(recovery.position), what = tv ? 'Серия ' + recovery.episode + ' · с ' + at : 'Продолжить с ' + at;
+      recoveryLabel.empty().append($('<span class="homelab-common-recovery-play"></span>').text('▶')).append($('<span class="homelab-common-recovery-what"></span>').text(what));
+      recoveryLabel.append($('<span class="homelab-common-recovery-voice' + (recovery.voice ? '' : ' is-none') + '"></span>').text(recovery.voice ? 'Озвучка: ' + recovery.voice : 'Выберите озвучку'));
+      recoveryLabel.append($('<span class="homelab-common-recovery-note"></span>').text('тайминги версий могут отличаться'));
+    }
     if (recoveryLabel) { head.after(recoveryLabel); recoveryText(); }
     function active() { return !dead && L.Activity.active() === object; }
     // The list owns focus only while the parameters panel is closed.
@@ -72,7 +79,25 @@
       tile.text((open ? '▾ Торренты · ' : '▸ Торренты · ') + plural(count, ['раздача', 'раздачи', 'раздач']) + (open ? '' : ' — показать'));
       return tile;
     }
-    var sectionOpen = false;
+    var sectionOpen = false, voicesOpen = null;
+    // Recovery keeps the voice: its sources are the list, other voices fold below.
+    function voicesSection(count, open) {
+      var tile = tiles['section:voices'];
+      if (!tile) tile = tiles['section:voices'] = button('', 'homelab-common-section', function () { voicesOpen = !voicesShown; locked = true; draw(); });
+      tile.text((open ? '▾ Другие озвучки · ' : '▸ Другие озвучки · ') + count + (open ? '' : ' — показать'));
+      return tile;
+    }
+    var voicesShown = false;
+    function sourceMode() { return grouped && !!(recovery && recovery.voice); }
+    // The voice this title is being watched in (Continue): its card leads, from the source that played it.
+    function watchedVoice() {
+      if (recovery || !window.homelabContinue || typeof window.homelabContinue.list !== 'function') return null;
+      var card = (movie.name ? 'tv_' : 'movie_') + movie.id, item = null;
+      try { item = window.homelabContinue.list().find(function (entry) { return entry && entry.card === card && entry.kind === 'online' && entry.online && entry.online.voice; }); } catch (_) {}
+      var canon = item ? canonVoice(item.online.voice) : null;
+      return canon && canon.key ? {key: 'voice:' + canon.key, provider: item.online.provider, label: canon.label, season: item.season || 0, episode: item.episode || 0, position: Number(item.position) || 0} : null;
+    }
+    var mine = watchedVoice();
     function otherVoices() {
       if (!recovery || !active() || sync.scope() !== currentScope) return;
       recovery.voice = ''; recoveryText(); locked = false; order = []; shown = 20; last = null; scroll.reset(); updateSummary(); draw();
@@ -228,7 +253,8 @@
     }
     function open(row) {
       if (!active() || sync.scope() !== currentScope) return;
-      if (recovery && (row.native || row.kind !== 'online' || row.provider === recovery.excludeProvider || recovery.voice && !voiceMatch(recovery.voice, row.identityVoice))) return;
+      // Another voice is a choice made in the "Другие озвучки" fold (or after clearing the voice); the failed provider never is.
+      if (recovery && (row.native || row.kind !== 'online' || row.provider === recovery.excludeProvider || recovery.voice && !sourceMode() && !voiceMatch(recovery.voice, row.identityVoice))) return;
       // Online handoffs push an activity, whose pause() cancels the search; a refused handoff keeps it running.
       if (row.kind === 'torrent') {
         cancel(); draw();
@@ -272,11 +298,27 @@
         nativeModel.sig = [nativeModel.voice, nativeModel.details].join('|');
         return nativeModel;
       }
+      if (item.source) {
+        var sourceModel = {voice: sourceName(row), badges: [], cls: 'is-online is-source', note: ''};
+        sourceModel.details = [row.canon && row.canon.label || row.identityVoice, row.unavailable ? 'Не отдаёт видео' : !best ? 'Качество уточняется' : ''].filter(Boolean).join(' · ');
+        var sourceLangs = subtitleLanguagesOf([row]);
+        if (sourceLangs !== null || row.canon && row.canon.subs) sourceModel.badges.push([sourceLangs || 'субтитры', 'is-subs']);
+        if (row.unavailable) { sourceModel.quality = 'нет видео'; sourceModel.qcls = 'is-off'; sourceModel.cls += ' is-unavailable'; }
+        else if (best) { sourceModel.quality = qualityLabel(best); sourceModel.qcls = qualityClass(best); }
+        else { sourceModel.quality = '—'; sourceModel.qcls = 'is-none'; }
+        sourceModel.cls += ' has-' + sourceModel.qcls.slice(3);
+        if (!row.unavailable && best) sourceModel.note = row.verified === 'play' ? 'по просмотру' : row.measured ? 'проверено' : row.doubtful ? 'заявлено, не проверено' : 'заявлено';
+        sourceModel.measured = !!row.measured;
+        sourceModel.pick = hero ? 'Лучший источник' + (row.measured ? ' · проверено' : '') : '';
+        if (hero) sourceModel.cls += ' is-hero';
+        sourceModel.sig = ['src', sourceModel.voice, sourceModel.details, sourceModel.quality, sourceModel.qcls, sourceModel.note, sourceModel.measured, sourceModel.pick, sourceModel.cls, sourceModel.badges.join(',')].join('|');
+        return sourceModel;
+      }
       var voice = !grouped ? row.voice : row.kind === 'torrent' ? (row.canon && row.canon.label || row.voice) : row.canon && row.canon.label || row.identityVoice || row.voice;
       if (voice === UNNAMED) voice = UNNAMED + ' · ' + row.providerName;
       var subs = item.rows.some(function (entry) { return entry.canon && entry.canon.subs; }), langs = subtitleLanguagesOf(item.rows);
       var model = {voice: voice, badges: [], cls: row.kind === 'torrent' ? 'is-torrent' : 'is-online', note: ''};
-      model.details = row.providerName + ' · ' + (count > 1 ? 'ещё ' + plural(count - 1, row.kind === 'torrent' ? ['раздача', 'раздачи', 'раздач'] : SOURCES) : row.kind === 'torrent' ? 'Торрент' : 'Онлайн');
+      model.details = row.providerName + ' · ' + (count > 1 ? 'ещё ' + plural(count - 1, row.kind === 'torrent' ? ['раздача', 'раздачи', 'раздач'] : item.key.indexOf('unnamed:') === 0 ? ['видео', 'видео', 'видео'] : SOURCES) : row.kind === 'torrent' ? 'Торрент' : 'Онлайн');
       if (row.release) {
         var described = row.described || (row.described = describeRelease(row.release)), size = gigabytes(row.release), seeds = Number(row.release.Seeders);
         if (Number.isFinite(seeds)) model.badges.push([plural(seeds, ['сид', 'сида', 'сидов']), seeds >= MIN_SEEDS ? 'is-seeds' : 'is-dead']);
@@ -300,7 +342,9 @@
         if (row.measured && row.claimed > best) model.note += ' · заявлено ' + qualityLabel(row.claimed);
       }
       model.measured = !!row.measured;
-      model.pick = hero ? 'Лучший выбор' + (row.measured ? ' · проверено' : '') : '';
+      var stopped = item.mine && mine.position > 30 && (!tv || mine.season === selection.season && mine.episode === selection.episode);
+      model.pick = item.mine ? 'Ваша озвучка · ' + (stopped ? 'остановились на ' + L.Utils.secondsToTime(mine.position) : 'вы смотрите в ней') : hero ? 'Лучший выбор' + (row.measured ? ' · проверено' : '') : '';
+      if (item.mine) model.cls += ' is-mine';
       if (hero) model.cls += ' is-hero';
       model.sig = [model.voice, model.details, model.quality, model.qcls, model.note, model.measured, model.pick, model.cls, model.badges.join(',')].join('|');
       return model;
@@ -377,32 +421,38 @@
       if (entry.measured && entry.claimed > best) return ['is-warn', qualityLabel(best) + ' · заявлено ' + qualityLabel(entry.claimed)];
       return [entry.measured ? 'is-ok' : '', qualityLabel(best) + (entry.verified === 'play' ? ' · по просмотру' : entry.measured ? ' · проверено' : ' · заявлено')];
     }
+    function keysText(item) {
+      if (recovery) return 'ОК — продолжить с ' + L.Utils.secondsToTime(recovery.position) + (item && !item.source && item.rows.length > 1 ? ' · удержание ОК — все источники' : '') + ' · → параметры';
+      return 'ОК — смотреть · удержание ОК — все источники · → параметры';
+    }
     function showDetail(key) {
       var item = key && models[key];
       if (!item || item.section) return;
       var row = item.best, model = view(item, false);
-      var sig = [key, model.sig, item.rows.map(function (entry) { return entry.key + ':' + (entry.qualities[0] || 0) + (entry.measured ? 'm' : '') + (entry.unavailable ? 'u' : ''); }).join(',')].join('|');
+      var sig = [key, model.sig, item.source ? visibleItems.filter(function (entry) { return entry.source; }).map(function (entry) { return entry.key + ':' + (entry.best.qualities[0] || 0) + (entry.best.measured ? 'm' : ''); }).join(',') : '', item.rows.map(function (entry) { return entry.key + ':' + (entry.qualities[0] || 0) + (entry.measured ? 'm' : '') + (entry.unavailable ? 'u' : ''); }).join(',')].join('|');
       if (sig === detailSig) return;
       detailSig = sig; detailKey = key; detail.empty().removeClass('hide');
       var top = $('<div class="homelab-common-detail-top"></div>'), named = $('<div class="homelab-common-detail-name"></div>');
       top.append($('<div class="homelab-common-ring ' + model.qcls + '"></div>').text(model.quality || '—'));
       named.append($('<div class="homelab-common-detail-voice"></div>').text(model.voice));
-      named.append($('<div class="homelab-common-detail-kind"></div>').text(item.key === 'native' ? 'Открыть в источнике' : row.release ? 'Торрент' + (row.described && row.described.codec ? ' · ' + row.described.codec : '') : 'Онлайн · ' + plural(item.rows.length, SOURCES)));
+      named.append($('<div class="homelab-common-detail-kind"></div>').text(item.source ? (row.canon && row.canon.label || row.identityVoice) : item.key === 'native' ? 'Открыть в источнике' : row.release ? 'Торрент' + (row.described && row.described.codec ? ' · ' + row.described.codec : '') : 'Онлайн · ' + plural(item.rows.length, SOURCES)));
       detail.append(top.append(named));
       var said = verdict(item);
       detail.append($('<div class="homelab-common-verdict ' + said[0] + '"></div>').text(said[1]));
       var langs = subtitleLanguagesOf(item.rows);
       if (langs !== null || item.rows.some(function (entry) { return entry.canon && entry.canon.subs; })) detail.append($('<div class="homelab-common-detail-subs"></div>').text('Субтитры: ' + (langs || 'есть')));
-      detail.append($('<div class="homelab-common-detail-label"></div>').text(row.release ? 'Раздачи' : 'Источники'));
+      // A source row compares itself with the other sources of the kept voice; a card lists the sources behind it.
+      var compared = item.source ? visibleItems.filter(function (entry) { return entry.source; }).map(function (entry) { return entry.best; }) : item.rows;
+      detail.append($('<div class="homelab-common-detail-label"></div>').text(item.source ? 'Все источники озвучки' : row.release ? 'Раздачи' : 'Источники'));
       var list = $('<div class="homelab-common-sources"></div>');
-      item.rows.slice(0, 6).forEach(function (entry) {
+      compared.slice(0, 6).forEach(function (entry) {
         var value = sourceValue(entry), height = entry.unavailable ? 0 : entry.qualities[0] || 0, line = $('<div class="homelab-common-source' + (entry === row ? ' is-best' : '') + '"></div>');
         line.append($('<span class="homelab-common-source-name"></span>').text(sourceName(entry))).append($('<span class="homelab-common-source-value ' + value[0] + '"></span>').text(value[1]));
         line.append($('<span class="homelab-common-meter"></span>').append($('<span class="homelab-common-meter-fill ' + qualityClass(height) + '"></span>').css('width', Math.round(height / 2160 * 100) + '%')));
         list.append(line);
       });
-      if (item.rows.length > 6) list.append($('<div class="homelab-common-source-more"></div>').text('ещё ' + plural(item.rows.length - 6, row.release ? ['раздача', 'раздачи', 'раздач'] : SOURCES) + ' — удержание ОК'));
-      detail.append(list).append($('<div class="homelab-common-keys"></div>').text('ОК — смотреть · удержание ОК — все источники · → параметры'));
+      if (compared.length > 6) list.append($('<div class="homelab-common-source-more"></div>').text('ещё ' + plural(compared.length - 6, row.release ? ['раздача', 'раздачи', 'раздач'] : SOURCES) + (item.source ? ' — ниже в списке' : ' — удержание ОК')));
+      detail.append(list).append($('<div class="homelab-common-keys"></div>').text(keysText(item)));
     }
     // Long press: every source behind the card, or every release of a torrent group.
     function sourceMenu(item) {
@@ -435,6 +485,8 @@
     }
     function draw() {
       if (dead || !search || sync.scope() !== currentScope) return;
+      // Re-read each time: playing another voice from here makes it the watched one on return.
+      mine = watchedVoice();
       // Groups merge while results stream in; a focused row that disappears
       // hands focus to the row now in its place, never to the filters above.
       var focusedKey = '', focusedIndex = -1;
@@ -447,11 +499,26 @@
         return match || compareRows(a, b, tie);
       }
       var available = candidates.filter(function (row) { return !recovery || !recovery.voice || voiceMatch(recovery.voice, row.identityVoice) > 0; }).sort(function (a, b) { return rank(a, b); });
-      var showOther = recovery && recovery.voice && candidates.length > 0 && (!exact || last === otherButton[0]);
+      var showOther = !sourceMode() && recovery && recovery.voice && candidates.length > 0 && (!exact || last === otherButton[0]);
       otherButton.text('Другие озвучки · ' + candidates.length).toggleClass('hide', !showOther);
-      var groups = grouped ? groupRows(available).sort(function (a, b) {
+      var byVoice = function (list) { return groupRows(list).map(function (item) {
+        // The watched voice plays from the source it played from, while that source still has the video.
+        if (mine && item.key === mine.key) {
+          var same = item.rows.find(function (entry) { return entry.provider === mine.provider && !entry.unavailable; });
+          if (same && same !== item.best) { item.rows.splice(item.rows.indexOf(same), 1); item.rows.unshift(same); item.best = same; }
+          item.mine = !!item.best && !item.best.unavailable;
+        }
+        return item;
+      }).sort(function (a, b) {
+        if (!!a.mine !== !!b.mine) return a.mine ? -1 : 1;
+        // Uploads without a named voice (VK, Rutube) are a last resort, however many of them there are.
+        var unnamedA = a.key.indexOf('unnamed:') === 0, unnamedB = b.key.indexOf('unnamed:') === 0;
+        if (unnamedA !== unnamedB) return unnamedA ? 1 : -1;
         return rank(a.best, b.best, function () { return b.rows.length - a.rows.length || (b.best.measured ? 1 : 0) - (a.best.measured ? 1 : 0); });
-      }) : available.map(function (row) { return {key: 'row:' + row.key, rows: [row], best: row}; });
+      }); };
+      var groups = sourceMode() ? available.map(function (row) { return {key: 'row:' + row.key, rows: [row], best: row, source: true}; })
+        .concat(byVoice(candidates.filter(function (row) { return !voiceMatch(recovery.voice, row.identityVoice); })).map(function (item) { item.other = true; return item; }))
+        : grouped ? byVoice(available) : available.map(function (row) { return {key: 'row:' + row.key, rows: [row], best: row}; });
       var byKey = {}; groups.forEach(function (item) { byKey[item.key] = item; });
       var loading = search.onlinePending || search.torrentPending, now = Date.now();
       // Untouched lists re-rank at most once a second while results stream in; once the user moved, rows keep their places.
@@ -474,13 +541,20 @@
           items = before.concat([{key: 'section:torrents', section: true, rows: torrents}], sectionOpen ? torrents : [], rest.slice(before.length));
         }
       }
+      if (sourceMode()) {
+        var others = items.filter(function (item) { return item.other; });
+        items = items.filter(function (item) { return !item.other; });
+        voicesShown = voicesOpen === null ? !items.length && !loading : voicesOpen;
+        if (others.length) items = items.concat([{key: 'section:voices', section: true, rows: others}], voicesShown ? others : []);
+      }
       visibleItems = items; models = byKey;
       showPlaceholder(items.length ? '' : loading ? 'loading' : 'empty:' + q + ':' + kind + ':' + subsOnly, loading);
       var wanted = {}, page = items.slice(0, shown), keys = [];
       search.probe(page.filter(function (item) { return !item.section; }).map(function (item) { return item.best; }));
-      var heroKey = page[0] && !page[0].section ? page[0].key : '';
+      var heroKey = page[0] && !page[0].section && !page[0].other ? page[0].key : '';
       page.forEach(function (item) {
         wanted[item.key] = true; keys.push(item.key);
+        if (item.key === 'section:voices') { voicesSection(item.rows.length, voicesShown); return; }
         if (item.section) { section(torrents.length, sectionOpen); return; }
         var tile = tiles[item.key] || (tiles[item.key] = card(item.key));
         fill(tile, view(item, item.key === heroKey && !item.best.native && !item.best.unavailable));
@@ -504,8 +578,8 @@
         if (moved || !body[0].contains(more[0]) || body.children().last()[0] !== more[0]) { body.append(more); moved = true; }
       } else if (more) { more.remove(); more = null; moved = true; }
       drawStatus(loading, items.filter(function (item) { return !item.section; }), available, exact);
-      hint.toggleClass('hide', !items.length).text(grouped ? 'ОК — смотреть  ·  удержание ОК — все источники  ·  → параметры' : 'ОК — смотреть  ·  удержание ОК — подробности  ·  → параметры');
-      var firstCard = keys.filter(function (key) { return key !== 'section:torrents'; })[0], top = firstCard && tiles[firstCard] ? tiles[firstCard][0] : null;
+      hint.toggleClass('hide', !items.length).text(recovery ? keysText(null) : grouped ? 'ОК — смотреть  ·  удержание ОК — все источники  ·  → параметры' : 'ОК — смотреть  ·  удержание ОК — подробности  ·  → параметры');
+      var firstCard = keys.filter(function (key) { return key.indexOf('section:') !== 0; })[0], top = firstCard && tiles[firstCard] ? tiles[firstCard][0] : null;
       if (ownList()) {
         var before = last;
         if (untouched && top) last = top;

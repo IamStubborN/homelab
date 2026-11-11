@@ -32,6 +32,7 @@
   }
   function always(promise, fn) { return promise.then(function (value) { fn(); return value; }, function (error) { fn(); throw error; }); }
   // ── Voice labels: studios, types, languages; torrent release voices ──
+  var BLOCKED = /заблокирован|правообладател|недоступно в (?:вашем|данном) регионе|blocked by|copyright/i;
   var ITEM_TAG = /^(?:web[\s-]?dl|webrip|hdrip|bdrip|blu[\s-]?ray|hdtv|camrip|ts|4k|uhd|hdr|sdr|\d{3,4}[pi])$/i;
   function voiceKey(value) { return String(value || '').toLowerCase().replace(/[\s._-]+/g, ' ').trim(); }
   // Whole-label studio aliases (normalized: lower case, ё→е, punctuation to spaces) and a display name.
@@ -49,11 +50,12 @@
     coldfilm: ['ColdFilm', 'coldfilm', 'cold film'], baibako: ['BaibaKo', 'baibako'], amedia: ['Amedia', 'amedia'],
     ideafilm: ['IdeaFilm', 'ideafilm', 'idea film'], novamedia: ['NovaMedia', 'novamedia', 'nova media'],
     kurazh: ['Кураж-Бамбей', 'кураж бамбей', 'kurazh bambey'], viruseproject: ['ViruseProject', 'viruseproject'],
-    anidub: ['AniDub', 'anidub'], animevost: ['AnimeVost', 'animevost'], dreamcast: ['DreamCast', 'dreamcast'],
-    sovetromantica: ['SovetRomantica', 'sovetromantica'], studioband: ['Studio Band', 'studio band', 'studioband'],
+    anidub: ['AniDub', 'anidub', 'anidub online'], animevost: ['AnimeVost', 'animevost'], dreamcast: ['DreamCast', 'dreamcast'],
+    sovetromantica: ['SovetRomantica', 'sovetromantica'], studioband: ['Studio Band', 'studio band', 'studioband', 'студийная банда'],
     flarrow: ['Flarrow Films', 'flarrow films', 'flarrow'], ledoyen: ['LeDoyen', 'ledoyen', 'le doyen'],
     gaevsky: ['Гаевский', 'гаевский', 'gaevsky'], gavrilov: ['Гаврилов', 'гаврилов', 'gavrilov'],
     volodarsky: ['Володарский', 'володарский', 'volodarsky'], sdi: ['SDI Media', 'sdi media', 'sdi'],
+    goblin: ['Гоблин', 'гоблин', 'goblin', 'дмитрий goblin пучков', 'дмитрий гоблин пучков', 'дмитрий пучков', 'пучков'],
     netflix: ['Netflix', 'netflix'], pazl: ['Pazl Voice', 'pazl voice', 'pazl'], tvin: ['TVIN', 'tvin']
   };
   function normalized(value) {
@@ -89,7 +91,7 @@
   }
   var LANGUAGES = [['RU', /^(?:рус(?:ский|ская|ское)?|ru|rus|russian)$/], ['UK', /^(?:укр(?:аинский|аинская)?|uk|ua|ukr|ukrainian)$/],
     ['EN', /^(?:англ(?:ийский|ийская)?|en|eng|english)$/], ['KZ', /^(?:каз(?:ахский)?|kz|kaz)$/], ['JA', /^(?:японский|ja|jp|jpn|japanese)$/]];
-  var TYPES = [['Дубляж', /^(?:дублированный|дублированная|дубляж|dub|лицензия|license)$/], ['Многоголосый', /^(?:многоголосый|многоголосая|mvo)$/],
+  var TYPES = [['Дубляж', /^(?:дублированный|дублированная|дубляж|дубл|dub|dubbed|лицензия|license)$/], ['Многоголосый', /^(?:многоголосый|многоголосая|mvo)$/],
     ['Двухголосый', /^(?:двухголосый|двухголосая|dvo)$/], ['Любительский', /^(?:любительский|любительская)$/],
     ['Авторский', /^(?:авторский|авторская|одноголосый|одноголосая|avo)$/], ['Оригинал', /^(?:оригинал|оригинальный|оригинальная|original|orig)$/]];
   // Tracker shorthand, only inside release names.
@@ -98,6 +100,8 @@
   function canonVoice(value) {
     var raw = String(value || '').trim(), text = normalized(raw), result = {studio: '', type: '', lang: '', subs: false, key: '', label: raw};
     if (!text) { result.key = ''; return result; }
+    // Placeholders name no voice: each stays its provider's own card.
+    if (/^(?:неизвестно|неизвестная|по умолчанию|unknown|default|delete|deleted|null|undefined|none)$/.test(text)) { result.label = 'Озвучка не указана'; return result; }
     var studio = studioOf(text), words = text.split(' '), rest = [];
     if (!studio) {
       words.forEach(function (word) {
@@ -105,9 +109,14 @@
         if (/^(?:субтитры|subs?|subtitles)$/.test(word)) result.subs = true;
         else if (lang) result.lang = result.lang || lang[0];
         else if (type) result.type = result.type || type[0];
-        else if (!/^(?:профессиональный|любительский|озвучка|перевод|голос|закадровый|закадровая|studio|studios|студия|tv|records|version|версия)$/.test(word)) rest.push(word);
+        // Release tags and initials ("Дубляж [4K, SDR, Ukr, LeDoyen]", "Ю. Сербин") say nothing about the studio.
+        else if (/^(?:\d{3,4}p|2160|1440|1080|720|576|480|360|4k|4к|uhd|hdr|sdr|hdr10|dv|bd|web|webrip|webdl|bdrip|hdrip|remux|av1|hevc)$/.test(word)) return;
+        else if (!/^(?:профессиональный|любительский|озвучка|перевод|голос|закадровый|закадровая|studio|studios|st|студия|tv|records|version|версия)$/.test(word)) rest.push(word);
       });
+      // Cyrillic initials go when a name stays and no studio needs them: "Ю. Сербин" is Сербин,
+      // "Кубик в Кубе (Дубляж)" keeps its "в"; "Studio A" and "Voice 2" keep theirs.
       var leftover = rest.join(' ');
+      if (!studioOf(leftover) && rest.some(function (word) { return word.length > 1; })) leftover = rest.filter(function (word) { return !/^[а-я]$/.test(word); }).join(' ');
       // A language next to a studio stays part of its identity: "HDRezka Studio (Украинский)".
       result.studio = studioOf(leftover) || (leftover ? 'text:' + leftover : '');
     } else result.studio = studio;
@@ -302,6 +311,11 @@
       return [movie.title, movie.original_title, movie.name, movie.original_name].some(function (name) {
         var known = normalized(name); return known.length >= 3 && (value === known || value.indexOf(known + ' ') === 0);
       });
+    }
+    // Uploads (VK Видео and the like) label a file with the film's own name: "🎬Интерстеллар (2014) - 4K UHD".
+    function namesFilm(text) {
+      var value = ' ' + normalized(text) + ' ';
+      return [movie.title, movie.original_title].some(function (name) { var known = normalized(name); return known.length >= 4 && value.indexOf(' ' + known + ' ') >= 0; });
     }
     // Two lanes: first pages of every provider go before alternate-voice pages, so all providers show up early.
     var self = this, scope = sync.scope(), alive = true, queue = [], voiceQueue = [], requests = [], timers = [], running = 0, discovered = {}, seenRows = {}, visited = {}, voicesSeen = {};
@@ -548,7 +562,11 @@
         if (state.voice && state.voice !== voice) voiceSeen(source, state.seasonIndex, state.voice);
         var matching = files.filter(function (file) { return !movie.name || Number.isInteger(file.season) && file.season >= 0 && Number.isInteger(file.episode) && file.episode > 0 && file.season === selection.season && file.episode === selection.episode; });
         var labels = {};
+        // A rights-holder notice stands where the voice should ("Заблокировано правообладателем!"): nothing plays behind
+        // it, though the page's other voices still get asked below.
+        if (BLOCKED.test(voice)) matching = [];
         matching.forEach(function (file) {
+          if (BLOCKED.test(file.voice_name || '') || BLOCKED.test(file.translate || '')) return;
           var row = {kind: 'online', provider: source.key, providerName: source.name, seasonIndex: state.seasonIndex, qualities: listedQualities(file), subtitles: onlineSubtitles(file)}, identityVoice;
           row.claimed = row.qualities[0] || 0;
           // Quality log key, the same one native rows and playback use (HomelabSync resume identity).
@@ -564,6 +582,7 @@
             // A film title, year or release tag ("Начало (2010) 4K") names the file, not its voice.
             var named = filmText && !titleLike(filmText) ? filmText : '';
             identityVoice = voice || translate || named || (tag && !ITEM_TAG.test(tag) && !titleLike(tag) ? tag : '') || UNNAMED;
+            if (identityVoice !== UNNAMED && namesFilm(identityVoice)) identityVoice = UNNAMED;
             row.key = source.key + ':' + state.seasonIndex + ':' + index + ':' + identityVoice + ':' + row.qualities.join(',');
             row.tag = tag && tag !== identityVoice ? tag : '';
             // Exact native draw identity for the bridge: same item index among play/call items, URL and texts.
@@ -618,7 +637,7 @@
         var key = String(source.balanser || source.name && source.name.split(' ')[0] || '').toLowerCase();
         if (!/^[a-z0-9_.-]{1,80}$/i.test(key) || discovered[key] || source.show === false || !source.url) return;
         discovered[key] = true;
-        var value = {key: key, name: String(source.name || key).replace(/\s*~.*$/, '') || key};
+        var value = {key: key, name: String(source.name || key).replace(/\s*~.*$/, '').replace(/\s+-\s+(?:\d{3,4}p|4k|uhd|hd)$/i, '') || key};
         try { enqueue(value, address(source.url, true), {seasonIndex: 0, voice: ''}); } catch (_) { fallback(value); }
       });
     }
@@ -737,6 +756,8 @@
   function groupKey(row) {
     if (row.native) return 'native';
     if (row.kind === 'torrent') return row.canon && row.canon.key ? 'torrent:' + row.canon.key + ':' + (row.qualities[0] || 0) : 'row:' + row.key;
+    // Unnamed files of one provider (VK uploads) share a card instead of a card each.
+    if (row.identityVoice === UNNAMED) return 'unnamed:' + row.provider;
     var canon = row.canon || (row.identityVoice ? canonVoice(row.identityVoice) : null);
     return canon && canon.key ? 'voice:' + canon.key : 'row:' + row.key;
   }
@@ -777,7 +798,7 @@
     // Header: poster, title, the episode and live search progress; the summary opens the parameters (also →).
     var poster = $('<div class="homelab-common-poster hide"></div>'), info = $('<div class="homelab-common-info"></div>'), facts = $('<div class="homelab-common-facts"></div>');
     var title = $('<div class="homelab-common-heading"></div>').text(movie.title || movie.name || 'Общий'), kicker = $('<div class="homelab-common-kicker"></div>').text(recovery ? 'Выбор источника' : 'Общий поиск');
-    var episodeLabel = $('<div class="homelab-common-episode' + (tv ? '' : ' hide') + '"></div>'), year = String(movie.release_date || movie.first_air_date || '').slice(0, 4), rating = Number(movie.vote_average);
+    var episodeLabel = $('<div class="homelab-common-episode' + (tv && !recovery ? '' : ' hide') + '"></div>'), year = String(movie.release_date || movie.first_air_date || '').slice(0, 4), rating = Number(movie.vote_average);
     var summary = button('', 'homelab-common-summary', function () { openSettings(); }), summaryText = $('<span class="homelab-common-summary-text"></span>');
     summary.append(summaryText).append($('<span class="homelab-common-key"></span>').text('→'));
     status.append($('<div class="homelab-common-spinner"></div>')).append(statusText).append(bar.append(barFill));
@@ -793,7 +814,14 @@
     var otherButton = button('', 'homelab-common-chip homelab-common-other-voices hide', otherVoices); root.append(otherButton);
     body.appendTo(scroll.body()); main.append(scroll.render()).append(detail); root.append(main); root.append(hint);
     var recoveryLabel = recovery ? $('<div class="homelab-common-recovery"></div>') : null;
-    function recoveryText() { if (recoveryLabel) recoveryLabel.text('Продолжить с ' + L.Utils.secondsToTime(recovery.position) + (recovery.voice ? ' · ' + recovery.voice : ' · Выберите озвучку') + '. Тайминги разных версий могут отличаться'); }
+    // Recovery banner: what resumes where, the kept voice, and the one caveat.
+    function recoveryText() {
+      if (!recoveryLabel) return;
+      var at = L.Utils.secondsToTime(recovery.position), what = tv ? 'Серия ' + recovery.episode + ' · с ' + at : 'Продолжить с ' + at;
+      recoveryLabel.empty().append($('<span class="homelab-common-recovery-play"></span>').text('▶')).append($('<span class="homelab-common-recovery-what"></span>').text(what));
+      recoveryLabel.append($('<span class="homelab-common-recovery-voice' + (recovery.voice ? '' : ' is-none') + '"></span>').text(recovery.voice ? 'Озвучка: ' + recovery.voice : 'Выберите озвучку'));
+      recoveryLabel.append($('<span class="homelab-common-recovery-note"></span>').text('тайминги версий могут отличаться'));
+    }
     if (recoveryLabel) { head.after(recoveryLabel); recoveryText(); }
     function active() { return !dead && L.Activity.active() === object; }
     // The list owns focus only while the parameters panel is closed.
@@ -826,7 +854,25 @@
       tile.text((open ? '▾ Торренты · ' : '▸ Торренты · ') + plural(count, ['раздача', 'раздачи', 'раздач']) + (open ? '' : ' — показать'));
       return tile;
     }
-    var sectionOpen = false;
+    var sectionOpen = false, voicesOpen = null;
+    // Recovery keeps the voice: its sources are the list, other voices fold below.
+    function voicesSection(count, open) {
+      var tile = tiles['section:voices'];
+      if (!tile) tile = tiles['section:voices'] = button('', 'homelab-common-section', function () { voicesOpen = !voicesShown; locked = true; draw(); });
+      tile.text((open ? '▾ Другие озвучки · ' : '▸ Другие озвучки · ') + count + (open ? '' : ' — показать'));
+      return tile;
+    }
+    var voicesShown = false;
+    function sourceMode() { return grouped && !!(recovery && recovery.voice); }
+    // The voice this title is being watched in (Continue): its card leads, from the source that played it.
+    function watchedVoice() {
+      if (recovery || !window.homelabContinue || typeof window.homelabContinue.list !== 'function') return null;
+      var card = (movie.name ? 'tv_' : 'movie_') + movie.id, item = null;
+      try { item = window.homelabContinue.list().find(function (entry) { return entry && entry.card === card && entry.kind === 'online' && entry.online && entry.online.voice; }); } catch (_) {}
+      var canon = item ? canonVoice(item.online.voice) : null;
+      return canon && canon.key ? {key: 'voice:' + canon.key, provider: item.online.provider, label: canon.label, season: item.season || 0, episode: item.episode || 0, position: Number(item.position) || 0} : null;
+    }
+    var mine = watchedVoice();
     function otherVoices() {
       if (!recovery || !active() || sync.scope() !== currentScope) return;
       recovery.voice = ''; recoveryText(); locked = false; order = []; shown = 20; last = null; scroll.reset(); updateSummary(); draw();
@@ -982,7 +1028,8 @@
     }
     function open(row) {
       if (!active() || sync.scope() !== currentScope) return;
-      if (recovery && (row.native || row.kind !== 'online' || row.provider === recovery.excludeProvider || recovery.voice && !voiceMatch(recovery.voice, row.identityVoice))) return;
+      // Another voice is a choice made in the "Другие озвучки" fold (or after clearing the voice); the failed provider never is.
+      if (recovery && (row.native || row.kind !== 'online' || row.provider === recovery.excludeProvider || recovery.voice && !sourceMode() && !voiceMatch(recovery.voice, row.identityVoice))) return;
       // Online handoffs push an activity, whose pause() cancels the search; a refused handoff keeps it running.
       if (row.kind === 'torrent') {
         cancel(); draw();
@@ -1026,11 +1073,27 @@
         nativeModel.sig = [nativeModel.voice, nativeModel.details].join('|');
         return nativeModel;
       }
+      if (item.source) {
+        var sourceModel = {voice: sourceName(row), badges: [], cls: 'is-online is-source', note: ''};
+        sourceModel.details = [row.canon && row.canon.label || row.identityVoice, row.unavailable ? 'Не отдаёт видео' : !best ? 'Качество уточняется' : ''].filter(Boolean).join(' · ');
+        var sourceLangs = subtitleLanguagesOf([row]);
+        if (sourceLangs !== null || row.canon && row.canon.subs) sourceModel.badges.push([sourceLangs || 'субтитры', 'is-subs']);
+        if (row.unavailable) { sourceModel.quality = 'нет видео'; sourceModel.qcls = 'is-off'; sourceModel.cls += ' is-unavailable'; }
+        else if (best) { sourceModel.quality = qualityLabel(best); sourceModel.qcls = qualityClass(best); }
+        else { sourceModel.quality = '—'; sourceModel.qcls = 'is-none'; }
+        sourceModel.cls += ' has-' + sourceModel.qcls.slice(3);
+        if (!row.unavailable && best) sourceModel.note = row.verified === 'play' ? 'по просмотру' : row.measured ? 'проверено' : row.doubtful ? 'заявлено, не проверено' : 'заявлено';
+        sourceModel.measured = !!row.measured;
+        sourceModel.pick = hero ? 'Лучший источник' + (row.measured ? ' · проверено' : '') : '';
+        if (hero) sourceModel.cls += ' is-hero';
+        sourceModel.sig = ['src', sourceModel.voice, sourceModel.details, sourceModel.quality, sourceModel.qcls, sourceModel.note, sourceModel.measured, sourceModel.pick, sourceModel.cls, sourceModel.badges.join(',')].join('|');
+        return sourceModel;
+      }
       var voice = !grouped ? row.voice : row.kind === 'torrent' ? (row.canon && row.canon.label || row.voice) : row.canon && row.canon.label || row.identityVoice || row.voice;
       if (voice === UNNAMED) voice = UNNAMED + ' · ' + row.providerName;
       var subs = item.rows.some(function (entry) { return entry.canon && entry.canon.subs; }), langs = subtitleLanguagesOf(item.rows);
       var model = {voice: voice, badges: [], cls: row.kind === 'torrent' ? 'is-torrent' : 'is-online', note: ''};
-      model.details = row.providerName + ' · ' + (count > 1 ? 'ещё ' + plural(count - 1, row.kind === 'torrent' ? ['раздача', 'раздачи', 'раздач'] : SOURCES) : row.kind === 'torrent' ? 'Торрент' : 'Онлайн');
+      model.details = row.providerName + ' · ' + (count > 1 ? 'ещё ' + plural(count - 1, row.kind === 'torrent' ? ['раздача', 'раздачи', 'раздач'] : item.key.indexOf('unnamed:') === 0 ? ['видео', 'видео', 'видео'] : SOURCES) : row.kind === 'torrent' ? 'Торрент' : 'Онлайн');
       if (row.release) {
         var described = row.described || (row.described = describeRelease(row.release)), size = gigabytes(row.release), seeds = Number(row.release.Seeders);
         if (Number.isFinite(seeds)) model.badges.push([plural(seeds, ['сид', 'сида', 'сидов']), seeds >= MIN_SEEDS ? 'is-seeds' : 'is-dead']);
@@ -1054,7 +1117,9 @@
         if (row.measured && row.claimed > best) model.note += ' · заявлено ' + qualityLabel(row.claimed);
       }
       model.measured = !!row.measured;
-      model.pick = hero ? 'Лучший выбор' + (row.measured ? ' · проверено' : '') : '';
+      var stopped = item.mine && mine.position > 30 && (!tv || mine.season === selection.season && mine.episode === selection.episode);
+      model.pick = item.mine ? 'Ваша озвучка · ' + (stopped ? 'остановились на ' + L.Utils.secondsToTime(mine.position) : 'вы смотрите в ней') : hero ? 'Лучший выбор' + (row.measured ? ' · проверено' : '') : '';
+      if (item.mine) model.cls += ' is-mine';
       if (hero) model.cls += ' is-hero';
       model.sig = [model.voice, model.details, model.quality, model.qcls, model.note, model.measured, model.pick, model.cls, model.badges.join(',')].join('|');
       return model;
@@ -1131,32 +1196,38 @@
       if (entry.measured && entry.claimed > best) return ['is-warn', qualityLabel(best) + ' · заявлено ' + qualityLabel(entry.claimed)];
       return [entry.measured ? 'is-ok' : '', qualityLabel(best) + (entry.verified === 'play' ? ' · по просмотру' : entry.measured ? ' · проверено' : ' · заявлено')];
     }
+    function keysText(item) {
+      if (recovery) return 'ОК — продолжить с ' + L.Utils.secondsToTime(recovery.position) + (item && !item.source && item.rows.length > 1 ? ' · удержание ОК — все источники' : '') + ' · → параметры';
+      return 'ОК — смотреть · удержание ОК — все источники · → параметры';
+    }
     function showDetail(key) {
       var item = key && models[key];
       if (!item || item.section) return;
       var row = item.best, model = view(item, false);
-      var sig = [key, model.sig, item.rows.map(function (entry) { return entry.key + ':' + (entry.qualities[0] || 0) + (entry.measured ? 'm' : '') + (entry.unavailable ? 'u' : ''); }).join(',')].join('|');
+      var sig = [key, model.sig, item.source ? visibleItems.filter(function (entry) { return entry.source; }).map(function (entry) { return entry.key + ':' + (entry.best.qualities[0] || 0) + (entry.best.measured ? 'm' : ''); }).join(',') : '', item.rows.map(function (entry) { return entry.key + ':' + (entry.qualities[0] || 0) + (entry.measured ? 'm' : '') + (entry.unavailable ? 'u' : ''); }).join(',')].join('|');
       if (sig === detailSig) return;
       detailSig = sig; detailKey = key; detail.empty().removeClass('hide');
       var top = $('<div class="homelab-common-detail-top"></div>'), named = $('<div class="homelab-common-detail-name"></div>');
       top.append($('<div class="homelab-common-ring ' + model.qcls + '"></div>').text(model.quality || '—'));
       named.append($('<div class="homelab-common-detail-voice"></div>').text(model.voice));
-      named.append($('<div class="homelab-common-detail-kind"></div>').text(item.key === 'native' ? 'Открыть в источнике' : row.release ? 'Торрент' + (row.described && row.described.codec ? ' · ' + row.described.codec : '') : 'Онлайн · ' + plural(item.rows.length, SOURCES)));
+      named.append($('<div class="homelab-common-detail-kind"></div>').text(item.source ? (row.canon && row.canon.label || row.identityVoice) : item.key === 'native' ? 'Открыть в источнике' : row.release ? 'Торрент' + (row.described && row.described.codec ? ' · ' + row.described.codec : '') : 'Онлайн · ' + plural(item.rows.length, SOURCES)));
       detail.append(top.append(named));
       var said = verdict(item);
       detail.append($('<div class="homelab-common-verdict ' + said[0] + '"></div>').text(said[1]));
       var langs = subtitleLanguagesOf(item.rows);
       if (langs !== null || item.rows.some(function (entry) { return entry.canon && entry.canon.subs; })) detail.append($('<div class="homelab-common-detail-subs"></div>').text('Субтитры: ' + (langs || 'есть')));
-      detail.append($('<div class="homelab-common-detail-label"></div>').text(row.release ? 'Раздачи' : 'Источники'));
+      // A source row compares itself with the other sources of the kept voice; a card lists the sources behind it.
+      var compared = item.source ? visibleItems.filter(function (entry) { return entry.source; }).map(function (entry) { return entry.best; }) : item.rows;
+      detail.append($('<div class="homelab-common-detail-label"></div>').text(item.source ? 'Все источники озвучки' : row.release ? 'Раздачи' : 'Источники'));
       var list = $('<div class="homelab-common-sources"></div>');
-      item.rows.slice(0, 6).forEach(function (entry) {
+      compared.slice(0, 6).forEach(function (entry) {
         var value = sourceValue(entry), height = entry.unavailable ? 0 : entry.qualities[0] || 0, line = $('<div class="homelab-common-source' + (entry === row ? ' is-best' : '') + '"></div>');
         line.append($('<span class="homelab-common-source-name"></span>').text(sourceName(entry))).append($('<span class="homelab-common-source-value ' + value[0] + '"></span>').text(value[1]));
         line.append($('<span class="homelab-common-meter"></span>').append($('<span class="homelab-common-meter-fill ' + qualityClass(height) + '"></span>').css('width', Math.round(height / 2160 * 100) + '%')));
         list.append(line);
       });
-      if (item.rows.length > 6) list.append($('<div class="homelab-common-source-more"></div>').text('ещё ' + plural(item.rows.length - 6, row.release ? ['раздача', 'раздачи', 'раздач'] : SOURCES) + ' — удержание ОК'));
-      detail.append(list).append($('<div class="homelab-common-keys"></div>').text('ОК — смотреть · удержание ОК — все источники · → параметры'));
+      if (compared.length > 6) list.append($('<div class="homelab-common-source-more"></div>').text('ещё ' + plural(compared.length - 6, row.release ? ['раздача', 'раздачи', 'раздач'] : SOURCES) + (item.source ? ' — ниже в списке' : ' — удержание ОК')));
+      detail.append(list).append($('<div class="homelab-common-keys"></div>').text(keysText(item)));
     }
     // Long press: every source behind the card, or every release of a torrent group.
     function sourceMenu(item) {
@@ -1189,6 +1260,8 @@
     }
     function draw() {
       if (dead || !search || sync.scope() !== currentScope) return;
+      // Re-read each time: playing another voice from here makes it the watched one on return.
+      mine = watchedVoice();
       // Groups merge while results stream in; a focused row that disappears
       // hands focus to the row now in its place, never to the filters above.
       var focusedKey = '', focusedIndex = -1;
@@ -1201,11 +1274,26 @@
         return match || compareRows(a, b, tie);
       }
       var available = candidates.filter(function (row) { return !recovery || !recovery.voice || voiceMatch(recovery.voice, row.identityVoice) > 0; }).sort(function (a, b) { return rank(a, b); });
-      var showOther = recovery && recovery.voice && candidates.length > 0 && (!exact || last === otherButton[0]);
+      var showOther = !sourceMode() && recovery && recovery.voice && candidates.length > 0 && (!exact || last === otherButton[0]);
       otherButton.text('Другие озвучки · ' + candidates.length).toggleClass('hide', !showOther);
-      var groups = grouped ? groupRows(available).sort(function (a, b) {
+      var byVoice = function (list) { return groupRows(list).map(function (item) {
+        // The watched voice plays from the source it played from, while that source still has the video.
+        if (mine && item.key === mine.key) {
+          var same = item.rows.find(function (entry) { return entry.provider === mine.provider && !entry.unavailable; });
+          if (same && same !== item.best) { item.rows.splice(item.rows.indexOf(same), 1); item.rows.unshift(same); item.best = same; }
+          item.mine = !!item.best && !item.best.unavailable;
+        }
+        return item;
+      }).sort(function (a, b) {
+        if (!!a.mine !== !!b.mine) return a.mine ? -1 : 1;
+        // Uploads without a named voice (VK, Rutube) are a last resort, however many of them there are.
+        var unnamedA = a.key.indexOf('unnamed:') === 0, unnamedB = b.key.indexOf('unnamed:') === 0;
+        if (unnamedA !== unnamedB) return unnamedA ? 1 : -1;
         return rank(a.best, b.best, function () { return b.rows.length - a.rows.length || (b.best.measured ? 1 : 0) - (a.best.measured ? 1 : 0); });
-      }) : available.map(function (row) { return {key: 'row:' + row.key, rows: [row], best: row}; });
+      }); };
+      var groups = sourceMode() ? available.map(function (row) { return {key: 'row:' + row.key, rows: [row], best: row, source: true}; })
+        .concat(byVoice(candidates.filter(function (row) { return !voiceMatch(recovery.voice, row.identityVoice); })).map(function (item) { item.other = true; return item; }))
+        : grouped ? byVoice(available) : available.map(function (row) { return {key: 'row:' + row.key, rows: [row], best: row}; });
       var byKey = {}; groups.forEach(function (item) { byKey[item.key] = item; });
       var loading = search.onlinePending || search.torrentPending, now = Date.now();
       // Untouched lists re-rank at most once a second while results stream in; once the user moved, rows keep their places.
@@ -1228,13 +1316,20 @@
           items = before.concat([{key: 'section:torrents', section: true, rows: torrents}], sectionOpen ? torrents : [], rest.slice(before.length));
         }
       }
+      if (sourceMode()) {
+        var others = items.filter(function (item) { return item.other; });
+        items = items.filter(function (item) { return !item.other; });
+        voicesShown = voicesOpen === null ? !items.length && !loading : voicesOpen;
+        if (others.length) items = items.concat([{key: 'section:voices', section: true, rows: others}], voicesShown ? others : []);
+      }
       visibleItems = items; models = byKey;
       showPlaceholder(items.length ? '' : loading ? 'loading' : 'empty:' + q + ':' + kind + ':' + subsOnly, loading);
       var wanted = {}, page = items.slice(0, shown), keys = [];
       search.probe(page.filter(function (item) { return !item.section; }).map(function (item) { return item.best; }));
-      var heroKey = page[0] && !page[0].section ? page[0].key : '';
+      var heroKey = page[0] && !page[0].section && !page[0].other ? page[0].key : '';
       page.forEach(function (item) {
         wanted[item.key] = true; keys.push(item.key);
+        if (item.key === 'section:voices') { voicesSection(item.rows.length, voicesShown); return; }
         if (item.section) { section(torrents.length, sectionOpen); return; }
         var tile = tiles[item.key] || (tiles[item.key] = card(item.key));
         fill(tile, view(item, item.key === heroKey && !item.best.native && !item.best.unavailable));
@@ -1258,8 +1353,8 @@
         if (moved || !body[0].contains(more[0]) || body.children().last()[0] !== more[0]) { body.append(more); moved = true; }
       } else if (more) { more.remove(); more = null; moved = true; }
       drawStatus(loading, items.filter(function (item) { return !item.section; }), available, exact);
-      hint.toggleClass('hide', !items.length).text(grouped ? 'ОК — смотреть  ·  удержание ОК — все источники  ·  → параметры' : 'ОК — смотреть  ·  удержание ОК — подробности  ·  → параметры');
-      var firstCard = keys.filter(function (key) { return key !== 'section:torrents'; })[0], top = firstCard && tiles[firstCard] ? tiles[firstCard][0] : null;
+      hint.toggleClass('hide', !items.length).text(recovery ? keysText(null) : grouped ? 'ОК — смотреть  ·  удержание ОК — все источники  ·  → параметры' : 'ОК — смотреть  ·  удержание ОК — подробности  ·  → параметры');
+      var firstCard = keys.filter(function (key) { return key.indexOf('section:') !== 0; })[0], top = firstCard && tiles[firstCard] ? tiles[firstCard][0] : null;
       if (ownList()) {
         var before = last;
         if (untouched && top) last = top;
@@ -1460,7 +1555,11 @@
     '.homelab-common-summary-text{min-width:0;opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.homelab-common-key{flex-shrink:0;margin-left:.7em;padding:.1em .7em;border-radius:2em;background:#fff;color:#000;font-weight:700}',
     '.homelab-common .homelab-common-summary.selector.focus{outline:0;background:#fff;color:#000}.homelab-common-summary.focus .homelab-common-summary-text{opacity:1}.homelab-common-summary.focus .homelab-common-key{background:#000;color:#fff}',
-    '.homelab-common-recovery{font-size:1em;margin:0 0 1em;line-height:1.4;padding:.7em 1em;border-radius:.6em;background:rgba(223,204,162,.12);color:#efe1bf}',
+    '.homelab-common-recovery{display:flex;align-items:center;flex-wrap:wrap;margin:0 0 1em;line-height:1.3;padding:.55em 1.1em .55em .55em;border-radius:2em;background:rgba(223,204,162,.12);color:#efe1bf}',
+    '.homelab-common-recovery-play{display:inline-block;width:1.9em;height:1.9em;line-height:1.9em;text-align:center;border-radius:50%;background:#efe1bf;color:#1a1408;font-size:.8em;margin-right:.8em;flex-shrink:0}',
+    '.homelab-common-recovery-what{font-weight:700;font-size:1.1em;color:#fff;margin-right:1em}',
+    '.homelab-common-recovery-voice{padding:.25em .8em;border-radius:1em;background:rgba(255,255,255,.12);color:#fff;font-weight:600;margin-right:1em}.homelab-common-recovery-voice.is-none{background:transparent;color:#efe1bf;padding-left:0}',
+    '.homelab-common-recovery-note{font-size:.85em;opacity:.65}',
     '.homelab-common-chip{padding:.6em 1.15em;border-radius:1em;background:rgba(255,255,255,.07)}',
     '.homelab-common-other-voices{align-self:flex-start;margin-bottom:1em;max-width:100%;box-sizing:border-box}',
     '.homelab-common .selector.focus{outline:.16em solid #fff;outline-offset:.12em;background:rgba(255,255,255,.16)}',
@@ -1481,6 +1580,7 @@
     '.homelab-common-result.focus .homelab-common-pick{color:#9a6a00}',
     '.homelab-common-voice{font-size:1.22em;font-weight:600;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.homelab-common-result.is-hero .homelab-common-voice{font-size:1.45em}',
+    '.homelab-common-result.is-mine .homelab-common-pick{color:#8fd4ff}.homelab-common-result.is-mine.focus .homelab-common-pick{color:#1d5f8a}',
     '.homelab-common-match{font-size:.85em;color:#dfcca2;margin-top:.3em}.homelab-common-result.focus .homelab-common-match{color:#6d5520}',
     '.homelab-common-line{margin-top:.3em;font-size:.84em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.homelab-common-details{opacity:.55}',

@@ -11,6 +11,11 @@
         var known = normalized(name); return known.length >= 3 && (value === known || value.indexOf(known + ' ') === 0);
       });
     }
+    // Uploads (VK Видео and the like) label a file with the film's own name: "🎬Интерстеллар (2014) - 4K UHD".
+    function namesFilm(text) {
+      var value = ' ' + normalized(text) + ' ';
+      return [movie.title, movie.original_title].some(function (name) { var known = normalized(name); return known.length >= 4 && value.indexOf(' ' + known + ' ') >= 0; });
+    }
     // Two lanes: first pages of every provider go before alternate-voice pages, so all providers show up early.
     var self = this, scope = sync.scope(), alive = true, queue = [], voiceQueue = [], requests = [], timers = [], running = 0, discovered = {}, seenRows = {}, visited = {}, voicesSeen = {};
     var sourceCount = {}, deadline = Date.now() + 60000, pollUntil = 0, parserTimer, parserPending = false, started = false;

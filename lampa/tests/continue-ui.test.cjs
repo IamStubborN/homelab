@@ -109,6 +109,21 @@ test('programmatic refocus of the row does not replay the card bounce; a remote 
   assert.equal(element.hasClass('homelab-resume-quiet'), false, 'a remote move bounces the next card');
 });
 
+test('at start the cursor stays at the start of the row when the server reorders the cached list', async t => {
+  const h = harness(t), a = {...saved, card: 'tv_42', title: 'A', observed: 1000}, b = {...saved, card: 'tv_43', title: 'B', observed: 900};
+  h.storage.set('homelab_continue_cache', {scope: 'a', items: [a, b], metadata: {}});
+  h.run('mods/HomelabSync/continue.js'); let instance;
+  h.rows[0].call()(data => { instance = data.params.createInstance(); instance.create(); });
+  const tiles = h.elements.filter(e => e.classes.has('homelab-resume-card')), [tileA, tileB] = tiles, focused = [];
+  const original = h.L.Controller.collectionFocus; h.L.Controller.collectionFocus = node => { focused.push(node); original(node); };
+  instance.toggle(); assert.equal(focused.at(-1), tileA);
+  h.calls[0].finish({version: 1, items: [a, {...b, observed: 3000}]}); await flush();
+  assert.equal(focused.at(-1), tileB, 'B moved to the front and takes the cursor');
+  h.L.Controller.controllers.homelab_resume.right(); assert.equal(focused.at(-1), tileA);
+  h.window.homelabContinue.load(); h.calls.at(-1).finish({version: 1, items: [a, {...b, observed: 6000}]}); await flush();
+  assert.equal(focused.at(-1), tileA, 'after a remote move the cursor follows its card');
+});
+
 test('titles, posters and the episode list from the last session render at once on the next start', async t => {
   const h = await row(t, [{...saved, title: undefined}], h => {
     h.L.Api.sources.tmdb.get = () => {};

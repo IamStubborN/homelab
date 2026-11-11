@@ -184,6 +184,9 @@
         order = nextOrder; orderList = data.map(function (item) { return item.card; }); scroll.clear(); empty = null;
         if (!cards.length && !fresh) { empty = window.$('<div class="homelab-resume-empty selector"></div>').text(loadedOnce ? 'Здесь появятся незавершённые просмотры' : 'Загрузка…'); scroll.append(empty); }
         cards.forEach(function (native) { scroll.append(native.render(true)); });
+        // Until the remote moved along the row, the cursor belongs at its start: the list from the server
+        // reorders the cached one while the app starts, and the card that was first need not stay first.
+        if (!fresh && !focus.moved && cards.length) { focus.card = data[0].card; if (typeof scroll.reset === 'function') scroll.reset(); }
         last = byCard[focus.card] ? byCard[focus.card].native.render(true) : cards.length ? cards[0].render(true) : null;
       }
       L.Layer.visible(scroll.render(true));
@@ -207,6 +210,7 @@
           if (!choice || destroyed) return;
           var index = orderList.indexOf(item.card), neighbour = orderList[index + 1] || orderList[index - 1] || '';
           if (choice.action === 'source') return resume(item, {choose: true});
+          focus.moved = true;
           if (choice.action === 'remove') { focus.card = neighbour; dismiss(item.card); return; }
           if (choice.action !== 'watched' || !markWatched(item)) return;
           focus.card = list().some(function (entry) { return entry.card === item.card && !!entry.fresh === fresh; }) ? item.card : neighbour;
@@ -222,7 +226,7 @@
     function quiet(on) { html.toggleClass('homelab-resume-quiet', on !== false && Date.now() - lastKey > 500); }
     function move(step) {
       var tiles = scroll.render(true).querySelectorAll('.selector'), index = Array.prototype.indexOf.call(tiles, last), next = index + step;
-      if (next >= 0 && next < tiles.length) { quiet(false); L.Controller.collectionFocus(tiles[next], scroll.render(true)); }
+      if (next >= 0 && next < tiles.length) { focus.moved = true; quiet(false); L.Controller.collectionFocus(tiles[next], scroll.render(true)); }
       else if (step < 0) self.emit('left');
     }
     this.toggle = function () {

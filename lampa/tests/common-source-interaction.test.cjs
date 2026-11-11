@@ -67,6 +67,7 @@ function setup(t, options = {}) {
     }))}; return template;
   }};
   if (options.facts) h.window.HomelabQuality = options.facts;
+  if (options.watching) h.window.homelabContinue = {list: () => [options.watching]};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../plugins/common-sources.js'), 'utf8'),
     {window: h.window, Lampa: h.L, document, fetch: request, AbortController, URL, setTimeout, clearTimeout, Date, console});
   if (options.quality) h.window.HomelabSources.preferences({quality: options.quality});
@@ -260,6 +261,47 @@ async function grouped(t, options) {
 }
 const voice = row => row.find('.homelab-common-voice').text();
 
+test('the voice being watched leads, from the source it played from', async t => {
+  const h = await grouped(t, {watching: {card: 'tv_42', kind: 'online', online: {provider: 'one', voice: 'Studio B'}}}), picked = [];
+  h.window.HomelabOnlineResume = {select: row => { picked.push(row.provider); return true; }};
+  assert.equal(voice(h.rows()[0]), 'Studio B', 'the 720p voice being watched beats the 1080p one');
+  assert.match(h.rows()[0].find('.homelab-common-pick').text(), /Ваша озвучка/);
+  h.fire(h.rows()[0], 'hover:enter'); assert.deepEqual(picked, ['three']);
+});
+
+test('the watched voice plays from its own source even when another has a higher quality', async t => {
+  const h = await grouped(t, {watching: {card: 'tv_42', kind: 'online', online: {provider: 'one', voice: 'Studio A'}}}), picked = [];
+  h.window.HomelabOnlineResume = {select: row => { picked.push(row.provider); return true; }};
+  h.fire(h.rows()[0], 'hover:enter'); assert.deepEqual(picked, ['one']);
+});
+
+test('uploads without a named voice share one card below every named voice', async t => {
+  const h = setup(t, {movie: {name: undefined, title: 'Film', original_title: 'Film'}});
+  h.parser[0].done({Results: []});
+  await h.finish('/lite/events', twoProviders.slice(0, 2));
+  const film = (text, quality) => ({method: 'play', text, url: '/v', quality: {[quality]: '/m'}});
+  h.pages.set('one', {'.videos__item': [film('Film (2014) 4K UHD', '2160p'), film('🎬Film - 2160p', '2160p'), film('Фильм/ Film 2014', '2160p')]});
+  h.pages.set('two', {'.videos__item': [film('Studio A', '720p')]});
+  await h.finish('/lite/one', 'one'); await h.finish('/lite/two', 'two'); h.tick(150);
+  assert.deepEqual(h.rows().map(voice), ['Studio A', 'Без названия · One']);
+  assert.match(h.rows()[1].find('.homelab-common-details').text(), /ещё 2 видео/);
+});
+
+test('the watched voice is re-read on every draw', async t => {
+  let watching = {card: 'tv_42', kind: 'online', online: {provider: 'three', voice: 'Studio B'}};
+  const h = await grouped(t, {watching: {}});
+  h.window.homelabContinue = {list: () => [watching]}; h.tick(1100);
+  h.component.start(); h.tick(1100);
+  const studioB = h.rows().find(row => voice(row) === 'Studio B');
+  assert.match(studioB.find('.homelab-common-pick').text(), /Ваша озвучка/, 'rows keep their places once focused, the mark moves');
+});
+
+test('a watched voice from another title changes nothing', async t => {
+  const h = await grouped(t, {watching: {card: 'tv_7', kind: 'online', online: {provider: 'three', voice: 'Studio B'}}});
+  assert.equal(voice(h.rows()[0]), 'Studio A');
+  assert.doesNotMatch(h.rows()[0].find('.homelab-common-pick').text(), /Ваша озвучка/);
+});
+
 test('one card per voice plays its best source and names how many sources stand behind it', async t => {
   const h = await grouped(t), picked = [];
   h.window.HomelabOnlineResume = {select: row => { picked.push(row.provider); return true; }};
@@ -372,13 +414,23 @@ test('leaving the title card for another screen cancels the prefetched search', 
   h.openScreen(); assert.equal(h.parser.length, 2, 'the screen starts its own search');
 });
 
-test('recovery groups one voice from every provider into one card', async t => {
+test('recovery lists the kept voice by source and folds other voices below', async t => {
   const h = setup(t, {recovery: {voice: 'Studio A'}});
-  await h.finish('/lite/events', twoProviders.slice(0, 2));
-  h.pages.set('one', episodePage('Studio A')); h.pages.set('two', episodePage('Studio A'));
-  await h.finish('/lite/one', 'one'); await h.finish('/lite/two', 'two'); h.tick(150);
-  assert.equal(h.rows().length, 1);
+  await h.finish('/lite/events', twoProviders.slice(0, 3));
+  h.pages.set('one', episodePage('Studio A')); h.pages.set('two', episodePage('Studio A')); h.pages.set('three', episodePage('Studio B'));
+  await h.finish('/lite/one', 'one'); await h.finish('/lite/two', 'two'); await h.finish('/lite/three', 'three'); h.tick(150);
+  const names = h.rows().map(row => row.find('.homelab-common-voice').text());
+  assert.equal(names.length, 2, 'one row per source of the kept voice; Studio B waits in the fold');
+  assert.ok(names.every(name => name !== 'Studio A'), 'rows are named by their source, the voice is said once above');
+  assert.match(h.rows()[0].find('.homelab-common-details').text(), /Studio A/);
   assert.doesNotMatch(h.summary(), /все источники/);
+  const fold = h.component.render()[0].querySelectorAll('.homelab-common-section')[0];
+  assert.match(fold.text(), /Другие озвучки · 1/);
+  h.fire(fold, 'hover:enter');
+  assert.equal(h.rows().length, 3);
+  const picked = []; h.window.HomelabOnlineResume = {select: row => { picked.push(row.provider); return true; }};
+  h.fire(h.rows().find(row => row.find('.homelab-common-voice').text() === 'Studio B'), 'hover:enter');
+  assert.deepEqual(picked, ['three'], 'a voice from the fold plays');
 });
 
 test('the focused summary paints over the generic selector focus', () => {

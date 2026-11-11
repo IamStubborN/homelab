@@ -58,6 +58,8 @@
     '.homelab-playback-card__actions{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-flex-wrap:wrap;flex-wrap:wrap;margin-top:.9em}' +
     '.homelab-playback-card__actions .simple-button{margin:0 1em 0 0;background-color:rgba(255,255,255,.1)}' +
     '.homelab-playback-card__actions .simple-button.focus{background-color:#fff;color:#000}' +
+    // The card's own spinner is the one wait mark while it is shown.
+    '.homelab-card-wait .player-video__loader{visibility:hidden!important}' +
     // Once playback has begun, Lampa's own spinner waits as long as the card.
     '.homelab-played .player-video.video--load .player-video__loader{-webkit-animation:homelab-loader-wait 5s step-end;animation:homelab-loader-wait 5s step-end}' +
     '@-webkit-keyframes homelab-loader-wait{from,to{visibility:hidden}}@keyframes homelab-loader-wait{from,to{visibility:hidden}}' +
@@ -166,6 +168,7 @@
     clearTimeout(card.timer); card.timer = null;
     clearTimeout(card.statTimer); card.statTimer = null;
     if (card.visible) { card.visible = false; card.root.addClass('hide'); }
+    card.player.removeClass('homelab-card-wait');
     if (state) state.stats = '';
     release();
   }
@@ -212,6 +215,7 @@
       c.layout = layout;
     }
     if (!c.visible) { c.visible = true; c.root.removeClass('hide'); }
+    c.player.toggleClass('homelab-card-wait', waiting);
     if (waiting) c.timer = setTimeout(render, 1000 - elapsed % 1000);
     if (kind !== 'failed') pollStats(s);
     var name = controller();
@@ -396,7 +400,7 @@
   function clear() {
     if (state) { unbind(state); state.escalated = false; actions(state, false); }
     state = null;
-    if (card) card.player.removeClass('homelab-played');
+    if (card) card.player.removeClass('homelab-played homelab-card-wait');
     hideCard();
   }
   function start(work) {

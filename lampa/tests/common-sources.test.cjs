@@ -595,6 +595,19 @@ test('spellings of one studio across scripts fold together; short codes and othe
   assert.notEqual(key('ЛостФильм (UKR)'), key('LostFilm'), 'another language still stays apart');
 });
 
+test('abbreviated studio labels join their studio', t => {
+  const canon = setup(t).window.HomelabSources.canonVoice, key = value => canon(value).key, rezka = key('HDRezka');
+  for (const name of ['HDrezka Studio (Дубл.)', 'Дубляж HDrezka St.', 'HDRezka Studio']) assert.equal(key(name), rezka, name);
+  assert.equal(key('Дубляж [4K, SDR, Ukr, LeDoyen]'), key('LeDoyen (Украинский)'), 'release tags in brackets drop out');
+  assert.equal(key('MVO [1080, Ukr, AMC]'), key('AMC (укр)'));
+  assert.equal(key('Ю. Сербин'), key('Сербин'));
+  assert.equal(key('Кубик в Кубе (Дубляж)'), key('Кубик в Кубе')); assert.equal(key('Дубляж Кубик в Кубе'), key('Кубик в Кубе'));
+  assert.equal(key('Дмитрий "Goblin" Пучков'), key('Гоблин'));
+  assert.equal(key('AniDub Online'), key('AniDub')); assert.equal(key('Студийная Банда'), key('Studio Band'));
+  assert.notEqual(key('1001 Cinema'), key('Cinema'), 'a studio number is not a release tag');
+  assert.equal(key('Неизвестно'), ''); assert.equal(canon('delete').label, 'Озвучка не указана');
+});
+
 test('a finished search is reused for ten minutes unless refreshed', async t => {
   const h = setup(t); await h.start();
   h.parser[0].done({Results: []});

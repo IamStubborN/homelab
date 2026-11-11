@@ -29,7 +29,11 @@
         if (state.voice && state.voice !== voice) voiceSeen(source, state.seasonIndex, state.voice);
         var matching = files.filter(function (file) { return !movie.name || Number.isInteger(file.season) && file.season >= 0 && Number.isInteger(file.episode) && file.episode > 0 && file.season === selection.season && file.episode === selection.episode; });
         var labels = {};
+        // A rights-holder notice stands where the voice should ("Заблокировано правообладателем!"): nothing plays behind
+        // it, though the page's other voices still get asked below.
+        if (BLOCKED.test(voice)) matching = [];
         matching.forEach(function (file) {
+          if (BLOCKED.test(file.voice_name || '') || BLOCKED.test(file.translate || '')) return;
           var row = {kind: 'online', provider: source.key, providerName: source.name, seasonIndex: state.seasonIndex, qualities: listedQualities(file), subtitles: onlineSubtitles(file)}, identityVoice;
           row.claimed = row.qualities[0] || 0;
           // Quality log key, the same one native rows and playback use (HomelabSync resume identity).
@@ -45,6 +49,7 @@
             // A film title, year or release tag ("Начало (2010) 4K") names the file, not its voice.
             var named = filmText && !titleLike(filmText) ? filmText : '';
             identityVoice = voice || translate || named || (tag && !ITEM_TAG.test(tag) && !titleLike(tag) ? tag : '') || UNNAMED;
+            if (identityVoice !== UNNAMED && namesFilm(identityVoice)) identityVoice = UNNAMED;
             row.key = source.key + ':' + state.seasonIndex + ':' + index + ':' + identityVoice + ':' + row.qualities.join(',');
             row.tag = tag && tag !== identityVoice ? tag : '';
             // Exact native draw identity for the bridge: same item index among play/call items, URL and texts.
@@ -99,7 +104,7 @@
         var key = String(source.balanser || source.name && source.name.split(' ')[0] || '').toLowerCase();
         if (!/^[a-z0-9_.-]{1,80}$/i.test(key) || discovered[key] || source.show === false || !source.url) return;
         discovered[key] = true;
-        var value = {key: key, name: String(source.name || key).replace(/\s*~.*$/, '') || key};
+        var value = {key: key, name: String(source.name || key).replace(/\s*~.*$/, '').replace(/\s+-\s+(?:\d{3,4}p|4k|uhd|hd)$/i, '') || key};
         try { enqueue(value, address(source.url, true), {seasonIndex: 0, voice: ''}); } catch (_) { fallback(value); }
       });
     }

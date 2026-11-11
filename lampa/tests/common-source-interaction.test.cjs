@@ -267,6 +267,7 @@ async function grouped(t, options) {
   return h;
 }
 const voice = row => row.find('.homelab-common-voice').text();
+function parametersButton(h) { return h.component.render()[0].querySelectorAll('.homelab-common-summary')[0]; }
 function chipOf(h, name) { return h.component.render()[0].querySelectorAll('.homelab-common-filter').find(node => node.children[0] && node.children[0].text() === name); }
 
 test('the voice being watched leads, from the source it played from', async t => {
@@ -350,6 +351,48 @@ test('a long press lists every source of a voice; there is no favourite voice', 
   assert.ok(!h.elements.some(node => node.classes.has('homelab-common-favorite')));
 });
 
+test('Right on a card with several sources chooses one in the detail panel; OK still plays the best', async t => {
+  const h = await grouped(t), c = h.L.Controller.controllers, picked = [];
+  h.window.HomelabOnlineResume = {select: row => { picked.push(row.provider); return true; }};
+  const card = h.focused(), panel = h.component.render()[0].querySelectorAll('.homelab-common-detail')[0];
+  assert.match(panel.querySelectorAll('.homelab-common-keys')[0].text(), /→ выбрать источник/);
+  c.content.right();
+  assert.equal(h.L.Controller.enabled().name, 'homelab_common_pick');
+  assert.ok(panel.classes.has('is-picking'));
+  const lines = panel.querySelectorAll('.homelab-common-source');
+  assert.equal(lines.length, 2); assert.equal(h.focused(), lines[0], 'focus starts on the best source');
+  c.homelab_common_pick.down(); assert.equal(h.focused(), lines[1]);
+  c.homelab_common_pick.down(); assert.equal(h.focused(), lines[1], 'stops at the last source');
+  c.homelab_common_pick.left();
+  assert.equal(h.L.Controller.enabled().name, 'content'); assert.equal(h.focused(), card, 'Left returns to the card');
+  assert.ok(!panel.classes.has('is-picking'));
+  c.content.right(); c.homelab_common_pick.down(); h.fire(h.focused(), 'hover:enter');
+  assert.deepEqual(picked, ['one'], 'OK in the panel plays that source');
+  assert.equal(h.L.Controller.enabled().name, 'content');
+});
+
+test('results that arrive while a source is being chosen leave the keys and focus in the panel', async t => {
+  const h = setup(t), c = h.L.Controller.controllers;
+  h.parser[0].done({Results: []});
+  await h.finish('/lite/events', twoProviders);
+  h.pages.set('one', episodePage('Studio A')); h.pages.set('two', episodePage('Studio A', {method: 'play', quality: {'1080p': '/media'}})); h.pages.set('three', episodePage('Studio B', {method: 'play', quality: {'720p': '/media'}}));
+  await h.finish('/lite/one', 'one'); await h.finish('/lite/two', 'two'); h.tick(150);
+  c.content.right(); const line = h.focused();
+  assert.equal(h.L.Controller.enabled().name, 'homelab_common_pick'); assert.ok(line.classes.has('homelab-common-source'));
+  await h.finish('/lite/three', 'three'); h.tick(150);
+  assert.equal(h.L.Controller.enabled().name, 'homelab_common_pick'); assert.equal(h.focused(), line);
+  c.homelab_common_pick.back(); assert.equal(h.L.Controller.enabled().name, 'content');
+  assert.ok(!h.component.render()[0].querySelectorAll('.homelab-common-source').some(node => node.classes.has('selector')), 'panel lines stop being focusable');
+});
+
+test('where the detail panel is hidden, Right opens the sources as Lampa menu', async t => {
+  const h = await grouped(t);
+  h.component.render()[0].querySelectorAll('.homelab-common-detail')[0].classes.add('hide');
+  h.L.Controller.controllers.content.right();
+  assert.match(h.select().title, /2 источника · Studio A/);
+  assert.notEqual(h.L.Controller.enabled().name, 'homelab_common_settings');
+});
+
 test('sources of one card are told apart by what their own voice name adds', async t => {
   const h = setup(t);
   h.parser[0].done({Results: []});
@@ -364,7 +407,7 @@ test('sources of one card are told apart by what their own voice name adds', asy
 
 test('the view setting switches between voice cards and every source', async t => {
   const h = await grouped(t), c = h.L.Controller.controllers;
-  c.content.right(); h.toSetting('Показывать'); c.homelab_common_settings.right();
+  h.fire(parametersButton(h), 'hover:enter'); h.toSetting('Показывать'); c.homelab_common_settings.right();
   assert.deepEqual(h.rows().map(voice), ['Studio A', 'Studio B', 'Studio A']);
   assert.equal(h.setting('Показывать'), 'Все источники'); assert.match(h.summary(), /все источники/);
 });
@@ -388,7 +431,7 @@ test('after an episode change focus follows the new recommendation, not the head
 
 test('the subtitles filter hides sources without subtitles; Left at the first value closes the panel', async t => {
   const h = await grouped(t), c = h.L.Controller.controllers;
-  c.content.right(); h.toSetting('Субтитры'); c.homelab_common_settings.right();
+  h.fire(parametersButton(h), 'hover:enter'); h.toSetting('Субтитры'); c.homelab_common_settings.right();
   assert.equal(h.rows().length, 0); assert.ok(chipOf(h, 'Субтитры').classes.has('is-on'));
   assert.match(h.component.render()[0].querySelectorAll('.homelab-common-empty-hint')[0].text(), /субтитр/);
   c.homelab_common_settings.left(); assert.equal(h.rows().length, 2);

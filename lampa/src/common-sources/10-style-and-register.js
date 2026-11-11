@@ -131,6 +131,10 @@
     '.homelab-common-source-value.is-ok{opacity:1;color:#a5d15f}.homelab-common-source-value.is-warn{opacity:1;color:#dfc154}.homelab-common-source-value.is-bad{opacity:1;color:#e17171}',
     '.homelab-common-meter{display:block;width:100%;height:.18em;margin-top:.35em;border-radius:.2em;background:rgba(255,255,255,.08);overflow:hidden}',
     '.homelab-common-meter-fill{display:block;height:100%;border-radius:.2em;background:#fff}',
+    // Choosing a source with →: the panel's lines become a focusable list.
+    '.homelab-common-detail.is-picking .homelab-common-sources{margin:0 -.6em}.homelab-common-detail.is-picking .homelab-common-source{padding:.45em .6em;margin-bottom:.2em;border-radius:.3em}',
+    '.homelab-common .homelab-common-detail .homelab-common-source.focus{outline:0;background:#fff;color:#000}',
+    '.homelab-common-source.focus .homelab-common-source-value{color:#000;opacity:.7}.homelab-common-source.focus .homelab-common-meter{background:rgba(0,0,0,.12)}.homelab-common-source.focus .homelab-common-meter-fill{background:#000}.homelab-common-source.is-best.focus .homelab-common-source-name:after{border-color:#000}',
     '.homelab-common-source-more{font-size:.78em;opacity:.45}',
     '.homelab-common-keys{margin-top:1em;font-size:.76em;opacity:.45}',
     '.homelab-common-hint{display:none;font-size:.85em;opacity:.45;padding-top:.6em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',

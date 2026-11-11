@@ -15,7 +15,7 @@
     var root = $('<div class="homelab-common"></div>'), art = $('<div class="homelab-common-art"></div>'), head = $('<div class="homelab-common-head"></div>');
     var status = $('<div class="homelab-common-status" aria-live="polite"></div>'), statusText = $('<div class="homelab-common-status-text"></div>'), bar = $('<div class="homelab-common-bar"></div>'), barFill = $('<div class="homelab-common-bar-fill"></div>');
     var main = $('<div class="homelab-common-main"></div>'), body = $('<div class="homelab-common-list"></div>'), scroll = new L.Scroll({mask: true, over: true}), hint = $('<div class="homelab-common-hint hide"></div>');
-    var detail = $('<div class="homelab-common-detail hide"></div>'), detailSig = '', detailKey = '';
+    var detail = $('<div class="homelab-common-detail hide"></div>'), detailSig = '', detailKey = '', picking = null, PICK = 'homelab_common_pick';
     var search, last = null, kind = recovery ? 'online' : 'all', q = recovery ? 0 : pref.quality, subsOnly = !recovery && pref.subs, tiles = {}, models = {}, shown = 20, visibleItems = [], order = [], locked = false, restoringFocus = false, more = null, torrentsOpen = null, toggled = false, rerank = null, fresh = 0, freshKeys = {}, sequence = '', sequenceKeys = [], qBefore = 0, reorderAt = 0, dead = false, voiceTimer = 0, started = false, refresh, uiIntent = 0, currentScope = sync.scope();
     // Grouped by voice, recovery too: its providers mostly carry the same voice, so one card leads to all of them.
     // untouched: until the first key press, focus follows the top (recommended) card so one OK plays it.
@@ -63,7 +63,7 @@
     if (recoveryLabel) { head.after(recoveryLabel); recoveryText(); }
     function active() { return !dead && L.Activity.active() === object; }
     // The list owns focus only while the parameters panel is closed.
-    function ownList() { return L.Controller.own(self) && !settingsOpen; }
+    function ownList() { return L.Controller.own(self) && !settingsOpen && !picking; }
     // With nothing focused yet: the top of the list, else the parameters (never the episode strip by accident).
     function focus(background) { restoringFocus = !!background; L.Controller.collectionSet(root, false, true); L.Controller.collectionFocus(last && root[0].contains(last) ? last : listNodes()[0] || summary[0], root, true); restoringFocus = false; }
     function touch() { untouched = false; }
@@ -525,12 +525,12 @@
       return [entry.measured ? 'is-ok' : '', qualityLabel(best) + (entry.verified === 'play' ? ' · по просмотру' : entry.measured ? ' · проверено' : ' · заявлено')];
     }
     function keysText(item) {
-      if (recovery) return 'ОК — продолжить с ' + L.Utils.secondsToTime(recovery.position) + (item && !item.source && item.rows.length > 1 ? ' · удержание ОК — все источники' : '') + ' · → параметры';
-      return 'ОК — смотреть · удержание ОК — все источники · → параметры';
+      var right = pickable(item) ? item.best.release ? ' · → выбрать раздачу' : ' · → выбрать источник' : ' · → параметры';
+      return (recovery ? 'ОК — продолжить с ' + L.Utils.secondsToTime(recovery.position) : 'ОК — смотреть') + right;
     }
     function showDetail(key) {
       var item = key && models[key];
-      if (!item || item.section) return;
+      if (!item || item.section || picking) return;
       var row = item.best, model = view(item, false);
       var sig = [key, model.sig, item.source ? visibleItems.filter(function (entry) { return entry.source; }).map(function (entry) { return entry.key + ':' + (entry.best.qualities[0] || 0) + (entry.best.measured ? 'm' : ''); }).join(',') : '', item.rows.map(function (entry) { return entry.key + ':' + (entry.qualities[0] || 0) + (entry.measured ? 'm' : '') + (entry.unavailable ? 'u' : ''); }).join(',')].join('|');
       if (sig === detailSig) return;
@@ -548,15 +548,57 @@
       var compared = item.source ? visibleItems.filter(function (entry) { return entry.source; }).map(function (entry) { return entry.best; }) : item.rows;
       detail.append($('<div class="homelab-common-detail-label"></div>').text(item.source ? 'Все источники озвучки' : row.release ? 'Раздачи' : 'Источники'));
       var list = $('<div class="homelab-common-sources"></div>');
-      compared.slice(0, 6).forEach(function (entry) {
-        var value = sourceValue(entry), height = entry.unavailable ? 0 : entry.qualities[0] || 0, line = $('<div class="homelab-common-source' + (entry === row ? ' is-best' : '') + '"></div>');
-        line.append($('<span class="homelab-common-source-name"></span>').text(sourceName(entry))).append($('<span class="homelab-common-source-value ' + value[0] + '"></span>').text(value[1]));
-        line.append($('<span class="homelab-common-meter"></span>').append($('<span class="homelab-common-meter-fill ' + qualityClass(height) + '"></span>').css('width', Math.round(height / 2160 * 100) + '%')));
-        list.append(line);
-      });
-      if (compared.length > 6) list.append($('<div class="homelab-common-source-more"></div>').text('ещё ' + plural(compared.length - 6, row.release ? ['раздача', 'раздачи', 'раздач'] : SOURCES) + (item.source ? ' — ниже в списке' : ' — удержание ОК')));
+      compared.slice(0, 6).forEach(function (entry) { list.append(sourceLine(entry, entry === row)); });
+      if (compared.length > 6) list.append($('<div class="homelab-common-source-more"></div>').text('ещё ' + plural(compared.length - 6, row.release ? ['раздача', 'раздачи', 'раздач'] : SOURCES) + (item.source ? ' — ниже в списке' : ' — нажмите →')));
       detail.append(list).append($('<div class="homelab-common-keys"></div>').text(keysText(item)));
     }
+    function sourceLine(entry, best) {
+      var value = sourceValue(entry), height = entry.unavailable ? 0 : entry.qualities[0] || 0, line = $('<div class="homelab-common-source' + (best ? ' is-best' : '') + '"></div>');
+      line.append($('<span class="homelab-common-source-name"></span>').text(sourceName(entry))).append($('<span class="homelab-common-source-value ' + value[0] + '"></span>').text(value[1]));
+      return line.append($('<span class="homelab-common-meter"></span>').append($('<span class="homelab-common-meter-fill ' + qualityClass(height) + '"></span>').css('width', Math.round(height / 2160 * 100) + '%')));
+    }
+    // → on a card with several sources: choose one in the detail panel; where the panel is not
+    // shown (narrow screens) the same list opens as Lampa's menu. OK on the card still plays the best.
+    function pickable(item) { return !!item && !item.section && !item.source && item.key !== 'native' && !item.best.native && item.rows.length > 1; }
+    function startPick() {
+      var key = ''; Object.keys(tiles).forEach(function (name) { if (tiles[name][0] === last) key = name; });
+      var item = key && models[key];
+      if (!pickable(item)) return false;
+      touch();
+      // Releases need their full titles to be told apart: they keep Lampa's menu.
+      if (item.best.release || detailKey !== key || detail[0].offsetParent === null) { sourceMenu(item); return true; }
+      if (search) search.probe(item.rows, true);
+      var list = detail.find('.homelab-common-sources').empty(), state = picking = {key: key, nodes: [], index: 0};
+      item.rows.forEach(function (entry, index) {
+        var line = sourceLine(entry, entry === item.best).addClass('selector');
+        line.on('hover:focus', function () {
+          state.index = index;
+          // The list clips its overflow: keep the focused source in view.
+          var box = list[0], top = this.offsetTop - box.offsetTop, bottom = top + this.offsetHeight;
+          if (top < box.scrollTop) box.scrollTop = top; else if (bottom > box.scrollTop + box.clientHeight) box.scrollTop = bottom - box.clientHeight;
+        }).on('hover:enter', function () { touch(); stopPick(); open(entry); });
+        if (entry === item.best) state.index = index;
+        state.nodes.push(line[0]); list.append(line);
+      });
+      detail.addClass('is-picking').find('.homelab-common-keys').text('ОК — смотреть этот источник · ← назад');
+      L.Controller.toggle(PICK);
+      return true;
+    }
+    function focusPick() {
+      if (!picking) return L.Controller.toggle('content');
+      L.Controller.collectionSet(detail, false, true); L.Controller.collectionFocus(picking.nodes[picking.index], detail, true);
+    }
+    function stepPick(delta) { if (picking && picking.nodes[picking.index + delta]) { picking.index += delta; focusPick(); } }
+    // quiet: the panel is being redrawn or hidden anyway; only the state goes.
+    function stopPick(quiet) {
+      if (!picking) return;
+      var key = picking.key, on = L.Controller.enabled && L.Controller.enabled();
+      picking = null; detailSig = ''; detail.removeClass('is-picking').find('.homelab-common-source').removeClass('selector');
+      if (!quiet) showDetail(key);
+      // The keys go back to the list whenever they are still in the panel.
+      if ((!quiet || on && on.name === PICK) && active()) L.Controller.toggle('content');
+    }
+    function leavePick() { if (picking) stopPick(); else L.Controller.toggle('content'); }
     // Long press: every source behind the card, or every release of a torrent group.
     function sourceMenu(item) {
       var row = item.best, items = [];
@@ -710,8 +752,10 @@
       } else if (more) { more.remove(); more = null; moved = true; }
       drawStatus(loading, items.filter(real), available, exact);
       drawChips();
-      hint.toggleClass('hide', !items.length).text(recovery ? keysText(null) : grouped ? 'ОК — смотреть  ·  удержание ОК — все источники  ·  → параметры' : 'ОК — смотреть  ·  удержание ОК — подробности  ·  → параметры');
+      hint.toggleClass('hide', !items.length).text(recovery ? keysText(null) : grouped ? 'ОК — смотреть  ·  → выбрать источник' : 'ОК — смотреть  ·  удержание ОК — подробности  ·  → параметры');
       var firstCard = keys.filter(function (key) { return key.indexOf('section:') !== 0 && key.indexOf('label:') !== 0; })[0], top = firstCard && tiles[firstCard] ? tiles[firstCard][0] : null;
+      // The card being chosen from was regrouped away: leave the panel for the list.
+      if (picking && !models[picking.key]) stopPick();
       if (ownList()) {
         var before = last;
         if (untouched && top) last = top;
@@ -723,7 +767,7 @@
       if (!shownKey && firstCard && !models[detailKey]) shownKey = firstCard;
       if (!shownKey && models[detailKey]) shownKey = detailKey;
       if (shownKey) showDetail(shownKey);
-      else if (!items.length) { detail.addClass('hide'); detailSig = ''; detailKey = ''; }
+      else if (!items.length) { stopPick(true); detail.addClass('hide'); detailSig = ''; detailKey = ''; }
     }
     function isChecked(item) { return !item.best.unavailable && (!!item.best.measured || item.best.verified === 'play'); }
     // Chip counts ignore the kind filter: they say what each choice would show.
@@ -748,7 +792,7 @@
       } else {
         parts.push(rows.length ? 'Найдено: ' + found : 'Ничего не найдено');
         if (search.checking()) parts.push('проверяем качество');
-        if (search.interrupted) parts.push('Поиск прерван: → и «Обновить поиск»');
+        if (search.interrupted) parts.push('Поиск прерван: «Параметры» → «Обновить поиск»');
         if (search.cachedAt) { var minutes = Math.floor((Date.now() - search.cachedAt) / 60000); parts.push(minutes ? 'обновлено ' + minutes + ' мин назад' : 'обновлено только что'); }
         if (fresh) parts.push('ниже ещё ' + plural(fresh, ['новый', 'новых', 'новых']));
         if (recovery && recovery.voice && !exact && rows.length) parts.push('Точного совпадения нет; показаны похожие озвучки');
@@ -765,7 +809,7 @@
       // OK on the strip keeps focus there until the new results bring the hero.
       var keep = last && strip[0].contains(last) ? last.homelabEpisode : 0;
       cancel(); currentScope = sync.scope(); resetList();
-      body.empty(); heroBox.empty().addClass('hide'); more = null; placeholder = null; placeholderState = ''; detail.addClass('hide'); updateSummary(); stripCenter = 0; drawStrip(keep);
+      stopPick(true); body.empty(); heroBox.empty().addClass('hide'); more = null; placeholder = null; placeholderState = ''; detail.addClass('hide'); updateSummary(); stripCenter = 0; drawStrip(keep);
       var options = {torrents: !recovery, fresh: fresh === true}, warmed = fresh === true ? null : adoptWarm(searchKey(movie, selection, options.torrents));
       if (warmed) { search = warmed; search.follow(changed); }
       else { search = new Search(Object.assign({}, movie), selection, changed, options); search.start(); }
@@ -808,9 +852,13 @@
       if (!active()) return;
       if (sync.scope() !== currentScope) { cancel(); return L.Activity.backward(); }
       if (settingsOpen) { settingsOpen = false; pending = null; panel.addClass('hide'); root.removeClass('is-settings'); }
+      stopPick(true);
       L.Controller.add('content', {link: self, invisible: true, toggle: function () { focus(false); }, up: function () { move(0, -1); }, down: function () { move(0, 1); }, left: function () { move(-1, 0); },
-        // → walks the strip and the chips; past their end, and from anywhere else, it opens the parameters.
-        right: function () { if (!(last && last !== summary[0] && (strip[0].contains(last) || filters[0].contains(last)) && move(1, 0))) openSettings(); }, back: function () { cancel(); L.Activity.backward(); }});
+        // → walks the strip and the chips; on a card with several sources it chooses among them;
+        // past the chips' end, and from anywhere else, it opens the parameters.
+        right: function () { if (!(last && last !== summary[0] && (strip[0].contains(last) || filters[0].contains(last)) && move(1, 0)) && !startPick()) openSettings(); }, back: function () { cancel(); L.Activity.backward(); }});
+      L.Controller.add(PICK, {link: self, invisible: true, toggle: focusPick, up: function () { stepPick(-1); }, down: function () { stepPick(1); },
+        left: leavePick, right: function () {}, back: leavePick});
       L.Controller.add(SETTINGS, {link: self, invisible: true, toggle: focusSetting, up: function () { if (settingIndex > 0) { settingIndex--; focusSetting(); } },
         down: function () { if (settingIndex < settingRows.length - 1) { settingIndex++; focusSetting(); } }, left: function () { stepSetting(-1, true); }, right: function () { stepSetting(1); }, back: function () { closeSettings(); }});
       L.Controller.toggle('content');

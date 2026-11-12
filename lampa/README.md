@@ -517,9 +517,13 @@ to 60 a minute (burst 30) and keeps these posts out of Traefik's access log.
 Logging failures never affect playback.
 
 `init.conf` disables VeoVeo: its upstream host `api.rstprgapipt.com` no longer
-resolves. Lampac rereads `init.conf` when the file changes, but it is mounted as
-a single file and `git pull` replaces it, so recreate `lampa` to apply a pulled
-change.
+resolves. Aladin is disabled because its CDN returns HTTP 403 for some freshly
+resolved streams.
+
+Lampac rereads in-place changes to `init.conf` without a restart. Release any
+exclusive lock on the file before waiting for the reload. `git pull` can replace
+the host file while the bind mount still points to the old one. Recreate `lampa`
+to apply a change made that way.
 
 The HTTP healthcheck requests `/version?type=hash` with a three-second timeout.
 It verifies the HTTP application, not GPU functionality or an individual stream.

@@ -414,14 +414,9 @@ VPL dispatcher, but the inspected image lacks these driver/runtime packages.
 Lampac's hardware backend selects `qsvh264enc` after a successful startup probe;
 VA-API support in another container is not sufficient.
 
-The managed application remains upstream; modules too, except for the patches in
-`runtime/patches/`, applied at build time with `patch --fuzz=0` so a changed
-upstream file stops the build instead of being overwritten. The Aladin patch
-replaces a WebSocket session that has stopped: upstream keeps returning it for
-the same episode, so every new link of that episode answers 403 until Lampac
-restarts. When upstream fixes a patched file, drop its patch. The image rebuilds
-`libe_sqlite3.so` with local symbol binding (`-Bsymbolic`) so a globally loaded
-system SQLite cannot interpose incompatible WAL callbacks. The build verifies
+The Lampac application and modules come from the upstream image. The build
+recompiles `libe_sqlite3.so` with local symbol binding (`-Bsymbolic`) so a
+globally loaded system SQLite cannot interpose incompatible WAL callbacks. It verifies
 the SQLite source ID and compile options against the bundled library and stops
 if upstream changes either; review the pinned amalgamation before updating it.
 The isolated native regression is in `runtime/tests/sqlite_interposition.py`.

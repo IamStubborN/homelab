@@ -5,7 +5,7 @@
   if (!L || !$ || window.homelabPlaybackStatus || !L.Player || !L.Player.listener || !L.PlayerVideo || !L.PlayerVideo.listener || !L.PlayerPanel || !L.Noty) return;
   if (![L.Player.playdata, L.Player.listener.follow, L.PlayerVideo.video,
     L.PlayerVideo.listener.follow, L.PlayerPanel.render, L.Noty.show, L.Player.opened].every(function (fn) { return typeof fn === 'function'; })) return;
-  window.homelabPlaybackStatus = {version: 11};
+  window.homelabPlaybackStatus = {version: 12};
   // Buffering mid-play stays invisible for 5 s (Lampa's spinner too), other short blips for 0.7 s; Lampa's own loader covers a fast
   // start; a long start suggests another source.
   var DEBOUNCE = 700, BUFFER_DELAY = 5000, FROZEN = 3000, HUNG = 10000, START_DELAY = 2500, ESCALATE = 20000, STATS_EVERY = 2000, CTRL = 'homelab_playback_card';
@@ -405,16 +405,18 @@
         try { video.currentTime = at + .5; } catch (error) { s.nudging = false; waiting(); }
       }, FROZEN);
     }
+    s.resumeHungSeek = function () {
+      // A fresh script seek may queue its event behind play; only an observed old seek counts.
+      if (!currentVideo(s) || !video.seeking || !s.seekSince || !inBuffer(video.currentTime) || Date.now() - s.seekSince < HUNG) return false;
+      s.userPaused = false; hungSeek(true); return true;
+    };
     function ready(phase) { if (currentVideo(s)) { cancelStall(s); capture(s); if (phase === 'playing') s.playedOnce = true; set(phase); } }
     s.events = {waiting: waiting, stalled: waiting, playing: function () { ready('playing'); }, canplay: function () { ready('ready'); },
       pause: function () { if (!video.ended) s.userPaused = true; cancelStall(s); if (currentVideo(s)) render(); },
       play: function () {
         s.userPaused = false;
         if (!currentVideo(s)) return;
-        // Play on a seek left hanging (typically after a long pause) reloads at once: it is the user's ask.
-        // seeking is queued after a script seek, so a play right behind currentTime= sees seeking before its event:
-        // only a seek whose own event started the clock counts.
-        if (video.seeking && s.seekSince && inBuffer(video.currentTime) && Date.now() - s.seekSince >= HUNG) return hungSeek(true);
+        if (s.resumeHungSeek()) return;
         arm(s); render(); watch(false);
       },
       // A seek into missing torrent pieces may never complete.
@@ -475,6 +477,8 @@
   L.Player.listener.follow('ready', function (work) { if (!state || state.work !== work) start(work); if (state) bind(state); });
   L.Player.listener.follow('destroy', clear);
   L.PlayerVideo.listener.follow('loadeddata', function () { if (state) bind(state); });
+  // Native rewind announces intent before its delayed currentTime assignment queues 'seeking'.
+  L.PlayerVideo.listener.follow('rewind', function () { if (state && currentVideo(state)) state.seekSince = 0; });
   L.PlayerVideo.listener.follow('destroy', function (event) { if (state) { unbind(state); if (event && event.savemeta) { state.stuck = true; set('preparing'); var s = state; s.rebind = setTimeout(function () { if (valid(s)) bind(s); }, 0); } } });
   L.PlayerVideo.listener.follow('error', function (event) {
     // Upstream Player handles a fatal error first by switching to url_reserve.
@@ -522,5 +526,20 @@
   function watchIdle() { touched(); clearTimeout(idleTimer); idleTimer = setTimeout(idleCheck, 1000); }
   L.Player.listener.follow('start', watchIdle);
   L.Player.listener.follow('destroy', function () { clearTimeout(idleTimer); idleTimer = null; });
+  // Native play/pause ignores input while its loader is active, so no video 'play' event reaches
+  // the recovery above. Handle an explicit resume of a buffered hung seek before that gate.
+  function resumeFromControl() {
+    var s = state;
+    return s && currentVideo(s) && s.work.homelab_online && canChoose(s) && s.phase !== 'recovering' && s.video.paused && s.resumeHungSeek();
+  }
+  var playpause = L.PlayerVideo.playpause;
+  if (typeof playpause === 'function') L.PlayerVideo.playpause = function () {
+    if (!resumeFromControl()) return playpause.apply(this, arguments);
+  };
+  // Clicking the video calls Lampa's private toggle rather than the public PlayerVideo method.
+  var videoRoot = typeof L.PlayerVideo.render === 'function' && L.PlayerVideo.render();
+  if (videoRoot && videoRoot[0] && typeof videoRoot[0].addEventListener === 'function') videoRoot[0].addEventListener('click', function (event) {
+    if (typeof L.PlayerPanel.visibleStatus === 'function' && L.PlayerPanel.visibleStatus() && resumeFromControl()) event.stopImmediatePropagation();
+  }, true);
   if (L.Player.opened()) { start(L.Player.playdata()); if (state) bind(state); watchIdle(); }
 })();

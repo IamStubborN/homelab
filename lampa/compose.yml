@@ -20,10 +20,12 @@ services:
       CLI_PROXY_KEY_FILE: /run/secrets/cliproxy_api_key
       TMDB_BASE: http://lampa:9118/tmdb/api/3
       TMDB_API_KEY_FILE: /run/secrets/tmdb_api_key
+      TAVILY_API_KEY_FILE: /run/secrets/tavily_api_key
       LAMPAC_FALLBACK_BASE: http://lampa:9118
     secrets:
       - cliproxy_api_key
       - tmdb_api_key
+      - tavily_api_key
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"

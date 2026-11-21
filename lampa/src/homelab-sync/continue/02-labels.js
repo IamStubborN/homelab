@@ -31,13 +31,15 @@
       if (item.deleted || !(item.duration > 0)) return;
       if (watched(item)) {
         if (item.card.indexOf('tv_') !== 0) return;
-        var known = metadata[item.card] || remembered[item.card], next = nextEpisode(item, known && known.seasons);
+        var known = metadata[item.card] || remembered[item.card], seasons = known && known.seasons, next = nextEpisode(item, seasons);
         if (!next) return;
+        // Source numbering can split a season that TMDB lists as a single season.
+        var aired = known && (!seasons || seasons[item.season] !== undefined) && known.aired;
         // TMDB lists announced episodes too: an episode that has not aired yet is nothing to continue.
-        var aired = known && known.aired, airedAt = aired ? Date.parse(aired.date + 'T00:00:00Z') : NaN;
         if (aired && next.season !== 0 && (next.season > aired.season || next.season === aired.season && next.episode > aired.episode)) return;
         var value = Object.assign({}, item, {season: next.season, episode: next.episode, position: 0, advance: {season: item.season, episode: item.episode}});
         // Episodes released after the last viewing are new: they lead the row and say so.
+        var airedAt = aired ? Date.parse(aired.date + 'T00:00:00Z') : NaN;
         if (Number.isFinite(airedAt) && airedAt > item.observed && next.season !== 0) value.fresh = true;
         // A native season index cannot be derived for another season.
         if (next.season !== item.season) delete value.online;

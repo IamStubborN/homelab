@@ -74,7 +74,11 @@ move between the actions and hand off to the panel at the edges, Down opens the
 panel. Back on an automatically focused card hides it and still acts as the
 player's Back; after the user moved focus, Back only hides it. The panel keeps
 the actions. Phase changes never produce notifications or raw error text,
-and recovery never switches automatically. Online retry resolves a fresh
+and recovery never switches automatically. Online play/pause and clicks on the
+video can also resume a buffered seek stuck
+for at least ten seconds while paused, even when Lampa's loading gate suppresses
+the native play event; this uses the same recovery and saved position. Fresh seeks
+and targets outside the buffer keep Lampa's normal controls. Online retry resolves a fresh
 URL from the same provider. Other source opens concrete online variants for the
 same episode and known voice. Exact voice labels rank first; whole-label aliases
 for a small set of known studios appear as clearly marked similar voices. They
@@ -353,6 +357,14 @@ secret file before starting the stack:
 install -m 0600 /dev/null hermes/secrets/tmdb_api_key
 # Put the TMDB API key on the single line in this file.
 ```
+
+For AI search, the adapter classifies requests as title identification or
+recommendations. It looks up title clues in TMDB, checks explicit type, year
+and exclusions, and uses the shared `tavily_api_key` Compose secret for one
+basic web search when the catalog match is weak. Tavily receives the search
+phrase and returns up to five results. The adapter verifies titles or IMDb
+and TMDB IDs against TMDB before sending Lampa cards. If Tavily is unavailable,
+the search can still return the cards it already resolved in TMDB.
 
 The service is published at:
 

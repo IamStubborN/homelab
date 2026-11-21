@@ -169,6 +169,21 @@ test('an episode that has not aired yet is not offered', async t => {
   assert.equal(h.window.homelabContinue.list().length, 0);
 });
 
+test('a source season missing from TMDB keeps its next episode in Continue', async t => {
+  let done;
+  const h = await row(t, [{...finished, season: 2, episode: 5}], h => {
+    h.L.Api.sources.tmdb.get = (url, params, ok) => { done = ok; };
+  });
+  assert.equal(h.window.homelabContinue.list()[0].episode, 6);
+  done({name: 'Series', seasons: [{season_number: 1, episode_count: 24}], last_episode_to_air: {season_number: 1, episode_number: 19, air_date: '2026-10-08'}});
+  await flush();
+  const [item] = h.window.homelabContinue.list();
+  assert.equal(item.season, 2);
+  assert.equal(item.episode, 6);
+  assert.equal(item.fresh, undefined);
+  assert.equal(h.overlay(), 'Следующая: Е6');
+});
+
 test('an older release is the plain next episode', async t => {
   const h = await row(t, [finished], cachedMeta({season: 1, episode: 10, date: '2026-09-01'}));
   assert.equal(h.overlay(), 'Следующая: Е3');

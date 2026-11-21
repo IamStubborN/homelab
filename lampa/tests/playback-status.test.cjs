@@ -433,6 +433,92 @@ test('Play on a seek left hanging during a long pause reloads the stream at once
   assert.deepEqual(loads, ['destroy', 'https://lampa.example/lite/one/video.m3u8']);
 });
 
+// The installed Lampa bundle's real button gate, which direct video.play() tests bypass.
+function nativeToggle(h, video) {
+  const context = {_video: video, wait$1: false, rewind_position: 0, play$4: () => video.play(), pause: () => video.pause()};
+  const toggle = require('node:vm').runInNewContext(`(function playpause() {
+    if (wait$1 || rewind_position) return;
+    if (_video.paused) play$4();else pause();
+  })`, context);
+  h.L.PlayerVideo.playpause = toggle;
+  video.addEventListener('waiting', () => { context.wait$1 = true; });
+  video.addEventListener('playing', () => { context.wait$1 = false; });
+  let click, panelVisible = true;
+  h.L.PlayerPanel.visibleStatus = () => panelVisible;
+  h.L.PlayerVideo.render = () => [{addEventListener(name, handler, capture) {
+    assert.equal(name, 'click'); assert.equal(capture, true); click = handler;
+  }}];
+  return {context, hide() { panelVisible = false; }, click() {
+    let stopped = false;
+    click?.({stopImmediatePropagation() { stopped = true; }});
+    if (!stopped) { if (panelVisible) toggle(); else panelVisible = true; }
+  }};
+}
+
+for (const control of ['button', 'video surface']) test(`${control} resumes a buffered seek left hanging during a two-hour pause despite Lampa's loading gate`, t => {
+  const h = harness(t), loads = [], video = realistic(h), native = nativeToggle(h, video);
+  h.window.HomelabSources = {recover: () => true};
+  h.L.PlayerVideo.destroy = () => loads.push('destroy');
+  h.L.PlayerVideo.url = url => { loads.push(url); realistic(h, h.replaceVideo()); };
+  h.run('plugins/playback-status.js');
+  h.start({card: {id: 7, name: 'Series'}, season: 1, episode: 3, homelab_online: {provider: 'one', voice: 'A'}, url: 'https://lampa.example/lite/one/video.m3u8'});
+  video.play(); video.data(); video.advance(2); video.pause();
+  video.buffered = {length: 1, start: () => 740, end: () => 851.7};
+  video.seeking = true; video.currentTime = 797; video.fire('seeking'); video.fire('waiting'); h.tick(2 * 3600000);
+  assert.deepEqual(loads, [], 'a pause alone never restarts playback');
+  if (control === 'button') h.L.PlayerVideo.playpause(); else {
+    native.hide(); native.click();
+    assert.deepEqual(loads, [], 'the first click with hidden controls only reveals the panel');
+    native.click();
+  }
+  assert.deepEqual(loads, ['destroy', 'https://lampa.example/lite/one/video.m3u8']);
+  h.video().fire('loadedmetadata'); assert.equal(h.video().currentTime, 797, 'the resume point survives');
+});
+
+for (const situation of ['normal', 'fresh seek', 'outside buffer', 'closed', 'unmanaged']) test(`the play/pause control preserves native behavior for ${situation}`, t => {
+  const h = harness(t), video = realistic(h), native = nativeToggle(h, video), loads = [];
+  h.window.HomelabSources = {recover: () => { loads.push('lookup'); return true; }};
+  h.run('plugins/playback-status.js');
+  h.start({card: {id: 7}, homelab_online: {provider: 'one', voice: 'A'}});
+  video.play(); video.data(); video.advance(2);
+  if (situation === 'normal') {
+    h.L.PlayerVideo.playpause(); assert.equal(video.paused, true);
+    h.L.PlayerVideo.playpause(); assert.equal(video.paused, false);
+  } else {
+    video.pause(); video.buffered = {length: 1, start: () => 0, end: () => situation === 'outside buffer' ? 60 : 300};
+    video.seeking = true; video.currentTime = 100; video.fire('seeking'); video.fire('waiting');
+    h.tick(situation === 'fresh seek' ? 1000 : 120000);
+    if (situation === 'closed') h.destroy();
+    if (situation === 'unmanaged') h.start({url: 'https://media.example/video.mp4'});
+    native.context.rewind_position = 120;
+    h.L.PlayerVideo.playpause(); native.click();
+    assert.equal(video.paused, true, 'the native loading/rewind guard remains in charge');
+  }
+  assert.deepEqual(loads, []);
+});
+
+test('a pending native rewind replaces an old hung seek before the delayed seeking event', t => {
+  const h = harness(t), video = realistic(h), native = nativeToggle(h, video), loads = [];
+  h.window.HomelabSources = {recover: () => { loads.push('lookup'); return true; }};
+  h.L.PlayerVideo.destroy = () => loads.push('destroy');
+  h.L.PlayerVideo.url = () => { loads.push('reload'); realistic(h, h.replaceVideo()); };
+  h.run('plugins/playback-status.js');
+  h.start({card: {id: 7}, homelab_online: {provider: 'one', voice: 'A'}, url: 'https://lampa.example/lite/one/video.m3u8'});
+  video.play(); video.data(); video.advance(2); video.pause();
+  video.buffered = {length: 1, start: () => 740, end: () => 851.7};
+  video.seeking = true; video.currentTime = 797; video.fire('seeking'); video.fire('waiting'); h.tick(120000);
+  // Lampa signals rewind now but assigns currentTime only after its one-second debounce.
+  native.context.rewind_position = 807; h.videoEvent('rewind');
+  h.L.PlayerVideo.playpause(); native.click();
+  assert.deepEqual(loads, [], 'Play must let the pending rewind finish instead of reopening the old point');
+  assert.equal(video.paused, true);
+  h.tick(1000); video.currentTime = 807; native.context.rewind_position = 0; video.fire('seeking');
+  native.context.play$4(); h.tick(2000);
+  video.seeking = false; video.fire('seeked'); video.data(); video.advance(4);
+  assert.deepEqual(loads, [], 'a completed native rewind remains normal playback');
+  assert.equal(video.currentTime, 811);
+});
+
 test('Play right after a fresh seek waits for it as usual', t => {
   const h = harness(t), loads = [];
   h.window.HomelabSources = {recover() { return true; }};

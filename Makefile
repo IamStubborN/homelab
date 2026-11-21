@@ -3,7 +3,7 @@ SHELL := /bin/bash
 INTERNAL_STORAGE ?= /mnt/internal
 VIDEO_DIR ?= $(INTERNAL_STORAGE)/torrents/tv
 
-.PHONY: ip-test dns-leak-test update-containers check-runtime prune danger-prune check-codecs
+.PHONY: ip-test dns-leak-test update-containers check-runtime check-deploy prune danger-prune check-codecs
 
 ip-test:
 	docker run --rm --network=container:gluetun alpine:3.20 sh -c "apk add wget && wget -qO- https://ipinfo.io"
@@ -21,6 +21,14 @@ check-runtime:
 	@bad="$$(docker ps -q | xargs -r docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}|{{index .Config.Labels "com.docker.compose.project.config_files"}}|{{.Name}}' | awk -F'|' -v root="$(CURDIR)" 'index($$1, root) == 1 && $$2 !~ ("^" root "/compose.yml(,|$$)")')"; \
 	if [[ -n "$$bad" ]]; then printf 'Containers launched outside root Compose:\n%s\n' "$$bad"; exit 1; fi
 	@echo "All homelab containers use the root Compose entrypoint"
+
+check-deploy:
+	@git fetch -q origin
+	@if [[ "$$(git rev-parse HEAD)" != "$$(git rev-parse origin/main)" ]]; then echo "Checkout is not at origin/main"; exit 1; fi
+	@if [[ -n "$$(git status --porcelain)" ]]; then git status --short; echo "Checkout has local changes"; exit 1; fi
+	@planned="$$(docker compose up -d --dry-run 2>&1 | awk '$$1 == "Container" && ($$3 == "Create" || $$3 == "Recreate") {print $$2}' | sort -u)"; \
+	if [[ -n "$$planned" ]]; then printf 'Compose would change containers:\n%s\n' "$$planned"; exit 1; fi
+	@echo "Checkout is clean at origin/main and every container matches Compose"
 
 prune:
 	@echo "Refusing to run docker system prune without an explicit confirmation."

@@ -11,6 +11,23 @@ unless a service README says otherwise.
 - `make check-runtime` checks for services launched outside the root project.
 - Run the service's own tests before changing its deployment contract.
 
+## Deployment
+
+The Docker host runs a checkout of `origin/main` and is a deploy target. Every
+change, hotfixes included, is committed and pushed from a development checkout;
+the host then runs `git pull --ff-only` and `docker compose up -d <service>`.
+The torrserver watcher recreates containers from the host's working tree at any
+moment, so an edit made on the host reaches production unreviewed and is lost on
+the next reset.
+
+A deployment is done when `make check-deploy` passes on the host: the checkout is
+clean at `origin/main` and Compose plans no container changes. Watchtower
+replaces images without updating Compose labels, so containers it updated show
+as planned recreations; `docker compose up -d` restarts them on the same image.
+
+Ignored private configuration is authoritative on the host. A development
+checkout that keeps copies refreshes them from the host after each change.
+
 ## Configuration boundary
 
 The public repository contains examples and code. Keep actual `.env` files,

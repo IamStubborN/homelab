@@ -6,7 +6,7 @@
 # DRY_RUN=1 only reports whether an update is due.
 set -euo pipefail
 
-ROOT=${LAMPA_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}   # the checkout this script lives in
+ROOT=${LAMPA_ROOT:-$(CDPATH="" cd -P -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)}   # the checkout this script lives in
 STATE=${LAMPAC_UPDATE_STATE:-/var/lib/lampac-update}
 AUTO=$STATE/auto                 # this script's own state
 UPSTREAM=ghcr.io/lampac-nextgen/lampac

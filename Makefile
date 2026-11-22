@@ -23,12 +23,7 @@ check-runtime:
 	@echo "All homelab containers use the root Compose entrypoint"
 
 check-deploy:
-	@git fetch -q origin
-	@if [[ "$$(git rev-parse HEAD)" != "$$(git rev-parse origin/main)" ]]; then echo "Checkout is not at origin/main"; exit 1; fi
-	@if [[ -n "$$(git status --porcelain)" ]]; then git status --short; echo "Checkout has local changes"; exit 1; fi
-	@planned="$$(docker compose up -d --dry-run 2>&1 | awk '$$1 == "Container" && ($$3 == "Create" || $$3 == "Recreate") {print $$2}' | sort -u)"; \
-	if [[ -n "$$planned" ]]; then printf 'Compose would change containers:\n%s\n' "$$planned"; exit 1; fi
-	@echo "Checkout is clean at origin/main and every container matches Compose"
+	@./scripts/check-deploy.sh
 
 prune:
 	@echo "Refusing to run docker system prune without an explicit confirmation."

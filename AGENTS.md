@@ -16,17 +16,19 @@ unless a service README says otherwise.
 The Docker host runs a checkout of `origin/main` and is a deploy target. Every
 change, hotfixes included, is committed and pushed from a development checkout;
 the host then runs `git pull --ff-only` and `docker compose up -d <service>`.
-The torrserver watcher recreates containers from the host's working tree at any
-moment, so an edit made on the host reaches production unreviewed and is lost on
-the next reset.
+`gluetun-torrserver-watcher` runs `docker compose up` from the host's working
+tree at any moment, so an edit made on the host reaches production unreviewed,
+fails `make check-deploy` and can block the next `git pull --ff-only`.
 
 A deployment is done when `make check-deploy` passes on the host: the checkout is
-clean at `origin/main` and Compose plans no container changes. Watchtower
-replaces images without updating Compose labels, so containers it updated show
-as planned recreations; `docker compose up -d` restarts them on the same image.
+clean at `origin/main`, Compose plans no container changes and every service is
+running and not unhealthy (one-shot jobs may exit 0). A warning lists services
+Watchtower updated: their Compose image label is stale, and
+`docker compose up -d <service>` restarts them on the same image to refresh it.
 
 Ignored private configuration is authoritative on the host. A development
-checkout that keeps copies refreshes them from the host after each change.
+checkout that keeps copies of these files pulls each changed file back from the
+host.
 
 ## Configuration boundary
 

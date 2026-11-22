@@ -1,7 +1,7 @@
 # OpenList
 
 Multi-storage file browser at `https://openlist.${DOCKER_DOMAIN}` (Traefik, no host ports).
-LAN-only on `*.host-5.example.invalid.example.test` — primary file manager UI.
+LAN-only (the `DOCKER_DOMAIN` zone); primary file manager UI.
 
 ## Stack
 
@@ -14,7 +14,7 @@ Admin password: ignored file `openlist/data/.admin-password` (chmod 600). Option
 
 ## Public URL
 
-`https://openlist.${DOCKER_DOMAIN}` — Traefik Host rule only (replaces former `files.*` Filestash URL).
+`https://openlist.${DOCKER_DOMAIN}` — Traefik Host rule only.
 
 ## Local mounts
 
@@ -25,7 +25,8 @@ Same host paths Samba shares, mounted RW:
 | `${INTERNAL_STORAGE:-/mnt/internal}` | `/mnt/shares/internal` | `/internal` |
 | `${USB_STORAGE:-/mnt/usb_drive}` | `/mnt/shares/usb_drive` | `/usb_drive` |
 
-Never delete or rearrange `save/`, `_partial/`, `_cull/` under internal.
+Never delete or rearrange `save/`, `library/_partial/` and
+`library/_cull/` under internal storage.
 
 ## Additional storage
 

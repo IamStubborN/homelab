@@ -1,223 +1,138 @@
 # Wiki host services
 
-The live vault is `${WIKI_ROOT}` on host-5.example.invalid (default `/mnt/internal/wiki`).
-It is not in this git clone. One Obsidian vault = the entire wiki root
-(Primary + Secondary + `shared/health`).
+The live vault is `${WIKI_ROOT}` on the Docker host (default
+`/mnt/internal/wiki`). It is not in this repository. The whole wiki root is one
+vault: Primary, Secondary and `shared/health`.
 
-This module ships:
+`wiki/compose.yml` defines:
 
-- **obsidian-sync** — official Obsidian Sync (`obsidian-headless`)
-- **health-drive** — one-way rclone mirror to Google Drive `HealthWiki/`
-
-Do **not** substitute Syncthing. Do **not** add a Samba write path.
+- **syncthing**: device sync of the vault for desktop and phone clients;
+- **health-drive**: one-way rclone copy to the Google Drive folder
+  `HealthWiki/` (Compose profile `g2-oauth`, not started by a plain `up`).
 
 ```text
 ${WIKI_ROOT}                 host, canonical, uid 10000:10000
-  primary/                    Hermes Primary WIKI_PATH
-  secondary/                 Hermes Secondary WIKI_PATH
+  primary/                   Hermes Primary wiki (HERMES_PRIMARY_WIKI_PATH)
+  secondary/                 Hermes Secondary wiki (HERMES_SECONDARY_WIKI_PATH)
+  shared/                    mounted into both Hermes containers at /wiki/shared
   shared/health/             health MCP cashier
-  .obsidian/                 created by obsidian-headless on sync-setup
 
-obsidian-sync  mounts ${WIKI_ROOT} rw → /vault
+syncthing      mounts ${WIKI_ROOT} rw → /var/syncthing/wiki
 health-drive   mounts ${WIKI_ROOT} ro → /data
 ```
 
-## Bootstrap
+The files in `${WIKI_ROOT}` are the source of truth. Syncthing devices hold
+copies; Hermes and the health cashier write the host files directly. Every
+process that writes the vault runs as `10000:10000`; the host needs no passwd
+entry for that UID.
 
-Tracked script: [`bootstrap-vault.sh`](bootstrap-vault.sh). Idempotent.
-Creates `primary/`, `secondary/`, and
-`shared/health/{data/{primary,secondary},generated,people/{primary,secondary},family,raw/{primary,secondary,family}}`,
-then writes initial SCHEMA/index/log from
-[`health/docs/wiki-SCHEMA.example.md`](../health/docs/wiki-SCHEMA.example.md)
-and
-[`health/docs/wiki-health-SCHEMA.example.md`](../health/docs/wiki-health-SCHEMA.example.md).
-Existing SCHEMA.md / index.md / log.md / jsonl are left untouched.
+The vault is also visible through the existing Samba share of `/mnt`. Treat
+that path as read-only: LAN writes land as UID 1000 and fight Hermes. Devices
+write through Syncthing.
 
-Does not require root. Does not SSH. Does not invent `.obsidian/` (that
-appears on first `sync-setup`). Does not create `primary/shared` — Hermes
-bind-mounts `${WIKI_ROOT}/shared`.
+## Host directory
 
-```bash
-# laptop / CI: any writable temp dir
-wiki/bootstrap-vault.sh /tmp/wiki-test
-wiki/tests/test-bootstrap-vault.sh
-
-# host-5.example.invalid after G3, as the vault owner
-sudo -u '#10000' wiki/bootstrap-vault.sh /mnt/internal/wiki
-```
-
-Default argument is `/mnt/internal/wiki` (or `$WIKI_ROOT` if set).
-`/opt/data/wiki` is wrong on this host.
-
-## G3 — Host directory (human; do not automate)
-
-Before first deploy. Do **not** run this from a Worker.
-
-SSH check (path must exist only after this gate):
-
-```bash
-ssh host-5.example.invalid.example.test 'ls -la /mnt/internal/wiki'
-```
-
-On host-5.example.invalid:
+On a new host, create the vault root and the rclone config directory, then run
+the bootstrap as the vault owner:
 
 ```bash
 sudo mkdir -p /mnt/internal/wiki
-sudo chown -R 10000:10000 /mnt/internal/wiki
+sudo chown 10000:10000 /mnt/internal/wiki
 sudo chmod 2770 /mnt/internal/wiki
-sudo install -d -o 10000 -g 10000 -m 0700 health/secrets/obsidian
 sudo install -d -o 10000 -g 10000 -m 0700 health/secrets/rclone
+sudo -u '#10000' wiki/bootstrap-vault.sh /mnt/internal/wiki
 ```
 
-Every process that writes the vault is `10000:10000`. Host has no passwd
-entry for 10000; numeric ownership is enough.
-
-## obsidian-sync
-
-- Service: `obsidian-sync` in `wiki/compose.yml`
-- Image: `homelab-obsidian-sync:local` (build context `wiki/obsidian-sync/`)
-- Base: official `node:22-bookworm-slim` pinned by digest
-- CLI: `obsidian-headless@0.0.14` (`ob`)
-- Command: `ob sync --continuous --path /vault`
-- Vault: `${WIKI_ROOT:-/mnt/internal/wiki}` mounted **read-write** at `/vault`
-- HOME: gitignored `health/secrets/obsidian/` → `/home/obsidian`
-- UID:GID: `10000:10000`
-- Watchtower: off
-- Does **not** join `health-internal`
-
-Credentials stay under `$HOME` (`~/.config/obsidian-headless/` or
-`~/.obsidian-headless/`). Never in the vault, never in Drive, never in
-Compose env. Vault link state after `sync-setup` also lives on that HOME
-volume (`sync/` + sqlite), not under `${WIKI_ROOT}`.
-
-Remote vault name: **FamilyWiki**. One remote vault = the entire
-`${WIKI_ROOT}`.
-
-## G1 — Obsidian Sync login (human; do not automate)
-
-Requires an active [Obsidian Sync](https://obsidian.md/sync) subscription.
-Complete this on host-5.example.invalid **before** `docker compose up` for
-`obsidian-sync`. Login is interactive `docker compose run`, not the
-service command.
-
-From the repository root, after the image is built
-(`docker compose build obsidian-sync`):
+[`bootstrap-vault.sh`](bootstrap-vault.sh) is idempotent and needs no root. It
+creates `primary/`, `secondary/` and
+`shared/health/{data/{primary,secondary},generated,people/{primary,secondary},family,raw/{primary,secondary,family}}`,
+then writes initial SCHEMA/index/log files from
+[`health/docs/wiki-SCHEMA.example.md`](../health/docs/wiki-SCHEMA.example.md)
+and
+[`health/docs/wiki-health-SCHEMA.example.md`](../health/docs/wiki-health-SCHEMA.example.md).
+Existing SCHEMA.md, index.md, log.md and jsonl files are left untouched. It does
+not create `primary/shared`: Hermes bind-mounts `${WIKI_ROOT}/shared`. The
+default argument is `$WIKI_ROOT`, else `/mnt/internal/wiki`.
 
 ```bash
-docker compose run --rm -it --user 10000:10000 --entrypoint ob obsidian-sync login
-docker compose run --rm -it --user 10000:10000 --entrypoint ob obsidian-sync sync-list-remote
-# create the remote vault in the Obsidian account if none exists:
-#   docker compose run --rm -it --user 10000:10000 --entrypoint ob \
-#     obsidian-sync sync-create-remote --name FamilyWiki
-docker compose run --rm -it --user 10000:10000 --entrypoint ob obsidian-sync \
-  sync-setup --vault FamilyWiki --path /vault --device-name host-5.example.invalid
-docker compose run --rm -it --user 10000:10000 --entrypoint ob obsidian-sync \
-  sync-config --path /vault --file-types image,audio,video,pdf,unsupported
+wiki/bootstrap-vault.sh /tmp/wiki-test
+wiki/tests/test-bootstrap-vault.sh
 ```
 
-`--file-types image,audio,video,pdf,unsupported` is required so chart
-PNGs and lab PDFs leave the server.
+## syncthing
 
-An optional E2E vault password, if enabled on the account, belongs in
-`health/secrets/obsidian/` and is passed only to that `sync-setup` run
-(`--password`). Never put it in Compose env or a bare `$` in an env file.
+- Image: `syncthing/syncthing:latest`, updated by Watchtower
+- UID:GID `10000:10000`, so synced files match the cashier and Hermes ownership
+- Vault: `${WIKI_ROOT}` mounted read-write at `/var/syncthing/wiki`
+- State and device keys: ignored `wiki/syncthing/home/` → `/var/syncthing`
+- GUI: `https://syncthing.${DOCKER_DOMAIN}` through Traefik (port 8384), LAN
+  and VPN only; set a GUI admin password on first login
+- Joins only `proxy`, not `health-internal`
 
-`.obsidian/` is created by `obsidian-headless` on first `sync-setup`. Do
-not invent a fake vault config in git.
-
-`docker compose up -d obsidian-sync` is a later human **G5** step, after
-G1 and G3. The Family Health deploy/rollback runbook (G1–G5, cashier,
-Hermes recreate) is [`health/README.md`](../health/README.md).
-
-## Samba / LAN visibility
-
-T7 does **not** add a Samba share. The existing share is path `/mnt`,
-the deployment account ownership mapping. `${WIKI_ROOT}` already
-appears as `share/internal/wiki`. LAN writes would be uid 1000 and fight
-Hermes — treat that path as **read-only visibility** only.
-
-Write path is official Obsidian Sync on laptops/phones. A later `sshfs`
-(or a dedicated share that does not rewrite the current Samba layout) is
-a follow-up; ask before adding either.
+Share the folder `/var/syncthing/wiki` with each device from the GUI. Treat
+`wiki/syncthing/home/` as a credential: it holds the device identity.
 
 ## health-drive
 
-One-way copy: host vault → Google Drive folder `HealthWiki/`.
+One-way copy from the host vault to `drive:HealthWiki/`. `wiki/rclone/copy-loop.sh`
+runs `rclone copy` (no deletes) with `wiki/rclone/exclude.txt`, then sleeps 24
+hours. It never runs bisync or sync.
 
-**Not started until G2.** The service uses Compose profile `g2-oauth` so a
-default `compose up` leaves it Created/unstarted. Do not invent Google OAuth
-credentials; complete G2 below, then
-`docker compose --profile g2-oauth up -d health-drive`.
+- Image: `rclone/rclone`, pinned by digest; Watchtower off
+- Source: `${WIKI_ROOT}` read-only at `/data`
+- Config: ignored `health/secrets/rclone/` → `/config/rclone` (a directory
+  mount, so token refresh can rewrite `rclone.conf`)
+- UID:GID `10000:10000`; default project network for outbound HTTPS, not
+  `health-internal`
 
-- Service: `health-drive` in `wiki/compose.yml` (profile `g2-oauth`)
-- Image: `rclone/rclone:1.75.0` pinned by digest
-- Source: `${WIKI_ROOT:-/mnt/internal/wiki}` mounted **read-only** at `/data`
-- Destination: `drive:HealthWiki/` (new English folder)
-- First rollout: `rclone copy` (no deletes)
-- Cadence: nightly (`sleep 86400` after each copy)
-- UID:GID: `10000:10000`
-- Watchtower: off
-- Does **not** join `health-internal`
+Start it only after the OAuth setup below:
 
-Never bisync. Never rsync. Never target the existing Drive folder `Здоровье/`.
-Do not reuse the laptop remote `healthdrive`; the server has its own config.
+```bash
+docker compose --profile g2-oauth up -d health-drive
+```
 
-OAuth lives in gitignored `health/secrets/rclone/` (directory mount at
-`/config/rclone` so token refresh can rewrite `rclone.conf`). Secrets are
-files, not Compose env interpolation.
+Never target the Drive folder `Здоровье/`, and do not reuse a laptop rclone
+remote; the server has its own config.
 
-## G2 — Server rclone OAuth (human; do not automate)
+### OAuth setup
 
-Complete this on/via `host-5.example.invalid` **before** `docker compose up` for
-`health-drive`. rclone’s shared Google client_id stops working during 2026;
-create your own. Guide: <https://rclone.org/drive/#making-your-own-client-id>.
-Headless authorize: <https://rclone.org/remote_setup/>.
+rclone's shared Google client ID is being retired, so use your own
+([guide](https://rclone.org/drive/#making-your-own-client-id),
+[headless authorization](https://rclone.org/remote_setup/)).
 
-1. Google Cloud Console → new project (e.g. `homelab-healthwiki`) → enable
-   **Google Drive API**.
-2. OAuth consent screen (External is fine for a personal Gmail; add the Drive
-   account as a test user).
-3. Credentials → Create OAuth client ID → **Desktop app**. Redirect URI must
-   stay `http://127.0.0.1:53682/`.
-4. On the clone:
+1. In Google Cloud Console, create a project and enable the Google Drive API.
+2. Configure the OAuth consent screen (External with the Drive account as a
+   test user is enough for a personal account).
+3. Create an OAuth client ID of type Desktop app; keep the redirect URI
+   `http://127.0.0.1:53682/`.
+4. On the Docker host, from the checkout root:
 
    ```bash
-   sudo install -d -o 10000 -g 10000 -m 0700 health/secrets/rclone
    cp wiki/rclone/rclone.conf.example health/secrets/rclone/rclone.conf
    sudo chown 10000:10000 health/secrets/rclone/rclone.conf
    sudo chmod 0600 health/secrets/rclone/rclone.conf
    ```
 
-   Put `client_id` / `client_secret` only in that ignored `rclone.conf`.
-   Do not paste them into `.env` or Compose.
+   Put `client_id` and `client_secret` only in that ignored file, never in
+   `.env` or Compose.
 
-5. Authorize. Preferred: on a laptop run the **same** rclone **1.75.0** with
-   that client id, then paste the token into a server `rclone config`:
+5. Authorize with the same rclone version on a machine with a browser, then
+   paste the token into the server config (the service entrypoint is the copy
+   loop, so override it):
 
    ```bash
-   # laptop (browser)
-   rclone authorize "drive" --client-id … --client-secret …
-
-   # host-5.example.invalid — custom entrypoint is the copy loop, so override it
+   rclone authorize "drive" --client-id … --client-secret …   # with a browser
    docker compose run --rm -it --user 10000:10000 --entrypoint rclone \
-     health-drive config
+     health-drive config                                        # on the host
    ```
 
    Answer `N` to the browser prompt and paste the token. Remote name `drive`,
-   scope **`drive.file`**, Shared Drive = no.
+   scope `drive.file`, Shared Drive no. Alternatively tunnel the callback port
+   (`ssh -L 53682:127.0.0.1:53682 docker-host.example.com`) and run the same
+   `config` with `-p 53682:53682`, answering `Y`.
 
-   Alternative: SSH tunnel and answer `Y` in the container:
-
-   ```bash
-   ssh -L 53682:127.0.0.1:53682 host-5.example.invalid.example.test
-   docker compose run --rm -it --user 10000:10000 -p 53682:53682 \
-     --entrypoint rclone health-drive config
-   ```
-
-6. Create the destination folder with rclone (so a `drive.file` scope can own
-   it). If the folder was created in the Drive UI first, `drive.file` cannot
-   see it — delete that UI folder and let rclone mkdir, or use scope `drive`
-   with dest still `drive:HealthWiki/`.
+6. Let rclone create the destination, so the `drive.file` scope owns it (a
+   folder created in the Drive UI is invisible to that scope):
 
    ```bash
    docker compose run --rm --user 10000:10000 --entrypoint rclone \
@@ -226,36 +141,16 @@ Headless authorize: <https://rclone.org/remote_setup/>.
      health-drive lsd drive:
    ```
 
-   `lsd` must list `HealthWiki`. Do **not** copy into `Здоровье`.
+### Dry run
 
-G3 (host vault directory ownership) is a separate human gate before first
-deploy. The rclone config dir above is part of G2/G3:
-
-```bash
-install -d -o 10000 -g 10000 -m 0700 health/secrets/rclone
-```
-
-## Dry-run (human / T10, not a deploy)
-
-Does not write to Drive. Run from the repository root after G2:
+Writes nothing to Drive:
 
 ```bash
 docker compose run --rm --user 10000:10000 --entrypoint rclone health-drive \
   copy /data drive:HealthWiki --exclude-from /etc/rclone/exclude.txt --dry-run -v
 ```
 
-Read the log: source is `/data`, dest is `drive:HealthWiki`, excludes match
-`wiki/rclone/exclude.txt`, and nothing under `Здоровье/` is listed.
-
-## Later switch: copy → sync
-
-Keep `rclone copy` until the user accepts a dry-run of **sync** (sync can
-delete dest files that vanished from the vault):
-
-```bash
-docker compose run --rm --user 10000:10000 --entrypoint rclone health-drive \
-  sync /data drive:HealthWiki --exclude-from /etc/rclone/exclude.txt --dry-run -v
-```
-
-Only then change the subcommand in `wiki/rclone/copy-loop.sh` from `copy` to
-`sync`. Do not enable bisync.
+The log must show source `/data`, destination `drive:HealthWiki`, the excludes
+from `wiki/rclone/exclude.txt`, and nothing under `Здоровье/`. Switching
+`copy-loop.sh` to `rclone sync` would delete Drive files that vanished from the
+vault; do it only after a reviewed `sync --dry-run`.

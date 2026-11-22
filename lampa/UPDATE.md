@@ -40,14 +40,17 @@ too. Its own state is `<state>/auto`. The idle check sees browser (GST) and
 proxied online playback, which flow through Lampa, but not a paused player.
 `DRY_RUN=1 lampa/auto-update.sh` only reports whether an update is due.
 
-Install as root on the Docker host. `auto-update.sh` uses the checkout it lives
-in unless `LAMPA_ROOT` is set. The example service sets `/opt/homelab`; if the
-checkout is elsewhere, change it in a private systemd override before enabling
-its timer. Do not commit the actual deployment path:
-
+Install as root on the Docker host. `auto-update.sh` resolves the checkout
+root from its own location (following symlinks); `LAMPA_ROOT` overrides it.
+The tracked unit uses `LAMPA_ROOT` to find the script and carries a placeholder
+root, so point it at the real checkout in a systemd drop-in. The examples on
+this page use `/srv/homelab`; never commit the actual deployment path:
 
 ```sh
 install -m 0644 lampa/lampac-auto-update.service lampa/lampac-auto-update.timer /etc/systemd/system/
+install -d /etc/systemd/system/lampac-auto-update.service.d
+printf '[Service]\nEnvironment=LAMPA_ROOT=/srv/homelab\n' \
+  > /etc/systemd/system/lampac-auto-update.service.d/checkout.conf
 systemctl daemon-reload
 systemctl enable --now lampac-auto-update.timer
 ```
@@ -182,8 +185,7 @@ network definitions, plus the baseline container/image, runtime Dockerfile,
 `.dockerignore`, SQLite build verifier and
 read-only bind contents/permissions. Unrelated service edits do not invalidate
 a checked candidate. Changes to Lampa or a shared network it uses still do.
-Generations staged with the earlier whole-project fingerprint must be staged
-and checked again; do not rewrite an existing record to bypass the guard.
+Do not rewrite an existing generation record to bypass the guard.
 
 Only one pending generation is selected by `pending.json`. A new stage after
 successful apply replaces that selection and makes the currently running image

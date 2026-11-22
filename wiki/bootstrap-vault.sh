@@ -12,9 +12,8 @@ Create the family llm-wiki tree (personal Primary/Secondary wikis plus
 shared/health). Default WIKI_ROOT is /mnt/internal/wiki, or $WIKI_ROOT
 when set. Pass a temp directory for tests.
 
-Does not require root and does not SSH to host-5.example.invalid. Does not
+Does not require root and does not SSH to the Docker host. Does not
 overwrite existing SCHEMA.md, index.md, log.md, or jsonl files.
-Does not create .obsidian/ (obsidian-headless writes that on sync-setup).
 EOF
 }
 

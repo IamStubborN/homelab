@@ -16,9 +16,10 @@ unless a service README says otherwise.
 The Docker host runs a checkout of `origin/main` and is a deploy target. Every
 change, hotfixes included, is committed and pushed from a development checkout;
 the host then runs `git pull --ff-only` and `docker compose up -d <service>`.
-`gluetun-torrserver-watcher` runs `docker compose up` from the host's working
-tree at any moment, so an edit made on the host reaches production unreviewed,
-fails `make check-deploy` and can block the next `git pull --ff-only`.
+The VPN watchers (`gluetun-watcher`, `gluetun-torrserver-watcher`,
+`gluetun-rezka-watcher`) run `docker compose up` from the host's working tree at
+any moment, so an edit made on the host reaches production unreviewed, fails
+`make check-deploy` and can block the next `git pull --ff-only`.
 
 A deployment is done when `make check-deploy` passes on the host: the checkout is
 clean at `origin/main`, Compose plans no container changes and every service is
@@ -29,6 +30,22 @@ Watchtower updated: their Compose image label is stale, and
 Ignored private configuration is authoritative on the host. A development
 checkout that keeps copies of these files pulls each changed file back from the
 host.
+
+## Host-installed files
+
+Some files are installed by hand, outside Compose: `proxmox-backup/` and
+`proxmox-update/` on Proxmox. On the Docker host:
+
+- `app-data-backup.py`, `docker-journald-retention.conf`, the `watchtower/` apt
+  files;
+- units: `lampac-*`, `image-retention`, `docker-prune`, `homelab-kuma-push`;
+- deployment user's crontab lines: `provider-stats` (or its units),
+  `torrserver-logrotate`, `telegram-watchdog`;
+- `/etc/logrotate-lampac.conf` (from `lampa/logrotate.conf.in`).
+
+`make check-deploy` does not cover them. After changing one,
+install it as its README says and compare the installed file's SHA256 with the
+repository's.
 
 ## Configuration boundary
 
@@ -55,5 +72,7 @@ Never print a resolved Compose model or secret file contents into reports.
 - Credentials are mounted from ignored secret files.
 
 Do not rename a live volume or move a bind mount merely for naming consistency.
-Back up state before any service recreation and validate the selected Compose
-resources before deployment.
+Recreation keeps named volumes and bind mounts, and nightly backups cover
+state; take a deliberate backup only before an irreversible data migration
+(schema change or volume move). Validate the selected Compose resources before
+deployment.

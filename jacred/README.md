@@ -13,7 +13,7 @@ tracksconcurrency: 1
 ```
 
 `tracksconcurrency` limits background TorrServer metadata analyses, not user
-playback. Version 3.15.1 defaults to two analyses; one reduces simultaneous
+playback. JacRed defaults to two analyses; one reduces simultaneous
 background torrent caches. Keep the existing `tsuri` and tracker settings.
 
 The image entrypoint copies `/app/config/init.yaml` to `/app/init.yaml` on
@@ -25,21 +25,26 @@ Existing analyses finish using their old semaphore; new work uses the new
 limit, so the transition can briefly overlap.
 
 Solverr's `SESSION_MAX` bounds idle retained sessions per browser engine; it is
-not a strict concurrent-request limit. For bounded retained-session cleanup, `solverr-crawl` uses `SESSION_MAX=2`, a five-minute
-idle TTL, and a 15-second reaper interval. Its healthcheck calls `/health`
-directly with exec-form curl. CPU, memory and PID budgets are unchanged.
-The interactive pool retains its previous settings. Lower idle retention is
-containment, not a proven fix for active browser fanout or incomplete cleanup;
-it can also increase browser creation when hosts alternate.
+not a strict concurrent-request limit. `solverr-crawl` uses `SESSION_MAX=2`, a
+five-minute idle TTL and a 15-second reaper interval; the interactive `solverr`
+keeps 4, 15 minutes and 30 seconds. `solverr-crawl`'s healthcheck calls
+`/health` with exec-form curl. Low idle retention is containment, not a fix for
+active browser fanout or incomplete cleanup; it can also increase browser
+creation when hosts alternate.
 
-The private configuration now sets `Kinozal.reqMinute: 1`, hot-reloaded in
-both configuration copies. This spaces listing attempts by 60 seconds; it
+The private configuration sets `Kinozal.reqMinute: 1` in both configuration
+copies. This spaces listing attempts by 60 seconds; it
 does not impose a global browser semaphore or limit every detail request.
-Do not interpret JacRed 3.15.1 full-cycle progress as successful ingestion:
+Do not interpret JacRed full-cycle progress as successful ingestion:
 `ParseAllCycleStore.NoteAttempt` settles a page after three failures, and the
 Kinozal caller counts that settled page as successful. Dependency outages
 therefore require checkpoint review. Do not edit checkpoint JSON underneath
 the running process or start a new cycle as an automatic recovery action.
+
+JacRed behaviour on this page (defaults, config reload, `ParseAllCycleStore`,
+endpoint responses, crawler limits) was checked against the pinned build: the
+upstream commit and `crawl-recovery.patch` in `jacred/build/Dockerfile`. Recheck
+it on upgrade.
 
 Measure current cache use and playback demand before imposing a hard memory
 limit; idle memory changes alone do not establish a leak. Keep dated production
@@ -71,22 +76,20 @@ below follow local daylight saving time; they are not fixed UTC times.
 | Toloka full-cycle start | Friday 01:00 |
 | Anibelka full-cycle start | Saturday 01:00 |
 
-Most incremental refreshes run every four to six hours. Previously disabled
-jobs remain disabled, including Rutracker/Kinozal/Ultradox full-cycle starts,
-Cloudflare warmups, and archive backfills. These trackers' archives are
-already in the database and new torrents also arrive through `syncapi`; a full
-cycle re-crawls the whole archive through Solverr for weeks . Kinozal's incremental refresh, paused
-during that cycle, runs every six hours again.
-JSON checkpoints still save every five minutes; logs rotate every 15 minutes.
+Most incremental refreshes run every four to six hours; Kinozal's runs every
+six hours. Rutracker/Kinozal/Ultradox full-cycle starts, Cloudflare warmups and
+archive backfills are disabled: these trackers' archives are already in the
+database and new torrents also arrive through `syncapi`, while a full cycle
+would re-crawl the whole archive through Solverr for weeks.
+JSON checkpoints save every five minutes; logs rotate every 15 minutes.
 There are no tracker starts at 22:00–23:59 and no new Sunday full-cycle start.
 
 SubsPlease `ParseShows` walks its show catalogue 200 shows per run (JacRed's
 maximum, about 50 minutes) and runs daily at 02:25, so the whole catalogue of
 about 1,250 shows is revisited every week. It reads the public JSON API with
-pauses and needs no browser solver, so it is not a heavy job. The weekly
-50-show runs it replaced would have needed six months to reach older shows.
+pauses and needs no browser solver, so it is not a heavy job.
 
-AniLiberty is enabled again; its refresh reads the latest API page every four
+AniLiberty's refresh reads the latest API page every four
 hours. Search returns only trackers listed in `synctrackers`, so a locally
 crawled tracker must be listed there too (and not in `disable_trackers`) for
 its torrents to appear. To backfill its whole catalogue once (about 63 pages,
@@ -99,9 +102,9 @@ on Sundays at **08:00–11:59** (`Europe/Sofia`, like the backup timers). They
 reserve the daily configuration/application-backup hour and additional time
 for the monthly guest backup. Incremental refreshes retry
 at their next normal cron slot; skips do not change failure backoff. Saves,
-log rotation and the report-only maintenance check remain enabled. The Sunday
-resume was moved to 14:10 Sofia so it does not immediately start new work just
-before the weekly backup chain.
+log rotation and the report-only maintenance check keep running. The Sunday
+resume runs at 14:10 so it does not start new work just before the weekly
+backup chain.
 
 This is a conservative schedule guard, **not active-backup detection**. Manual
 or delayed backups outside these windows are not covered, and an existing
@@ -113,7 +116,7 @@ This is a start schedule, not a strict work window. `ParseAllTask` starts
 asynchronous work; existing cycles can continue into the daytime or backup
 window. The HTTP runner lock does not cover the lifetime of that work. Changing
 the scheduler does not interrupt, restart, or erase existing crawl checkpoints.
-JacRed 3.15.1 also resumes pending work after application startup. Keep resource
+JacRed also resumes pending work after application startup. Keep resource
 limits in place and measure actual overlap instead of assuming all crawling
 ends before the backup starts.
 
@@ -140,8 +143,7 @@ reports without explicit results, and the structured ResumeParseAll report.
 also preserving backoff. Unknown is neither a confirmed failure nor success;
 the next normal cron slot can retry once existing backoff has expired.
 
-These contracts were checked at JacRed revision
-`6c238d07df45ee84f1ae7baf5d491dbef2878fe7`. Rutor's False conflates failed
+Rutor's False conflates failed
 fetches and unrecognized listings with potentially empty pages. Some endpoints
 also swallow internal errors and return `ok`; the scheduler cannot recover
 information absent from the HTTP response. Inspect application logs and crawl
@@ -158,9 +160,8 @@ make check-runtime
 ```
 
 Do not restart JacRed or its browser dependencies for a schedule-only change.
-Before deployment retain the previous scheduler image and both source files
-for rollback. Verify the installed `/etc/crontabs/root`, container health,
-and root-project ownership afterward.
+Verify the installed `/etc/crontabs/root`, container health, and root-project
+ownership afterward.
 
 ## LostFilm
 

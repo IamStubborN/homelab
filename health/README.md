@@ -1,89 +1,45 @@
 # Family Health stack
 
-The live stack is a Python MCP cashier. It writes append-only jsonl under
-`${WIKI_ROOT}/shared/health` and serves the same streamable-HTTP endpoint
-Hermes already uses:
+`health-service` is a Python MCP cashier. It writes append-only jsonl under
+`${WIKI_ROOT}/shared/health` and serves the streamable-HTTP endpoint both Hermes
+profiles use:
 
 ```text
 http://health-service:8080/internal/mcp
 ```
 
-- Image: `family-health-mcp:local` (build context `health/mcp`)
-- Container name: `health-service` (unchanged on purpose)
+- Image: `${HEALTH_MCP_IMAGE}`, default `family-health-mcp:local` (build context `health/mcp`)
+- Container name: `health-service`
 - Process UID:GID: `10000:10000`
 - Host vault: `${WIKI_ROOT}` (set in the ignored deployment environment)
 - Cashier mount: `${WIKI_ROOT}/shared/health` → `/wiki/shared/health`
-- No Postgres. No SQLite. No Rust health binary in Compose.
+- Watchtower: off
+- No database: the jsonl files are the store
 
-Keep the wiki mount path consistent with the deployed Compose environment.
+The vault, its Syncthing device sync and the one-way Drive copy
+(`health-drive`) are documented in [`wiki/README.md`](../wiki/README.md).
 
-Obsidian Sync (`obsidian-sync`) and the one-way Drive mirror (`health-drive`)
-live in [`wiki/compose.yml`](../wiki/compose.yml). Human gates **G1** (Obsidian
-login) and **G2** (server rclone OAuth, destination `drive:HealthWiki/` only)
-are documented in [`wiki/README.md`](../wiki/README.md). Do not reuse the
-laptop `healthdrive` remote. Do not target `Здоровье/`.
-
-The unused Phase 1 Rust crate remains on disk at [`service/`](service/) as
-leftover source only. Compose does not build it. Do not treat
-`family-health-service:local` or `health/service` mise/cargo as the live path.
-
-Household-specific plans and ingestion notes are kept in private operator records.
+`health/service/` is an unused Rust crate. Compose does not build it; the live
+service is the Python package in `health/mcp/`.
 
 ## Topology
 
 ```text
-Telegram Primary     → hermes-primary      ─┐
-Telegram Secondary  → hermes-secondary   ─┼─ health-internal ─ health-service
-                                          │
-                                          └─ writes only:
-                                               ${WIKI_ROOT}/shared/health/data/**/*.jsonl
-                                               ${WIKI_ROOT}/shared/health/generated/*.md
-
-obsidian-sync  mounts ${WIKI_ROOT} rw → /vault     (does not join health-internal)
-health-drive   mounts ${WIKI_ROOT} ro → /data      (does not join health-internal)
+Telegram Primary    → hermes-primary   ─┐
+Telegram Secondary  → hermes-secondary ─┼─ health-internal ─ health-service
+                                        │
+                                        └─ writes only:
+                                             ${WIKI_ROOT}/shared/health/data/**/*.jsonl
+                                             ${WIKI_ROOT}/shared/health/generated/*.md
 ```
 
-`health-internal` is still required. Only `health-service` and the two Hermes
-profiles join it. Create it as an external attachable internal network.
+Only `health-service` and the two Hermes profiles join `health-internal`. The network is `--internal`, so `health-service` has no route out; the Hermes containers reach the internet through their other networks.
+`syncthing` and `health-drive` mount the vault but do not join it.
 
 The cashier fails closed if the wiki path is missing (`WikiStore` exits with
-`missing health wiki directory`). Complete **G3** and
-[`wiki/bootstrap-vault.sh`](../wiki/bootstrap-vault.sh) before the first
-`health-service` up. Do not start the cashier against an empty or absent vault.
-
-## Human gates (operator; do not automate)
-
-These are not Worker tasks and are not GitHub Actions. Watchtower is off for
-`health-service`, `obsidian-sync`, and `health-drive`.
-
-| Gate | When | What the operator does |
-| --- | --- | --- |
-| **G1** Obsidian Sync | before `obsidian-sync` up | Confirm a paid [Obsidian Sync](https://obsidian.md/sync) subscription. Interactive `ob login` / `sync-setup` / `sync-config` in the container. Full commands: [`wiki/README.md`](../wiki/README.md). |
-| **G2** Server rclone OAuth | before `health-drive` up | Create a personal Drive OAuth client (rclone’s shared id retires in 2026). Authorize on/via `host-5.example.invalid`. Remote `drive`, dest `HealthWiki/` only. Full commands: [`wiki/README.md`](../wiki/README.md). |
-| **G3** Host directory | before first deploy | Create `${WIKI_ROOT}` as `10000:10000` mode `2770`, plus secret dirs. Then bootstrap the vault. Commands below and in [`wiki/README.md`](../wiki/README.md). |
-| **G4** Keep Google archive | after T8 ingest sample | Confirm the ingest sample before anyone deletes Google Docs/Sheet `Здоровье/`. Leave the archive in place until that confirmation. |
-| **G5** Recreate Hermes | after G3 + bootstrap (and G1/G2 before those wiki services) | Manual `docker compose up` / `--force-recreate` of Hermes from this runbook. No Watchtower. No GitHub Actions. |
-
-## G3 + bootstrap (before first `health-service` up)
-
-On host-5.example.invalid. Do **not** run this from a Worker or from this laptop against
-the live host unless you are the operator at **G3**.
-
-```bash
-sudo mkdir -p /mnt/internal/wiki
-sudo chown -R 10000:10000 /mnt/internal/wiki
-sudo chmod 2770 /mnt/internal/wiki
-sudo install -d -o 10000 -g 10000 -m 0700 health/secrets
-sudo install -d -o 10000 -g 10000 -m 0700 health/secrets/obsidian
-sudo install -d -o 10000 -g 10000 -m 0700 health/secrets/rclone
-sudo -u '#10000' wiki/bootstrap-vault.sh /mnt/internal/wiki
-```
-
-SSH check after G3 (path must exist only after this gate):
-
-```bash
-ssh host-5.example.invalid.example.test 'ls -la /mnt/internal/wiki'
-```
+`missing health wiki directory`). Create the vault and run
+[`wiki/bootstrap-vault.sh`](../wiki/bootstrap-vault.sh) before the first start
+(see the host directory section of `wiki/README.md`).
 
 ## External network (before the first `up`)
 
@@ -107,14 +63,11 @@ An existing network with either check set to `false` is an operator blocker.
 Do not recreate it automatically: first inspect attached containers and plan a
 maintenance window.
 
-Do **not** `docker volume create health-pg-data`. That volume is unused by
-the live stack.
-
 ## API tokens
 
-On the Linux Docker host, generate each value once in a private temporary file,
-then install copies owned by the cashier UID. There are no Postgres passwords
-and no UID `10001` files.
+Each profile has its own bearer token. Hermes mounts the same files, so the
+health stack owns them. On the Docker host, generate each value once in a
+private temporary file, then install copies owned by the cashier UID:
 
 ```bash
 set -eu
@@ -131,67 +84,56 @@ rmdir "$secret_tmp"
 stat -c '%u:%g %a %n' health/secrets/*.health_api_token
 ```
 
-The expected modes are `10000:10000 400` for both API tokens. Leftover
-`health_pg_bootstrap_password` / `health_service_db_password` files (UID
-`0` / `10001`) are unused; do not create new ones.
+The expected modes are `10000:10000 400` for both API tokens.
+`HEALTH_PRIMARY_TOKEN_PATH` and `HEALTH_SECONDARY_TOKEN_PATH` can point the
+secrets at other files. Set Hermes' `HERMES_PRIMARY_HEALTH_API_TOKEN_PATH` and
+`HERMES_SECONDARY_HEALTH_API_TOKEN_PATH` to the same files at the same time, or
+MCP authentication fails. The application receives only secret file paths; no
+token is interpolated into Compose environment values. Leftover
+`health_pg_bootstrap_password` and `health_service_db_password` files are
+unused.
 
-On macOS, Docker Desktop does not reproduce Linux bind-mount ownership
-faithfully; use the Linux ownership probe below before deploying to the
-homelab host.
-
-From the repository root, validate Compose and build the image before running
-the ownership probe:
-
-```bash
-docker compose -f health/compose.yml config --quiet
-docker compose -f wiki/compose.yml config --quiet
-docker compose build health-service
-```
-
-Root `docker compose config --quiet` needs a filled `.env` next to
-`compose.yml`. On a laptop without that file it fails on required variables
-such as `NEXTAUTH_SECRET`. Do not invent secrets. On host-5.example.invalid,
-after `.env` is present, `docker compose config --quiet` from the repo root
-is the canonical whole-project check.
+Docker Desktop on macOS does not reproduce Linux bind-mount ownership, so run
+this ownership probe on the Linux host after building the image:
 
 ```bash
 docker run --rm \
   -v "$PWD/health/secrets:/probe:ro" \
   --entrypoint /bin/sh \
-  family-health-mcp:local \
+  "${HEALTH_MCP_IMAGE:-family-health-mcp:local}" \
   -eu -c 'test -r /probe/primary.health_api_token; test -r /probe/secondary.health_api_token'
 ```
 
-The application receives only secret file paths. No API token is interpolated
-into Compose environment values.
+## Deploy
 
-## G5 — Deploy (human; no Watchtower; no GitHub Actions)
-
-G5 is a **manual** operator step on host-5.example.invalid after G3 + bootstrap. Do not
-run these `up` commands from a Worker. Do not enable Watchtower. Do not add
-GitHub Actions.
-
-Start health first, wait for the healthcheck, start wiki host services only
-after their gates, then recreate both Hermes services so they load the
-current mounted config and skill:
+Deployment follows the repository flow: commit and push from a dev checkout,
+then on the host `git pull --ff-only`, build, recreate and `make check-deploy`.
+No Watchtower and no GitHub Actions: the image is built locally and recreated
+by hand.
 
 ```bash
 docker compose build health-service
-docker compose up -d health-service
-docker compose up --wait health-service
-# After G1 + G3:
-docker compose up -d obsidian-sync
-# After G2 + G3:
-docker compose up -d health-drive
+docker compose up -d --wait health-service
 docker compose up -d --force-recreate hermes-primary hermes-secondary
-docker compose ps health-service health-drive obsidian-sync hermes-primary hermes-secondary
 docker compose logs --since=5m health-service hermes-primary hermes-secondary
 ```
 
-The logs must show the cashier listening and no `health` MCP discovery/auth
-error. From each Telegram bot, run one read-only health query and confirm that
-the `health` tools are discovered before writing real data. User-facing
-Telegram text stays Russian; identifiers stay English.
+Recreate both Hermes services after an MCP tool-schema change so they discover
+the new tools. The logs must show the cashier listening and no `health` MCP
+discovery or auth error. From each Telegram bot, run one read-only health query
+and confirm the `health` tools are discovered before writing real data.
+User-facing Telegram text stays Russian; identifiers stay English.
+
+Root `docker compose config --quiet` needs the filled root `.env`; on a laptop
+without it, it fails on required variables such as `NEXTAUTH_SECRET`. Do not
+invent secrets. The per-module renders work without it:
+
+```bash
+docker compose -f health/compose.yml config --quiet
+docker compose -f wiki/compose.yml config --quiet
+```
+
+## Rollback
 
 Image-only rollback and in-place downgrade are unsupported after MCP
 tool-schema changes. On a failed deployment, stop `health-service` and both
@@ -203,72 +145,27 @@ docker compose stop health-service hermes-primary hermes-secondary
 
 The recommended default is to roll forward with a corrected Python cashier,
 wiki mount, Hermes config, and skill. Do **not** switch Compose back to the
-leftover Rust crate or reintroduce `health-postgres` as a recovery path.
+leftover Rust crate.
 
-For isolated maintenance, retain the root project name explicitly:
+## Local checks
 
-```bash
-docker compose -p homelab -f health/compose.yml config --quiet
-docker compose -p homelab -f health/compose.yml build health-service
-```
-
-`docker compose -p homelab -f health/compose.yml up -d` is the same G5
-decision as the root project; do not run it from a Worker.
-
-## Local cashier checks
-
-Run service-local checks from the Python package, not from `health/service`:
+Run the cashier tests from the Python package:
 
 ```bash
 cd health/mcp
 python3 -m pytest
 ```
 
-## T8 — one-shot Здоровье ingest
-
-Ingest uses `WikiStore` (`via=system`). It is not HTTP MCP. Do not
-`docker compose up`. Do not delete Google Docs/Sheet (`G4` is a human
-gate after the sample). Do not ingest `secondary-teeth/Data.zip`.
-
-Column map: [`docs/plans/t8-ingest-map.md`](docs/plans/t8-ingest-map.md).
-Counts-only report: [`docs/plans/t8-ingest-report.md`](docs/plans/t8-ingest-report.md).
-
-G3 is not done. Run against a **temp vault**, not `/mnt/internal/wiki`:
+`hermes/scripts/check` also covers the health integration (Compose, token
+reuse, skill contract). It also runs the media release preflight, so it needs
+`MEDIA_RELEASE_DIR`; the sanitized `media/release.example/` is enough for
+checks. Run it from `hermes/`:
 
 ```bash
-VAULT=$(mktemp -d /tmp/t8-wiki-XXXX)
-wiki/bootstrap-vault.sh "$VAULT"
-# binaries already copied off Drive (read-only). Do not write to Здоровье/.
-cd health/mcp
-python3 -m health_mcp.ingest \
-  --wiki-root "$VAULT/shared/health" \
-  --export-dir /tmp/zdorovie-export \
-  --xlsx "/tmp/zdorovie-xlsx/Дневник показателей здоровья.xlsx" \
-  --raw-src /tmp/t8-zdorovie-raw
+cd hermes
+MEDIA_RELEASE_DIR="$PWD/../media/release.example" ./scripts/check
 ```
 
-After G3, the same command with `--wiki-root "$WIKI_ROOT/shared/health"`
-re-runs against the host vault. Medications/conditions/allergies have no
-`source_event_id`; the command refuses a nonempty medications jsonl unless
-`--force`. Chronology/journal sections are not facts. Weight sheet uses
-columns C/D only.
-
-## Leftover Rust source and unused Postgres volume
-
-`health/service` is leftover Phase 1 Rust source. It is not shipped from
-Compose. Do not make a Rust rebuild the default rollback.
-
-The external volume `health-pg-data` is no longer in Compose. It is empty of
-medical rows (only the old `people` seed, if the volume still exists on the
-host). Routine `docker compose down` does not delete it.
-
-Deleting that unused volume is a **later manual** operator step, after the
-Python cashier is the accepted live path and the operator no longer wants the
-empty Postgres volume around. It is not part of deploy, not part of G5, and
-not part of routine rollback:
-
-```bash
-# Later manual only. Not a deploy or rollback command.
-# DANGER: permanently deletes the unused Family Health PostgreSQL volume.
-docker volume rm health-pg-data
-```
+`python3 -m health_mcp.ingest` (in `health/mcp`) bulk-imports exported records
+through `WikiStore`; it writes jsonl directly and does not use HTTP MCP. Test it
+against a temporary vault from `wiki/bootstrap-vault.sh` first.

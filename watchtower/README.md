@@ -1,93 +1,88 @@
-# Bounded Watchtower image retention
+# Watchtower and nightly Docker host maintenance
 
-Watchtower keeps `--cleanup=false`, its existing image references, and the
-05:45 `Europe/Sofia` schedule. The separate Python 3 standard-library CLI records
-image IDs actually used by explicitly enrolled, Watchtower-enabled Compose
-services. It retains the current and one previous distinct observed ID per
-service/replica. Histories are independent even when services share repositories;
-image protection is the union across all histories sharing an ID.
+Watchtower updates labeled containers at 05:45 `Europe/Sofia` with
+`--cleanup=false`. The rest of this page covers the Docker host's nightly jobs
+around it; the full night schedule is below.
+
+## Image retention
+
+`image-retention.py` (Python 3 standard library) records image IDs actually
+used by explicitly enrolled, Watchtower-enabled Compose services. It retains
+the current and one previous distinct observed ID per service/replica.
+Histories are independent even when services share repositories; image
+protection is the union across all histories sharing an ID.
 
 Only older recorded IDs with **no tags**, no references from **any** container
 (including stopped/created containers), and no digest in an untracked repository
 can be removed, and only through repository digest references recorded while the
 image was current for an enrolled service. Images without a proven digest remain
 protected; the tool never falls back to deleting by image ID. All tags, including
-`latest` and arbitrary manual rollback tags,
-are protected. Unknown existing orphan images are never adopted by repository
-name, creation time, or digest. Therefore bootstrap frees no space and an actual
-previous image cannot be reconstructed from an unproven existing orphan.
+`latest` and arbitrary manual rollback tags, are protected. Unknown existing
+orphan images are never adopted by repository name, creation time, or digest.
 
 Missing, stopped, disabled, or changed-reference services freeze their entire
-history. New services are reported but not automatically enrolled. A new reviewed
-state file can enroll changed services; keep the old state as a backup. Images
-known only to that old state then become protected unknowns. These safety
-exceptions can retain more than two images. This bounds eligible future update
-history, not total Docker disk use or image sizes.
+history. New services are reported but not automatically enrolled; a new state
+file can enroll them (keep the old one as a backup, since images known only to
+it become protected unknowns). These safety exceptions can retain more than two
+images. This bounds eligible update history, not total Docker disk use.
 
-## Review and initialize
+Deployed on the Docker host with `--apply`: the script is
+`/usr/local/libexec/watchtower-image-retention.py`, the state is
+`/var/lib/watchtower-image-retention/state.json` (directory 0700, file 0600,
+outside Git), and `image-retention.timer` is enabled. The timer runs the
+service at 05:40, capturing the old IDs before Watchtower, and at 06:25,
+recording the replacements; `Persistent=false` avoids a catch-up run at boot.
+Missed observations or extra manual updates can leave unknown intermediates;
+those remain untouched.
 
-Run on the Docker host. The tool explicitly uses the local Unix socket; it does
-not inherit Docker context selection. Choose a private state path outside Git.
-No command pulls images, tags images, restarts containers, or changes volumes.
+Each deletion refreshes all containers and images twice, updates history, and
+rechecks the candidate before each digest removal, resolving that exact digest
+back to its recorded full image ID. It invokes only
+`docker image rm --no-prune REPOSITORY@sha256:DIGEST`, without force, one digest
+at a time. A Docker conflict or changing protection stops the run. No
+parent-image, global-image, build-cache, or volume pruning is performed. A tag
+added between the check and the removal is preserved (see the Engine's
+[ImageDelete implementation](https://github.com/moby/moby/blob/464cd50/daemon/images/image_delete.go)).
+The tool reports reference removal separately from image deletion and never
+retries by ID.
+
+Commands (the tool uses the local Unix socket, never a Docker context; none
+pull, tag or restart anything): `discover --project PROJECT` and `plan` are
+read-only; `init --project PROJECT` captures current IDs into a new state file
+and refuses to overwrite history; `observe` records current IDs; `run` records
+and prints a dry-run plan, or deletes with `--apply`. Every command takes
+`--state PATH`. Plans contain image metadata and service identities, so keep
+them outside Git. Logical image sizes are not reclaimed bytes.
+
+Install or update as root on the Docker host, from its checkout. Shared
+directories such as `/usr/local/libexec` must stay 0755 (0700 breaks Docker CLI
+plugin discovery):
 
 ```sh
-python3 image-retention.py discover --project PROJECT --state /private/path/state.json
-python3 image-retention.py init --project PROJECT --state /private/path/state.json
-python3 image-retention.py plan --state /private/path/state.json
+install -m 0755 watchtower/image-retention.py /usr/local/libexec/watchtower-image-retention.py
+install -d -m 0700 /var/lib/watchtower-image-retention
+sed -e 's|@SCRIPT@|/usr/local/libexec/watchtower-image-retention.py|' \
+  -e 's|@STATE@|/var/lib/watchtower-image-retention/state.json --apply|' \
+  watchtower/image-retention.service.in > /etc/systemd/system/image-retention.service
+install -m 0644 watchtower/image-retention.timer /etc/systemd/system/
+systemd-analyze verify /etc/systemd/system/image-retention.service
+[ -e /var/lib/watchtower-image-retention/state.json ] || python3 /usr/local/libexec/watchtower-image-retention.py \
+  init --project homelab --state /var/lib/watchtower-image-retention/state.json
+systemctl daemon-reload
+systemctl enable --now image-retention.timer
 ```
 
-`discover` and `plan` are read-only. `init` captures current IDs only and refuses
-to overwrite existing history. `observe` records current IDs; `run` records IDs
-and prints a dry-run plan. State writes are atomic, mode 0600, and writers use a
-file lock. Plans contain image metadata and service identities, so store them
-outside Git too. Logical image sizes are not reclaimed bytes: shared layers mean
-actual reclaimable space is unknown unless the candidate set is empty (0 bytes).
+To stop retention, disable the timer and keep the state: resetting it discards
+provenance.
 
-## Deployment after review
-
-Before copying anything into deployment paths, back up any existing script,
-unit, timer, state, and Watchtower Compose file outside Git. Do not recreate
-Watchtower. Substitute `@SCRIPT@` and `@STATE@` in the service template with
-absolute paths, validate with `systemd-analyze verify`, and install as a system
-unit with Docker socket access. Keep the timer disabled during review. The
-template is dry-run even if started; no destructive mode is enabled by default.
-Shared executable directories such as `/usr/local/libexec` must remain mode
-0755; restricting them to 0700 can break Docker CLI plugin discovery. Install
-the script as 0755, and restrict only the private state directory to 0700
-and its state file to 0600.
-
-The two daily observations bracket the normal update: 05:40 captures the old ID
-before 05:45; 06:25 records the replacement. Initialize before the first update.
-If an update finishes later, the next observation captures it. Missed observations
-or extra manual updates can leave unknown intermediates; those remain untouched.
-The timer is not a substitute for Watchtower scheduling and does not trigger an
-update. `Persistent=false` avoids an unexpected catch-up cleanup at boot.
-
-Only **after the parent/operator reviews the dry-run and this policy**, add
-`--apply` to the service's `run` command and activate the timer. Each deletion
-refreshes all containers and images twice, updates history, and rechecks the
-candidate before each digest removal, resolving that exact digest back to its
-recorded full image ID. It invokes only
-`docker image rm --no-prune REPOSITORY@sha256:DIGEST`, without force. Multiple
-recorded digests are removed one at a time, with full protection checks between
-them. A Docker conflict or changing protection stops the run. No parent-image,
-global-image, build-cache, or volume pruning is performed.
-
-Docker's classic image store removes the named digest reference, then retains
-the image if other references remain. A tag added between our check and that
-reference removal is preserved, unlike deletion by image ID. This follows the
-installed Engine revision's [ImageDelete implementation](https://github.com/moby/moby/blob/464cd50/daemon/images/image_delete.go).
-Successful digest removal can leave an image present (for example, a new tag or
-container now protects it); the tool reports reference removal separately from
-image deletion. It never retries by ID. The lock serializes this tool only;
-Docker's operations are not a transaction with other clients. Shared layers are
-left to Docker's reference accounting, and sizes count each shared ID only once.
-
-For rollback of this mechanism, disable/stop the timer and restore its backed-up
-files. Keep the state: resetting it discards provenance. Application rollback is
-still available by retained full image ID (`plan` lists each service's history)
-or an existing manual rollback tag. Disabling retention cannot restore images
-already deleted in a subsequently approved apply run.
+Retention never tags or pins images, so "retained" only means this tool will
+not delete them. The 06:05 Docker cleanup removes an image Watchtower replaced
+at 05:45 (untagged, used by no container) before retention's 06:25 run, so the
+previous image is normally already gone locally. Roll back by pulling a
+previous repository digest recorded in the state file (`digests`, keyed by the
+image IDs in each service's `history`; `plan` lists the histories) while the
+registry still serves it, or use an existing manual rollback tag. Disabling
+retention does not restore deleted images.
 
 ## Nightly schedule
 
@@ -97,20 +92,23 @@ job into another's window.
 
 | Time | Job |
 | --- | --- |
+| 03:55 | Router configuration backups on Proxmox (private home repository, `scripts/router-config-backup`) |
 | 04:00–04:45 | Backups (each waits for the previous one): daily OPNsense config (04:00) and app data (04:05), Sunday host config (04:20) and OPNsense VM (04:25); see `proxmox-backup/README.md`. JacRed starts no crawls 04:00–04:59 |
 | 04:40–05:25 | Lampac update when upstream changed and Lampa is idle (`lampa/UPDATE.md`) |
 | 05:40 | Image retention records the running images |
 | 05:45 | Watchtower updates containers |
 | 06:05 | Docker cleanup: untagged images, build cache older than 7 days |
 | 06:10 | Docker host package updates: Ubuntu and Docker CE (a Docker update restarts every container) |
+| 06:20 | Proxmox trims the Docker guest's rootfs (`homelab-guest-fstrim`, `proxmox-update/`) |
 | 06:25 | Image retention records the replacements |
 | 06:30 | OPNsense firmware auto-update (its cron job; a reboot drops the internet for a few minutes) |
 | 06:50 | Proxmox host updates, reboot for a new kernel before 07:45 (`proxmox-update/`) |
 | first Sunday 08:00 | Monthly Docker guest backup (about an hour, snapshot mode); JacRed starts no crawls on Sundays 08:00–11:59 |
 
-Nobody uses the homelab between 04:00 and 08:00. Backups run first, so they
-copy the last working state; downloads (Lampac, Watchtower, packages) come
-next; the jobs that can drop the internet, OPNsense and Proxmox, come last.
+Nobody uses the homelab between 04:00 and 08:00. Backups run first (the small
+router configuration exports just before the window), so they copy the last
+working state; downloads (Lampac, Watchtower, packages) come next; the jobs
+that can drop the internet, OPNsense and Proxmox, come last.
 
 ## Failure notifications
 
@@ -132,9 +130,8 @@ printf 'telegram://%s@telegram?chats=%s&preview=No\n' \
 `docker builder prune -f --filter until=168h` at 06:05. Only untagged images
 that no container (even a stopped one) uses are removed, so tags such as
 `latest` and Lampa's candidate/rollback tags stay. An image Watchtower replaced
-at 05:45 loses its tag and is removed the same night; roll back by pulling the
-previous digest (`image-retention.py plan` lists them). Install as root on the
-Docker host:
+at 05:45 loses its tag and is removed the same night (rollback: see Image
+retention). Install as root on the Docker host:
 
 ```sh
 install -m 0644 watchtower/docker-prune.service watchtower/docker-prune.timer /etc/systemd/system/
@@ -170,4 +167,26 @@ the plan:
 ```sh
 install -m 0644 watchtower/52homelab-unattended-upgrades /etc/apt/apt.conf.d/
 unattended-upgrade --dry-run
+```
+
+## Drift check
+
+Source edits reach the Docker host only through the `install` commands on this
+page. After changing a file, install it and compare as root from the same
+commit:
+
+```sh
+while read -r repo installed; do
+  [ "$(sha256sum < "$repo")" = "$(sha256sum < "$installed")" ] || echo "drift: $installed"
+done <<'EOF'
+watchtower/image-retention.py /usr/local/libexec/watchtower-image-retention.py
+watchtower/image-retention.timer /etc/systemd/system/image-retention.timer
+watchtower/docker-prune.service /etc/systemd/system/docker-prune.service
+watchtower/docker-prune.timer /etc/systemd/system/docker-prune.timer
+watchtower/apt-daily-upgrade.override.conf /etc/systemd/system/apt-daily-upgrade.timer.d/override.conf
+watchtower/52homelab-unattended-upgrades /etc/apt/apt.conf.d/52homelab-unattended-upgrades
+EOF
+sed -e 's|@SCRIPT@|/usr/local/libexec/watchtower-image-retention.py|' \
+  -e 's|@STATE@|/var/lib/watchtower-image-retention/state.json --apply|' \
+  watchtower/image-retention.service.in | diff - /etc/systemd/system/image-retention.service
 ```

@@ -1,7 +1,7 @@
-# Wiki host-side services. The live vault is ${WIKI_ROOT} on host-5.example.invalid, not git.
-# T6: health-drive — one-way rclone copy vault → drive:HealthWiki/. Never bisync.
-# T7 (revised): syncthing — self-hosted device sync of the vault. SoT stays the
-# files in ${WIKI_ROOT}; devices sync copies, Hermes/cashier keep writing directly.
+# Wiki host-side services. The live vault is ${WIKI_ROOT} on the Docker host, not git.
+# health-drive: one-way rclone copy vault → drive:HealthWiki/. Never bisync.
+# syncthing: device sync of the vault. The files in ${WIKI_ROOT} stay the source
+# of truth; devices sync copies, Hermes and the cashier write directly.
 
 x-locked-down: &locked-down
   cap_drop: [ALL]
@@ -10,7 +10,8 @@ x-locked-down: &locked-down
 services:
   health-drive:
     <<: *locked-down
-    # Intentionally not started until G2 OAuth exists. Enable with:
+    # Not started by a plain `up`; after the rclone Drive OAuth setup in
+    # wiki/README.md, enable with:
     #   docker compose --profile g2-oauth up -d health-drive
     profiles: [g2-oauth]
     image: rclone/rclone:1.75.0@sha256:b06aed988cf5967de7c25be5925240983981c757f4ed1ac9d2fa659d51d60548

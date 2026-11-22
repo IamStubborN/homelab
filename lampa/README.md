@@ -5,9 +5,11 @@ The locally prepared UX additions include playback status/retry and
 current chapter next to the time, a chapter list) plus ±N s step buttons outside
 TVs. Chapters come from the `lampa-media` header probe below, so they cost no
 extra torrent read. Cross-device continuation and household history live
-in the separate [HomelabSync module](mods/HomelabSync/README.md). These additions
-were installed on 2026-11-01 after explicit approval; a source checkout alone
-does not install them. Clients need one reload to load the new plugins.
+in the separate [HomelabSync module](mods/HomelabSync/README.md).
+
+Plugin changes need no Lampac restart: `/plugins/homelab/` is served with
+`Cache-Control: no-cache`, so a client picks up a deployed plugin on its next
+start or reload.
 
 ## Sources and build
 
@@ -39,6 +41,27 @@ tab, marked as to be clarified. Leaving mid-search marks the list as interrupted
 Refresh restarts it. Recovery pickers skip the torrent search. Devices without
 `AbortController` get a button that explains the picker is unavailable.
 
+`online.js` loads the picker from the read-only plugins mount and adds
+**Общий** first in the native Watch source chooser through `full/complite`;
+upstream code and source settings are not modified. Catalog requests run at most
+five at once and two per provider, and each provider's requests are paced at
+least 350 ms apart. Traversal is limited to the selected season and episode, a
+60-second deadline and 32 pages per provider. Torrents without a quality stay
+hidden under a specific quality tab. Ambiguous titles or seasons, RCH and failed
+metadata probes offer native-source selection instead of declaring the source
+dead. Torrent releases with explicitly incompatible season/episode coverage are
+excluded; unknown-coverage packs keep the native file chooser. Discovery never
+adds torrents or resolves video URLs, and neither results nor stream URLs are
+persisted.
+
+Selection uses native Lampac fresh resolution, headers, subtitles and complete
+playlists through the online bridge. An explicit quality is passed as the only
+quality, so the native player cannot override it with the global default.
+Torrent selection passes the original parser result and full movie card to
+`Torrent.start`. Leaving the activity or changing profile cancels searches;
+returning keeps collected results with Refresh. Native-frontend compatibility
+needs rechecking after upstream updates.
+
 Rows without a quality are probed once the live discovery and every catalog page
 are done, two at a time, own-Lampac requests paced like catalog pages. Only the
 leading source of each card on screen is probed (at most 12 per search); the other
@@ -50,6 +73,22 @@ nothing is probed. A row is marked as having no video only on an own-Lampac
 (`/lite/`, `/proxy/`) 404/410 or an explicit "not found" error; 401/403, `accsdb`,
 quota or other errors, rch/ws handshakes, timeouts and foreign CDN refusals change
 nothing.
+
+`online.js` also installs `playlist-thumbnails.js`. It fills only a missing
+next-episode thumbnail (including native `w300null` placeholders) with the exact
+TMDB episode still from public `Api.seasons` (tmdb/cub ids or `card.tmdb_id`).
+The card backdrop/poster is shown only as a provisional fallback when the still
+is slow (>1.5 s) or absent, and is upgraded when the still arrives. Season stills
+are cached per app session (bounded, survives episode switches; misses retry
+after 5 min). Valid existing thumbnails are preserved. A guarded re-set of the
+same native playlist updates the Next renderer without changing media URLs,
+order, or the current index. Closing the player, replacing the playlist, or
+changing profile invalidates late callbacks. On the last episode the season
+stills are still loaded for the list. The native playlist (a Select of the
+playlist items) is decorated through `Select` `preshow`/`onDraw` only when it
+shows the active player playlist: each row gets its saved timeline progress bar
+on the still, «Просмотрено» with a check mark from 90%, «осталось N мин», and the
+current row a «Сейчас» marker with live progress instead of the native check.
 
 `playback-status.js` shows a small state card below the native loader in the
 embedded player. Preparation, buffering and GST recovery show one line with an
@@ -350,21 +389,33 @@ umask 077
 openssl rand -hex 32 > lampa/config/passwd
 ```
 
-The AI adapter reads the TMDB API key from a Docker secret. Create the ignored
-secret file before starting the stack:
+## AI adapter
 
-```bash
-install -m 0600 /dev/null hermes/secrets/tmdb_api_key
-# Put the TMDB API key on the single line in this file.
-```
+`lampa-ai-adapter` answers Lampa's AI search at `/ai/` and at the CUB-compatible
+`/cub/red/api/ai/` path that Lampa's built-in AI client calls (stripped to
+`/ai/` by Traefik). Both routes live on the Lampa host name, so they are
+reachable only from the LAN and VPN, and share one Traefik rate limit (10 a
+minute, burst 5). The adapter calls the model through `cli-proxy-api` and reads
+TMDB through Lampac's `/tmdb` proxy.
 
-For AI search, the adapter classifies requests as title identification or
-recommendations. It looks up title clues in TMDB, checks explicit type, year
-and exclusions, and uses the shared `tavily_api_key` Compose secret for one
-basic web search when the catalog match is weak. Tavily receives the search
-phrase and returns up to five results. The adapter verifies titles or IMDb
-and TMDB IDs against TMDB before sending Lampa cards. If Tavily is unavailable,
-the search can still return the cards it already resolved in TMDB.
+It classifies a request as title identification or recommendations, looks up
+title clues in TMDB and checks explicit type, year and exclusions. When the
+catalog match is weak it runs one basic Tavily web search, which receives the
+search phrase and returns up to five results. Titles and IMDb/TMDB IDs are
+verified against TMDB before Lampa gets cards. If Tavily is unavailable, the
+search still returns the cards already resolved in TMDB.
+
+It reads three Docker secrets from the ignored files under `hermes/secrets/`,
+each with the value on a single line:
+
+- `cliproxy_api_key` (mode `0600`): a CLIProxyAPI client key (see
+  `cliproxyapi/README.md`);
+- `tmdb_api_key` (mode `0600`): the TMDB API key;
+- `tavily_api_key` (mode `0644`): the Tavily API key, also mounted into Hermes
+  (`hermes/compose.yaml`), which runs as UID `10000` and needs it readable
+  (see `hermes/README.md`).
+
+## Publishing
 
 The service is published at:
 
@@ -415,8 +466,7 @@ the switch, native code may still apply it to the newly selected profile.
 
 Synchronization still requires the user's account sync setting and a selected
 profile. Android may suspend the client in the background; returning to the app
-schedules a check. Existing clients must reload once to load the plugin after
-deployment.
+schedules a check.
 
 ## Intel runtime and updates
 
@@ -472,7 +522,6 @@ original URL, so Next/Previous stay on the right episode after the GST rewrite.
 Lampa's own Playback info button stays hidden for these streams: it needs the
 legacy TorrServer hash, which the plugin removes so that Lampa's legacy GST
 heartbeat cannot reach another viewer's task.
-Plugin changes require reloading the client, not restarting Lampac.
 
 `cpu_shares: 2048` gives playback relative CPU priority under contention.
 There is no hard CPU, memory, or PID cap without measurements of concurrent
@@ -496,9 +545,12 @@ Treat logs as private runtime data: upstream errors can contain source URLs
 and viewer identifiers. Do not commit or publish them.
 
 Lampac itself logs no requests. Traefik writes JSON access logs only for the
-`lampa`, `lampa-media` and `lampa-gst-sessions` routers, without client
-addresses or headers, so `docker logs traefik` shows which online stream or GST
-session a viewer played. They share Traefik's three 10 MiB console log files,
+`lampa`, `lampa-media` and `lampa-gst-sessions` routers and the TorrServer
+guard routers (`torrserver-foreign`, `torrserver-foreign-http`,
+`lampa-torrserver-foreign`, `lampa-torrserver-gst-foreign`). Client addresses
+are dropped and only the `Origin` and `Sec-Fetch-Site` headers are kept, so
+`docker logs traefik` shows which online stream or GST session a viewer played
+and which page a blocked TorrServer request came from. They share Traefik's three 10 MiB console log files,
 which hold roughly days of playback, not a fixed period.
 
 The plugin also reports player events to `POST /homelab-media/log`, and the
@@ -532,16 +584,20 @@ exclusive lock on the file before waiting for the reload. `git pull` can replace
 the host file while the bind mount still points to the old one. Recreate `lampa`
 to apply a change made that way.
 
-The HTTP healthcheck requests `/version?type=hash` with a three-second timeout.
-It verifies the HTTP application, not GPU functionality or an individual stream.
+The HTTP healthcheck requests `/version?type=hash` every 30 seconds with a
+10-second curl limit (12-second check timeout) and 5 retries; failures in the
+600-second start period, while a new version compiles its modules, do not count.
+DeUnhealth restarts `lampa` once it turns unhealthy. The check verifies the HTTP
+application, not GPU functionality or an individual stream.
 
-Before deployment, back up the current Compose/configuration and application
-state, create `logs/` with mode 0700 and ownership matching Lampac, verify the
-render-device permissions, and validate the complete Compose model with the
-deployment environment. Build first; recreate only `lampa` in an agreed playback
-window. Recreation interrupts its active GST sessions. Rebuilding the image
-alone does not change the running container. The host log policy and systemd
-units in this directory must be installed on the Docker host separately.
+Before the first deployment, create `logs/` with mode 0700 and ownership
+matching Lampac and verify the render-device permissions. A normal deployment
+builds only the sidecars: `docker compose build lampa-media lampa-ai-adapter`.
+Never build `lampa` directly: that retags `homelab/lampac-intel:latest` and
+makes the next staged update refuse. The Lampa runtime image changes only
+through [UPDATE.md](UPDATE.md). Recreating `lampa` interrupts its active GST
+sessions, so do it in an agreed playback window. The host log policy and
+systemd units in this directory are installed on the Docker host separately.
 
 Render the templates on the Docker host with `envsubst` (from `gettext-base`).
 Use that host's deployment directory and account; the values below are examples.

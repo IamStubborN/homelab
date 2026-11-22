@@ -6,9 +6,7 @@ independent. Updating the bind-mounted script does not require a VPN restart.
 
 ## Persistent logs
 
-Compose declares `./torrserver/log:/opt/ts/log`. The deployed container already
-uses this bind. Older deployments acquire it only on recreation; do not restart
-active playback solely to enable log rotation.
+Compose declares `./torrserver/log:/opt/ts/log`.
 
 Run `torrserver-logrotate.sh` once per minute as the deployment user on the host
 (requires Docker access and `/usr/sbin/logrotate`). The script exits without
@@ -23,48 +21,36 @@ Rotation checks a 10 MiB threshold once a minute and keeps three archives,
 compressing older archives. The active file can exceed the threshold between
 checks. `copytruncate` preserves TorrServer's open file descriptor, with the
 usual small possibility of losing lines written during the copy/truncate gap.
-The existing TorrServer image and entrypoint remain unchanged.
 
-## Recreation procedure
+## Changing settings.json
 
-1. Back up the current Compose file, complete TorrServer config directory,
-   existing log, and current crontab to a private directory below
-   `torrserver/backups/`. Confirm the running image and VPN parent are unchanged.
-2. Stop only `torrserver`. Allow it up to 20 seconds to stop. Leave both Gluetun
-   containers, watchers, and port-sync running. Port-sync will retry the API
-   while TorrServer is stopped.
-3. Take final, stopped copies of the configuration and log. Seed
-   `torrserver/log/torrserver.log` with the entire final log using `docker cp`
-   before recreating TorrServer. Keep the backup separately. The deployment
-   user must own and be able to write the log directory and seeded log file.
-4. In the stopped instance's `torrserver/config/settings.json`, change only
-   `BitTorr.DisableUPNP` to `true`, using an atomic replacement. Preserve all
-   other keys, including the complete GStreamer section. Do not apply this via
-   the settings API during playback: it can restart the torrent client.
-5. From the root Compose project, run
+Some settings (for example `BitTorr.DisableUPNP` or `EnableRutorSearch`) must not
+be changed through the settings API during playback: it can restart the torrent
+client. Change them in a stopped instance instead:
+
+1. Stop only `torrserver`; leave both Gluetun containers, the watchers and
+   port-sync running (port-sync retries while TorrServer is down).
+2. Edit `torrserver/config/settings.json` with an atomic replacement, changing
+   only the intended key and preserving the rest, including the GStreamer
+   section.
+3. From the checkout root:
    `docker compose up -d --no-deps --no-build --pull never --wait --wait-timeout 60 torrserver`.
-   The existing port-sync container resumes automatically when the API responds.
-   No image build or VPN recreation is needed. Allow roughly 30–90 seconds for
-   this window; failed health checks require recovery rather than further waits.
-6. Verify healthy containers, matching live/persisted settings, `DisableUPNP`,
-   the forwarded port and TCP/UDP listeners, unchanged VPN container identities
-   and firewall policy, cache 2147483648, preload 3, and CPU shares 2048.
-   Confirm the log bind, ownership, host rotation dry-run, and the next scheduled
-   rotation. Do not start a playback or speed test as part of verification.
+   Port-sync resumes once the API answers.
 
-If startup fails, restore the saved Compose/config, preserve any new logs, and
-recreate only TorrServer with the original image. Port-sync resumes once the
-server responds. Do not alter the VPN namespace to recover a logging change.
+Keep a copy of the previous `settings.json`; if startup fails, restore it and
+recreate only `torrserver`. Never touch the VPN containers.
 
 ## Rutor search and ffprobe
 
 `EnableRutorSearch` stays `false` in `settings.json`. TorrServer's own rutor
 index (used only by its web search and Telegram bot; Lampa searches through
-JacRed, which crawls rutor itself) reloads every three hours. MatriX.145 can
-run two reload loops after a quick double `set`, and its decoder never leaves a
+JacRed, which crawls rutor itself) reloads every three hours. The MatriX build
+can run two reload loops after a quick double `set`, and its decoder never leaves a
 parse error. A corrupt temporary index can therefore keep a reload loop busy.
-Keep dated incident measurements in private operator records. Change the flag only in a stopped instance, as in
-the recreation procedure above.
+Change the flag only in a stopped instance, as described above. These upstream
+behaviours were checked against the pinned build (`TORRSERVER_VERSION` in
+`download/compose.yml` and `download/torrserver/Dockerfile`); recheck them on
+upgrade.
 
 The image ships `ffprobe`, which TorrServer looks up in `PATH` for `/ffp`.
 Without it JacRed's track analyses (`tracks: true`) all fail while still making
@@ -76,7 +62,7 @@ and subtitle tracks of analysed releases.
 TorrServer runs without a login (`TS_HTTPAUTH=0`) and answers every origin
 with `Access-Control-Allow-Origin: *`, so any page open in a LAN browser or TV
 could read the torrent list or change settings, and a plain
-`<img src=".../shutdown">` stopped the server. The Traefik file provider
+`<img src=".../shutdown">` would stop the server. The Traefik file provider
 (`traefik/config/config.yml`, see `config.example.yml`) guards it without
 recreating the VPN container that carries TorrServer's labels:
 
@@ -86,7 +72,7 @@ recreating the VPN container that carries TorrServer's labels:
 - `torrserver-foreign*`, `lampa-torrserver-foreign` and
   `lampa-torrserver-gst-foreign` refuse with 403 requests whose `Origin` is
   neither Lampa nor TorrServer, or cross-site requests without an `Origin`,
-  and write an access log line. TV playback sent none while they only logged.
+  and write an access log line. TV playback sends no such requests.
 
 If a client stops playing, look for it with
 `docker logs traefik | grep -- '-foreign@file'`. A `HEAD` request

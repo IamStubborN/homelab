@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Prepare private daily application files and transaction-consistent DB exports.
 
-Run inside Docker the configured Docker container. The host archives and uploads the completed directory;
-this helper does not upload data or stop applications.
+Run inside the configured Docker container. The host archives and uploads the
+completed directory; this helper does not upload data or stop applications.
 """
 
 import argparse

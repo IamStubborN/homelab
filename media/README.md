@@ -12,26 +12,27 @@ its local API without restarting qBittorrent. TorrServer has its own
 `gluetun-torrserver` namespace and forwarded port (`torrserver-port-sync`
 writes `PeersListenPort`). LAN URL is `https://torrserver.${DOCKER_DOMAIN}`.
 
-Before the first start, create the ignored runtime files with permissions that
-allow the unprivileged sync container to read the non-secret forwarded port:
+On a fresh checkout only, create the ignored runtime files under `download/`
+before the first start. Each line skips a file that already exists, so it never
+truncates a live key or port file:
 
 ```bash
-install -d -m 0755 download/gluetun/data
-install -m 0644 /dev/null download/gluetun/data/forwarded_port
-install -d -m 0755 download/gluetun-torrserver/data
-install -m 0644 /dev/null download/gluetun-torrserver/data/forwarded_port
+install -d -m 0755 download/gluetun/data download/gluetun-torrserver/data
 install -d -m 0700 download/secrets
-install -m 0600 /dev/null download/secrets/protonvpn_wireguard_private_key
-install -m 0600 /dev/null download/secrets/protonvpn_wireguard_private_key_torrserver
-install -m 0600 /dev/null download/secrets/gluetun_control_auth_config
-install -m 0600 /dev/null download/secrets/gluetun_control_api_key
+for f in download/gluetun/data/forwarded_port \
+         download/gluetun-torrserver/data/forwarded_port; do
+  [ -e "$f" ] || install -m 0644 /dev/null "$f"
+done
+for f in protonvpn_wireguard_private_key protonvpn_wireguard_private_key_torrserver \
+         gluetun_control_auth_config gluetun_control_api_key; do
+  [ -e "download/secrets/$f" ] || install -m 0600 /dev/null "download/secrets/$f"
+done
 ```
 
-The forwarded-port file is not a credential. The WireGuard private key and
-control API credentials must remain mode `0600` and must never be committed.
-Although the tracked Compose definitions now live in `download/` and `plex/`,
-their mutable state and secrets remain in these existing `media/` paths. This
-keeps upgrades non-destructive and avoids silently starting with empty state.
+The forwarded-port files are not credentials and must stay readable by the
+unprivileged port-sync containers. The WireGuard private keys and control API
+credentials stay mode `0600` and are never committed. All torrent VPN state and
+secrets live under `download/`, next to `download/compose.yml`.
 
 `compose.media-orchestrator.yml` is included by the root `compose.yml` and is
 managed as part of the `homelab` Compose project. Application images must be
@@ -67,9 +68,9 @@ The application images provide their own `media healthcheck` command for
 (`kill -0 1`): with `MEDIA_RUNNER_EXIT_AFTER_JOB=true` and `restart: "no"`, an
 exited container after a finished attempt is expected — do not treat that as a
 broken Watcher path. `gluetun-rezka-watcher` healthchecks the `docker events`
-loop (same pattern as `download/gluetun-watcher`). The four `homelab_*` media named volumes are also declared external because
-they already hold live data; create/restore them before first boot and never
-remove them during a normal recreate. Create the external networks used by
+loop (same pattern as `download/gluetun-watcher`). The four `homelab_*` media
+named volumes are declared external because they hold live data; create or
+restore them before first boot and never remove them during a normal recreate. Create the external networks used by
 Media Orchestrator once:
 
 ```bash
@@ -87,28 +88,39 @@ install -d -m 0750 \
 install -d -m 0700 "${MEDIA_SECRETS_DIR}"
 ```
 
-Set the application secrets in the real ignored root `.env`; never commit their
-values. This includes the PostgreSQL password and database URL, all three API
-tokens, both webhook HMAC values, the Prowlarr API key, Plex token, anonymous
-Rezka cookie key, qBittorrent password, and Gluetun control API key. Rezka is
-always anonymous: the encrypted cookie jar carries only provider cookies and
-Anubis clearance.
-
-Create these local secret files with mode `0600`:
+Non-secret settings (images, Rezka mirrors and session markers, Plex section
+IDs, qBittorrent categories and username) come from the real ignored root
+`.env`. Every credential is a file in `${MEDIA_SECRETS_DIR}`, mode `0600`,
+declared in `compose.media-orchestrator.yml`:
 
 ```text
 gluetun_rezka_wireguard_private_key
 gluetun_rezka_control_auth_config
 gluetun_rezka_control_api_key
+media_database_url
+media_postgres_password
+media_primary_token
+media_secondary_token
+media_runner_token
+media_lifecycle_token
+media_primary_webhook_hmac
+media_secondary_webhook_hmac
+media_prowlarr_api_key
+media_tmdb_api_key
+media_plex_token
+media_qbittorrent_password
+rezka_cookie_key
 ```
 
-`MEDIA_DATABASE_URL` uses the private hostname, for example
+`MEDIA_PRIMARY_TOKEN_PATH`, `MEDIA_SECONDARY_TOKEN_PATH` and the two
+`*_WEBHOOK_HMAC_PATH` variables can point those four secrets at another file.
+Rezka is always anonymous: the encrypted cookie jar carries only provider
+cookies and Anubis clearance.
+
+`media_database_url` uses the private hostname, for example
 `postgres://media:<password>@media-postgres:5432/media_orchestrator`.
-The two media API tokens and webhook HMAC values must match the corresponding
-values in the `hermes-home` deployment. Set the real Plex TV/movie section IDs,
-the existing qBittorrent TV and movies categories, and the qBittorrent username
-in `.env`.
-`MEDIA_REZKA_COOKIE_KEY` is base64 for exactly 32 decoded bytes. Generate the
+The primary/secondary tokens and webhook HMAC values must match the values the
+Hermes profiles use. `rezka_cookie_key` is base64 for exactly 32 decoded bytes. Generate the
 Gluetun API key with `docker run --rm qmcgaw/gluetun:<pinned-version> genkey`.
 Write the same value to `gluetun_rezka_control_api_key` and the auth config:
 
@@ -146,15 +158,14 @@ The runner image contains a checksum-pinned Chrome for Testing
 when that binary is present; there is no compose toggle to disable it. The
 native SHA-256 solver remains the default path and does not launch Chromium.
 The service image does not include Chrome. There is no FlareSolverr on the
-direct Rezka path, no user Chrome profile, and no extra session volume. The
-existing `homelab_rezka_session_encrypted` volume is unchanged.
+direct Rezka path, no user Chrome profile, and no extra session volume.
 Obscura and Lightpanda stay out of this path: Anubis blocks Lightpanda, and
 neither is a real Chromium cookie/JS runtime for `preact` / `metarefresh`.
 
 ## Validate
 
-The repository test creates temporary dummy environment values and the three
-required Gluetun secret files, then only renders Compose:
+The repository test creates temporary dummy environment values and secret
+files, then only renders Compose:
 
 ```bash
 media/tests/validate-media-orchestrator-compose.sh
@@ -164,8 +175,7 @@ shellcheck media/gluetun-rezka-watcher/watch.sh \
   tests/gluetun-rezka-watcher-test.sh
 ```
 
-For an operator-side render using the real ignored environment and the three
-Gluetun secret file paths:
+For an operator-side render using the real ignored environment and secret files:
 
 ```bash
 docker compose --env-file .env config --quiet
@@ -173,8 +183,8 @@ docker compose --env-file .env config --quiet
 
 ## Start And Operate
 
-Do not run these commands until the images, root environment values, and three
-Gluetun secret files are ready. The service talks to Prowlarr directly through
+Do not run these commands until the images, root environment values, and
+secret files are ready. The service talks to Prowlarr directly through
 `http://prowlarr:9696`, to qBittorrent through `http://gluetun:8400`, and to
 Plex through `http://plex:32400`. Prowlarr stays outside the VPN so indexer
 sites see the server address, while qBittorrent remains inside the dedicated
@@ -205,18 +215,18 @@ bind-mounts `${HOMELAB_ROOT}` at the same absolute path
 so in-container `docker compose --project-directory … -f …/compose.yml` can
 read the host project tree.
 
-## FlareSolverr
+## Solverr
 
-Prowlarr reaches indexers directly from the server. The internal-only
-`flaresolverr` service is an exception handler for indexers protected by
-Cloudflare; it has no published port or Traefik route. In Prowlarr, assign the
-`cloudflare` tag to both the FlareSolverr proxy and only the indexers that need
-it. RuTracker currently uses this tag, while other indexers continue to use
-their normal direct connection.
+Prowlarr reaches indexers directly from the server. `solverr` (defined in
+`download/compose.yml`) exposes a FlareSolverr-compatible `/v1` API on port
+8191 for indexers protected by Cloudflare; it has no published port or Traefik
+route. In Prowlarr, assign the `cloudflare` tag to both the FlareSolverr proxy
+(pointing at `http://solverr:8191`) and only the indexers that need it; other
+indexers keep their direct connection. `solverr-crawl` is a separate, lower
+priority browser pool for JacRed crawling (see `jacred/README.md`).
 
-Keep `LOG_LEVEL=warning` and `LOG_HTML=false`. Debug or HTML logging can include
-indexer request bodies and must only be enabled briefly during supervised
-diagnostics, then disabled before the container is recreated.
+Keep `LOG_LEVEL=info`. Debug logging can include indexer request bodies; enable
+it only briefly during supervised diagnostics.
 
 ## Glance Queue Widget
 
@@ -230,27 +240,38 @@ and this file already declare `proxy` as an `external: true` network, so once
 that shared network.
 
 The widget authenticates with `Authorization: Bearer ${MEDIA_STATUS_TOKEN}`,
-an env placeholder resolved from the gitignored `glance/.env`. This service
-only recognizes the three fixed client tokens configured above
-(`MEDIA_PRIMARY_TOKEN`, `MEDIA_SECONDARY_TOKEN`, `MEDIA_RUNNER_TOKEN`,
-`MEDIA_LIFECYCLE_TOKEN`) — there
-is no dedicated read-only/status client. Set `MEDIA_STATUS_TOKEN` in
-`glance/.env` to the same value as one of the existing family tokens (prefer
-`MEDIA_PRIMARY_TOKEN` or `MEDIA_SECONDARY_TOKEN`; avoid reusing
-`MEDIA_RUNNER_TOKEN`, which is scoped to the download runner) rather than
-inventing a new credential.
+resolved from the gitignored `glance/.env`. Every token `media-service`
+recognizes (`media_primary_token`, `media_secondary_token`,
+`media_runner_token`, `media_lifecycle_token`) can change state, and the family
+tokens can also run destructive media-admin actions. Do not reuse any of them
+in Glance: Glance fetches `custom-api` server-side and does not serve its
+config, but a status widget needs only read access (least privilege). Give the
+widget a dedicated read-only status token; until `media-service`
+offers one, leave `MEDIA_STATUS_TOKEN` at its placeholder and accept that the
+widget shows an error.
 
 ## Rollback
 
 Do not use `down` for an orchestrator-only rollback because it belongs to the
 root project. Restore the previous application image values in `.env`, then
-recreate only its long-running services:
+recreate the long-running services:
 
 ```bash
 docker compose --env-file .env config --quiet
+# Only while download-runner is stopped: on a running runner this recreates
+# the container and kills the active attempt.
+docker compose --env-file .env up --no-start --no-deps download-runner
 docker compose --env-file .env up -d \
-  media-postgres media-service gluetun-rezka download-runner gluetun-rezka-watcher
+  media-postgres media-service gluetun-rezka gluetun-rezka-watcher
 ```
+
+The `--no-start` step moves a stopped runner onto the restored
+`DOWNLOAD_RUNNER_IMAGE` without starting it; otherwise the watcher may
+`docker start` the old container. Skip it while the runner is running; the
+watcher recreates it through Compose whenever `gluetun-rezka` gets a new
+namespace. Never name `download-runner` in `up -d` or `docker start` it by
+hand: that starts an attempt outside the watcher's lifecycle gate. The watcher
+starts the runner when lifecycle is `ready`.
 
 The database, Gluetun, lifecycle, and encrypted-session volumes have explicit
 `homelab_*` names. Never delete those volumes during a normal rollback.

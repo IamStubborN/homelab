@@ -3,7 +3,7 @@ set -eu
 DEST="${RCLONE_DEST:-drive:HealthWiki/}"
 # One-way vault → Drive. Never bisync. Never rsync.
 # First rollout: copy (no deletes). After a user-accepted dry-run of
-# `rclone sync`, T9 / the operator may switch the subcommand to sync.
+# `rclone sync`, the operator may switch the subcommand to sync.
 while true; do
   rclone copy /data "$DEST" \
     --exclude-from /etc/rclone/exclude.txt \

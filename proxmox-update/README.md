@@ -48,8 +48,8 @@ GRUB cannot record a boot attempt, so a one-time boot (`grub-reboot`) would
 stick. A kernel that does not boot needs the console.
 
 After a reboot, `homelab-host-boot-check.service` waits up to 15 minutes for
-the configured router VM and Docker container and `1.1.1.1`. Both units report failures through the backup
-monitor's Telegram alerts (`host-update` and `host-boot` jobs with
+the configured router VM and Docker container and `1.1.1.1`. Both units report
+failures through the backup monitor's Telegram alerts (`host-update` and `host-boot` jobs with
 `failure_only: true` in `/etc/homelab-backup/monitor.json`). If the host does
 not come back at all, nothing on it can report that.
 
@@ -68,11 +68,11 @@ not come back at all, nothing on it can report that.
 ## Install
 
 As root on Proxmox, create the root-only private
-`/etc/homelab-backup/proxmox.env` first. Set `ROUTER_VM_ID` and `DOCKER_CT_ID`
-to the intended guests; the supplied example leaves IDs blank. Missing
-or invalid IDs fail closed. Back up this file with the host configuration.
-Do not enable the updated units until those private inputs are installed:
-
+`/etc/homelab-backup/proxmox.env` first (see `proxmox-backup/README.md`). Set
+`ROUTER_VM_ID` and `DOCKER_CT_ID` to the intended guests; the example leaves
+them blank. The units load it with `EnvironmentFile=` without `-`, so they fail
+while it is missing, and blank or invalid IDs fail closed. The weekly host
+configuration backup includes it.
 
 ```sh
 install -m 0755 proxmox-update/homelab-host-update.sh /usr/local/sbin/homelab-host-update
@@ -100,4 +100,24 @@ cannot trim its own rootfs. `homelab-guest-fstrim.timer` runs
 install -m 0644 proxmox-update/homelab-guest-fstrim.service proxmox-update/homelab-guest-fstrim.timer /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now homelab-guest-fstrim.timer
+```
+
+## Drift check
+
+Source edits reach Proxmox only through the `install` commands above. After
+changing a file, install it and compare hashes as root on Proxmox, from the same
+commit:
+
+```sh
+while read -r repo installed; do
+  [ "$(sha256sum < "$repo")" = "$(sha256sum < "$installed")" ] || echo "drift: $installed"
+done <<'EOF'
+proxmox-update/homelab-host-update.sh /usr/local/sbin/homelab-host-update
+proxmox-update/homelab-host-boot-check.sh /usr/local/sbin/homelab-host-boot-check
+proxmox-update/homelab-host-update.service /etc/systemd/system/homelab-host-update.service
+proxmox-update/homelab-host-update.timer /etc/systemd/system/homelab-host-update.timer
+proxmox-update/homelab-host-boot-check.service /etc/systemd/system/homelab-host-boot-check.service
+proxmox-update/homelab-guest-fstrim.service /etc/systemd/system/homelab-guest-fstrim.service
+proxmox-update/homelab-guest-fstrim.timer /etc/systemd/system/homelab-guest-fstrim.timer
+EOF
 ```

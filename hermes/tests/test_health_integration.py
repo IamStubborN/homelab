@@ -279,36 +279,27 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
         health = self.homelab["services"]["health-service"]
         self.assertEqual(health["image"], "family-health-mcp:local")
 
-    def test_health_runbook_documents_python_cashier_and_human_gates(self):
+    def test_health_runbook_documents_python_cashier_and_deploy(self):
         runbook = (HOMELAB_ROOT / "health/README.md").read_text(encoding="utf-8")
-        compact = " ".join(runbook.split())
         self.assertIn("family-health-mcp:local", runbook)
         self.assertIn("build context `health/mcp`", runbook)
         self.assertIn("`${WIKI_ROOT}/shared/health`", runbook)
         self.assertIn("ignored deployment environment", runbook)
         self.assertIn("install -o 10000 -g 10000 -m 0400", runbook)
         self.assertIn("`10000:10000 400`", runbook)
-        self.assertIn("There are no Postgres passwords", compact)
-        self.assertIn("no UID `10001` files", compact)
         self.assertIn("missing health wiki directory", runbook)
         self.assertIn("wiki/bootstrap-vault.sh", runbook)
         self.assertIn("wiki/README.md", runbook)
         self.assertIn("No Watchtower", runbook)
-        self.assertIn("No GitHub Actions", runbook)
+        self.assertIn("no GitHub Actions", runbook)
         self.assertIn("NEXTAUTH_SECRET", runbook)
         self.assertIn("cd health/mcp", runbook)
         self.assertIn("python3 -m pytest", runbook)
-        for gate in ("**G1**", "**G2**", "**G3**", "**G4**", "**G5**"):
-            self.assertIn(gate, runbook)
-        self.assertIn("Obsidian Sync", runbook)
-        self.assertIn("Server rclone OAuth", runbook)
-        self.assertIn("Host directory", runbook)
-        self.assertIn("Keep Google archive", runbook)
-        self.assertIn("Recreate Hermes", runbook)
         self.assertIn(
             "docker compose up -d --force-recreate hermes-primary hermes-secondary",
             runbook,
         )
+        self.assertNotIn("obsidian-sync", runbook)
         self.assertNotIn("docker compose up --wait health-postgres", runbook)
         self.assertNotIn("pg_dump -U health", runbook)
         self.assertNotIn("cd health/service", runbook)
@@ -321,14 +312,8 @@ class EmbeddedHealthComposeTests(unittest.TestCase):
         self.assertIn("image-only rollback and in-place downgrade are unsupported", lower)
         self.assertIn("stop `health-service` and both hermes services", lower)
         self.assertIn("recommended default is to roll forward", lower)
-        self.assertIn("leftover phase 1 rust source", lower)
+        self.assertIn("unused rust crate", lower)
         self.assertIn("do **not** switch compose back to the leftover rust crate", lower)
-        self.assertIn("later manual", lower)
-        self.assertLess(
-            runbook.index("later manual"),
-            runbook.index("docker volume rm health-pg-data"),
-        )
-        self.assertIn("not a deploy or rollback command", lower)
         self.assertNotIn("family-health-service:rollback", runbook)
         self.assertNotIn("retag `family-health-service:rollback`", runbook)
         self.assertNotIn("ALTER TABLE sleep_records DROP CONSTRAINT", runbook)

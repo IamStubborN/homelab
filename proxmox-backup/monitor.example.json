@@ -31,6 +31,10 @@
     "host-boot": {
       "failure_only": true
     },
+    "router-hub": {
+      "success_file": "/var/lib/homelab-router-config-backup/hub.json",
+      "max_age_hours": 50
+    },
     "opnsense-dnsbl-hotfix": {
       "dnsbl_hotfix_vm": 901
     }

@@ -268,7 +268,8 @@ services:
       - ${HERMES_PRIMARY_PROFILE_DIR:-./profiles/primary}/plugins/vaultwarden-approval:/opt/data/plugins/vaultwarden-approval:ro
       # Personal llm-wiki root. Host shared/ is an explicit nested bind (not a
       # copy) so /wiki/shared is the family tree. Bundled obsidian skill stays
-      # disabled; official Sync is a separate host service — no OBSIDIAN_VAULT_PATH.
+      # disabled; devices sync the vault via Syncthing (wiki/compose.yml), so
+      # no OBSIDIAN_VAULT_PATH.
       - ${HERMES_PRIMARY_WIKI_PATH:-${WIKI_ROOT:-/mnt/internal/wiki}/primary}:/wiki
       - ${WIKI_ROOT:-/mnt/internal/wiki}/shared:/wiki/shared
     secrets:

@@ -2,7 +2,7 @@
 
 Private, Docker-first Hermes profiles for Primary and Secondary. Both profiles run the unmodified official `nousresearch/hermes-agent:stable` image with its own bootstrap while keeping configuration, memory, browser identity, Telegram credentials, and media credentials isolated. Explicit Vaultwarden browser login is available only to Primary.
 
-The umbrella design is maintained in [`media-orchestrator`](https://github.com/IamStubborN/media-orchestrator/blob/main/docs/superpowers/specs/2026-07-10-media-orchestrator-mvp-design.md).
+The umbrella design lives in the private `media-orchestrator` repository.
 
 ## Deployment Policy
 
@@ -11,18 +11,22 @@ must not use GitHub Actions to update the household agents. The agents use the
 official Hermes image; deployment synchronizes reviewed profile files and
 skills and recreates only the affected consumers.
 
-For a profile configuration change only, including a model switch, use the
-profile-only deployment command from `media-orchestrator`. It copies the
-profile YAML from the selected local Homelab checkout, leaves the official
-Hermes image and Media Service untouched, and recreates only the
-Hermes agents. It checks for active media jobs, waits for both agents to become
-healthy, verifies the mounted configs, and restores the previous configs if
-deployment fails:
+The live profile files are ignored: `HERMES_PRIMARY_PROFILE_DIR` and
+`HERMES_SECONDARY_PROFILE_DIR` in the root `.env` point at
+`private-profiles/<profile>/`, and the containers mount `config/config.yaml`,
+`SOUL.md`, `identity` and (Primary) `plugins/vaultwarden-approval` from there.
+The tracked `profiles/<profile>/` files are sanitized templates and the Compose
+fallback; changing them on the host affects nothing that runs.
+
+For a profile configuration change, including a model switch, edit the file in
+`private-profiles/<profile>/` on the Docker host and recreate only that agent:
 
 ```bash
-cd /path/to/media-orchestrator
-HOMELAB_ROOT=/opt/homelab ./scripts/homelab.sh deploy-hermes-profiles
+docker compose up -d --force-recreate hermes-primary   # or hermes-secondary
 ```
+
+Recreating interrupts a reply in progress; check that no media job is waiting on
+the agent first.
 
 For shared media skills, MCP schema, or CLI artifact changes, use the guarded
 `media-orchestrator` deployment script after confirming that no media job is
@@ -46,20 +50,21 @@ on two checks in a row, it reports through the disk-watchdog's bot, and again
 on recovery:
 
 ```text
-*/5 * * * * /opt/homelab/hermes/scripts/telegram-watchdog 2>&1 | /usr/bin/logger -t hermes-telegram-watchdog
+*/5 * * * * /path/to/homelab/hermes/scripts/telegram-watchdog 2>&1 | /usr/bin/logger -t hermes-telegram-watchdog
 ```
 
 Everything else is attached through upstream extension points:
 
 | Mount | Purpose |
 | --- | --- |
-| `profiles/<profile>/config/config.yaml` → `/etc/hermes/config.yaml` | Managed config layer, deep-merged over the user config; `${VAR}` values resolve from the environment |
-| `profiles/<profile>/SOUL.md` → `/opt/data/SOUL.md` | Persona |
+| `private-profiles/<profile>/config/config.yaml` → `/etc/hermes/config.yaml` | Managed config layer, deep-merged over the user config; `${VAR}` values resolve from the environment |
+| `private-profiles/<profile>/SOUL.md` → `/opt/data/SOUL.md` | Persona |
+| `private-profiles/<profile>/identity` → `/etc/hermes-home/profile-id` | Profile identity |
 | `shared/skills` → `/opt/data/skills/home` | Shared skills as their own `home` category, because bundled skills already use names like `media/` |
 | `shared/plugins/telegram-home` → `/opt/data/plugins/telegram-home` | Telegram adapter with the media panel |
-| `profiles/primary/plugins/vaultwarden-approval` → `/opt/data/plugins/vaultwarden-approval` | Primary only |
+| `private-profiles/primary/plugins/vaultwarden-approval` → `/opt/data/plugins/vaultwarden-approval` | Primary only |
 
-Upstream no longer applies `session_reset`, so both profiles enable the
+Upstream does not apply `session_reset`, so both profiles enable the
 community plugin `hermes-session-reset-policy`, which resets a conversation on
 the first message after 1440 idle minutes. It is not mounted: it lives in each
 profile volume and follows the Hermes plugin catalog, which pins a reviewed
@@ -75,8 +80,11 @@ for c in hermes-primary hermes-secondary; do
 done
 ```
 
-All mounts are read-only. Conversational media operations and Telegram
-callbacks use the media-service MCP endpoint.
+Profile files, skills, plugins, scripts and secrets are mounted read-only. The
+profile, memory and `browser_auth` volumes and the wiki binds (`/wiki` and
+`/wiki/shared`) are writable; the agent-browser tools volume is read-only.
+Conversational media operations and Telegram callbacks use the media-service
+MCP endpoint.
 The media CLI is a trusted-host operator tool and is
 not mounted into either Hermes container.
 
@@ -99,7 +107,7 @@ agent-browser-updater     vaultwarden-broker-primary
 
 The Hermes containers share the official image but not state or credentials. Each has its own profile volume, managed config, SOUL, memory, browser metadata, Telegram bot token, media client token, and health client token. Primary alone has a Vaultwarden broker and approval plugin. Profile sources are mounted read-only straight into the upstream locations listed above; nothing is copied into the profile volume. Neither container receives the Docker socket.
 
-The root filesystem is read-only. `/run` is the only executable tmpfs because s6-overlay stages its init binary there; `/tmp` remains `noexec`. All Linux capabilities are dropped except the official bootstrap requirements. Hermes runs as UID/GID `10000:10000`.
+The root filesystem is read-only. Two tmpfs mounts are executable: `/run`, because s6-overlay stages its init binary there, and `/opt/data/tmp`, the terminal tool's `TMPDIR`, which keeps its environment snapshots (tokens included) off the profile volume. `/tmp` is `noexec`. All Linux capabilities are dropped except the official bootstrap requirements. Hermes runs as UID/GID `10000:10000`.
 
 Secrets reach Hermes through the upstream command secret source. Each profile's
 user config (`/opt/data/config.yaml` in the volume, not the managed layer,
@@ -127,17 +135,7 @@ UID and can read the mounted files, and upstream strips only the names it knows
 (`TELEGRAM_BOT_TOKEN` and other adapter or provider keys) from child processes.
 The boundary is the container, not the environment.
 
-Both profiles discover the internal streamable-HTTP `health` MCP server at `health-service:8080/internal/mcp` through the external `health-internal` network. Each profile uses its own bearer token and owner default, while an explicitly named spouse may override that default. Hermes reuses the exact ignored token files owned by the embedded `health` stack; the health service must be available for first MCP discovery. The shared health skill specifies Russian user-facing text and native clarification choices, but these repository checks assert the skill contract rather than live Telegram behavior. Live Telegram acceptance and MCP discovery remain part of Task 14 after the service and credentials are available. Deployment remains the guarded manual flow.
-
-Stable retry identity is live-deferred until the Hermes Telegram gateway is
-verified to expose a source update/message identifier to the skill context. If
-available, the skill derives a per-fact identity from that stable transport ID
-plus a deterministic fact ordinal; it never passes the raw message ID or
-invents `source_event_id`. Without it, only exact event-time deduplication
-applies. The skill's preflight for a user-intended verbatim repeat is likewise
-a contract assertion pending live Telegram acceptance in Task 14; it queries
-recent full values and skips the write only for an exact match with no new time
-or context.
+Both profiles discover the internal streamable-HTTP `health` MCP server at `health-service:8080/internal/mcp` through the external `health-internal` network. Each profile uses its own bearer token and owner default, while an explicitly named spouse may override that default. Hermes reuses the exact ignored token files owned by the embedded `health` stack; the health service must be available for first MCP discovery. The shared health skill specifies Russian user-facing text and native clarification choices; the repository checks assert the skill contract, not live Telegram behavior.
 
 The media service maps each MCP token server-side to its fixed owner. No
 model-supplied owner field is accepted. The standalone `hermes-media` wrapper
@@ -195,21 +193,20 @@ When a private guarded rollout stages the CLI, it passes
 and compares it with the digest in the bundle's authenticated
 `media-linux-amd64.sha256` file before activation.
 
-Private guarded deployment requires explicit `HOMELAB_ROOT` and
-`MEDIA_RELEASE_DIR` paths; it does not discover sibling checkouts. Promotion is
-still blocked until the operator logs in to the private registry and supplies
-real published image digests. Export, preflight, and this repository perform no
-registry login, publishing, or deployment.
+The private guarded deployment takes explicit `HOMELAB_ROOT` and
+`MEDIA_RELEASE_DIR` paths and does not discover sibling checkouts. Registry
+login and real published image digests are operator steps; export, preflight
+and this repository perform no registry login, publishing or deployment.
 
 The preflight verifies this mounted artifact before containers are recreated.
 No Hermes image build is required.
 
 ## Configuration
 
-1. Keep the Vaultwarden server URL and login allowlist in ignored local files. Set `HERMES_VAULTWARDEN_SERVER_PATH` and `HERMES_VAULTWARDEN_ALLOWLIST_PATH` to those files. The tracked `.example` files are synthetic.
-2. Create `.env` from `.env.example` and set the numeric Telegram user/chat IDs, media network name, private profile paths, and existing named volume names. During an existing deployment cutover, set `HERMES_EXISTING_VOLUMES=true` so Compose reuses those volumes. That also covers the rebuildable tool caches `homelab_agent_browser_tools` and `homelab_vaultwarden_tools`: on a new host create them first with `docker volume create`.
-3. Create each untracked file under `secrets/` from its `.example` counterpart, including `primary.vaultwarden_session`, `primary.vaultwarden_broker_token`, and the shared `tavily_api_key` and `exa_api_key`; keep ownership with deployment UID/GID `1000`. Compose ignores `uid`, `gid`, and `mode` for file secrets, so files mounted into Hermes must be mode `0644` for UID `10000` to read them (the bootstrap drops supplementary groups, so `group_add` does not help); the `0750` directory still keeps other host users out.
-4. Ensure the external media and `agent-tools` networks exist, then run `docker compose pull` and `docker compose up -d`.
+1. Keep the Vaultwarden server URL and login allowlist in ignored local files. Set `HERMES_VAULTWARDEN_SERVER_PATH` and `HERMES_VAULTWARDEN_ALLOWLIST_PATH` to those files. The tracked `config/*.example*` files are synthetic.
+2. Set the Hermes variables in the root `.env` (template: root `.env.example`): the numeric Telegram user/chat IDs, media network name, private profile directories, secret paths, wiki paths and named volume names. With existing named volumes, set `HERMES_EXISTING_VOLUMES=true` so Compose reuses them; that also covers the rebuildable tool caches `homelab_agent_browser_tools` and `homelab_vaultwarden_tools`, which a new host creates first with `docker volume create`.
+3. Create the ignored secret files. Their names and default paths are the `secrets:` entries in `compose.yaml`; the per-profile `HERMES_*_PATH` variables can point them elsewhere. Keep ownership with deployment UID/GID `1000`. Compose ignores `uid`, `gid`, and `mode` for file secrets, so files mounted into Hermes must be mode `0644` for UID `10000` to read them (the bootstrap drops supplementary groups, so `group_add` does not help); the `0750` directory still keeps other host users out.
+4. The external networks `media-internal` (`MEDIA_NETWORK`) and `health-internal` must exist; Compose creates `agent-tools` and the per-profile private networks. Then run `docker compose pull` and `docker compose up -d` from the checkout root.
 5. Once per profile volume, add the `secrets:` block above to `/opt/data/config.yaml`, then install the optional dependencies the configs use and restart the profile:
 
    ```sh
@@ -288,11 +285,19 @@ reviewed and added explicitly.
 
 The broker `/health` endpoint is a fast process liveness check. Use the authenticated `vaultwarden-safe status` command for Vaultwarden readiness and session state; a slow or locked remote vault must not create a container restart loop.
 
-Initialize or rotate only Primary's session from the Docker host with `./scripts/init-primary-vaultwarden`. The helper prompts through `bw`, writes the session directly to the untracked Docker secret, and never prints the session key.
+Initialize or rotate only Primary's session from the Docker host with `hermes/scripts/init-primary-vaultwarden`. The helper prompts through `bw`, writes the session directly to the ignored Docker secret, and never prints the session key. It does not read `.env`: export the matching root `.env` values first, or it falls back to the synthetic server example and default volume name:
+
+```sh
+export HERMES_VAULTWARDEN_SERVER_PATH=<value from .env>
+export VAULTWARDEN_VOLUME=<HERMES_PRIMARY_VAULTWARDEN_VOLUME from .env>
+hermes/scripts/init-primary-vaultwarden
+```
+
+`VAULTWARDEN_SESSION_FILE` is a path inside the helper container under `/run/hermes-home-secrets/` (the host `hermes/secrets/`); set it only when `HERMES_PRIMARY_VAULTWARDEN_SESSION_PATH` names a different file in that directory.
 
 ## Notifications
 
-Media notifications no longer pass through Hermes. Each profile has a separate `media-notifier` container on internal port `8644`; the port is not published on the Docker host. It validates the existing timestamped HMAC envelope, sends or edits the Telegram lifecycle card directly through Bot API, persists message IDs and presentation state in its own volume, and never invokes an LLM.
+Media notifications do not pass through Hermes. Each profile has a separate `media-notifier` container on internal port `8644`; the port is not published on the Docker host. It validates the existing timestamped HMAC envelope, sends or edits the Telegram lifecycle card directly through Bot API, persists message IDs and presentation state in its own volume, and never invokes an LLM.
 
 One movie, episode, or season owns one Telegram card. Progress and lifecycle changes edit that message. `Details` and `Back` switch the same message between compact and detailed views, and the selected view survives notifier restarts. A successful job adds one short completion reply after the card reaches its terminal state. Cancellation uses a same-message confirmation before Hermes sends the business command to `media-service`.
 
@@ -353,8 +358,12 @@ Hermes documents durable login persistence only for Camofox when an external Cam
 ## Verification
 
 ```sh
-./scripts/check
+cd hermes
+MEDIA_RELEASE_DIR="$PWD/../media/release.example" ./scripts/check
 ```
+
+`MEDIA_RELEASE_DIR` is required because the check runs `deploy-preflight`; the
+sanitized example bundle is enough for checks, a real export for deployment.
 
 The check covers use of the unmodified official stable image under
 Watchtower, profile and secret isolation, notifier HMAC/state

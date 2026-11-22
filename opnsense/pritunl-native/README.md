@@ -63,8 +63,8 @@ OPNsense into the private `instance-uuid` file as one line and restrict it to
 root (`0600`). `pritunl-vpnctl` reads that file, or accepts `INSTANCE_UUID` in
 its environment, and exports the value to its watcher process. The controller
 refuses to run without a valid UUID. Keep the private value with the router
-configuration backup; do not add it to this repository. Existing installed
-scripts are unaffected until they are deliberately replaced on OPNsense.
+configuration backup; do not add it to this repository. Changes here reach
+OPNsense only when the installed scripts are replaced there.
 
 For a validation-only run, provide `EXPECTED_REMOTE_LINE` as the exact
 `remote ...` line expected from the private native instance. Keep it outside Git;

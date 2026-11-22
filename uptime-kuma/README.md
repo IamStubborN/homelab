@@ -3,20 +3,19 @@
 Availability monitoring in the root Compose project. The stable-v2 slim/rootless
 image uses SQLite on `./data`, HTTPS through Traefik, and no Docker socket or
 published host port. Keep the actual catalog, admin credentials, notification
-credentials and Push tokens in ignored private files. Watchtower is enabled by operator request. The official `latest` tag stays
-on v1; `2-slim-rootless` follows stable v2. The initially verified release is 2.5.9.
+credentials and Push tokens in ignored private files. Watchtower follows
+`2-slim-rootless`, the stable v2 tag (the official `latest` tag is v1).
 
 ## Bootstrap and deployment
 
-1. Review the current runtime and back it up. Do not synchronize the whole
-   checkout over unrelated live changes. Validate the root project with
-   `docker compose config --quiet` and `make check-runtime`.
-2. Create `uptime-kuma/data` owned by the image's verified Node UID/GID. Leave
+1. Validate the root project with `docker compose config --quiet` and
+   `make check-runtime`.
+2. Create `uptime-kuma/data` owned by the image's Node UID/GID. Leave
    `UPTIME_KUMA_INGRESS_ENABLED=false` until the first admin exists.
-3. After deployment approval, start only this service from the root project:
+3. Start only this service from the root project:
    `docker compose up -d --no-deps uptime-kuma`.
 4. Create the administrator and monitors through the application. The optional
-   `tools/provision.cjs` uses the initially verified version's internal Socket.IO API over
+   `tools/provision.cjs` uses Kuma's internal Socket.IO API over
    container loopback. Feed its private JSON on stdin and capture its stdout
    privately: it contains Push secrets. It refuses unowned monitor-name or
    status-page collisions. Monitors are initially inactive. Never edit the live
@@ -34,6 +33,18 @@ Provisioning input uses `username`, `password`, `timezone`, `baseUrl`, `tags`,
 is `description: homelab-managed:<key>`. The status-page description must retain
 `<!-- homelab-managed:status -->`. Monitor parents must precede children. The
 catalog and deployment addresses are intentionally absent from this repository.
+
+## Ingress
+
+Both routers exist only while `UPTIME_KUMA_INGRESS_ENABLED=true`:
+
+- `uptime-kuma`: the whole UI on `https://uptime.${DOCKER_DOMAIN}`, limited to
+  `LAN_SUBNET`.
+- `uptime-kuma-observer`: only `GET /api/entry-page` on the same host (priority
+  350), limited to `UPTIME_KUMA_OBSERVER_SOURCES` (default `LAN_SUBNET`). It lets
+  an external observer confirm that Kuma itself answers without opening the UI
+  to that source. Set it in the root `.env` to the observer's addresses plus the
+  LAN, as a comma-separated CIDR list.
 
 ## Monitoring contracts
 
@@ -66,8 +77,7 @@ Saving a template does not require sending a live test notification.
 Messages show a clear state, service name, bounded diagnostic text and the
 heartbeat's `localDateTime`/`timezone` (Europe/Sofia). Dynamic text is truncated
 before HTML escaping; missing heartbeat events use a generic notice, and zero
-latency is retained. The real installed provider passed five offline rendering
-cases with network disabled. A retired host must be removed from the desired
+latency is retained. A retired host must be removed from the desired
 catalog and status-page membership as well as the live monitor list. Delete
 its monitor through the native API; its history is not kept.
 
@@ -105,8 +115,8 @@ errors. This diagnostic does not add application request logging.
 
 For noisy container Push monitors, retry tolerance must be tested against the
 installed Kuma version. Its watchdog also consumes retries after a fresh bad
-Push; a retry count is not an exact number of minutes. In the tested v2.5.9
-timing, three retries suppress a single bad sample followed by recovery within
+Push; a retry count is not an exact number of minutes. In tested v2 timing,
+three retries suppress a single bad sample followed by recovery within
 70 seconds, while sustained failures and absent collectors still become DOWN.
 Keep the actual selected monitors and controls in the private catalog.
 
@@ -132,19 +142,12 @@ resolved secrets. Verify HTTPS, unauthorized admin access, allowed/denied ingres
 actual probes from the Kuma container, one failure/recovery and stale-Push test,
 and persistence across a scoped Kuma restart.
 
-The existing app-data backup collector discovers service-local bind data and
-performs online SQLite backups with `quick_check`. Confirm the deployed collector
-and repository path, then verify a real capture includes Kuma before reporting
-backup coverage. Back up the entire `data` directory, including uploads and
-settings; a copied live `kuma.db` without its WAL is not a backup.
+The app-data backup collector takes online SQLite backups of `data/` with
+`quick_check`; a copied live `kuma.db` without its WAL is not a backup. A newer
+image may migrate the database, so rolling back only the image does not roll
+back the schema: restore the matching data snapshot with it. To take Kuma out of
+service, stop the collector timer and the `uptime-kuma` service, disable its
+ingress flag, and keep `data/` for recovery.
 
-For recovery, create and restore-test a private backup with the actual deployed image digest. A newer application may migrate the database: rolling back only
-the image does not roll back the schema. Restore the matching data snapshot.
-Rollback of this new service consists of stopping its timer and only the Kuma
-service, disabling its ingress flag, and retaining the private state for recovery.
-
-Watchtower uses the existing root-stack schedule. The application backup timer
-should complete before it; this is not a transactional pre-update gate. Keep
-previous image digests with matching snapshots for recovery after DB migrations.
-The provisioning tools target the initially verified internal API version and
-must be rechecked before use after an automatic update.
+`tools/provision.cjs` uses Kuma's internal API, which can change in a Watchtower
+update; recheck it before use after an update.

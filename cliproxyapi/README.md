@@ -7,7 +7,7 @@ OpenAI-compatible gateway (`eceasy/cli-proxy-api`) for household LLM clients.
 | Client | Base URL |
 | --- | --- |
 | LAN / Traefik | `https://cliproxy.${DOCKER_DOMAIN}/v1` |
-| Hermes / Karakeep (Docker DNS) | `http://cli-proxy-api:8317/v1` |
+| Karakeep / Lampa AI adapter (Docker DNS) | `http://cli-proxy-api:8317/v1` |
 | Home Assistant (`network_mode: host`) | `http://127.0.0.1:8317/v1` |
 
 Authenticate with the shared client key in `hermes/secrets/cliproxy_api_key` (also listed under `api-keys` in `config.yaml`). Traefik does not replace client api-key auth.
@@ -19,7 +19,7 @@ listed in the `openai-compatibility` block are different credentials — do not 
 
 | Path | Credential | Stored in |
 | --- | --- | --- |
-| Karakeep / HA → gateway | gateway client key | `api-keys` in `config.yaml`, `hermes/secrets/cliproxy_api_key` |
+| Karakeep / Lampa AI adapter / HA → gateway | gateway client key | `api-keys` in `config.yaml`, `hermes/secrets/cliproxy_api_key` |
 | gateway → OpenCode Go | Go key named `cliproxy` in the console | `openai-compatibility` in `config.yaml`, sops `OPENCODE_GO_API_KEY` |
 | pi agent → OpenCode Go (direct) | Go key named `pi` | `~/.pi/agent/auth.json` |
 | OpenCode CLI → OpenCode Go (direct) | Go key named `opencode-cli` | `~/.local/share/opencode/auth.json` |
@@ -48,14 +48,13 @@ From your laptop, open an SSH tunnel, then run login on the Docker host:
 
 ```bash
 # Laptop (keep this session open):
-ssh -L 1455:127.0.0.1:1455 host-5.example.invalid.example.test
+ssh -L 1455:127.0.0.1:1455 docker-host.example.com
 
-# Docker host:
-cd /opt/homelab
+# Docker host, from the checkout root:
 docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser -codex-login
 ```
 
-Open the printed `https://auth.openai.com/...` URL in the laptop browser. Ignore any `root@public-ip` tunnel example the binary prints — use the `host-5.example.invalid...` tunnel above.
+Open the printed `https://auth.openai.com/...` URL in the laptop browser. Ignore any `root@public-ip` tunnel example the binary prints; use the tunnel above.
 
 ## OpenCode Go (third-party models)
 
@@ -66,7 +65,7 @@ answer on that endpoint can be listed** (see “Adding models”). The Go key is
 in `config.yaml` (gitignored); on the Mac the same value lives in sops as
 `OPENCODE_GO_API_KEY`.
 
-Two things are easy to get wrong:
+Three things are easy to get wrong:
 
 - `headers: x-opencode-session: "$session-id"` — the `$NAME` form copies a header from
 the downstream request. OpenCode Go rejects requests without a session header
@@ -82,9 +81,8 @@ list before adding or renaming any Go aliases.
 Model names and context windows mirror `~/.cache/opencode/models.json` (the OpenCode
 CLI's cache).
 
-> Codex on the Mac is **not** wired to this gateway: its `model_provider` and
-> `model_catalog_json` were rolled back, so Codex talks to OpenAI directly again. The
-> Go models above are reachable only by clients that call this gateway themselves.
+The Go models are reachable only by clients that call this gateway; Codex on a
+workstation talks to OpenAI directly.
 
 ### Adding models
 

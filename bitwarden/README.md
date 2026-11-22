@@ -2,8 +2,13 @@
 
 - **LAN:** `https://bitwarden.${DOCKER_DOMAIN}` (Traefik)
 - **Public:** `https://bitwarden.example.test` (Cloudflare Tunnel via `bitwarden-cloudflared`)
-- **`DOMAIN`** is the public URL so Bitwarden **Send** copy-link uses a shareable host.
-- **`SIGNUPS_ALLOWED=false`** — only invited/existing accounts; recipients of Send links need no account.
+- **`DOMAIN`** comes from `BITWARDEN_PUBLIC_URL` in the root `.env` (the public
+  URL, default `https://bitwarden.example.test`), so Bitwarden **Send** copy-links
+  use a shareable host. Set it to the real public hostname.
+- **`SIGNUPS_ALLOWED=false`** and **`INVITATIONS_ALLOWED=false`**: only existing
+  accounts can sign in, and organization owners cannot invite new users. To add
+  an account, enable signups temporarily. Recipients of Send links need no
+  account.
 - **No Cloudflare Access** on the public host (anonymous Send must work).
 
 ## Tunnel secret

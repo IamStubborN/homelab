@@ -13,6 +13,8 @@ import urllib.request
 
 STATE = Path("/var/lib/homelab-backup-monitor")
 CONFIG = Path("/etc/homelab-backup")
+# Present only in the patched module (see the DNSBL atomic-context hotfix).
+DNSBL_HOTFIX_MARKER = "pending_dnsbl"
 
 
 def load(path, default):
@@ -51,6 +53,25 @@ def send(message):
     telegram("sendMessage", {"text": message, "disable_notification": False})
 
 
+def dnsbl_hotfix_applied(vm_id):
+    """True when both the installed and the running Unbound DNSBL module carry the hotfix.
+
+    OPNsense updates replace the installed module; Unbound copies it to the
+    runtime directory on restart. Checked through the QEMU guest agent.
+    """
+    files = ("/usr/local/opnsense/scripts/unbound-dnsbl/lib/dnsbl.py "
+             "/var/unbound/unbound-dnsbl/lib/dnsbl.py")
+    result = subprocess.run(
+        ["qm", "guest", "exec", str(vm_id), "--timeout", "30", "--",
+         "/bin/sh", "-c", f"for f in {files}; do grep -q {DNSBL_HOTFIX_MARKER} $f || exit 1; done"],
+        capture_output=True, text=True, timeout=45,
+    )
+    execution = json.loads(result.stdout)
+    if not execution.get("exited"):
+        raise RuntimeError("guest check did not finish")
+    return execution.get("exitcode") == 0
+
+
 def check():
     config = load(CONFIG / "monitor.json", {})
     records = load(STATE / "jobs.json", {})
@@ -61,6 +82,13 @@ def check():
         if records.get(name, {}).get("failed"):
             issues.append(f"{name}: последний запуск завершился ошибкой")
         if job.get("failure_only"):
+            continue
+        if "dnsbl_hotfix_vm" in job:
+            try:
+                if not dnsbl_hotfix_applied(job["dnsbl_hotfix_vm"]):
+                    issues.append(f"{name}: hotfix DNSBL на OPNsense отсутствует; после обновления установите его заново")
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+                issues.append(f"{name}: не удалось проверить hotfix DNSBL на OPNsense")
             continue
         if "success_file" in job:
             try:

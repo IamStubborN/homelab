@@ -6,7 +6,9 @@ age-encrypted and uploaded with rclone to the ID-pinned `homelab-backups:` Googl
 `/usr/local/sbin/homelab-backup-to-google-drive` on Proxmox. All jobs share
 `/run/lock/homelab-google-drive-backup.lock`; normal successes are silent and
 `backup-monitor.py` alerts the owner's private chat about failures or stale
-copies.
+copies. A job with `dnsbl_hotfix_vm` instead checks, through the QEMU guest
+agent, that the OPNsense Unbound DNSBL hotfix is still installed and running;
+OPNsense updates replace it.
 
 | Job | Europe/Sofia schedule | Remote directory | Keep |
 | --- | --- | --- | --- |

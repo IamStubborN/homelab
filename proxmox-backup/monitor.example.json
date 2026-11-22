@@ -30,6 +30,9 @@
     },
     "host-boot": {
       "failure_only": true
+    },
+    "opnsense-dnsbl-hotfix": {
+      "dnsbl_hotfix_vm": 901
     }
   }
 }
